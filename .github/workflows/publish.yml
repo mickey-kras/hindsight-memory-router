@@ -19,7 +19,7 @@ jobs:
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME }}/hindsight-memory-router
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: step-security/harden-runner@v2
         with:
