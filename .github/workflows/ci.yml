@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  security-events: write
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Auto-fix same-repo PRs
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        run: |
+          npm run fix
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add -A
+            git commit -m "Apply automated fixes"
+            git push
+          fi
+
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run security:audit
+
+      - name: aislop
+        run: npx --yes aislop@latest ci --human
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: Semgrep
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: auto
+
+      - name: Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+      - name: Docker build
+        run: docker build -t hindsight-memory-router:ci .
