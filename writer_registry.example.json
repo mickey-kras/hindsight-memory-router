@@ -1,6 +1,6 @@
 {
   "writers": {
-    "bender": {
+    "main": {
       "role": "orchestrator",
       "source": "openclaw",
       "write_bank": "main",
