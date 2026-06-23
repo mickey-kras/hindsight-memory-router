@@ -1,0 +1,25 @@
+{
+  "name": "hindsight-memory-router",
+  "version": "0.0.0",
+  "private": false,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "npx --yes typescript@5.7.3 tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "test": "npx --yes vitest@4.1.9 run",
+    "typecheck": "npx --yes typescript@5.7.3 tsc -p tsconfig.json --noEmit",
+    "format": "npx --yes prettier@3.6.2 --write .",
+    "format:check": "npx --yes prettier@3.6.2 --check .",
+    "lint": "npx --yes eslint@9.39.2 .",
+    "lint:fix": "npx --yes eslint@9.39.2 . --fix",
+    "security:audit": "npm audit --audit-level=moderate",
+    "aislop:ci": "npx --yes aislop@latest ci --changes --base origin/main",
+    "aislop:fix:safe": "npx --yes aislop@latest fix --safe",
+    "check": "npm run format:check && npm run lint && npm test && npm run typecheck && npm run security:audit && npm run aislop:ci",
+    "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
+    "hooks:install": "git config core.hooksPath .githooks"
+  }
+}
