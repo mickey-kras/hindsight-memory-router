@@ -64,13 +64,13 @@ The path value called `bank_id` by the Hindsight API is treated here as `writer_
 Example:
 
 ```text
-POST /v1/default/banks/bender/memories
+POST /v1/default/banks/main/memories
 ```
 
 means:
 
 ```text
-writer_id = bender
+writer_id = main
 ```
 
 The router decides the real target bank from `writer_registry.example.json`.
@@ -148,14 +148,14 @@ suspicious recalled result -> suppressed
 Default read target example:
 
 ```text
-bender:   main, core, ops, dev, creative, personal
+main:     main, core, ops, dev, creative, personal
 dev:      dev, core
 creative: creative, core
 ops:      ops, core
 research: research, core
 ```
 
-No writer recalls `quarantine`. Bender does not recall `research`.
+No writer recalls `quarantine`. The `main` writer does not recall `research`.
 
 ## Review queue
 
