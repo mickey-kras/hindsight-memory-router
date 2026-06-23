@@ -3,7 +3,7 @@ import type { WriterRegistry, WriterRule } from "./types.js";
 
 export const DEFAULT_REGISTRY: WriterRegistry = {
   writers: {
-    bender: {
+    main: {
       role: "orchestrator",
       source: "openclaw",
       write_bank: "main",
@@ -70,8 +70,8 @@ export function validateRegistry(registry: WriterRegistry): void {
     if (rule.read_banks.includes("quarantine")) {
       throw new Error(`writer ${writerId} cannot read quarantine`);
     }
-    if (writerId === "bender" && rule.read_banks.includes("research")) {
-      throw new Error("bender cannot read research");
+    if (writerId === "main" && rule.read_banks.includes("research")) {
+      throw new Error("main writer cannot read research");
     }
   }
 }
