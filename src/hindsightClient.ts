@@ -22,15 +22,29 @@ export class FetchHindsightGateway implements HindsightGateway {
   }
 
   async retain(bankId: string, body: RetainBody): Promise<unknown> {
-    return this.request("POST", `/v1/default/banks/${encodeURIComponent(bankId)}/memories`, body);
+    return this.request(
+      "POST",
+      `/v1/default/banks/${encodeURIComponent(bankId)}/memories`,
+      body,
+    );
   }
 
   async recall(bankId: string, body: RecallBody): Promise<RecallResponse> {
-    return this.request("POST", `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`, body) as Promise<RecallResponse>;
+    return this.request(
+      "POST",
+      `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,
+      body,
+    ) as Promise<RecallResponse>;
   }
 
-  private async request(method: string, path: string, body?: unknown): Promise<unknown> {
-    const headers: Record<string, string> = { "content-type": "application/json" };
+  private async request(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<unknown> {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
 
     const res = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, {
@@ -42,7 +56,9 @@ export class FetchHindsightGateway implements HindsightGateway {
     const text = await res.text();
     const payload = text ? JSON.parse(text) : null;
     if (!res.ok) {
-      throw new Error(`Hindsight ${method} ${path} failed: HTTP ${res.status} ${text}`);
+      throw new Error(
+        `Hindsight ${method} ${path} failed: HTTP ${res.status} ${text}`,
+      );
     }
     return payload;
   }
