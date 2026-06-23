@@ -50,7 +50,7 @@ jobs:
         run: npx --yes aislop@latest ci --human
 
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
 
       - name: Semgrep
         uses: semgrep/semgrep-action@v1
