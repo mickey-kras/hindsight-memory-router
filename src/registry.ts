@@ -54,19 +54,25 @@ export function loadRegistry(path?: string): WriterRegistry {
   return parsed;
 }
 
-export function getWriter(registry: WriterRegistry, writerId: string): WriterRule | undefined {
+export function getWriter(
+  registry: WriterRegistry,
+  writerId: string,
+): WriterRule | undefined {
   return registry.writers[writerId];
 }
 
 export function validateRegistry(registry: WriterRegistry): void {
-  if (!registry || typeof registry !== "object") throw new Error("registry must be an object");
+  if (!registry || typeof registry !== "object")
+    throw new Error("registry must be an object");
   if (!registry.writers || typeof registry.writers !== "object") {
     throw new Error("registry.writers must be an object");
   }
   for (const [writerId, rule] of Object.entries(registry.writers)) {
     if (!writerId.trim()) throw new Error("writer id cannot be empty");
-    if (!rule.write_bank) throw new Error(`writer ${writerId} missing write_bank`);
-    if (!Array.isArray(rule.read_banks)) throw new Error(`writer ${writerId} missing read_banks`);
+    if (!rule.write_bank)
+      throw new Error(`writer ${writerId} missing write_bank`);
+    if (!Array.isArray(rule.read_banks))
+      throw new Error(`writer ${writerId} missing read_banks`);
     if (rule.read_banks.includes("quarantine")) {
       throw new Error(`writer ${writerId} cannot read quarantine`);
     }

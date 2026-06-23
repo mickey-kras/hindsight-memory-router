@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   security-events: write
+  pull-requests: read
 
 jobs:
   checks:
@@ -16,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          fetch-depth: 0
 
       - uses: step-security/harden-runner@v2
         with:
@@ -28,8 +30,10 @@ jobs:
 
       - run: npm ci
 
-      - name: Auto-fix same-repo PRs
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+      - name: Auto-fix before gates
+        if: >-
+          github.event_name == 'push' ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         run: |
           npm run fix
           if ! git diff --quiet; then
@@ -46,11 +50,10 @@ jobs:
       - run: npm run typecheck
       - run: npm run security:audit
 
-      - name: aislop
-        run: npx --yes aislop@latest ci --human
-
       - name: Gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Semgrep
         uses: semgrep/semgrep-action@v1
@@ -64,3 +67,32 @@ jobs:
 
       - name: Docker build
         run: docker build -t hindsight-memory-router:ci .
+
+  aislop:
+    name: aislop status
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Aislop quality gate
+        run: npx --yes aislop@latest ci --human
+
+      - name: Aislop SARIF
+        if: always()
+        run: npx --yes aislop@latest ci --sarif > aislop.sarif
+
+      - name: Upload Aislop SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aislop.sarif

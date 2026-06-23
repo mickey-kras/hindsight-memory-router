@@ -11,7 +11,10 @@ export class JsonlReviewQueue implements ReviewQueue {
 
   enqueue(record: ReviewRecord): void {
     mkdirSync(dirname(this.path), { recursive: true });
-    appendFileSync(this.path, JSON.stringify(record) + "\n", { encoding: "utf8", mode: 0o600 });
+    appendFileSync(this.path, JSON.stringify(record) + "\n", {
+      encoding: "utf8",
+      mode: 0o600,
+    });
   }
 }
 

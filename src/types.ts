@@ -69,7 +69,11 @@ export interface RecallResponse {
   trace?: Record<string, unknown> | null;
 }
 
-export type ReviewReason = "unknown_writer" | "suspicious_content" | "suspicious_query" | "denied_endpoint";
+export type ReviewReason =
+  | "unknown_writer"
+  | "suspicious_content"
+  | "suspicious_query"
+  | "denied_endpoint";
 
 export interface ReviewRecord {
   timestamp: string;

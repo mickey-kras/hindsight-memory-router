@@ -1,5 +1,11 @@
 import type { HindsightGateway } from "./hindsightClient.js";
-import type { RecallBody, RecallResponse, RetainBody, ReviewRecord, WriterRegistry } from "./types.js";
+import type {
+  RecallBody,
+  RecallResponse,
+  RetainBody,
+  ReviewRecord,
+  WriterRegistry,
+} from "./types.js";
 import { getWriter } from "./registry.js";
 import type { ReviewQueue } from "./reviewQueue.js";
 import { safePreview, scanContent, sha256 } from "./safety.js";
@@ -14,10 +20,19 @@ export interface RouterPolicyDeps {
 export class RouterPolicy {
   constructor(private readonly deps: RouterPolicyDeps) {}
 
-  async retain(writerId: string, body: RetainBody, source = "openclaw"): Promise<unknown> {
+  async retain(
+    writerId: string,
+    body: RetainBody,
+    source = "openclaw",
+  ): Promise<unknown> {
     const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      this.enqueueReview({ writerId, source, reason: "unknown_writer", preview: `unknown writer ${writerId}` });
+      this.enqueueReview({
+        writerId,
+        source,
+        reason: "unknown_writer",
+        preview: `unknown writer ${writerId}`,
+      });
       return { queued: true, reason: "unknown_writer" };
     }
 
@@ -31,7 +46,11 @@ export class RouterPolicy {
           content: item.content ?? "",
           preview: safePreview(item.content ?? ""),
         });
-        return { queued: true, reason: "suspicious_content", findings: scan.findings };
+        return {
+          queued: true,
+          reason: "suspicious_content",
+          findings: scan.findings,
+        };
       }
     }
 
@@ -52,10 +71,19 @@ export class RouterPolicy {
     return this.deps.hindsight.retain(writer.write_bank, rewritten);
   }
 
-  async recall(writerId: string, body: RecallBody, source = "openclaw"): Promise<RecallResponse> {
+  async recall(
+    writerId: string,
+    body: RecallBody,
+    source = "openclaw",
+  ): Promise<RecallResponse> {
     const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      this.enqueueReview({ writerId, source, reason: "unknown_writer", preview: `unknown writer ${writerId}` });
+      this.enqueueReview({
+        writerId,
+        source,
+        reason: "unknown_writer",
+        preview: `unknown writer ${writerId}`,
+      });
       return { results: [] };
     }
 
@@ -71,13 +99,23 @@ export class RouterPolicy {
       return { results: [] };
     }
 
-    const responses = await Promise.all(writer.read_banks.map((bankId) => this.deps.hindsight.recall(bankId, body)));
-    const results = responses.flatMap((response) => response.results ?? []).filter((result) => scanContent(result.text ?? "").safe);
+    const responses = await Promise.all(
+      writer.read_banks.map((bankId) =>
+        this.deps.hindsight.recall(bankId, body),
+      ),
+    );
+    const results = responses
+      .flatMap((response) => response.results ?? [])
+      .filter((result) => scanContent(result.text ?? "").safe);
 
     return { results };
   }
 
-  denyEndpoint(method: string, path: string, writerId?: string): { error: string } {
+  denyEndpoint(
+    method: string,
+    path: string,
+    writerId?: string,
+  ): { error: string } {
     this.enqueueReview({
       writerId,
       source: "http",
