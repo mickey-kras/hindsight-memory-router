@@ -1,0 +1,18 @@
+# Node
+node_modules/
+dist/
+coverage/
+
+# Local files
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Aislop local state
+.aislop/history.jsonl
+.aislop/agent/
