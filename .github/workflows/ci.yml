@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   security-events: write
+  pull-requests: read
 
 jobs:
   checks:
@@ -50,6 +51,8 @@ jobs:
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Semgrep
         uses: semgrep/semgrep-action@v1
