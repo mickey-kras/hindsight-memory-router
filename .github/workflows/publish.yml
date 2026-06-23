@@ -80,7 +80,7 @@ jobs:
         run: cosign sign --yes ${{ env.IMAGE_GHCR }}@${{ steps.build-ghcr.outputs.digest }}
 
       - name: Attest GHCR image
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_GHCR }}
           subject-digest: ${{ steps.build-ghcr.outputs.digest }}
