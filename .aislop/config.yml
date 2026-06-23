@@ -1,0 +1,11 @@
+ci:
+  failBelow: 85
+
+exclude:
+  - dist
+  - node_modules
+  - coverage
+  - package-lock.json
+
+rules:
+  security/hardcoded-secret: error
