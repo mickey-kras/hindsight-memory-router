@@ -48,9 +48,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run security:audit
 
-      - name: aislop
-        run: npx --yes aislop@latest ci --human
-
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
 
@@ -66,3 +63,32 @@ jobs:
 
       - name: Docker build
         run: docker build -t hindsight-memory-router:ci .
+
+  aislop:
+    name: aislop status
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: step-security/harden-runner@v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Aislop quality gate
+        run: npx --yes aislop@latest ci --human
+
+      - name: Aislop SARIF
+        if: always()
+        run: npx --yes aislop@latest ci --sarif > aislop.sarif
+
+      - name: Upload Aislop SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: aislop.sarif
