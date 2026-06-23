@@ -21,7 +21,7 @@ async function withServer<T>(fn: (baseUrl: string, hindsight: FakeHindsightGatew
 describe("OpenClaw Hindsight plugin contract", () => {
   it("accepts retain payload shape produced by HindsightClient.retain", async () => {
     await withServer(async (baseUrl, hindsight) => {
-      const res = await fetch(`${baseUrl}/v1/default/banks/bender/memories`, {
+      const res = await fetch(`${baseUrl}/v1/default/banks/main/memories`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
@@ -29,7 +29,7 @@ describe("OpenClaw Hindsight plugin contract", () => {
             {
               content: "Verified router contract retain payload.",
               context: "OpenClaw transcript",
-              document_id: "openclaw:agent:bender:main",
+              document_id: "openclaw:agent:main",
               metadata: { source: "openclaw" },
               tags: ["source_system:openclaw"],
               update_mode: "append",
@@ -66,11 +66,11 @@ describe("OpenClaw Hindsight plugin contract", () => {
 
   it("logs unknown Hindsight endpoints instead of proxying them", async () => {
     await withServer(async (baseUrl, hindsight, reviewQueue) => {
-      const res = await fetch(`${baseUrl}/v1/default/banks/bender/config`);
+      const res = await fetch(`${baseUrl}/v1/default/banks/main/config`);
       expect(res.status).toBe(404);
       expect(hindsight.retained).toHaveLength(0);
       expect(hindsight.recalled).toHaveLength(0);
-      expect(reviewQueue.records[0]).toMatchObject({ reason: "denied_endpoint", path: "/v1/default/banks/bender/config" });
+      expect(reviewQueue.records[0]).toMatchObject({ reason: "denied_endpoint", path: "/v1/default/banks/main/config" });
     });
   });
 });
