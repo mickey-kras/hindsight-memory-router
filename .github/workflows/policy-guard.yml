@@ -1,0 +1,124 @@
+name: policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    name: guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect PR policy-sensitive files
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const pull_number = context.payload.pull_request.number;
+            const headSha = context.payload.pull_request.head.sha;
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner,
+              repo,
+              pull_number,
+              per_page: 100,
+            });
+
+            const changed = files.map((file) => file.filename);
+            const failures = [];
+
+            async function readFileAtHead(path) {
+              const response = await github.rest.repos.getContent({
+                owner,
+                repo,
+                path,
+                ref: headSha,
+              });
+              const data = response.data;
+              if (!('content' in data)) return '';
+              return Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
+            }
+
+            function fail(message) {
+              failures.push(message);
+            }
+
+            for (const path of changed) {
+              if (!path.startsWith('.github/workflows/')) continue;
+              if (!path.endsWith('.yml') && !path.endsWith('.yaml')) continue;
+
+              const content = await readFileAtHead(path);
+              const lower = content.toLowerCase();
+
+              if (/permissions:\s*write-all/i.test(content)) {
+                fail(`${path}: permissions: write-all is not allowed`);
+              }
+
+              if (lower.includes('pull_request_target') && lower.includes('actions/checkout')) {
+                if (
+                  lower.includes('github.event.pull_request.head') ||
+                  lower.includes('github.head_ref') ||
+                  lower.includes('head.sha') ||
+                  lower.includes('pull_request.head')
+                ) {
+                  fail(`${path}: pull_request_target must not checkout PR head code`);
+                }
+              }
+
+              if (lower.includes('id-token: write') && path !== '.github/workflows/publish.yml') {
+                fail(`${path}: id-token: write is only allowed in publish.yml`);
+              }
+
+              if (lower.includes('packages: write') && path !== '.github/workflows/publish.yml') {
+                fail(`${path}: packages: write is only allowed in publish.yml`);
+              }
+            }
+
+            if (changed.includes('.github/workflows/publish.yml')) {
+              const publish = await readFileAtHead('.github/workflows/publish.yml');
+              if (!publish.includes('pull_request:')) {
+                fail('publish.yml: pull_request preflight trigger must stay enabled');
+              }
+              if (!publish.includes('name: container')) {
+                fail('publish.yml: required container preflight job must stay present');
+              }
+              if (!publish.includes('name: publish')) {
+                fail('publish.yml: real publish job must stay present');
+              }
+              if (!publish.includes('Trivy critical gate')) {
+                fail('publish.yml: Trivy critical gate must stay present');
+              }
+              if (!publish.includes('ignore-unfixed: true')) {
+                fail('publish.yml: Trivy gate must ignore unfixed vulnerabilities');
+              }
+            }
+
+            if (changed.includes('.github/workflows/ci.yml')) {
+              const ci = await readFileAtHead('.github/workflows/ci.yml');
+              if (!ci.includes('name: ci')) fail('ci.yml: workflow name must remain ci');
+              if (!ci.includes('checks:')) fail('ci.yml: required checks job must stay present');
+              if (!ci.includes('aislop status')) fail('ci.yml: required aislop status job must stay present');
+              if (!ci.includes('Gitleaks')) fail('ci.yml: Gitleaks step must stay present');
+              if (!ci.includes('Semgrep')) fail('ci.yml: Semgrep step must stay present');
+              if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
+            }
+
+            if (changed.includes('.github/workflows/codeql.yml')) {
+              const codeql = await readFileAtHead('.github/workflows/codeql.yml');
+              if (!codeql.includes('name: codeql')) fail('codeql.yml: workflow name must remain codeql');
+              if (!codeql.includes('analyze:')) fail('codeql.yml: required analyze job must stay present');
+              if (!codeql.includes('github/codeql-action/analyze')) {
+                fail('codeql.yml: CodeQL analyze action must stay present');
+              }
+            }
+
+            if (failures.length > 0) {
+              core.setFailed(`Policy guard failed:\n- ${failures.join('\n- ')}`);
+            } else {
+              core.info('Policy guard passed.');
+            }
