@@ -48,14 +48,46 @@ jobs:
               failures.push(message);
             }
 
+            function stripYamlBlockScalars(content) {
+              const lines = content.split('\n');
+              const kept = [];
+              for (let i = 0; i < lines.length; i += 1) {
+                const line = lines[i];
+                kept.push(line);
+
+                const block = line.match(/^(\s*)[A-Za-z0-9_-]+:\s*[>|]/);
+                if (!block) continue;
+
+                const parentIndent = block[1].length;
+                while (i + 1 < lines.length) {
+                  const next = lines[i + 1];
+                  const nextIndent = next.match(/^\s*/)[0].length;
+                  if (next.trim() === '' || nextIndent > parentIndent) {
+                    i += 1;
+                    continue;
+                  }
+                  break;
+                }
+              }
+              return kept.join('\n');
+            }
+
+            function yamlSurface(content) {
+              return stripYamlBlockScalars(content)
+                .split('\n')
+                .filter((line) => !line.trimStart().startsWith('#'))
+                .join('\n');
+            }
+
             for (const path of changed) {
               if (!path.startsWith('.github/workflows/')) continue;
               if (!path.endsWith('.yml') && !path.endsWith('.yaml')) continue;
 
               const content = await readFileAtHead(path);
-              const lower = content.toLowerCase();
+              const surface = yamlSurface(content);
+              const lower = surface.toLowerCase();
 
-              if (/permissions:\s*write-all/i.test(content)) {
+              if (/^\s*permissions:\s*write-all\s*$/im.test(surface)) {
                 fail(`${path}: permissions: write-all is not allowed`);
               }
 
