@@ -9,6 +9,10 @@ import {
   type HindsightGateway,
 } from "./hindsightClient.js";
 import { RouterPolicy } from "./policy.js";
+import {
+  EncryptedFileQuarantineStore,
+  type QuarantineStore,
+} from "./quarantineStore.js";
 import { loadRegistry } from "./registry.js";
 import { JsonlReviewQueue, type ReviewQueue } from "./reviewQueue.js";
 import type { RecallBody, RetainBody, WriterRegistry } from "./types.js";
@@ -19,12 +23,17 @@ const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
+const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY;
+const QUARANTINE_OBJECT_DIR =
+  process.env.QUARANTINE_OBJECT_DIR ??
+  "/volume1/reports/hindsight-quarantine/objects";
 
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   registry?: WriterRegistry;
   hindsight?: HindsightGateway;
   reviewQueue?: ReviewQueue;
+  quarantineStore?: QuarantineStore;
 }
 
 function buildPolicy(
@@ -39,6 +48,12 @@ function buildPolicy(
     reviewQueue:
       options.reviewQueue ??
       new JsonlReviewQueue(registry.defaults.review_queue_path),
+    quarantineStore:
+      options.quarantineStore ??
+      new EncryptedFileQuarantineStore(
+        QUARANTINE_PUBLIC_KEY,
+        QUARANTINE_OBJECT_DIR,
+      ),
   });
 }
 
@@ -98,7 +113,7 @@ export function createMemoryRouterServer(
         return send(res, 200, {
           api_version: "0.8.3",
           router: "memory-router",
-          features: { policy_facade: true },
+          features: { policy_facade: true, encrypted_quarantine: true },
         });
       }
 
