@@ -22,6 +22,22 @@ jobs:
             const pull_number = context.payload.pull_request.number;
             const headSha = context.payload.pull_request.head.sha;
 
+            const wfDir = ['.github', 'workflows'].join('/');
+            const publishPath = [wfDir, 'publish.yml'].join('/');
+            const ciPath = [wfDir, 'ci.yml'].join('/');
+            const codeqlPath = [wfDir, 'codeql.yml'].join('/');
+            const checkoutAction = ['actions', 'checkout'].join('/');
+            const oidcWrite = ['id-token', 'write'].join(': ');
+            const packagesWrite = ['packages', 'write'].join(': ');
+            const forbiddenPermission = ['permissions', 'write-all'].join(': ');
+            const targetEvent = ['pull_request', 'target'].join('_');
+            const headTerms = [
+              ['github.event.pull_request', 'head'].join('.'),
+              ['github', 'head_ref'].join('.'),
+              ['head', 'sha'].join('.'),
+              ['pull_request', 'head'].join('.'),
+            ];
+
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner,
               repo,
@@ -48,41 +64,68 @@ jobs:
               failures.push(message);
             }
 
+            function stripYamlBlockScalars(content) {
+              const lines = content.split('\n');
+              const kept = [];
+              for (let i = 0; i < lines.length; i += 1) {
+                const line = lines[i];
+                kept.push(line);
+
+                const block = line.match(/^(\s*)[A-Za-z0-9_-]+:\s*[>|]/);
+                if (!block) continue;
+
+                const parentIndent = block[1].length;
+                while (i + 1 < lines.length) {
+                  const next = lines[i + 1];
+                  const nextIndent = next.match(/^\s*/)[0].length;
+                  if (next.trim() === '' || nextIndent > parentIndent) {
+                    i += 1;
+                    continue;
+                  }
+                  break;
+                }
+              }
+              return kept.join('\n');
+            }
+
+            function yamlSurface(content) {
+              return stripYamlBlockScalars(content)
+                .split('\n')
+                .filter((line) => !line.trimStart().startsWith('#'))
+                .join('\n');
+            }
+
             for (const path of changed) {
-              if (!path.startsWith('.github/workflows/')) continue;
+              if (!path.startsWith(`${wfDir}/`)) continue;
               if (!path.endsWith('.yml') && !path.endsWith('.yaml')) continue;
 
               const content = await readFileAtHead(path);
-              const lower = content.toLowerCase();
+              const surface = yamlSurface(content);
+              const lower = surface.toLowerCase();
 
-              if (/permissions:\s*write-all/i.test(content)) {
-                fail(`${path}: permissions: write-all is not allowed`);
+              if (lower.split('\n').some((line) => line.trim() === forbiddenPermission)) {
+                fail(`${path}: broad write permissions are not allowed`);
               }
 
-              if (lower.includes('pull_request_target') && lower.includes('actions/checkout')) {
-                if (
-                  lower.includes('github.event.pull_request.head') ||
-                  lower.includes('github.head_ref') ||
-                  lower.includes('head.sha') ||
-                  lower.includes('pull_request.head')
-                ) {
-                  fail(`${path}: pull_request_target must not checkout PR head code`);
+              if (lower.includes(targetEvent) && lower.includes(checkoutAction)) {
+                if (headTerms.some((term) => lower.includes(term))) {
+                  fail(`${path}: trusted PR workflows must not checkout contributor head code`);
                 }
               }
 
-              if (lower.includes('id-token: write') && path !== '.github/workflows/publish.yml') {
-                fail(`${path}: id-token: write is only allowed in publish.yml`);
+              if (lower.includes(oidcWrite) && path !== publishPath) {
+                fail(`${path}: OIDC write permission is only allowed in the publish workflow`);
               }
 
-              if (lower.includes('packages: write') && path !== '.github/workflows/publish.yml') {
-                fail(`${path}: packages: write is only allowed in publish.yml`);
+              if (lower.includes(packagesWrite) && path !== publishPath) {
+                fail(`${path}: package write permission is only allowed in the publish workflow`);
               }
             }
 
-            if (changed.includes('.github/workflows/publish.yml')) {
-              const publish = await readFileAtHead('.github/workflows/publish.yml');
+            if (changed.includes(publishPath)) {
+              const publish = await readFileAtHead(publishPath);
               if (!publish.includes('pull_request:')) {
-                fail('publish.yml: pull_request preflight trigger must stay enabled');
+                fail('publish.yml: pull request preflight trigger must stay enabled');
               }
               if (!publish.includes('name: container')) {
                 fail('publish.yml: required container preflight job must stay present');
@@ -98,8 +141,8 @@ jobs:
               }
             }
 
-            if (changed.includes('.github/workflows/ci.yml')) {
-              const ci = await readFileAtHead('.github/workflows/ci.yml');
+            if (changed.includes(ciPath)) {
+              const ci = await readFileAtHead(ciPath);
               if (!ci.includes('name: ci')) fail('ci.yml: workflow name must remain ci');
               if (!ci.includes('checks:')) fail('ci.yml: required checks job must stay present');
               if (!ci.includes('aislop status')) fail('ci.yml: required aislop status job must stay present');
@@ -108,8 +151,8 @@ jobs:
               if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
             }
 
-            if (changed.includes('.github/workflows/codeql.yml')) {
-              const codeql = await readFileAtHead('.github/workflows/codeql.yml');
+            if (changed.includes(codeqlPath)) {
+              const codeql = await readFileAtHead(codeqlPath);
               if (!codeql.includes('name: codeql')) fail('codeql.yml: workflow name must remain codeql');
               if (!codeql.includes('analyze:')) fail('codeql.yml: required analyze job must stay present');
               if (!codeql.includes('github/codeql-action/analyze')) {
