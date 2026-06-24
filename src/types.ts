@@ -80,9 +80,11 @@ export interface ReviewRecord {
   writer_id?: string;
   source?: string;
   reason: ReviewReason;
+  quarantine_id?: string;
   sha256?: string;
   preview: string;
   decision: "pending";
+  postpone_count?: number;
   method?: string;
   path?: string;
 }
