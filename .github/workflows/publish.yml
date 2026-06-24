@@ -74,7 +74,7 @@ jobs:
       attestations: write
     env:
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
-      IMAGE_DOCKERHUB: ${{ secrets.DOCKERHUB_USERNAME }}/hindsight-memory-router
+      IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
     steps:
       - uses: actions/checkout@v4
 
@@ -91,7 +91,6 @@ jobs:
           password: ${{ github.token }}
 
       - uses: docker/login-action@v3
-        if: env.IMAGE_DOCKERHUB != '/hindsight-memory-router'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -107,7 +106,6 @@ jobs:
             ${{ env.IMAGE_GHCR }}:${{ github.sha }}
 
       - name: Build and push Docker Hub
-        if: env.IMAGE_DOCKERHUB != '/hindsight-memory-router'
         uses: docker/build-push-action@v7
         with:
           context: .
