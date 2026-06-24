@@ -1,0 +1,63 @@
+name: pr branch updater
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    name: update
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update open PR branches
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const repoFullName = `${owner}/${repo}`;
+
+            const pulls = await github.paginate(github.rest.pulls.list, {
+              owner,
+              repo,
+              state: 'open',
+              base: 'main',
+              per_page: 100,
+            });
+
+            core.info(`Found ${pulls.length} open PR(s) targeting main.`);
+
+            for (const pull of pulls) {
+              if (pull.head.repo.full_name !== repoFullName) {
+                core.info(`#${pull.number}: skip fork PR ${pull.head.repo.full_name}`);
+                continue;
+              }
+
+              const { data: current } = await github.rest.pulls.get({
+                owner,
+                repo,
+                pull_number: pull.number,
+              });
+
+              if (current.mergeable_state !== 'behind') {
+                core.info(`#${pull.number}: skip, mergeable_state=${current.mergeable_state}`);
+                continue;
+              }
+
+              try {
+                await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+                  owner,
+                  repo,
+                  pull_number: pull.number,
+                  expected_head_sha: current.head.sha,
+                });
+                core.info(`#${pull.number}: update branch requested`);
+              } catch (error) {
+                core.warning(`#${pull.number}: update branch failed: ${error.message}`);
+              }
+            }
