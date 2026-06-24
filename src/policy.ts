@@ -8,19 +8,23 @@ import type {
 } from "./types.js";
 import { getWriter } from "./registry.js";
 import type { ReviewQueue } from "./reviewQueue.js";
-import type { QuarantineStore } from "./quarantineStore.js";
+import { MemoryQuarantineStore, type QuarantineStore } from "./quarantineStore.js";
 import { scanContent } from "./safety.js";
 
 export interface RouterPolicyDeps {
   registry: WriterRegistry;
   hindsight: HindsightGateway;
   reviewQueue: ReviewQueue;
-  quarantineStore: QuarantineStore;
+  quarantineStore?: QuarantineStore;
   now?: () => Date;
 }
 
 export class RouterPolicy {
-  constructor(private readonly deps: RouterPolicyDeps) {}
+  private readonly quarantineStore: QuarantineStore;
+
+  constructor(private readonly deps: RouterPolicyDeps) {
+    this.quarantineStore = deps.quarantineStore ?? new MemoryQuarantineStore();
+  }
 
   async retain(
     writerId: string,
@@ -140,7 +144,7 @@ export class RouterPolicy {
   }) {
     const now = this.deps.now?.() ?? new Date();
     const timestamp = now.toISOString();
-    const stored = this.deps.quarantineStore.put({
+    const stored = this.quarantineStore.put({
       timestamp,
       writerId: input.writerId,
       source: input.source,
