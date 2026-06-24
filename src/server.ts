@@ -87,12 +87,12 @@ export function createMemoryRouterServer(
       const method = req.method ?? "GET";
       const url = new URL(req.url ?? "/", "http://memory-router.local");
 
-      if (!isAuthorized(req, options.routerToken))
-        return send(res, 401, { error: "unauthorized" });
-
       if (method === "GET" && url.pathname === "/health") {
         return send(res, 200, { status: "healthy", service: "memory-router" });
       }
+
+      if (!isAuthorized(req, options.routerToken))
+        return send(res, 401, { error: "unauthorized" });
 
       if (method === "GET" && url.pathname === "/version") {
         return send(res, 200, {
