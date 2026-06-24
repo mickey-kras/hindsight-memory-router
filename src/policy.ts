@@ -12,7 +12,7 @@ import {
   MemoryQuarantineStore,
   type QuarantineStore,
 } from "./quarantineStore.js";
-import { scanContent } from "./safety.js";
+import { scanContent, type SafetyFinding } from "./safety.js";
 
 export interface RouterPolicyDeps {
   registry: WriterRegistry;
@@ -36,34 +36,24 @@ export class RouterPolicy {
   ): Promise<unknown> {
     const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      const quarantine = await this.quarantine({
+      return this.quarantineRetain({
         writerId,
         source,
         reason: "unknown_writer",
-        payload: { action: "retain", writer_id: writerId, body },
+        body,
       });
-      return {
-        queued: true,
-        reason: "unknown_writer",
-        quarantine_id: quarantine.quarantine_id,
-      };
     }
 
     for (const item of body.items ?? []) {
       const scan = scanContent(item.content ?? "");
       if (!scan.safe) {
-        const quarantine = await this.quarantine({
+        return this.quarantineRetain({
           writerId,
           source,
           reason: "suspicious_content",
-          payload: { action: "retain", writer_id: writerId, body },
-        });
-        return {
-          queued: true,
-          reason: "suspicious_content",
-          quarantine_id: quarantine.quarantine_id,
+          body,
           findings: scan.findings,
-        };
+        });
       }
     }
 
@@ -137,6 +127,32 @@ export class RouterPolicy {
       path,
     });
     return { error: "endpoint denied by memory-router policy" };
+  }
+
+  private async quarantineRetain(input: {
+    writerId: string;
+    source: string;
+    reason: "unknown_writer" | "suspicious_content";
+    body: RetainBody;
+    findings?: SafetyFinding[];
+  }): Promise<unknown> {
+    const quarantine = await this.quarantine({
+      writerId: input.writerId,
+      source: input.source,
+      reason: input.reason,
+      payload: {
+        action: "retain",
+        writer_id: input.writerId,
+        body: input.body,
+      },
+    });
+
+    return {
+      queued: true,
+      reason: input.reason,
+      quarantine_id: quarantine.quarantine_id,
+      ...(input.findings ? { findings: input.findings } : {}),
+    };
   }
 
   private async quarantine(input: {
