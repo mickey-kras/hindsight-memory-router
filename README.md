@@ -4,6 +4,9 @@
 [![codeql](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml)
 [![aislop ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml/badge.svg?branch=main)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml)
 [![aislop score](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router.svg)](https://scanaislop.com/mickey-kras/hindsight-memory-router)
+[![docker hub](https://img.shields.io/docker/v/mickeykrasilnikov/hindsight-memory-router?label=docker%20hub)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
+[![docker pulls](https://img.shields.io/docker/pulls/mickeykrasilnikov/hindsight-memory-router)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
+[![ghcr](https://img.shields.io/badge/ghcr.io-mickey--kras%2Fhindsight--memory--router-blue)](https://github.com/mickey-kras/hindsight-memory-router/pkgs/container/hindsight-memory-router)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
 
@@ -96,6 +99,25 @@ curl -fsS http://127.0.0.1:8890/version
 ```
 
 ## Docker
+
+Published images:
+
+```text
+docker.io/mickeykrasilnikov/hindsight-memory-router:latest
+docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
+ghcr.io/mickey-kras/hindsight-memory-router:latest
+ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
+```
+
+`main` branch pushes publish `latest` and exact commit SHA tags to both Docker Hub and GitHub Container Registry.
+
+Pull the Docker Hub image used by the UGOS Compose deployment:
+
+```bash
+docker pull docker.io/mickeykrasilnikov/hindsight-memory-router:latest
+```
+
+Build locally:
 
 ```bash
 docker build -t hindsight-memory-router:local .
