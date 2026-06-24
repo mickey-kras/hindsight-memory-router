@@ -8,7 +8,10 @@ import type {
 } from "./types.js";
 import { getWriter } from "./registry.js";
 import type { ReviewQueue } from "./reviewQueue.js";
-import { MemoryQuarantineStore, type QuarantineStore } from "./quarantineStore.js";
+import {
+  MemoryQuarantineStore,
+  type QuarantineStore,
+} from "./quarantineStore.js";
 import { scanContent } from "./safety.js";
 
 export interface RouterPolicyDeps {
