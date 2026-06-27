@@ -9,7 +9,7 @@ services:
       - "8888"
     volumes:
       - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
-      - ./tmp/state:/state
+      - ./tmp/fake/state:/state
     networks:
       - internal
 
@@ -27,8 +27,8 @@ services:
     ports:
       - "127.0.0.1:8890:8890"
     volumes:
-      - ./tmp/review:/volume1/reports/hindsight-review
-      - ./tmp/quarantine:/state/quarantine
+      - ./tmp/fake/review:/volume1/reports/hindsight-review
+      - ./tmp/fake/quarantine:/state/quarantine
     networks:
       - internal
 
