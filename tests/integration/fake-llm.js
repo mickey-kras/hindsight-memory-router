@@ -1,4 +1,7 @@
+import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
+import process from "node:process";
+import { URL } from "node:url";
 
 const PORT = Number(process.env.PORT ?? "11434");
 const EMBEDDING_DIM = 384;
@@ -110,5 +113,5 @@ createServer(async (req, res) => {
     return send(res, 500, { error: "internal error" });
   }
 }).listen(PORT, () => {
-  console.log(`fake-llm listening on ${PORT}`);
+  process.stdout.write(`fake-llm listening on ${PORT}\n`);
 });
