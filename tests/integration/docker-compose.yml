@@ -1,0 +1,37 @@
+services:
+  hindsight:
+    image: node:26-alpine
+    working_dir: /workspace
+    command: ["node", "fake-hindsight.js"]
+    environment:
+      FAKE_HINDSIGHT_LOG: /state/hindsight.jsonl
+    expose:
+      - "8888"
+    volumes:
+      - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
+      - ./tmp/state:/state
+    networks:
+      - internal
+
+  memory-router:
+    image: hindsight-memory-router:ci
+    depends_on:
+      - hindsight
+    environment:
+      MEMORY_ROUTER_PORT: "8890"
+      MEMORY_ROUTER_TOKEN: test-router-token
+      HINDSIGHT_BASE_URL: http://hindsight:8888
+      HINDSIGHT_API_KEY: test-hindsight-key
+      QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
+      QUARANTINE_OBJECT_DIR: /state/quarantine/objects
+    ports:
+      - "127.0.0.1:8890:8890"
+    volumes:
+      - ./tmp/review:/volume1/reports/hindsight-review
+      - ./tmp/quarantine:/state/quarantine
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
