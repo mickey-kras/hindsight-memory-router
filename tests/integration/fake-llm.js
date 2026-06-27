@@ -106,10 +106,8 @@ createServer(async (req, res) => {
     }
 
     return send(res, 404, { error: "not found" });
-  } catch (error) {
-    return send(res, 500, {
-      error: error instanceof Error ? error.message : String(error),
-    });
+  } catch {
+    return send(res, 500, { error: "internal error" });
   }
 }).listen(PORT, () => {
   console.log(`fake-llm listening on ${PORT}`);
