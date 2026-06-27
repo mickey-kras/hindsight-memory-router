@@ -34,6 +34,17 @@ export QUARANTINE_PUBLIC_KEY="$(base64 -w0 "${tmp_dir}/public.pem")"
 cleanup() {
   docker compose -p "$project" -f "$compose_file" down -v --remove-orphans >/dev/null 2>&1 || true
 }
+
+dump_debug() {
+  local exit_code="$?"
+  echo ""
+  echo "${mode} integration smoke failed; docker compose state follows" >&2
+  docker compose -p "$project" -f "$compose_file" ps >&2 || true
+  docker compose -p "$project" -f "$compose_file" logs --no-color --tail=250 >&2 || true
+  exit "$exit_code"
+}
+
+trap dump_debug ERR
 trap cleanup EXIT
 
 cleanup
@@ -47,6 +58,14 @@ for _ in {1..60}; do
   sleep 2
 done
 curl -fsS "${router_url}/health" >/dev/null
+
+for _ in {1..60}; do
+  if docker compose -p "$project" -f "$compose_file" exec -T memory-router node -e "fetch('http://hindsight:8888/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+docker compose -p "$project" -f "$compose_file" exec -T memory-router node -e "fetch('http://hindsight:8888/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null
 
 status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/version")"
 if [[ "$status" != "401" ]]; then
@@ -90,7 +109,7 @@ retry_post_router() {
   post_router "$path" "$body"
 }
 
-known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":false}')"
+known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":true}')"
 printf '%s' "$known_response" | grep -q 'success' || {
   echo "known retain failed: ${known_response}" >&2
   exit 1
