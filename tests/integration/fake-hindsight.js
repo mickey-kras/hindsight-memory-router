@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { createServer } from "node:http";
-import { mkdirSync, appendFileSync } from "node:fs";
 import { dirname } from "node:path";
+import process from "node:process";
+import { URL } from "node:url";
 
 const PORT = Number(process.env.PORT ?? "8888");
 const LOG_PATH = process.env.FAKE_HINDSIGHT_LOG ?? "/state/hindsight.jsonl";
@@ -72,5 +75,5 @@ createServer(async (req, res) => {
     return send(res, 500, { error: "internal error" });
   }
 }).listen(PORT, () => {
-  console.log(`fake-hindsight listening on ${PORT}`);
+  process.stdout.write(`fake-hindsight listening on ${PORT}\n`);
 });
