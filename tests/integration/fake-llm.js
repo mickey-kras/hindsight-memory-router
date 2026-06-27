@@ -27,6 +27,10 @@ function textFromMessages(messages) {
   return typeof last?.content === "string" ? last.content : "CI smoke memory fact.";
 }
 
+function inputList(input) {
+  return Array.isArray(input) ? input : [input ?? ""];
+}
+
 createServer(async (req, res) => {
   try {
     const method = req.method ?? "GET";
@@ -57,15 +61,26 @@ createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/v1/embeddings") {
       const body = await readJson(req);
-      const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
       return send(res, 200, {
         object: "list",
-        data: input.map((_, index) => ({
+        data: inputList(body.input).map((_, index) => ({
           object: "embedding",
           index,
           embedding: embedding(),
         })),
         model: body.model ?? "ci-fake",
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/embeddings") {
+      return send(res, 200, { embedding: embedding() });
+    }
+
+    if (method === "POST" && url.pathname === "/api/embed") {
+      const body = await readJson(req);
+      return send(res, 200, {
+        model: body.model ?? "ci-fake",
+        embeddings: inputList(body.input).map(() => embedding()),
       });
     }
 
