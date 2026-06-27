@@ -1,0 +1,101 @@
+import { createServer } from "node:http";
+
+const PORT = Number(process.env.PORT ?? "11434");
+const EMBEDDING_DIM = 384;
+
+function send(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const chunk of req) chunks.push(Buffer.from(chunk));
+  const raw = Buffer.concat(chunks).toString("utf8");
+  return raw ? JSON.parse(raw) : {};
+}
+
+function embedding() {
+  return Array.from({ length: EMBEDDING_DIM }, (_, index) =>
+    index === 0 ? 1 : 0,
+  );
+}
+
+function textFromMessages(messages) {
+  if (!Array.isArray(messages)) return "CI smoke memory fact.";
+  const last = [...messages].reverse().find((item) => item?.content);
+  return typeof last?.content === "string" ? last.content : "CI smoke memory fact.";
+}
+
+createServer(async (req, res) => {
+  try {
+    const method = req.method ?? "GET";
+    const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
+
+    if (method === "GET" && ["/health", "/api/tags"].includes(url.pathname)) {
+      return send(res, 200, { models: [{ name: "ci-fake" }] });
+    }
+
+    if (method === "POST" && url.pathname === "/v1/chat/completions") {
+      const body = await readJson(req);
+      const text = textFromMessages(body.messages);
+      return send(res, 200, {
+        id: "ci-chat",
+        object: "chat.completion",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: `CI extracted fact: ${text}`,
+            },
+            finish_reason: "stop",
+          },
+        ],
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/v1/embeddings") {
+      const body = await readJson(req);
+      const input = Array.isArray(body.input) ? body.input : [body.input ?? ""];
+      return send(res, 200, {
+        object: "list",
+        data: input.map((_, index) => ({
+          object: "embedding",
+          index,
+          embedding: embedding(),
+        })),
+        model: body.model ?? "ci-fake",
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/chat") {
+      const body = await readJson(req);
+      return send(res, 200, {
+        model: body.model ?? "ci-fake",
+        done: true,
+        message: {
+          role: "assistant",
+          content: `CI extracted fact: ${textFromMessages(body.messages)}`,
+        },
+      });
+    }
+
+    if (method === "POST" && url.pathname === "/api/generate") {
+      const body = await readJson(req);
+      return send(res, 200, {
+        model: body.model ?? "ci-fake",
+        done: true,
+        response: `CI extracted fact: ${body.prompt ?? "memory"}`,
+      });
+    }
+
+    return send(res, 404, { error: "not found" });
+  } catch (error) {
+    return send(res, 500, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}).listen(PORT, () => {
+  console.log(`fake-llm listening on ${PORT}`);
+});
