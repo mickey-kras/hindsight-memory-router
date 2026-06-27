@@ -9,6 +9,9 @@ coverage/
 !.env.example
 .DS_Store
 
+# Integration smoke state
+tests/integration/tmp/
+
 # Editors
 .vscode/
 .idea/
