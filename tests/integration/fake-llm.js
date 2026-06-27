@@ -27,7 +27,9 @@ function embedding() {
 function textFromMessages(messages) {
   if (!Array.isArray(messages)) return "CI smoke memory fact.";
   const last = [...messages].reverse().find((item) => item?.content);
-  return typeof last?.content === "string" ? last.content : "CI smoke memory fact.";
+  return typeof last?.content === "string"
+    ? last.content
+    : "CI smoke memory fact.";
 }
 
 function inputList(input) {

@@ -35,10 +35,15 @@ createServer(async (req, res) => {
     }
 
     if (method === "GET" && url.pathname === "/version") {
-      return send(res, 200, { api_version: "0.8.3", service: "fake-hindsight" });
+      return send(res, 200, {
+        api_version: "0.8.3",
+        service: "fake-hindsight",
+      });
     }
 
-    const retain = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/memories$/);
+    const retain = url.pathname.match(
+      /^\/v1\/default\/banks\/([^/]+)\/memories$/,
+    );
     if (method === "POST" && retain) {
       const body = await readJson(req);
       const bankId = decodeURIComponent(retain[1]);
