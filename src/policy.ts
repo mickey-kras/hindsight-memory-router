@@ -1,5 +1,6 @@
 import type { HindsightGateway } from "./hindsightClient.js";
 import type {
+  MemoryItem,
   RecallBody,
   RecallResponse,
   RetainBody,
@@ -45,7 +46,7 @@ export class RouterPolicy {
     }
 
     for (const item of body.items ?? []) {
-      const scan = scanContent(item.content ?? "");
+      const scan = scanMemoryItem(item);
       if (!scan.safe) {
         return this.quarantineRetain({
           writerId,
@@ -228,4 +229,20 @@ export class RouterPolicy {
       path: input.path,
     });
   }
+}
+
+function scanMemoryItem(item: MemoryItem): {
+  safe: boolean;
+  findings: SafetyFinding[];
+} {
+  const fields = [
+    item.content,
+    item.context ?? "",
+    item.document_id ?? "",
+    ...(item.tags ?? []),
+    ...Object.values(item.metadata ?? {}),
+  ].filter((value): value is string => typeof value === "string");
+
+  const findings = fields.flatMap((value) => scanContent(value).findings);
+  return { safe: findings.length === 0, findings };
 }
