@@ -1,6 +1,8 @@
 name: policy
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
 
@@ -46,6 +48,11 @@ jobs:
             });
 
             const changed = files.map((file) => file.filename);
+            const workflowChanged = changed.some(
+              (path) =>
+                path.startsWith(`${wfDir}/`) &&
+                (path.endsWith('.yml') || path.endsWith('.yaml')),
+            );
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -93,6 +100,11 @@ jobs:
                 .split('\n')
                 .filter((line) => !line.trimStart().startsWith('#'))
                 .join('\n');
+            }
+
+            if (!workflowChanged) {
+              core.info('No workflow files changed. Policy guard passed.');
+              return;
             }
 
             for (const path of changed) {
