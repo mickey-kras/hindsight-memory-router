@@ -18,32 +18,39 @@ OpenClaw Hindsight plugin -> memory-router -> Hindsight API
 
 The router is a facade/decorator, not a second memory system.
 
-## Why
+## What it does
 
 ```text
 writer identity required
 bank chosen by policy, not by agent
 recall is ACL-filtered
 unknown/suspicious input is encrypted before review
+admin review uses a separate token and private key
 unknown Hindsight endpoints are denied and logged
 ```
 
-## API surface
+## API
 
-Allowed:
+Normal facade:
 
 ```text
 GET  /health                         anonymous
-GET  /version                        token required
+GET  /version                        router token
 POST /v1/default/banks/{writer}/memories
 POST /v1/default/banks/{writer}/memories/recall
 ```
 
-Denied by default:
+Quarantine admin:
 
 ```text
-all other endpoints
+GET  /admin/quarantine/queue
+GET  /admin/quarantine/items/{quarantine_id}
+POST /admin/quarantine/items/{quarantine_id}/reject
+POST /admin/quarantine/items/{quarantine_id}/postpone
+POST /admin/quarantine/items/{quarantine_id}/promote
 ```
+
+All other Hindsight endpoints are denied by default.
 
 The Hindsight `bank_id` path value is treated as `writer_id`. Router policy decides the real bank.
 
@@ -58,16 +65,23 @@ ghcr.io/mickey-kras/hindsight-memory-router:latest
 ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
 ```
 
+The container runs as the non-root `node` user.
+
+On startup, it checks that configured quarantine/review storage paths are writable. Bad volume permissions fail fast instead of causing later request-time 500s.
+
 ## Configuration
 
 ```text
 MEMORY_ROUTER_PORT=8890
 MEMORY_ROUTER_TOKEN=change-me
+MEMORY_ROUTER_ADMIN_TOKEN=change-me-admin-token
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
+QUARANTINE_PRIVATE_KEY=<PEM or base64 PEM>
 QUARANTINE_OBJECT_DIR=/volume1/reports/hindsight-quarantine/objects
+QUARANTINE_MAX_POSTPONES=3
 ```
 
 OpenClaw plugin config:
@@ -110,6 +124,8 @@ No writer recalls `quarantine`. The `main` writer does not recall `research`.
 raw payload -> encrypted object store
 review queue -> quarantine_id + metadata only
 Hindsight quarantine bank -> safe index record only
+admin read -> decrypts one item with private key
+promote -> writes approved/sanitized content only
 ```
 
 No original text is written to the review queue or searchable memory.
@@ -124,6 +140,8 @@ npm run typecheck
 npm run security:audit
 npm run aislop:ci
 ```
+
+CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real compose smoke tests.
 
 ## License
 
