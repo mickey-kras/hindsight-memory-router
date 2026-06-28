@@ -5,6 +5,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
   security-events: write
@@ -67,6 +71,12 @@ jobs:
 
       - name: Docker build
         run: docker build -t hindsight-memory-router:ci .
+
+      - name: Fake Hindsight compose smoke
+        run: bash tests/integration/smoke.sh fake
+
+      - name: Real Hindsight compose smoke
+        run: bash tests/integration/smoke.sh real
 
   aislop:
     name: aislop status

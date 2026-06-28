@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: hindsight
+      POSTGRES_USER: hindsight
+      POSTGRES_PASSWORD: hindsight
+    volumes:
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hindsight -d hindsight"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
+  llm:
+    image: node:26-alpine
+    working_dir: /workspace
+    command: ["node", "fake-llm.js"]
+    volumes:
+      - ./fake-llm.js:/workspace/fake-llm.js:ro
+    expose:
+      - "11434"
+    networks:
+      - internal
+
+  hindsight:
+    image: ghcr.io/vectorize-io/hindsight:latest
+    environment:
+      HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/hindsight
+      HINDSIGHT_API_AUDIT_LOG_ENABLED: "true"
+      HINDSIGHT_API_AUDIT_LOG_RETENTION_DAYS: "1"
+      HINDSIGHT_API_LLM_TRACE_RETENTION_DAYS: "1"
+      HINDSIGHT_API_LLM_PROVIDER: ollama
+      HINDSIGHT_API_LLM_BASE_URL: http://llm:11434/v1
+      HINDSIGHT_API_LLM_MODEL: ci-fake
+      HINDSIGHT_API_LLM_MAX_CONCURRENT: "1"
+      HINDSIGHT_API_LLM_TIMEOUT: "60"
+      HINDSIGHT_API_VECTOR_EXTENSION: pgvector
+      HINDSIGHT_API_WORKER_ID: ci-hindsight
+      HINDSIGHT_CP_DATAPLANE_API_URL: http://127.0.0.1:8888
+      HINDSIGHT_CP_ACCESS_KEY: ci-access-key
+      HINDSIGHT_API_TENANT_EXTENSION: hindsight_api.extensions.builtin.tenant:ApiKeyTenantExtension
+      HINDSIGHT_API_TENANT_API_KEY: test-hindsight-key
+      HINDSIGHT_CP_DATAPLANE_API_KEY: test-hindsight-key
+    depends_on:
+      postgres:
+        condition: service_healthy
+      llm:
+        condition: service_started
+    expose:
+      - "8888"
+    networks:
+      - internal
+
+  memory-router:
+    image: hindsight-memory-router:ci
+    depends_on:
+      hindsight:
+        condition: service_started
+    environment:
+      MEMORY_ROUTER_PORT: "8890"
+      MEMORY_ROUTER_TOKEN: test-router-token
+      HINDSIGHT_BASE_URL: http://hindsight:8888
+      HINDSIGHT_API_KEY: test-hindsight-key
+      QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
+      QUARANTINE_OBJECT_DIR: /state/quarantine/objects
+    ports:
+      - "127.0.0.1:8890:8890"
+    volumes:
+      - ./tmp/real/review:/volume1/reports/hindsight-review
+      - ./tmp/real/quarantine:/state/quarantine
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
