@@ -1,5 +1,7 @@
 import type { HindsightGateway } from "./hindsightClient.js";
+import { HttpError } from "./httpError.js";
 import {
+  assertSafeQuarantineId,
   deleteEncryptedQuarantineObject,
   readDecryptedQuarantineObject,
 } from "./quarantineStore.js";
@@ -69,7 +71,7 @@ export class QuarantineAdminService {
     const record = this.requirePendingRecord(quarantineId);
     const count = record.postpone_count ?? 0;
     if (count >= maxPostpones) {
-      throw new Error("maximum postpone count reached");
+      throw new HttpError(409, "postpone_limit_reached", "maximum postpone count reached");
     }
     const next = {
       ...record,
@@ -92,22 +94,20 @@ export class QuarantineAdminService {
     this.requirePendingRecord(quarantineId);
     const targetBank = parseBankId(body.target_bank);
     if (targetBank === "quarantine") {
-      throw new Error("cannot promote to quarantine bank");
+      throw new HttpError(400, "invalid_target_bank", "cannot promote to quarantine bank");
     }
     const content = body.content?.trim();
     if (!content) {
-      throw new Error("approved content is required");
+      throw new HttpError(400, "approved_content_required", "approved content is required");
     }
     const scan = scanContent(content);
     if (!scan.safe) {
-      throw new Error("approved content failed safety scan");
+      throw new HttpError(400, "approved_content_rejected", "approved content failed safety scan");
     }
 
-    const metadata: Record<string, string> = {
-      router_decision: "promoted_from_quarantine",
-      quarantine_id: quarantineId,
-    };
-    if (body.metadata) Object.assign(metadata, body.metadata);
+    const metadata: Record<string, string> = body.metadata ? { ...body.metadata } : {};
+    metadata.router_decision = "promoted_from_quarantine";
+    metadata.quarantine_id = quarantineId;
 
     await this.options.hindsight.retain(targetBank, {
       async: true,
@@ -141,12 +141,17 @@ export class QuarantineAdminService {
   }
 
   private requirePendingRecord(quarantineId: string): ReviewRecord {
+    try {
+      assertSafeQuarantineId(quarantineId);
+    } catch {
+      throw new HttpError(400, "invalid_quarantine_id", "invalid quarantine_id");
+    }
     const record = readReviewQueue(this.options.reviewQueuePath).find(
       (item) => item.quarantine_id === quarantineId,
     );
-    if (!record) throw new Error("quarantine item not found");
+    if (!record) throw new HttpError(404, "quarantine_not_found", "quarantine item not found");
     if (record.decision !== "pending") {
-      throw new Error("quarantine item is not pending");
+      throw new HttpError(409, "quarantine_already_finalized", "quarantine item is not pending");
     }
     return record;
   }
@@ -170,8 +175,8 @@ export class QuarantineAdminService {
 }
 
 function parseBankId(value: string | undefined): BankId {
-  if (!value) throw new Error("target_bank is required");
+  if (!value) throw new HttpError(400, "target_bank_required", "target_bank is required");
   if (!BANK_IDS.includes(value as BankId))
-    throw new Error("invalid target_bank");
+    throw new HttpError(400, "invalid_target_bank", "invalid target_bank");
   return value as BankId;
 }
