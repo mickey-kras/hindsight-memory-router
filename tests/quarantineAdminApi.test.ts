@@ -243,7 +243,9 @@ describe("quarantine admin API", () => {
         },
       );
       expect(promoteRes.status).toBe(500);
-      expect(await promoteRes.json()).toMatchObject({ error: "internal error" });
+      expect(await promoteRes.json()).toMatchObject({
+        error: "internal error",
+      });
     });
   });
 });
