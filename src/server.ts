@@ -269,7 +269,7 @@ export function createMemoryRouterServer(
 if (import.meta.url === `file://${process.argv[1]}`) {
   try {
     createMemoryRouterServer({ validateStorage: true }).listen(PORT, () => {
-      console.log(`memory-router listening on ${PORT}`);
+      process.stdout.write(`memory-router listening on ${PORT}\n`);
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "startup failed";
