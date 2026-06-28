@@ -36,7 +36,9 @@ const QUARANTINE_OBJECT_DIR =
 const QUARANTINE_MAX_POSTPONES = Number(
   process.env.QUARANTINE_MAX_POSTPONES ?? "3",
 );
-const MAX_BODY_BYTES = Number(process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576");
+const MAX_BODY_BYTES = Number(
+  process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576",
+);
 
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
@@ -280,7 +282,8 @@ export function createMemoryRouterServer(
       return send(res, 404, denied);
     } catch (error) {
       const response = safeErrorBody(error);
-      if (response.status === 500) process.stderr.write("memory-router request failed\n");
+      if (response.status === 500)
+        process.stderr.write("memory-router request failed\n");
       return send(res, response.status, response.body);
     }
   });

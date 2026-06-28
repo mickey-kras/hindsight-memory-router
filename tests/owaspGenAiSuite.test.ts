@@ -74,14 +74,17 @@ describe("OWASP GenAI quarantine regression scaffold", () => {
 
   it("rejects malformed JSON with a safe structured response", async () => {
     await withServer({}, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/v1/default/banks/main/memories`, {
-        method: "POST",
-        headers: {
-          authorization: "Bearer router-token",
-          "content-type": "application/json",
+      const response = await fetch(
+        `${baseUrl}/v1/default/banks/main/memories`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer router-token",
+            "content-type": "application/json",
+          },
+          body: "{not-json",
         },
-        body: "{not-json",
-      });
+      );
       expect(response.status).toBe(400);
       expect(await response.json()).toMatchObject({
         error: "invalid_json",
@@ -92,14 +95,17 @@ describe("OWASP GenAI quarantine regression scaffold", () => {
 
   it("rejects oversized JSON with a safe structured response", async () => {
     await withServer({ maxBodyBytes: 32 }, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/v1/default/banks/main/memories`, {
-        method: "POST",
-        headers: {
-          authorization: "Bearer router-token",
-          "content-type": "application/json",
+      const response = await fetch(
+        `${baseUrl}/v1/default/banks/main/memories`,
+        {
+          method: "POST",
+          headers: {
+            authorization: "Bearer router-token",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ items: [{ content: "x".repeat(100) }] }),
         },
-        body: JSON.stringify({ items: [{ content: "x".repeat(100) }] }),
-      });
+      );
       expect(response.status).toBe(413);
       expect(await response.json()).toMatchObject({
         error: "payload_too_large",

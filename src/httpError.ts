@@ -9,7 +9,10 @@ export class HttpError extends Error {
   }
 }
 
-export function safeErrorBody(error: unknown): { status: number; body: unknown } {
+export function safeErrorBody(error: unknown): {
+  status: number;
+  body: unknown;
+} {
   if (error instanceof HttpError) {
     return {
       status: error.status,
