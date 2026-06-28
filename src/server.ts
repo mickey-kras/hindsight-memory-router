@@ -222,8 +222,8 @@ export function createMemoryRouterServer(
 
       const denied = policy.denyEndpoint(method, url.pathname);
       return send(res, 404, denied);
-    } catch (error) {
-      console.error("memory-router request failed", error);
+    } catch {
+      console.error("memory-router request failed");
       return send(res, 500, { error: "internal error" });
     }
   });
