@@ -9,6 +9,7 @@ import {
   type HindsightGateway,
 } from "./hindsightClient.js";
 import { RouterPolicy } from "./policy.js";
+import { QuarantineAdminService } from "./quarantineAdmin.js";
 import {
   EncryptedFileQuarantineStore,
   type QuarantineStore,
@@ -19,47 +20,83 @@ import type { RecallBody, RetainBody, WriterRegistry } from "./types.js";
 
 const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
+const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY;
+const QUARANTINE_PRIVATE_KEY = process.env.QUARANTINE_PRIVATE_KEY;
 const QUARANTINE_OBJECT_DIR =
   process.env.QUARANTINE_OBJECT_DIR ??
   "/volume1/reports/hindsight-quarantine/objects";
+const QUARANTINE_MAX_POSTPONES = Number(
+  process.env.QUARANTINE_MAX_POSTPONES ?? "3",
+);
 
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
+  adminToken?: string;
+  quarantinePrivateKey?: string;
+  quarantineObjectDir?: string;
+  reviewQueuePath?: string;
+  maxPostpones?: number;
   registry?: WriterRegistry;
   hindsight?: HindsightGateway;
   reviewQueue?: ReviewQueue;
   quarantineStore?: QuarantineStore;
 }
 
+function buildHindsight(options: CreateMemoryRouterServerOptions): HindsightGateway {
+  return (
+    options.hindsight ?? new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
+  );
+}
+
 function buildPolicy(
   options: CreateMemoryRouterServerOptions = {},
 ): RouterPolicy {
   const registry = options.registry ?? loadRegistry(REGISTRY_PATH);
+  const reviewQueue =
+    options.reviewQueue ??
+    new JsonlReviewQueue(options.reviewQueuePath ?? registry.defaults.review_queue_path);
   return new RouterPolicy({
     registry,
-    hindsight:
-      options.hindsight ??
-      new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY),
-    reviewQueue:
-      options.reviewQueue ??
-      new JsonlReviewQueue(registry.defaults.review_queue_path),
+    hindsight: buildHindsight(options),
+    reviewQueue,
     quarantineStore:
       options.quarantineStore ??
       new EncryptedFileQuarantineStore(
         QUARANTINE_PUBLIC_KEY,
-        QUARANTINE_OBJECT_DIR,
+        options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR,
       ),
+  });
+}
+
+function buildAdmin(
+  options: CreateMemoryRouterServerOptions = {},
+): QuarantineAdminService | null {
+  const registry = options.registry ?? loadRegistry(REGISTRY_PATH);
+  const reviewQueuePath =
+    options.reviewQueuePath ?? registry.defaults.review_queue_path;
+  return new QuarantineAdminService({
+    reviewQueuePath,
+    quarantineObjectDir: options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR,
+    quarantinePrivateKey: options.quarantinePrivateKey ?? QUARANTINE_PRIVATE_KEY,
+    hindsight: buildHindsight(options),
+    maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });
 }
 
 function isAuthorized(req: IncomingMessage, routerToken?: string): boolean {
   const token = routerToken ?? ROUTER_TOKEN;
   if (!token) return true;
+  return req.headers.authorization === `Bearer ${token}`;
+}
+
+function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
+  const token = adminToken ?? ADMIN_TOKEN;
+  if (!token) return false;
   return req.headers.authorization === `Bearer ${token}`;
 }
 
@@ -92,10 +129,24 @@ function parseMemoryPath(
   return null;
 }
 
+function parseAdminItemPath(
+  pathname: string,
+): { quarantineId: string; action: "read" | "reject" | "postpone" | "promote" } | null {
+  const match = pathname.match(
+    /^\/admin\/quarantine\/items\/([^/]+)(?:\/(reject|postpone|promote))?$/,
+  );
+  if (!match) return null;
+  return {
+    quarantineId: decodeURIComponent(match[1]),
+    action: (match[2] ?? "read") as "read" | "reject" | "postpone" | "promote",
+  };
+}
+
 export function createMemoryRouterServer(
   options: CreateMemoryRouterServerOptions = {},
 ) {
   const policy = buildPolicy(options);
+  const admin = buildAdmin(options);
 
   return createServer(async (req, res) => {
     try {
@@ -106,6 +157,30 @@ export function createMemoryRouterServer(
         return send(res, 200, { status: "healthy", service: "memory-router" });
       }
 
+      if (url.pathname.startsWith("/admin/")) {
+        if (!admin || !isAdminAuthorized(req, options.adminToken)) {
+          return send(res, 401, { error: "unauthorized" });
+        }
+        if (method === "GET" && url.pathname === "/admin/quarantine/queue") {
+          return send(res, 200, admin.listQueue());
+        }
+        const itemPath = parseAdminItemPath(url.pathname);
+        if (itemPath?.action === "read" && method === "GET") {
+          return send(res, 200, admin.readItem(itemPath.quarantineId));
+        }
+        if (itemPath?.action === "reject" && method === "POST") {
+          return send(res, 200, admin.reject(itemPath.quarantineId));
+        }
+        if (itemPath?.action === "postpone" && method === "POST") {
+          return send(res, 200, admin.postpone(itemPath.quarantineId));
+        }
+        if (itemPath?.action === "promote" && method === "POST") {
+          const body = await readJson(req);
+          return send(res, 200, await admin.promote(itemPath.quarantineId, body));
+        }
+        return send(res, 404, { error: "admin endpoint not found" });
+      }
+
       if (!isAuthorized(req, options.routerToken))
         return send(res, 401, { error: "unauthorized" });
 
@@ -113,7 +188,11 @@ export function createMemoryRouterServer(
         return send(res, 200, {
           api_version: "0.8.3",
           router: "memory-router",
-          features: { policy_facade: true, encrypted_quarantine: true },
+          features: {
+            policy_facade: true,
+            encrypted_quarantine: true,
+            quarantine_admin_api: true,
+          },
         });
       }
 
