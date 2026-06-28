@@ -20,9 +20,11 @@ services:
     environment:
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_TOKEN: test-router-token
+      MEMORY_ROUTER_ADMIN_TOKEN: test-admin-token
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
+      QUARANTINE_PRIVATE_KEY: ${QUARANTINE_PRIVATE_KEY:?missing QUARANTINE_PRIVATE_KEY}
       QUARANTINE_OBJECT_DIR: /state/quarantine/objects
     ports:
       - "127.0.0.1:8890:8890"
