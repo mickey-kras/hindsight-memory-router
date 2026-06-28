@@ -9,7 +9,10 @@ import {
   type HindsightGateway,
 } from "./hindsightClient.js";
 import { RouterPolicy } from "./policy.js";
-import { QuarantineAdminService } from "./quarantineAdmin.js";
+import {
+  QuarantineAdminService,
+  type PromoteBody,
+} from "./quarantineAdmin.js";
 import {
   EncryptedFileQuarantineStore,
   type QuarantineStore,
@@ -49,7 +52,8 @@ export interface CreateMemoryRouterServerOptions {
 
 function buildHindsight(options: CreateMemoryRouterServerOptions): HindsightGateway {
   return (
-    options.hindsight ?? new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
+    options.hindsight ??
+    new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
   );
 }
 
@@ -59,7 +63,9 @@ function buildPolicy(
   const registry = options.registry ?? loadRegistry(REGISTRY_PATH);
   const reviewQueue =
     options.reviewQueue ??
-    new JsonlReviewQueue(options.reviewQueuePath ?? registry.defaults.review_queue_path);
+    new JsonlReviewQueue(
+      options.reviewQueuePath ?? registry.defaults.review_queue_path,
+    );
   return new RouterPolicy({
     registry,
     hindsight: buildHindsight(options),
@@ -129,9 +135,10 @@ function parseMemoryPath(
   return null;
 }
 
-function parseAdminItemPath(
-  pathname: string,
-): { quarantineId: string; action: "read" | "reject" | "postpone" | "promote" } | null {
+function parseAdminItemPath(pathname: string): {
+  quarantineId: string;
+  action: "read" | "reject" | "postpone" | "promote";
+} | null {
   const match = pathname.match(
     /^\/admin\/quarantine\/items\/([^/]+)(?:\/(reject|postpone|promote))?$/,
   );
@@ -175,7 +182,7 @@ export function createMemoryRouterServer(
           return send(res, 200, admin.postpone(itemPath.quarantineId));
         }
         if (itemPath?.action === "promote" && method === "POST") {
-          const body = await readJson(req);
+          const body = await readJson<PromoteBody>(req);
           return send(res, 200, await admin.promote(itemPath.quarantineId, body));
         }
         return send(res, 404, { error: "admin endpoint not found" });
