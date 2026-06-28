@@ -2,13 +2,13 @@ services:
   hindsight:
     image: node:26-alpine
     working_dir: /workspace
-    command: ["node", "stub-hindsight.js"]
+    command: ["node", "fake-hindsight.js"]
     environment:
-      STUB_HINDSIGHT_LOG: /state/hindsight.jsonl
+      FAKE_HINDSIGHT_LOG: /state/hindsight.jsonl
     expose:
       - "8888"
     volumes:
-      - ./stub-hindsight.js:/workspace/stub-hindsight.js:ro
+      - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
       - ./tmp/fake/state:/state
     networks:
       - internal
