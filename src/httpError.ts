@@ -16,5 +16,5 @@ export function safeErrorBody(error: unknown): { status: number; body: unknown }
       body: { error: error.code, message: error.message },
     };
   }
-  return { status: 500, body: { error: "internal_error", message: "internal error" } };
+  return { status: 500, body: { error: "internal error" } };
 }
