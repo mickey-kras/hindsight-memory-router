@@ -10,6 +10,7 @@ import {
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
+import { HttpError, safeErrorBody } from "./httpError.js";
 import { RouterPolicy } from "./policy.js";
 import { QuarantineAdminService, type PromoteBody } from "./quarantineAdmin.js";
 import {
@@ -35,6 +36,7 @@ const QUARANTINE_OBJECT_DIR =
 const QUARANTINE_MAX_POSTPONES = Number(
   process.env.QUARANTINE_MAX_POSTPONES ?? "3",
 );
+const MAX_BODY_BYTES = Number(process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576");
 
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
@@ -43,6 +45,7 @@ export interface CreateMemoryRouterServerOptions {
   quarantineObjectDir?: string;
   reviewQueuePath?: string;
   maxPostpones?: number;
+  maxBodyBytes?: number;
   validateStorage?: boolean;
   registry?: WriterRegistry;
   hindsight?: HindsightGateway;
@@ -141,12 +144,27 @@ function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
   return req.headers.authorization === `Bearer ${token}`;
 }
 
-async function readJson<T>(req: IncomingMessage): Promise<T> {
+async function readJson<T>(
+  req: IncomingMessage,
+  maxBodyBytes: number,
+): Promise<T> {
   const chunks: Buffer[] = [];
-  for await (const chunk of req)
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  let totalBytes = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > maxBodyBytes) {
+      throw new HttpError(413, "payload_too_large", "payload too large");
+    }
+    chunks.push(buffer);
+  }
   const raw = Buffer.concat(chunks).toString("utf8");
-  return raw ? (JSON.parse(raw) as T) : ({} as T);
+  if (!raw) return {} as T;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    throw new HttpError(400, "invalid_json", "invalid JSON body");
+  }
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
@@ -189,6 +207,7 @@ export function createMemoryRouterServer(
 ) {
   if (options.validateStorage) validateWritableStorage(options);
 
+  const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const policy = buildPolicy(options);
   const admin = buildAdmin(options);
 
@@ -219,14 +238,14 @@ export function createMemoryRouterServer(
           return send(res, 200, admin.postpone(itemPath.quarantineId));
         }
         if (itemPath?.action === "promote" && method === "POST") {
-          const body = await readJson<PromoteBody>(req);
+          const body = await readJson<PromoteBody>(req, maxBodyBytes);
           return send(
             res,
             200,
             await admin.promote(itemPath.quarantineId, body),
           );
         }
-        return send(res, 404, { error: "admin endpoint not found" });
+        return send(res, 404, { error: "admin_endpoint_not_found" });
       }
 
       if (!isAuthorized(req, options.routerToken))
@@ -246,22 +265,23 @@ export function createMemoryRouterServer(
 
       const memoryPath = parseMemoryPath(url.pathname);
       if (method === "POST" && memoryPath?.action === "retain") {
-        const body = await readJson<RetainBody>(req);
+        const body = await readJson<RetainBody>(req, maxBodyBytes);
         const result = await policy.retain(memoryPath.writerId, body);
         return send(res, 200, result);
       }
 
       if (method === "POST" && memoryPath?.action === "recall") {
-        const body = await readJson<RecallBody>(req);
+        const body = await readJson<RecallBody>(req, maxBodyBytes);
         const result = await policy.recall(memoryPath.writerId, body);
         return send(res, 200, result);
       }
 
       const denied = policy.denyEndpoint(method, url.pathname);
       return send(res, 404, denied);
-    } catch {
-      console.error("memory-router request failed");
-      return send(res, 500, { error: "internal error" });
+    } catch (error) {
+      const response = safeErrorBody(error);
+      if (response.status === 500) process.stderr.write("memory-router request failed\n");
+      return send(res, response.status, response.body);
     }
   });
 }
@@ -273,7 +293,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "startup failed";
-    console.error(`memory-router startup failed: ${message}`);
+    process.stderr.write(`memory-router startup failed: ${message}\n`);
     process.exit(1);
   }
 }
