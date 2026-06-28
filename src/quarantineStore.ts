@@ -11,6 +11,8 @@ import { resolve, sep } from "node:path";
 import { sha256 } from "./safety.js";
 import type { ReviewReason } from "./types.js";
 
+const GCM_AUTH_TAG_LENGTH_BYTES = 16;
+
 export interface QuarantineInput {
   timestamp: string;
   reason: ReviewReason;
@@ -117,12 +119,17 @@ export function decryptQuarantineEnvelope(
     },
     Buffer.from(envelope.encryption.wrapped_key_b64, "base64"),
   );
+  const tag = Buffer.from(envelope.encryption.tag_b64, "base64");
+  if (tag.length !== GCM_AUTH_TAG_LENGTH_BYTES) {
+    throw new Error("invalid AES-GCM authentication tag length");
+  }
   const decipher = createDecipheriv(
     "aes-256-gcm",
     key,
     Buffer.from(envelope.encryption.iv_b64, "base64"),
+    { authTagLength: GCM_AUTH_TAG_LENGTH_BYTES },
   );
-  decipher.setAuthTag(Buffer.from(envelope.encryption.tag_b64, "base64"));
+  decipher.setAuthTag(tag);
   const plaintext = Buffer.concat([
     decipher.update(Buffer.from(envelope.ciphertext_b64, "base64")),
     decipher.final(),
@@ -186,7 +193,9 @@ export class EncryptedFileQuarantineStore implements QuarantineStore {
 
     const key = randomBytes(32);
     const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    const cipher = createCipheriv("aes-256-gcm", key, iv, {
+      authTagLength: GCM_AUTH_TAG_LENGTH_BYTES,
+    });
     const ciphertext = Buffer.concat([
       cipher.update(plaintext, "utf8"),
       cipher.final(),
