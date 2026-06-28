@@ -117,7 +117,8 @@ function validateWritableStorage(
   const registry = options.registry ?? loadRegistry(REGISTRY_PATH);
   const reviewQueuePath =
     options.reviewQueuePath ?? registry.defaults.review_queue_path;
-  const quarantineObjectDir = options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR;
+  const quarantineObjectDir =
+    options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR;
 
   if (!options.reviewQueue) {
     assertWritableDirectory("review queue directory", dirname(reviewQueuePath));
