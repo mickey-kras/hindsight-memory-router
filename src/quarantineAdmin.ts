@@ -103,6 +103,12 @@ export class QuarantineAdminService {
       throw new Error("approved content failed safety scan");
     }
 
+    const metadata: Record<string, string> = {
+      router_decision: "promoted_from_quarantine",
+      quarantine_id: quarantineId,
+    };
+    if (body.metadata) Object.assign(metadata, body.metadata);
+
     await this.options.hindsight.retain(targetBank, {
       async: true,
       items: [
@@ -110,11 +116,7 @@ export class QuarantineAdminService {
           content,
           context: body.context ?? "memory-router quarantine promotion",
           document_id: body.document_id ?? `promoted:${quarantineId}`,
-          metadata: {
-            ...(body.metadata ?? {}),
-            router_decision: "promoted_from_quarantine",
-            quarantine_id: quarantineId,
-          },
+          metadata,
           tags: body.tags ?? ["quarantine-promoted"],
           update_mode: "append",
         },
