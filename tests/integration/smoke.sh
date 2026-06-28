@@ -58,6 +58,7 @@ fail_check() {
 
 rm -rf "$tmp_dir"
 mkdir -p "${tmp_dir}/review" "${quarantine_dir}/objects" "${tmp_dir}/state"
+chmod -R ugo+rwX "$tmp_dir"
 
 cleanup() {
   docker compose -p "$project" -f "$compose_file" down -v --remove-orphans >/dev/null 2>&1 || true
