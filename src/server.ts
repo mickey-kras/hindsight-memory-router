@@ -1,8 +1,10 @@
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { dirname, join } from "node:path";
 import { URL } from "node:url";
 import {
   FetchHindsightGateway,
@@ -41,6 +43,7 @@ export interface CreateMemoryRouterServerOptions {
   quarantineObjectDir?: string;
   reviewQueuePath?: string;
   maxPostpones?: number;
+  validateStorage?: boolean;
   registry?: WriterRegistry;
   hindsight?: HindsightGateway;
   reviewQueue?: ReviewQueue;
@@ -92,6 +95,37 @@ function buildAdmin(
     hindsight: buildHindsight(options),
     maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });
+}
+
+function assertWritableDirectory(label: string, directory: string): void {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const probePath = join(
+    directory,
+    `.memory-router-write-test-${process.pid}-${Date.now()}`,
+  );
+  try {
+    writeFileSync(probePath, "ok\n", { encoding: "utf8", mode: 0o600 });
+    unlinkSync(probePath);
+  } catch {
+    throw new Error(`${label} is not writable: ${directory}`);
+  }
+}
+
+function validateWritableStorage(
+  options: CreateMemoryRouterServerOptions = {},
+): void {
+  const registry = options.registry ?? loadRegistry(REGISTRY_PATH);
+  const reviewQueuePath =
+    options.reviewQueuePath ?? registry.defaults.review_queue_path;
+  const quarantineObjectDir = options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR;
+
+  if (!options.reviewQueue) {
+    assertWritableDirectory("review queue directory", dirname(reviewQueuePath));
+  }
+
+  if (!options.quarantineStore || options.adminToken || ADMIN_TOKEN) {
+    assertWritableDirectory("quarantine object directory", quarantineObjectDir);
+  }
 }
 
 function isAuthorized(req: IncomingMessage, routerToken?: string): boolean {
@@ -152,6 +186,8 @@ function parseAdminItemPath(pathname: string): {
 export function createMemoryRouterServer(
   options: CreateMemoryRouterServerOptions = {},
 ) {
+  if (options.validateStorage) validateWritableStorage(options);
+
   const policy = buildPolicy(options);
   const admin = buildAdmin(options);
 
@@ -230,7 +266,13 @@ export function createMemoryRouterServer(
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  createMemoryRouterServer().listen(PORT, () => {
-    console.log(`memory-router listening on ${PORT}`);
-  });
+  try {
+    createMemoryRouterServer({ validateStorage: true }).listen(PORT, () => {
+      console.log(`memory-router listening on ${PORT}`);
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "startup failed";
+    console.error(`memory-router startup failed: ${message}`);
+    process.exit(1);
+  }
 }
