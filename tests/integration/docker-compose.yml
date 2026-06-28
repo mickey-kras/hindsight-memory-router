@@ -2,14 +2,14 @@ services:
   hindsight:
     image: node:26-alpine
     working_dir: /workspace
-    command: ["node", "fake-hindsight.js"]
+    command: ["node", "stub-hindsight.js"]
     environment:
-      FAKE_HINDSIGHT_LOG: /state/hindsight.jsonl
+      STUB_HINDSIGHT_LOG: /state/hindsight.jsonl
     expose:
       - "8888"
     volumes:
-      - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
-      - ./tmp/fake/state:/state
+      - ./stub-hindsight.js:/workspace/stub-hindsight.js:ro
+      - ./tmp/stub/state:/state
     networks:
       - internal
 
@@ -27,8 +27,8 @@ services:
     ports:
       - "127.0.0.1:8890:8890"
     volumes:
-      - ./tmp/fake/review:/volume1/reports/hindsight-review
-      - ./tmp/fake/quarantine:/state/quarantine
+      - ./tmp/stub/review:/volume1/reports/hindsight-review
+      - ./tmp/stub/quarantine:/state/quarantine
     networks:
       - internal
 
