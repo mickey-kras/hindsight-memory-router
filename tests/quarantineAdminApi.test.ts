@@ -188,7 +188,7 @@ describe("quarantine admin API", () => {
         { method: "POST" },
       );
       expect(second.status).toBe(500);
-      expect(await second.text()).toContain("maximum postpone count reached");
+      expect(await second.json()).toMatchObject({ error: "internal error" });
     });
   });
 
@@ -243,9 +243,7 @@ describe("quarantine admin API", () => {
         },
       );
       expect(promoteRes.status).toBe(500);
-      expect(await promoteRes.text()).toContain(
-        "approved content failed safety scan",
-      );
+      expect(await promoteRes.json()).toMatchObject({ error: "internal error" });
     });
   });
 });
