@@ -266,12 +266,15 @@ describe("quarantine admin API", () => {
   it("returns structured admin errors for invalid and missing records", async () => {
     await withAdminServer(async ({ baseUrl }) => {
       await expectAdminError(
-        await adminFetch(baseUrl, "/admin/quarantine/items/../secret"),
+        await adminFetch(baseUrl, "/admin/quarantine/items/%2e%2e%2fsecret"),
         400,
         "invalid_quarantine_id",
       );
       await expectAdminError(
-        await adminFetch(baseUrl, "/admin/quarantine/items/q_missing_0123456789abcdef"),
+        await adminFetch(
+          baseUrl,
+          "/admin/quarantine/items/q_missing_0123456789abcdef",
+        ),
         404,
         "quarantine_not_found",
       );
