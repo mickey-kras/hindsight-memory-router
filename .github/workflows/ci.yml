@@ -60,9 +60,13 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: auto
+        run: |
+          docker pull semgrep/semgrep:latest
+          docker run --rm \
+            -v "${PWD}:/src" \
+            -w /src \
+            semgrep/semgrep:latest \
+            semgrep scan --config auto --error
 
       - name: Hadolint
         uses: hadolint/hadolint-action@v3.3.0
