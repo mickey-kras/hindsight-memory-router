@@ -116,9 +116,21 @@ async function adminFetch(
   });
 }
 
+async function expectAdminError(
+  response: Response,
+  status: number,
+  code: string,
+): Promise<void> {
+  expect(response.status).toBe(status);
+  const body = await response.json();
+  expect(body).toMatchObject({ error: code });
+  expect(JSON.stringify(body)).not.toContain("stack");
+  expect(JSON.stringify(body)).not.toContain("Error:");
+}
+
 describe("quarantine admin API", () => {
   it("requires separate admin auth and decrypts queue items", async () => {
-    await withAdminServer(async ({ baseUrl }) => {
+    await withAdminServer(async ({ baseUrl, hindsight }) => {
       const raw = "RAW_SECRET_FOR_ADMIN_READ_ONLY";
       const quarantineId = await createQuarantine(baseUrl, raw);
 
@@ -132,6 +144,12 @@ describe("quarantine admin API", () => {
       const queueText = await queueRes.text();
       expect(queueText).toContain(quarantineId);
       expect(queueText).not.toContain(raw);
+
+      const quarantineIndex = hindsight.retained.find(
+        (item) => item.bankId === "quarantine",
+      );
+      expect(JSON.stringify(quarantineIndex)).toContain(quarantineId);
+      expect(JSON.stringify(quarantineIndex)).not.toContain(raw);
 
       const readRes = await adminFetch(
         baseUrl,
@@ -187,8 +205,7 @@ describe("quarantine admin API", () => {
         `/admin/quarantine/items/${quarantineId}/postpone`,
         { method: "POST" },
       );
-      expect(second.status).toBe(500);
-      expect(await second.json()).toMatchObject({ error: "internal error" });
+      await expectAdminError(second, 409, "postpone_limit_reached");
     });
   });
 
@@ -242,10 +259,84 @@ describe("quarantine admin API", () => {
           }),
         },
       );
-      expect(promoteRes.status).toBe(500);
-      expect(await promoteRes.json()).toMatchObject({
-        error: "internal error",
-      });
+      await expectAdminError(promoteRes, 400, "approved_content_rejected");
+    });
+  });
+
+  it("returns structured admin errors for invalid and missing records", async () => {
+    await withAdminServer(async ({ baseUrl }) => {
+      await expectAdminError(
+        await adminFetch(baseUrl, "/admin/quarantine/items/%2e%2e%2fsecret"),
+        400,
+        "invalid_quarantine_id",
+      );
+      await expectAdminError(
+        await adminFetch(
+          baseUrl,
+          "/admin/quarantine/items/q_missing_0123456789abcdef",
+        ),
+        404,
+        "quarantine_not_found",
+      );
+    });
+  });
+
+  it("does not allow finalized quarantine items to be replayed", async () => {
+    await withAdminServer(async ({ baseUrl }) => {
+      const quarantineId = await createQuarantine(baseUrl, "RAW_FINALIZED");
+      const rejectRes = await adminFetch(
+        baseUrl,
+        `/admin/quarantine/items/${quarantineId}/reject`,
+        { method: "POST" },
+      );
+      expect(rejectRes.status).toBe(200);
+
+      await expectAdminError(
+        await adminFetch(baseUrl, `/admin/quarantine/items/${quarantineId}`),
+        409,
+        "quarantine_already_finalized",
+      );
+      await expectAdminError(
+        await adminFetch(
+          baseUrl,
+          `/admin/quarantine/items/${quarantineId}/promote`,
+          {
+            method: "POST",
+            body: JSON.stringify({ target_bank: "ops", content: "Approved." }),
+          },
+        ),
+        409,
+        "quarantine_already_finalized",
+      );
+    });
+  });
+
+  it("validates promotion target and required content", async () => {
+    await withAdminServer(async ({ baseUrl }) => {
+      const quarantineId = await createQuarantine(baseUrl, "RAW_BAD_PROMOTE");
+
+      await expectAdminError(
+        await adminFetch(
+          baseUrl,
+          `/admin/quarantine/items/${quarantineId}/promote`,
+          {
+            method: "POST",
+            body: JSON.stringify({ target_bank: "quarantine", content: "Ok." }),
+          },
+        ),
+        400,
+        "invalid_target_bank",
+      );
+
+      await expectAdminError(
+        await adminFetch(
+          baseUrl,
+          `/admin/quarantine/items/${quarantineId}/promote`,
+          { method: "POST", body: JSON.stringify({ target_bank: "ops" }) },
+        ),
+        400,
+        "approved_content_required",
+      );
     });
   });
 });
