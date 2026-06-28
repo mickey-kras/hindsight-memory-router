@@ -53,11 +53,18 @@ export class QuarantineAdminService {
       decision: "rejected",
       decided_at: this.nowIso(),
     }));
-    deleteEncryptedQuarantineObject(this.options.quarantineObjectDir, quarantineId);
+    deleteEncryptedQuarantineObject(
+      this.options.quarantineObjectDir,
+      quarantineId,
+    );
     return { rejected: true, quarantine_id: quarantineId };
   }
 
-  postpone(quarantineId: string): { postponed: true; quarantine_id: string; count: number } {
+  postpone(quarantineId: string): {
+    postponed: true;
+    quarantine_id: string;
+    count: number;
+  } {
     const maxPostpones = this.options.maxPostpones ?? 3;
     const record = this.requirePendingRecord(quarantineId);
     const count = record.postpone_count ?? 0;
@@ -120,8 +127,15 @@ export class QuarantineAdminService {
       decided_at: this.nowIso(),
       target_bank: targetBank,
     }));
-    deleteEncryptedQuarantineObject(this.options.quarantineObjectDir, quarantineId);
-    return { promoted: true, quarantine_id: quarantineId, target_bank: targetBank };
+    deleteEncryptedQuarantineObject(
+      this.options.quarantineObjectDir,
+      quarantineId,
+    );
+    return {
+      promoted: true,
+      quarantine_id: quarantineId,
+      target_bank: targetBank,
+    };
   }
 
   private requirePendingRecord(quarantineId: string): ReviewRecord {
@@ -155,6 +169,7 @@ export class QuarantineAdminService {
 
 function parseBankId(value: string | undefined): BankId {
   if (!value) throw new Error("target_bank is required");
-  if (!BANK_IDS.includes(value as BankId)) throw new Error("invalid target_bank");
+  if (!BANK_IDS.includes(value as BankId))
+    throw new Error("invalid target_bank");
   return value as BankId;
 }

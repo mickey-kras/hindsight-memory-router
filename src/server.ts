@@ -9,10 +9,7 @@ import {
   type HindsightGateway,
 } from "./hindsightClient.js";
 import { RouterPolicy } from "./policy.js";
-import {
-  QuarantineAdminService,
-  type PromoteBody,
-} from "./quarantineAdmin.js";
+import { QuarantineAdminService, type PromoteBody } from "./quarantineAdmin.js";
 import {
   EncryptedFileQuarantineStore,
   type QuarantineStore,
@@ -50,7 +47,9 @@ export interface CreateMemoryRouterServerOptions {
   quarantineStore?: QuarantineStore;
 }
 
-function buildHindsight(options: CreateMemoryRouterServerOptions): HindsightGateway {
+function buildHindsight(
+  options: CreateMemoryRouterServerOptions,
+): HindsightGateway {
   return (
     options.hindsight ??
     new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
@@ -88,7 +87,8 @@ function buildAdmin(
   return new QuarantineAdminService({
     reviewQueuePath,
     quarantineObjectDir: options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR,
-    quarantinePrivateKey: options.quarantinePrivateKey ?? QUARANTINE_PRIVATE_KEY,
+    quarantinePrivateKey:
+      options.quarantinePrivateKey ?? QUARANTINE_PRIVATE_KEY,
     hindsight: buildHindsight(options),
     maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });
@@ -183,7 +183,11 @@ export function createMemoryRouterServer(
         }
         if (itemPath?.action === "promote" && method === "POST") {
           const body = await readJson<PromoteBody>(req);
-          return send(res, 200, await admin.promote(itemPath.quarantineId, body));
+          return send(
+            res,
+            200,
+            await admin.promote(itemPath.quarantineId, body),
+          );
         }
         return send(res, 404, { error: "admin endpoint not found" });
       }

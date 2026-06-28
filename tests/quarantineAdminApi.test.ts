@@ -57,7 +57,10 @@ async function withAdminServer<T>(
     reviewQueuePath,
     maxPostpones: 1,
     hindsight,
-    quarantineStore: new EncryptedFileQuarantineStore(keys.publicKey, objectDir),
+    quarantineStore: new EncryptedFileQuarantineStore(
+      keys.publicKey,
+      objectDir,
+    ),
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -98,7 +101,11 @@ async function createQuarantine(baseUrl: string, raw: string): Promise<string> {
   return body.quarantine_id;
 }
 
-async function adminFetch(baseUrl: string, path: string, init: RequestInit = {}) {
+async function adminFetch(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+) {
   return fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
@@ -139,7 +146,9 @@ describe("quarantine admin API", () => {
   it("rejects pending quarantine and removes encrypted object", async () => {
     await withAdminServer(async ({ baseUrl, objectDir }) => {
       const quarantineId = await createQuarantine(baseUrl, "RAW_REJECT_ME");
-      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(true);
+      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(
+        true,
+      );
 
       const rejectRes = await adminFetch(
         baseUrl,
@@ -151,7 +160,9 @@ describe("quarantine admin API", () => {
         rejected: true,
         quarantine_id: quarantineId,
       });
-      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(false);
+      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(
+        false,
+      );
 
       const queueRes = await adminFetch(baseUrl, "/admin/quarantine/queue");
       const queueText = await queueRes.text();
@@ -204,15 +215,22 @@ describe("quarantine admin API", () => {
       });
 
       const promoted = hindsight.retained.find((item) => item.bankId === "ops");
-      expect(JSON.stringify(promoted)).toContain("Approved sanitized operational note");
+      expect(JSON.stringify(promoted)).toContain(
+        "Approved sanitized operational note",
+      );
       expect(JSON.stringify(promoted)).not.toContain(raw);
-      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(false);
+      expect(existsSync(join(objectDir, `${quarantineId}.enc.json`))).toBe(
+        false,
+      );
     });
   });
 
   it("denies unsafe approved content during promotion", async () => {
     await withAdminServer(async ({ baseUrl }) => {
-      const quarantineId = await createQuarantine(baseUrl, "RAW_UNSAFE_PROMOTE");
+      const quarantineId = await createQuarantine(
+        baseUrl,
+        "RAW_UNSAFE_PROMOTE",
+      );
       const promoteRes = await adminFetch(
         baseUrl,
         `/admin/quarantine/items/${quarantineId}/promote`,
@@ -225,7 +243,9 @@ describe("quarantine admin API", () => {
         },
       );
       expect(promoteRes.status).toBe(500);
-      expect(await promoteRes.text()).toContain("approved content failed safety scan");
+      expect(await promoteRes.text()).toContain(
+        "approved content failed safety scan",
+      );
     });
   });
 });

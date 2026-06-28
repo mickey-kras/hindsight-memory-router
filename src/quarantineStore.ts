@@ -133,9 +133,12 @@ export function readEncryptedQuarantineEnvelope(
   objectDir: string,
   quarantineId: string,
 ): EncryptedEnvelope {
-  const raw = readFileSync(encryptedQuarantineObjectPath(objectDir, quarantineId), {
-    encoding: "utf8",
-  });
+  const raw = readFileSync(
+    encryptedQuarantineObjectPath(objectDir, quarantineId),
+    {
+      encoding: "utf8",
+    },
+  );
   return JSON.parse(raw) as EncryptedEnvelope;
 }
 
