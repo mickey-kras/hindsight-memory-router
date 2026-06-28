@@ -12,4 +12,5 @@ COPY package*.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY writer_registry.example.json ./writer_registry.example.json
+USER node
 CMD ["node", "dist/src/server.js"]

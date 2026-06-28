@@ -8,6 +8,17 @@ export type BankId =
   | "research"
   | "quarantine";
 
+export const BANK_IDS: readonly BankId[] = [
+  "core",
+  "main",
+  "personal",
+  "dev",
+  "creative",
+  "ops",
+  "research",
+  "quarantine",
+] as const;
+
 export interface WriterRule {
   role: string;
   source: string;
@@ -75,6 +86,8 @@ export type ReviewReason =
   | "suspicious_query"
   | "denied_endpoint";
 
+export type ReviewDecision = "pending" | "rejected" | "postponed" | "promoted";
+
 export interface ReviewRecord {
   timestamp: string;
   writer_id?: string;
@@ -83,8 +96,10 @@ export interface ReviewRecord {
   quarantine_id?: string;
   sha256?: string;
   preview: string;
-  decision: "pending";
+  decision: ReviewDecision;
   postpone_count?: number;
   method?: string;
   path?: string;
+  decided_at?: string;
+  target_bank?: BankId;
 }
