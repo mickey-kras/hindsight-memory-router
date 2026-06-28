@@ -22,6 +22,7 @@ quarantine_dir="${tmp_dir}/quarantine"
 state_file="${tmp_dir}/state/hindsight.jsonl"
 router_url="http://127.0.0.1:8890"
 router_token="test-router-token"
+admin_token="test-admin-token"
 raw_marker="RAW_${mode}_$(date +%s)_$RANDOM"
 checks_total=0
 checks_passed=0
@@ -80,6 +81,7 @@ trap cleanup EXIT
 
 run_check "generate disposable quarantine keypair" bash -c "openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out '${tmp_dir}/private.pem' >/dev/null 2>&1 && openssl rsa -pubout -in '${tmp_dir}/private.pem' -out '${tmp_dir}/public.pem' >/dev/null 2>&1"
 export QUARANTINE_PUBLIC_KEY="$(base64 -w0 "${tmp_dir}/public.pem")"
+export QUARANTINE_PRIVATE_KEY="$(base64 -w0 "${tmp_dir}/private.pem")"
 
 run_check "remove stale compose stack" cleanup
 run_check "build memory-router image" docker build -t hindsight-memory-router:ci .
@@ -134,6 +136,22 @@ post_router() {
     -d "$body"
 }
 
+admin_get() {
+  local path="$1"
+  curl -fsS -H "Authorization: Bearer ${admin_token}" "${router_url}${path}"
+}
+
+admin_post() {
+  local path="$1"
+  local body="${2:-{}}"
+  curl -fsS \
+    -H "Authorization: Bearer ${admin_token}" \
+    -H "Content-Type: application/json" \
+    -X POST \
+    "${router_url}${path}" \
+    -d "$body"
+}
+
 retry_post_router() {
   local path="$1"
   local body="$2"
@@ -156,6 +174,7 @@ pass_check
 begin_check "unknown writer is quarantined"
 unknown_response="$(retry_post_router "/v1/default/banks/unknown-smoke/memories" "{\"items\":[{\"content\":\"${raw_marker}\",\"context\":\"integration quarantine smoke\",\"document_id\":\"ci-unknown\"}],\"async\":true}")"
 printf '%s' "$unknown_response" | grep -q 'quarantine_id' || fail_check "unknown writer did not return quarantine_id: ${unknown_response}"
+quarantine_id="$(printf '%s' "$unknown_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quarantine_id"])')"
 pass_check
 
 begin_check "review queue is written"
@@ -172,6 +191,35 @@ pass_check
 begin_check "raw marker does not leak to queue or object plaintext"
 if grep -R "$raw_marker" "${tmp_dir}/review" "${tmp_dir}/quarantine" >/dev/null 2>&1; then
   fail_check "raw quarantine payload leaked to review queue or object plaintext"
+fi
+pass_check
+
+begin_check "router token cannot access admin queue"
+admin_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/admin/quarantine/queue")"
+if [[ "$admin_status" != "401" ]]; then
+  fail_check "expected router token admin queue access to return 401, got ${admin_status}"
+fi
+pass_check
+
+begin_check "admin queue lists quarantine ref without raw payload"
+queue_response="$(admin_get "/admin/quarantine/queue")"
+printf '%s' "$queue_response" | grep -q "$quarantine_id" || fail_check "admin queue missing quarantine_id"
+if printf '%s' "$queue_response" | grep -q "$raw_marker"; then
+  fail_check "admin queue leaked raw payload"
+fi
+pass_check
+
+begin_check "admin read decrypts quarantine payload"
+read_response="$(admin_get "/admin/quarantine/items/${quarantine_id}")"
+printf '%s' "$read_response" | grep -q "$raw_marker" || fail_check "admin read did not decrypt raw payload"
+pass_check
+
+begin_check "admin reject removes quarantine from pending queue"
+reject_response="$(admin_post "/admin/quarantine/items/${quarantine_id}/reject")"
+printf '%s' "$reject_response" | grep -q 'rejected' || fail_check "admin reject failed"
+queue_after_reject="$(admin_get "/admin/quarantine/queue")"
+if printf '%s' "$queue_after_reject" | grep -q "$quarantine_id"; then
+  fail_check "rejected quarantine remained pending"
 fi
 pass_check
 
