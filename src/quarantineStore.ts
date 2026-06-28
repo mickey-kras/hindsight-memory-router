@@ -7,7 +7,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { resolve, sep } from "node:path";
 import { sha256 } from "./safety.js";
 import type { ReviewReason } from "./types.js";
 
@@ -96,7 +96,12 @@ export function encryptedQuarantineObjectPath(
   quarantineId: string,
 ): string {
   assertSafeQuarantineId(quarantineId);
-  return join(objectDir, `${quarantineId}.enc.json`);
+  const baseDir = resolve(objectDir);
+  const objectPath = resolve(baseDir, `${quarantineId}.enc.json`);
+  if (!objectPath.startsWith(`${baseDir}${sep}`)) {
+    throw new Error("invalid quarantine object path");
+  }
+  return objectPath;
 }
 
 export function decryptQuarantineEnvelope(
