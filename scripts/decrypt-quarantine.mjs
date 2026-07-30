@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { Buffer } from "node:buffer";
 import {
   constants,
   createDecipheriv,
@@ -7,6 +8,7 @@ import {
   privateDecrypt,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import process from "node:process";
 
 const [responsePath] = process.argv.slice(2);
 if (!responsePath) {
