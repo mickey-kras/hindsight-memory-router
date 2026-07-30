@@ -12,6 +12,7 @@ import { BANK_IDS, type BankId, type ReviewRecord } from "./types.js";
 export interface QuarantineAdminServiceOptions {
   reviewQueuePath: string;
   quarantineObjectDir: string;
+  quarantinePrivateKey?: string;
   hindsight: HindsightGateway;
   maxPostpones?: number;
   now?: () => Date;
