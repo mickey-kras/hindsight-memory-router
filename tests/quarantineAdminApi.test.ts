@@ -4,7 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
-import { EncryptedFileQuarantineStore } from "../src/quarantineStore.js";
+import {
+  decryptQuarantineEnvelope,
+  EncryptedFileQuarantineStore,
+} from "../src/quarantineStore.js";
 import { createMemoryRouterServer } from "../src/server.js";
 import type { WriterRegistry } from "../src/types.js";
 
@@ -41,6 +44,7 @@ async function withAdminServer<T>(
     baseUrl: string;
     hindsight: FakeHindsightGateway;
     objectDir: string;
+    privateKey: string;
   }) => Promise<T>,
 ): Promise<T> {
   const dir = mkdtempSync(join(tmpdir(), "memory-router-admin-"));
@@ -52,7 +56,6 @@ async function withAdminServer<T>(
     registry,
     routerToken: "router-token",
     adminToken: "admin-token",
-    quarantinePrivateKey: keys.privateKey,
     quarantineObjectDir: objectDir,
     reviewQueuePath,
     maxPostpones: 1,
@@ -72,6 +75,7 @@ async function withAdminServer<T>(
       baseUrl: `http://127.0.0.1:${address.port}`,
       hindsight,
       objectDir,
+      privateKey: keys.privateKey,
     });
   } finally {
     await new Promise<void>((resolve, reject) =>
@@ -129,8 +133,8 @@ async function expectAdminError(
 }
 
 describe("quarantine admin API", () => {
-  it("requires separate admin auth and decrypts queue items", async () => {
-    await withAdminServer(async ({ baseUrl, hindsight }) => {
+  it("returns encrypted items for admin-only local decryption", async () => {
+    await withAdminServer(async ({ baseUrl, hindsight, privateKey }) => {
       const raw = "RAW_SECRET_FOR_ADMIN_READ_ONLY";
       const quarantineId = await createQuarantine(baseUrl, raw);
 
@@ -156,8 +160,14 @@ describe("quarantine admin API", () => {
         `/admin/quarantine/items/${quarantineId}`,
       );
       expect(readRes.status).toBe(200);
-      const readBody = await readRes.text();
-      expect(readBody).toContain(raw);
+      const readBody = (await readRes.json()) as {
+        encrypted: Parameters<typeof decryptQuarantineEnvelope>[0];
+      };
+      expect(JSON.stringify(readBody)).not.toContain(raw);
+      expect(readBody.encrypted.ciphertext_b64).toBeTruthy();
+
+      const decrypted = decryptQuarantineEnvelope(readBody.encrypted, privateKey);
+      expect(JSON.stringify(decrypted)).toContain(raw);
     });
   });
 
