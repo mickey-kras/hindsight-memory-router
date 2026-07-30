@@ -69,7 +69,9 @@ console.log(
 
 const failures: string[] = [];
 if (lineTotal > 0 && linePercent < lineThreshold) {
-  failures.push(`line coverage ${linePercent.toFixed(2)}% is below ${lineThreshold}%`);
+  failures.push(
+    `line coverage ${linePercent.toFixed(2)}% is below ${lineThreshold}%`,
+  );
 }
 if (branchTotal > 0 && branchPercent < branchThreshold) {
   failures.push(
@@ -84,7 +86,14 @@ if (failures.length) {
 function readChangedLines(compareBase: string): ChangedLines {
   const output = execFileSync(
     "git",
-    ["diff", "--unified=0", "--no-color", `${compareBase}...HEAD`, "--", "src/**/*.ts"],
+    [
+      "diff",
+      "--unified=0",
+      "--no-color",
+      `${compareBase}...HEAD`,
+      "--",
+      "src/**/*.ts",
+    ],
     { encoding: "utf8" },
   );
   const result: ChangedLines = new Map();
