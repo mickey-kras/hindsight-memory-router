@@ -166,7 +166,10 @@ describe("quarantine admin API", () => {
       expect(JSON.stringify(readBody)).not.toContain(raw);
       expect(readBody.encrypted.ciphertext_b64).toBeTruthy();
 
-      const decrypted = decryptQuarantineEnvelope(readBody.encrypted, privateKey);
+      const decrypted = decryptQuarantineEnvelope(
+        readBody.encrypted,
+        privateKey,
+      );
       expect(JSON.stringify(decrypted)).toContain(raw);
     });
   });
