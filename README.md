@@ -18,10 +18,6 @@ OpenClaw Hindsight plugin -> memory-router -> Hindsight API
 
 The router is a facade/decorator, not a second memory system.
 
-## Repository scope
-
-This is a public, deployment-agnostic project. Examples describe generic roles and interfaces only. Keep private infrastructure, account, secret-store, and deployment details in the repository that owns the deployment.
-
 ## What it does
 
 ```text
