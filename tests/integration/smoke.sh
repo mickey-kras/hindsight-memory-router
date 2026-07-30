@@ -210,9 +210,15 @@ if printf '%s' "$queue_response" | grep -q "$raw_marker"; then
 fi
 pass_check
 
-begin_check "admin read decrypts quarantine payload"
+begin_check "admin read returns encrypted envelope for local decryption"
 read_response="$(admin_get "/admin/quarantine/items/${quarantine_id}")"
-printf '%s' "$read_response" | grep -q "$raw_marker" || fail_check "admin read did not decrypt raw payload"
+if printf '%s' "$read_response" | grep -q "$raw_marker"; then
+  fail_check "admin read leaked raw payload"
+fi
+encrypted_response_file="${tmp_dir}/encrypted-response.json"
+printf '%s' "$read_response" > "$encrypted_response_file"
+local_plaintext="$(printf '%s' "$QUARANTINE_PRIVATE_KEY" | node scripts/decrypt-quarantine.mjs "$encrypted_response_file")"
+printf '%s' "$local_plaintext" | grep -q "$raw_marker" || fail_check "local admin decryption did not recover raw payload"
 pass_check
 
 begin_check "admin reject removes quarantine from pending queue"
