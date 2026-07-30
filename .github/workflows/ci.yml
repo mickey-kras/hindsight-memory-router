@@ -66,11 +66,7 @@ jobs:
             -v "${PWD}:/src" \
             -w /src \
             semgrep/semgrep:latest \
-            semgrep scan \
-              --config auto \
-              --exclude-rule yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag \
-              --exclude-rule package_managers.dependabot.dependabot-missing-cooldown.dependabot-missing-cooldown \
-              --error
+            semgrep scan --config auto --error
 
       - name: Hadolint
         uses: hadolint/hadolint-action@v3.3.0
