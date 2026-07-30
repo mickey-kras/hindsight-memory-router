@@ -18,6 +18,10 @@ OpenClaw Hindsight plugin -> memory-router -> Hindsight API
 
 The router is a facade/decorator, not a second memory system.
 
+## Repository scope
+
+This is a public, deployment-agnostic project. Examples describe generic roles and interfaces only. Keep private infrastructure, account, secret-store, and deployment details in the repository that owns the deployment.
+
 ## What it does
 
 ```text
@@ -26,7 +30,7 @@ bank chosen by policy, not by agent
 recall is ACL-filtered
 unknown/suspicious input is encrypted before review
 router stores only the quarantine public key
-admin decrypts locally with an admin-only private key
+review clients decrypt locally with a separately managed private key
 unknown Hindsight endpoints are denied and logged
 ```
 
@@ -82,11 +86,11 @@ HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
-QUARANTINE_OBJECT_DIR=/volume1/reports/hindsight-quarantine/objects
+QUARANTINE_OBJECT_DIR=/data/quarantine/objects
 QUARANTINE_MAX_POSTPONES=3
 ```
 
-`QUARANTINE_PRIVATE_KEY` is not a router configuration value. Do not put it in the container, Compose environment, machine vault, filesystem, or logs.
+`QUARANTINE_PRIVATE_KEY` is not a router configuration value. Keep it outside the router runtime and provide it only to an authorized local review client when decrypting an item.
 
 OpenClaw plugin config:
 
@@ -129,17 +133,17 @@ raw payload -> encrypted object store
 review queue -> quarantine_id + metadata only
 Hindsight quarantine bank -> safe index record only
 admin item API -> encrypted envelope only
-admin workstation -> private key from admin-only 1Password vault -> local decryption
+authorized review client -> local decryption with separately managed private key
 promote -> explicit approved/sanitized content only
 ```
 
-No original text is written to the review queue or searchable memory. Queue listing, reject, postpone, and promotion do not require the private key. The private key is required only for local admin review.
+No original text is written to the review queue or searchable memory. Queue listing, reject, postpone, and promotion do not require the private key. The private key is required only for local review.
 
-Smallest admin review flow:
+Generic review flow:
 
 1. List pending items with the admin token.
 2. Fetch one encrypted envelope with the admin token.
-3. Retrieve `QUARANTINE_PRIVATE_KEY` from the admin-only 1Password `Employee` vault and decrypt locally without persisting the key.
+3. Supply the private key to a local review client through stdin or another non-persistent channel.
 4. Reject, postpone, or explicitly promote sanitized content through the admin API.
 
 ## Checks
@@ -154,10 +158,6 @@ npm run aislop:ci
 ```
 
 CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real compose smoke tests.
-
-## Auto-merge
-
-Same-repository, non-draft PRs automatically enable GitHub auto-merge. Dependabot uses its separate workflow. Branch rules, required reviews, required checks, security scans, and mergeability remain authoritative; automation only requests a squash merge after those gates pass.
 
 ## License
 
