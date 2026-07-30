@@ -50,7 +50,8 @@ jobs:
 
       - run: npm run format:check
       - run: npm run lint
-      - run: npm test
+      - name: Changed-code coverage
+        run: npm run coverage:changed
       - run: npm run typecheck
       - run: npm run security:audit
 
