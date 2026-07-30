@@ -13,7 +13,7 @@ import process from "node:process";
 const [responsePath] = process.argv.slice(2);
 if (!responsePath) {
   process.stderr.write(
-    "usage: op read <private-key-reference> | node scripts/decrypt-quarantine.mjs <encrypted-response.json>\n",
+    "usage: <private-key-command> | node scripts/decrypt-quarantine.mjs <encrypted-response.json>\n",
   );
   process.exit(2);
 }
