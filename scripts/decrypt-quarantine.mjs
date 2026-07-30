@@ -3,6 +3,7 @@
 import {
   constants,
   createDecipheriv,
+  createHash,
   privateDecrypt,
 } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -45,6 +46,11 @@ const plaintext = Buffer.concat([
   decipher.final(),
 ]).toString("utf8");
 
+const digest = createHash("sha256").update(plaintext).digest("hex");
+if (digest !== envelope.sha256) {
+  throw new Error("quarantine object digest mismatch");
+}
+
 process.stdout.write(`${JSON.stringify(JSON.parse(plaintext), null, 2)}\n`);
 
 async function readStdin() {
@@ -69,6 +75,7 @@ function validateEnvelope(envelope) {
     envelope?.version !== 1 ||
     envelope?.encryption?.algorithm !== "AES-256-GCM" ||
     envelope?.encryption?.key_wrap !== "RSA-OAEP-SHA256" ||
+    typeof envelope?.sha256 !== "string" ||
     typeof envelope?.encryption?.wrapped_key_b64 !== "string" ||
     typeof envelope?.encryption?.iv_b64 !== "string" ||
     typeof envelope?.encryption?.tag_b64 !== "string" ||
