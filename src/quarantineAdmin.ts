@@ -3,7 +3,7 @@ import { HttpError } from "./httpError.js";
 import {
   assertSafeQuarantineId,
   deleteEncryptedQuarantineObject,
-  readDecryptedQuarantineObject,
+  readEncryptedQuarantineEnvelope,
 } from "./quarantineStore.js";
 import { readReviewQueue, writeReviewQueue } from "./reviewQueue.js";
 import { scanContent } from "./safety.js";
@@ -12,7 +12,6 @@ import { BANK_IDS, type BankId, type ReviewRecord } from "./types.js";
 export interface QuarantineAdminServiceOptions {
   reviewQueuePath: string;
   quarantineObjectDir: string;
-  quarantinePrivateKey?: string;
   hindsight: HindsightGateway;
   maxPostpones?: number;
   now?: () => Date;
@@ -40,12 +39,11 @@ export class QuarantineAdminService {
 
   readItem(quarantineId: string): unknown {
     const record = this.requirePendingRecord(quarantineId);
-    const decrypted = readDecryptedQuarantineObject(
+    const encrypted = readEncryptedQuarantineEnvelope(
       this.options.quarantineObjectDir,
       quarantineId,
-      this.options.quarantinePrivateKey,
     );
-    return { record, item: decrypted };
+    return { record, encrypted };
   }
 
   reject(quarantineId: string): { rejected: true; quarantine_id: string } {
