@@ -10,7 +10,7 @@ import {
 import {
   EncryptedFileQuarantineStore,
   readEncryptedQuarantineEnvelope,
-} from "../src/quarantineStore.js";
+} from "../src/quarantine/quarantineStore.js";
 
 function keyPair(): {
   publicKeyBase64: string;
