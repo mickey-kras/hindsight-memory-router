@@ -1,13 +1,15 @@
 import {
   constants,
   createCipheriv,
-  createDecipheriv,
-  privateDecrypt,
   publicEncrypt,
   randomBytes,
 } from "node:crypto";
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import {
+  parseEncryptedQuarantineEnvelope,
+  type EncryptedQuarantineEnvelope,
+} from "./quarantine/envelopeCrypto.js";
 import { sha256 } from "./safety.js";
 import type { ReviewReason } from "./types.js";
 
@@ -30,33 +32,6 @@ export interface QuarantineStore {
   put(input: QuarantineInput): QuarantineResult;
 }
 
-export interface DecryptedQuarantineObject {
-  quarantine_id: string;
-  created_at: string;
-  reason: ReviewReason;
-  writer_id?: string;
-  source?: string;
-  payload: unknown;
-}
-
-interface EncryptedEnvelope {
-  version: 1;
-  quarantine_id: string;
-  created_at: string;
-  reason: ReviewReason;
-  writer_id?: string;
-  source?: string;
-  sha256: string;
-  encryption: {
-    algorithm: "AES-256-GCM";
-    key_wrap: "RSA-OAEP-SHA256";
-    wrapped_key_b64: string;
-    iv_b64: string;
-    tag_b64: string;
-  };
-  ciphertext_b64: string;
-}
-
 function publicKeyPemFromEnv(value?: string): string {
   if (!value?.trim()) throw new Error("QUARANTINE_PUBLIC_KEY is required");
 
@@ -68,21 +43,6 @@ function publicKeyPemFromEnv(value?: string): string {
   const decoded = Buffer.from(trimmed, "base64").toString("utf8");
   if (!decoded.includes("BEGIN PUBLIC KEY")) {
     throw new Error("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM");
-  }
-  return decoded;
-}
-
-export function privateKeyPemFromEnv(value?: string): string {
-  if (!value?.trim()) throw new Error("QUARANTINE_PRIVATE_KEY is required");
-
-  const trimmed = value.trim();
-  if (trimmed.includes("BEGIN PRIVATE KEY")) {
-    return trimmed.replace(/\\n/g, "\n");
-  }
-
-  const decoded = Buffer.from(trimmed, "base64").toString("utf8");
-  if (!decoded.includes("BEGIN PRIVATE KEY")) {
-    throw new Error("QUARANTINE_PRIVATE_KEY must be PEM or base64-encoded PEM");
   }
   return decoded;
 }
@@ -106,63 +66,15 @@ export function encryptedQuarantineObjectPath(
   return objectPath;
 }
 
-export function decryptQuarantineEnvelope(
-  envelope: EncryptedEnvelope,
-  privateKeyEnv: string | undefined,
-): DecryptedQuarantineObject {
-  const privateKey = privateKeyPemFromEnv(privateKeyEnv);
-  const key = privateDecrypt(
-    {
-      key: privateKey,
-      oaepHash: "sha256",
-      padding: constants.RSA_PKCS1_OAEP_PADDING,
-    },
-    Buffer.from(envelope.encryption.wrapped_key_b64, "base64"),
-  );
-  const tag = Buffer.from(envelope.encryption.tag_b64, "base64");
-  if (tag.length !== GCM_AUTH_TAG_LENGTH_BYTES) {
-    throw new Error("invalid AES-GCM authentication tag length");
-  }
-  const decipher = createDecipheriv(
-    "aes-256-gcm",
-    key,
-    Buffer.from(envelope.encryption.iv_b64, "base64"),
-    { authTagLength: GCM_AUTH_TAG_LENGTH_BYTES },
-  );
-  decipher.setAuthTag(tag);
-  const plaintext = Buffer.concat([
-    decipher.update(Buffer.from(envelope.ciphertext_b64, "base64")),
-    decipher.final(),
-  ]).toString("utf8");
-  const decrypted = JSON.parse(plaintext) as DecryptedQuarantineObject;
-  if (sha256(plaintext) !== envelope.sha256) {
-    throw new Error("quarantine object digest mismatch");
-  }
-  return decrypted;
-}
-
 export function readEncryptedQuarantineEnvelope(
   objectDir: string,
   quarantineId: string,
-): EncryptedEnvelope {
+): EncryptedQuarantineEnvelope {
   const raw = readFileSync(
     encryptedQuarantineObjectPath(objectDir, quarantineId),
-    {
-      encoding: "utf8",
-    },
+    { encoding: "utf8" },
   );
-  return JSON.parse(raw) as EncryptedEnvelope;
-}
-
-export function readDecryptedQuarantineObject(
-  objectDir: string,
-  quarantineId: string,
-  privateKeyEnv: string | undefined,
-): DecryptedQuarantineObject {
-  return decryptQuarantineEnvelope(
-    readEncryptedQuarantineEnvelope(objectDir, quarantineId),
-    privateKeyEnv,
-  );
+  return parseEncryptedQuarantineEnvelope(JSON.parse(raw));
 }
 
 export function deleteEncryptedQuarantineObject(
@@ -211,7 +123,7 @@ export class EncryptedFileQuarantineStore implements QuarantineStore {
       key,
     );
 
-    const envelope: EncryptedEnvelope = {
+    const envelope: EncryptedQuarantineEnvelope = {
       version: 1,
       quarantine_id: quarantineId,
       created_at: input.timestamp,
