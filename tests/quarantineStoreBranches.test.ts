@@ -14,7 +14,7 @@ import {
   EncryptedFileQuarantineStore,
   MemoryQuarantineStore,
   readEncryptedQuarantineEnvelope,
-} from "../src/quarantineStore.js";
+} from "../src/quarantine/quarantineStore.js";
 
 function keyPair() {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
