@@ -60,8 +60,14 @@ describe("quarantine envelope validation", () => {
       const cases: Array<[unknown, string]> = [
         [null, "encrypted quarantine envelope must be an object"],
         [[envelope], "encrypted quarantine envelope must be an object"],
-        [{ ...envelope, encryption: null }, "encryption metadata must be an object"],
-        [{ ...envelope, version: 2 }, "unsupported quarantine envelope version"],
+        [
+          { ...envelope, encryption: null },
+          "encryption metadata must be an object",
+        ],
+        [
+          { ...envelope, version: 2 },
+          "unsupported quarantine envelope version",
+        ],
         [
           {
             ...envelope,
@@ -77,11 +83,20 @@ describe("quarantine envelope validation", () => {
           "unsupported quarantine key wrapping algorithm",
         ],
         [{ ...envelope, quarantine_id: "bad" }, "invalid quarantine_id"],
-        [{ ...envelope, quarantine_id: "" }, "quarantine_id must be a non-empty string"],
+        [
+          { ...envelope, quarantine_id: "" },
+          "quarantine_id must be a non-empty string",
+        ],
         [{ ...envelope, reason: "other" }, "invalid quarantine reason"],
         [{ ...envelope, sha256: "abc" }, "invalid quarantine object digest"],
-        [{ ...envelope, created_at: undefined }, "created_at must be a non-empty string"],
-        [{ ...envelope, writer_id: "" }, "writer_id must be a non-empty string"],
+        [
+          { ...envelope, created_at: undefined },
+          "created_at must be a non-empty string",
+        ],
+        [
+          { ...envelope, writer_id: "" },
+          "writer_id must be a non-empty string",
+        ],
         [{ ...envelope, source: 42 }, "source must be a non-empty string"],
         [
           {
@@ -174,9 +189,9 @@ describe("quarantine envelope validation", () => {
       publicKeyEncoding: { type: "spki", format: "pem" },
     });
     expect(decodePrivateKey(privateKey)).toContain("BEGIN RSA PRIVATE KEY");
-    expect(decodePrivateKey(Buffer.from(privateKey).toString("base64"))).toContain(
-      "BEGIN RSA PRIVATE KEY",
-    );
+    expect(
+      decodePrivateKey(Buffer.from(privateKey).toString("base64")),
+    ).toContain("BEGIN RSA PRIVATE KEY");
   });
 
   it("detects every authenticated metadata mismatch", () => {
