@@ -16,9 +16,7 @@ export interface DecryptQuarantineCliIo {
   stderr: OutputStream;
 }
 
-export function extractEnvelope(
-  value: unknown,
-): EncryptedQuarantineEnvelope {
+export function extractEnvelope(value: unknown): EncryptedQuarantineEnvelope {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const object = value as Record<string, unknown>;
     if ("encrypted" in object) {
@@ -66,7 +64,8 @@ export async function runDecryptQuarantineCli(
     io.stdout.write(`${JSON.stringify(decrypted, null, 2)}\n`);
     return 0;
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : "decryption failed";
+    const message =
+      error instanceof Error ? error.message : "decryption failed";
     io.stderr.write(`decrypt-quarantine failed: ${message}\n`);
     return 1;
   }
