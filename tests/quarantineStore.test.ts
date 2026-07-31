@@ -7,7 +7,7 @@ import { decryptQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
 import {
   EncryptedFileQuarantineStore,
   readEncryptedQuarantineEnvelope,
-} from "../src/quarantineStore.js";
+} from "../src/quarantine/quarantineStore.js";
 
 function keyPair(): { publicKey: string; privateKey: string } {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -56,7 +56,7 @@ describe("EncryptedFileQuarantineStore", () => {
         reason: "unknown_writer",
         writerId: "unknown",
         source: "test",
-        payload: { content: "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY" },
+        payload: { content: "MATCHING_KEY_ONLY" },
       });
       const envelope = readEncryptedQuarantineEnvelope(
         dir,
@@ -64,9 +64,7 @@ describe("EncryptedFileQuarantineStore", () => {
       );
 
       const decrypted = decryptQuarantineEnvelope(envelope, keys.privateKey);
-      expect(JSON.stringify(decrypted.payload)).toContain(
-        "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY",
-      );
+      expect(JSON.stringify(decrypted.payload)).toContain("MATCHING_KEY_ONLY");
 
       expect(() =>
         decryptQuarantineEnvelope(envelope, wrongKeys.privateKey),
