@@ -29,7 +29,6 @@ const HINDSIGHT_BASE_URL =
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY;
-const QUARANTINE_PRIVATE_KEY = process.env.QUARANTINE_PRIVATE_KEY;
 const QUARANTINE_OBJECT_DIR =
   process.env.QUARANTINE_OBJECT_DIR ??
   "/volume1/reports/hindsight-quarantine/objects";
@@ -43,7 +42,6 @@ const MAX_BODY_BYTES = Number(
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   adminToken?: string;
-  quarantinePrivateKey?: string;
   quarantineObjectDir?: string;
   reviewQueuePath?: string;
   maxPostpones?: number;
@@ -95,8 +93,6 @@ function buildAdmin(
   return new QuarantineAdminService({
     reviewQueuePath,
     quarantineObjectDir: options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR,
-    quarantinePrivateKey:
-      options.quarantinePrivateKey ?? QUARANTINE_PRIVATE_KEY,
     hindsight: buildHindsight(options),
     maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });
