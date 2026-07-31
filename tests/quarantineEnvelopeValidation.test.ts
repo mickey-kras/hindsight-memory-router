@@ -12,7 +12,7 @@ import {
 import {
   EncryptedFileQuarantineStore,
   readEncryptedQuarantineEnvelope,
-} from "../src/quarantineStore.js";
+} from "../src/quarantine/quarantineStore.js";
 
 function withEnvelope<T>(
   run: (context: {
