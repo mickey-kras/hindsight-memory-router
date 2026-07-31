@@ -12,11 +12,14 @@ import {
 } from "./hindsightClient.js";
 import { HttpError, safeErrorBody } from "./httpError.js";
 import { RouterPolicy } from "./policy.js";
-import { QuarantineAdminService, type PromoteBody } from "./quarantineAdmin.js";
+import {
+  QuarantineAdminService,
+  type PromoteBody,
+} from "./quarantine/quarantineAdmin.js";
 import {
   EncryptedFileQuarantineStore,
   type QuarantineStore,
-} from "./quarantineStore.js";
+} from "./quarantine/quarantineStore.js";
 import { loadRegistry } from "./registry.js";
 import { JsonlReviewQueue, type ReviewQueue } from "./reviewQueue.js";
 import type { RecallBody, RetainBody, WriterRegistry } from "./types.js";
