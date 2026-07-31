@@ -4,8 +4,11 @@ import {
   FetchHindsightGateway,
 } from "../src/hindsightClient.js";
 
-function mockFetch(response: Response) {
-  const fetchMock = vi.fn().mockResolvedValue(response);
+function mockFetch(...responses: Response[]) {
+  const fetchMock = vi.fn();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
@@ -44,6 +47,7 @@ describe("FetchHindsightGateway", () => {
 
   it("encodes bank ids and serializes retain and recall bodies", async () => {
     const fetchMock = mockFetch(
+      new Response(JSON.stringify({ ok: true }), { status: 200 }),
       new Response(JSON.stringify({ results: [] }), { status: 200 }),
     );
     const gateway = new FetchHindsightGateway("https://hindsight.test");
