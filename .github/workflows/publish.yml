@@ -20,7 +20,7 @@ jobs:
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: step-security/harden-runner@v2
         with:
@@ -47,7 +47,7 @@ jobs:
           exit-code: 0
           version: v0.71.2
 
-      - uses: github/codeql-action/upload-sarif@v3
+      - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: trivy-results.sarif
@@ -76,7 +76,7 @@ jobs:
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: step-security/harden-runner@v2
         with:
@@ -115,13 +115,13 @@ jobs:
             ${{ env.IMAGE_DOCKERHUB }}:${{ github.sha }}
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@v4
 
       - name: Sign GHCR image
         run: cosign sign --yes ${{ env.IMAGE_GHCR }}@${{ steps.build-ghcr.outputs.digest }}
 
       - name: Attest GHCR image
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_GHCR }}
           subject-digest: ${{ steps.build-ghcr.outputs.digest }}
