@@ -11,9 +11,9 @@ type InputStream = AsyncIterable<string | Uint8Array>;
 type OutputStream = { write(value: string): unknown };
 
 export interface DecryptQuarantineCliIo {
-  stdin: InputStream;
-  stdout: OutputStream;
-  stderr: OutputStream;
+  readonly stdin: InputStream;
+  readonly stdout: OutputStream;
+  readonly stderr: OutputStream;
 }
 
 export function extractEnvelope(value: unknown): EncryptedQuarantineEnvelope {
@@ -45,7 +45,7 @@ export async function decryptQuarantineResponseFile(
 }
 
 export async function runDecryptQuarantineCli(
-  args: string[],
+  args: readonly string[],
   io: DecryptQuarantineCliIo,
 ): Promise<number> {
   try {
