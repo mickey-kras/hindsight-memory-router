@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
+import { MemoryQuarantineStore } from "../src/quarantine/quarantineStore.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
-import { MemoryQuarantineStore } from "../src/quarantineStore.js";
 import { MemoryReviewQueue } from "../src/reviewQueue.js";
 import {
   createMemoryRouterServer,
