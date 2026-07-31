@@ -12,11 +12,14 @@ import {
 } from "./hindsightClient.js";
 import { HttpError, safeErrorBody } from "./httpError.js";
 import { RouterPolicy } from "./policy.js";
-import { QuarantineAdminService, type PromoteBody } from "./quarantineAdmin.js";
+import {
+  QuarantineAdminService,
+  type PromoteBody,
+} from "./quarantine/quarantineAdmin.js";
 import {
   EncryptedFileQuarantineStore,
   type QuarantineStore,
-} from "./quarantineStore.js";
+} from "./quarantine/quarantineStore.js";
 import { loadRegistry } from "./registry.js";
 import { JsonlReviewQueue, type ReviewQueue } from "./reviewQueue.js";
 import type { RecallBody, RetainBody, WriterRegistry } from "./types.js";
@@ -29,7 +32,6 @@ const HINDSIGHT_BASE_URL =
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY;
-const QUARANTINE_PRIVATE_KEY = process.env.QUARANTINE_PRIVATE_KEY;
 const QUARANTINE_OBJECT_DIR =
   process.env.QUARANTINE_OBJECT_DIR ??
   "/volume1/reports/hindsight-quarantine/objects";
@@ -43,7 +45,6 @@ const MAX_BODY_BYTES = Number(
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   adminToken?: string;
-  quarantinePrivateKey?: string;
   quarantineObjectDir?: string;
   reviewQueuePath?: string;
   maxPostpones?: number;
@@ -95,8 +96,6 @@ function buildAdmin(
   return new QuarantineAdminService({
     reviewQueuePath,
     quarantineObjectDir: options.quarantineObjectDir ?? QUARANTINE_OBJECT_DIR,
-    quarantinePrivateKey:
-      options.quarantinePrivateKey ?? QUARANTINE_PRIVATE_KEY,
     hindsight: buildHindsight(options),
     maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });

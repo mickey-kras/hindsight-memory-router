@@ -4,16 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  assertSafeQuarantineId,
+  decodePrivateKey,
   decryptQuarantineEnvelope,
+} from "../src/quarantine/envelopeCrypto.js";
+import {
+  assertSafeQuarantineId,
   deleteEncryptedQuarantineObject,
   encryptedQuarantineObjectPath,
   EncryptedFileQuarantineStore,
   MemoryQuarantineStore,
-  privateKeyPemFromEnv,
-  readDecryptedQuarantineObject,
   readEncryptedQuarantineEnvelope,
-} from "../src/quarantineStore.js";
+} from "../src/quarantine/quarantineStore.js";
 
 function keyPair() {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -72,16 +73,14 @@ describe("quarantine store branches", () => {
         ).put(input),
       ).not.toThrow();
 
-      expect(() => privateKeyPemFromEnv()).toThrow(
-        "QUARANTINE_PRIVATE_KEY is required",
-      );
-      expect(() => privateKeyPemFromEnv("not-a-key")).toThrow(
-        "QUARANTINE_PRIVATE_KEY must be PEM or base64-encoded PEM",
+      expect(() => decodePrivateKey(" ")).toThrow("private key is required");
+      expect(() => decodePrivateKey("not-a-key")).toThrow(
+        "private key must be PEM or base64-encoded PEM",
       );
       expect(
-        privateKeyPemFromEnv(keys.privateKeyPem.replaceAll("\n", "\\n")),
+        decodePrivateKey(keys.privateKeyPem.replaceAll("\n", "\\n")),
       ).toContain("BEGIN PRIVATE KEY");
-      expect(privateKeyPemFromEnv(keys.privateKeyBase64)).toContain(
+      expect(decodePrivateKey(keys.privateKeyBase64)).toContain(
         "BEGIN PRIVATE KEY",
       );
     } finally {
@@ -132,9 +131,11 @@ describe("quarantine store branches", () => {
     );
     try {
       expect(
-        readDecryptedQuarantineObject(
-          context.directory,
-          context.result.quarantine_id,
+        decryptQuarantineEnvelope(
+          readEncryptedQuarantineEnvelope(
+            context.directory,
+            context.result.quarantine_id,
+          ),
           context.keys.privateKeyBase64,
         ),
       ).toMatchObject({ payload: { content: "review locally" } });

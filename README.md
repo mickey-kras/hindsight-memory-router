@@ -25,7 +25,8 @@ writer identity required
 bank chosen by policy, not by agent
 recall is ACL-filtered
 unknown/suspicious input is encrypted before review
-admin review uses a separate token and private key
+router stores only the quarantine public key
+review clients decrypt locally with a separately managed private key
 unknown Hindsight endpoints are denied and logged
 ```
 
@@ -49,6 +50,8 @@ POST /admin/quarantine/items/{quarantine_id}/reject
 POST /admin/quarantine/items/{quarantine_id}/postpone
 POST /admin/quarantine/items/{quarantine_id}/promote
 ```
+
+The item endpoint returns the encrypted envelope and safe queue metadata. It never returns decrypted payload content.
 
 All other Hindsight endpoints are denied by default.
 
@@ -79,10 +82,11 @@ HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
-QUARANTINE_PRIVATE_KEY=<PEM or base64 PEM>
 QUARANTINE_OBJECT_DIR=/volume1/reports/hindsight-quarantine/objects
 QUARANTINE_MAX_POSTPONES=3
 ```
+
+`QUARANTINE_PRIVATE_KEY` is not a router configuration value. Keep it outside the router runtime and provide it only to an authorized review client when decrypting an item.
 
 OpenClaw plugin config:
 
@@ -124,11 +128,25 @@ No writer recalls `quarantine`. The `main` writer does not recall `research`.
 raw payload -> encrypted object store
 review queue -> quarantine_id + metadata only
 Hindsight quarantine bank -> safe index record only
-admin read -> decrypts one item with private key
-promote -> writes approved/sanitized content only
+admin item API -> encrypted envelope only
+authorized review client -> local decryption with separately managed private key
+promote -> explicit approved/sanitized content only
 ```
 
-No original text is written to the review queue or searchable memory.
+No original text is written to the review queue or searchable memory. Queue listing, reject, postpone, and promotion do not require the private key.
+
+Local review flow:
+
+1. List pending items with the admin token.
+2. Fetch one encrypted envelope with the admin token and save the JSON response.
+3. Decrypt locally, supplying the private key through stdin:
+
+```bash
+npm run build
+private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.json
+```
+
+4. Reject, postpone, or explicitly promote sanitized content through the admin API.
 
 ## Checks
 

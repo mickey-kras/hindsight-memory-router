@@ -1,12 +1,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { decryptQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
 import {
   EncryptedFileQuarantineStore,
-  readDecryptedQuarantineObject,
-} from "./quarantineStore.js";
+  readEncryptedQuarantineEnvelope,
+} from "../src/quarantine/quarantineStore.js";
 
 function keyPair(): { publicKey: string; privateKey: string } {
   const { publicKey, privateKey } = generateKeyPairSync("rsa", {
@@ -55,24 +56,18 @@ describe("EncryptedFileQuarantineStore", () => {
         reason: "unknown_writer",
         writerId: "unknown",
         source: "test",
-        payload: { content: "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY" },
+        payload: { content: "MATCHING_KEY_ONLY" },
       });
-
-      const decrypted = readDecryptedQuarantineObject(
+      const envelope = readEncryptedQuarantineEnvelope(
         dir,
         result.quarantine_id,
-        keys.privateKey,
-      );
-      expect(JSON.stringify(decrypted.payload)).toContain(
-        "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY",
       );
 
+      const decrypted = decryptQuarantineEnvelope(envelope, keys.privateKey);
+      expect(JSON.stringify(decrypted.payload)).toContain("MATCHING_KEY_ONLY");
+
       expect(() =>
-        readDecryptedQuarantineObject(
-          dir,
-          result.quarantine_id,
-          wrongKeys.privateKey,
-        ),
+        decryptQuarantineEnvelope(envelope, wrongKeys.privateKey),
       ).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });

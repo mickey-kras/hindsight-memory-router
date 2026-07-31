@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { FakeHindsightGateway } from "./hindsightClient.js";
-import { RouterPolicy } from "./policy.js";
-import { MemoryQuarantineStore } from "./quarantineStore.js";
-import { MemoryReviewQueue } from "./reviewQueue.js";
-import type { WriterRegistry } from "./types.js";
+import { FakeHindsightGateway } from "../src/hindsightClient.js";
+import { RouterPolicy } from "../src/policy.js";
+import { MemoryQuarantineStore } from "../src/quarantine/quarantineStore.js";
+import { MemoryReviewQueue } from "../src/reviewQueue.js";
+import type { WriterRegistry } from "../src/types.js";
 
 const registry: WriterRegistry = {
   writers: {
