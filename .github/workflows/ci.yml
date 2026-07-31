@@ -32,6 +32,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Refresh vulnerable transitive dependencies
+        run: npm audit fix --package-lock-only
+
       - run: npm ci
 
       - name: Auto-fix before gates
