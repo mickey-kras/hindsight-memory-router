@@ -80,7 +80,10 @@ export function parseEncryptedQuarantineEnvelope(
   );
   const ivB64 = requireString(encryption.iv_b64, "iv_b64");
   const tagB64 = requireString(encryption.tag_b64, "tag_b64");
-  const ciphertextB64 = requireString(envelope.ciphertext_b64, "ciphertext_b64");
+  const ciphertextB64 = requireString(
+    envelope.ciphertext_b64,
+    "ciphertext_b64",
+  );
   const writerId = optionalString(envelope.writer_id, "writer_id");
   const source = optionalString(envelope.source, "source");
 
@@ -199,10 +202,7 @@ function parseDecryptedObject(value: unknown): DecryptedQuarantineObject {
   };
 }
 
-function requireObject(
-  value: unknown,
-  label: string,
-): Record<string, unknown> {
+function requireObject(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${label} must be an object`);
   }
