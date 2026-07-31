@@ -8,7 +8,10 @@ import type {
   WriterRegistry,
 } from "./types.js";
 import { getWriter } from "./registry.js";
-import { MemoryQuarantineStore, type QuarantineStore } from "./quarantine/quarantineStore.js";
+import {
+  MemoryQuarantineStore,
+  type QuarantineStore,
+} from "./quarantine/quarantineStore.js";
 import type { ReviewQueue } from "./reviewQueue.js";
 import { scanContent, type SafetyFinding } from "./safety.js";
 
