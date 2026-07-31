@@ -23,9 +23,9 @@ function record(id: string): ReviewRecord {
 
 describe("review queues", () => {
   it("treats a missing JSONL file as an empty queue", () => {
-    expect(readReviewQueue("/tmp/definitely-missing-review-queue.jsonl")).toEqual(
-      [],
-    );
+    expect(
+      readReviewQueue("/tmp/definitely-missing-review-queue.jsonl"),
+    ).toEqual([]);
   });
 
   it("enqueues, lists, replaces, and empties JSONL records", () => {

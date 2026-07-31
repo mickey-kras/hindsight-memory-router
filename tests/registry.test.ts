@@ -10,9 +10,7 @@ import {
 } from "../src/registry.js";
 import type { WriterRegistry } from "../src/types.js";
 
-function registryWith(
-  writers: WriterRegistry["writers"],
-): WriterRegistry {
+function registryWith(writers: WriterRegistry["writers"]): WriterRegistry {
   return {
     writers,
     defaults: {
@@ -52,11 +50,56 @@ describe("registry", () => {
   it.each([
     [null, "registry must be an object"],
     [{}, "registry.writers must be an object"],
-    [registryWith({ "": { role: "x", source: "x", write_bank: "ops", read_banks: [] } }), "writer id cannot be empty"],
-    [registryWith({ ops: { role: "x", source: "x", write_bank: "" as "ops", read_banks: [] } }), "writer ops missing write_bank"],
-    [registryWith({ ops: { role: "x", source: "x", write_bank: "ops", read_banks: null as unknown as [] } }), "writer ops missing read_banks"],
-    [registryWith({ ops: { role: "x", source: "x", write_bank: "ops", read_banks: ["quarantine"] } }), "writer ops cannot read quarantine"],
-    [registryWith({ main: { role: "x", source: "x", write_bank: "main", read_banks: ["research"] } }), "main writer cannot read research"],
+    [
+      registryWith({
+        "": { role: "x", source: "x", write_bank: "ops", read_banks: [] },
+      }),
+      "writer id cannot be empty",
+    ],
+    [
+      registryWith({
+        ops: {
+          role: "x",
+          source: "x",
+          write_bank: "" as "ops",
+          read_banks: [],
+        },
+      }),
+      "writer ops missing write_bank",
+    ],
+    [
+      registryWith({
+        ops: {
+          role: "x",
+          source: "x",
+          write_bank: "ops",
+          read_banks: null as unknown as [],
+        },
+      }),
+      "writer ops missing read_banks",
+    ],
+    [
+      registryWith({
+        ops: {
+          role: "x",
+          source: "x",
+          write_bank: "ops",
+          read_banks: ["quarantine"],
+        },
+      }),
+      "writer ops cannot read quarantine",
+    ],
+    [
+      registryWith({
+        main: {
+          role: "x",
+          source: "x",
+          write_bank: "main",
+          read_banks: ["research"],
+        },
+      }),
+      "main writer cannot read research",
+    ],
   ])("rejects invalid registry input", (value, message) => {
     expect(() => validateRegistry(value as WriterRegistry)).toThrow(message);
   });
