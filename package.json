@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -18,13 +19,14 @@
     "security:audit": "npm audit --audit-level=moderate",
     "aislop:ci": "npx --yes aislop@latest ci --changes --base origin/main",
     "aislop:fix:safe": "npx --yes aislop@latest fix --safe",
-    "check": "npm run format:check && npm run lint && npm test && npm run typecheck && npm run security:audit && npm run aislop:ci",
+    "check": "npm run format:check && npm run lint && npm run test:coverage && npm run typecheck && npm run security:audit && npm run aislop:ci",
     "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
+    "@vitest/coverage-v8": "^4.1.10",
     "eslint": "^10.7.0",
     "prettier": "^3.9.6",
     "typescript": "^6.0.3",
