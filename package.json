@@ -10,6 +10,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "test": "vitest run",
+    "test:coverage": "npx --yes c8@10.1.3 --all --include='src/**/*.ts' --exclude='src/cli/checkChangedCoverage.ts' --reporter=json --reporter=text npm test",
+    "coverage:changed": "npm run test:coverage && npm run build && node dist/src/cli/checkChangedCoverage.js origin/main 90 85",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -18,7 +20,7 @@
     "security:audit": "npm audit --audit-level=moderate",
     "aislop:ci": "npx --yes aislop@latest ci --changes --base origin/main",
     "aislop:fix:safe": "npx --yes aislop@latest fix --safe",
-    "check": "npm run format:check && npm run lint && npm test && npm run typecheck && npm run security:audit && npm run aislop:ci",
+    "check": "npm run format:check && npm run lint && npm run coverage:changed && npm run typecheck && npm run security:audit && npm run aislop:ci",
     "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
     "hooks:install": "git config core.hooksPath .githooks"
   },
