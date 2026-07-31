@@ -32,7 +32,10 @@ function keyPair() {
 function createEnvelope() {
   const directory = mkdtempSync(join(tmpdir(), "quarantine-branches-"));
   const keys = keyPair();
-  const store = new EncryptedFileQuarantineStore(keys.publicKeyBase64, directory);
+  const store = new EncryptedFileQuarantineStore(
+    keys.publicKeyBase64,
+    directory,
+  );
   const result = store.put({
     timestamp: "2026-07-31T00:00:00.000Z",
     reason: "unknown_writer",
