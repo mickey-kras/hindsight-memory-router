@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { decryptQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
-import { EncryptedFileQuarantineStore } from "../src/quarantineStore.js";
+import { EncryptedFileQuarantineStore } from "../src/quarantine/quarantineStore.js";
 import { createMemoryRouterServer } from "../src/server.js";
 import type { WriterRegistry } from "../src/types.js";
 
