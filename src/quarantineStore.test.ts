@@ -3,9 +3,10 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
+import { decryptQuarantineEnvelope } from "./quarantine/envelopeCrypto.js";
 import {
   EncryptedFileQuarantineStore,
-  readDecryptedQuarantineObject,
+  readEncryptedQuarantineEnvelope,
 } from "./quarantineStore.js";
 
 function keyPair(): { publicKey: string; privateKey: string } {
@@ -57,22 +58,18 @@ describe("EncryptedFileQuarantineStore", () => {
         source: "test",
         payload: { content: "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY" },
       });
-
-      const decrypted = readDecryptedQuarantineObject(
+      const envelope = readEncryptedQuarantineEnvelope(
         dir,
         result.quarantine_id,
-        keys.privateKey,
       );
+
+      const decrypted = decryptQuarantineEnvelope(envelope, keys.privateKey);
       expect(JSON.stringify(decrypted.payload)).toContain(
         "DECRYPT_ME_ONLY_WITH_PRIVATE_KEY",
       );
 
       expect(() =>
-        readDecryptedQuarantineObject(
-          dir,
-          result.quarantine_id,
-          wrongKeys.privateKey,
-        ),
+        decryptQuarantineEnvelope(envelope, wrongKeys.privateKey),
       ).toThrow();
     } finally {
       rmSync(dir, { recursive: true, force: true });
