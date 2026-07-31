@@ -8,11 +8,8 @@ import type {
   WriterRegistry,
 } from "./types.js";
 import { getWriter } from "./registry.js";
+import { MemoryQuarantineStore, type QuarantineStore } from "./quarantine/quarantineStore.js";
 import type { ReviewQueue } from "./reviewQueue.js";
-import {
-  MemoryQuarantineStore,
-  type QuarantineStore,
-} from "./quarantineStore.js";
 import { scanContent, type SafetyFinding } from "./safety.js";
 
 export interface RouterPolicyDeps {
