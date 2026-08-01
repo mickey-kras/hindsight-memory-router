@@ -74,6 +74,7 @@ export interface QuarantineRepository {
   close(): Promise<void>;
   insert(item: NewQuarantineItem): Promise<void>;
   upsertRecalledMemory(item: NewQuarantineItem): Promise<void>;
+  upsertSecurityEvent(item: NewQuarantineItem): Promise<void>;
   get(quarantineId: string): Promise<StoredQuarantineItem | null>;
   listReviewable(
     limit?: number,
