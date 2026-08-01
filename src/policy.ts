@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "./canonicalJson.js";
 import type { HindsightGateway } from "./hindsightClient.js";
 import { getWriter } from "./registry.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
@@ -146,7 +146,7 @@ export class RouterPolicy {
     const resultScan = scanContent(result.text ?? "");
     if (resultScan.safe) return true;
 
-    const sourceContentSha256 = digestJson(result);
+    const sourceContentSha256 = sha256Hex(result.text ?? "");
     if (
       state?.status === "reviewed_allowed" &&
       state.source_content_sha256 === sourceContentSha256
@@ -249,33 +249,4 @@ function scanMemoryItem(item: MemoryItem): {
 
   const findings = fields.flatMap((value) => scanContent(value).findings);
   return { safe: findings.length === 0, findings };
-}
-
-function digestJson(value: unknown): string {
-  return createHash("sha256").update(stableJson(value)).digest("hex");
-}
-
-function stableJson(value: unknown): string {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("non-finite JSON number");
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(stableJson).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
-      .join(",")}}`;
-  }
-  throw new Error("recall result must contain JSON values only");
 }
