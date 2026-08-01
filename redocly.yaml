@@ -1,0 +1,9 @@
+apis:
+  memory-router@v0.9:
+    root: ./openapi/openapi.json
+
+extends:
+  - recommended-strict
+
+rules:
+  no-server-example.com: off
