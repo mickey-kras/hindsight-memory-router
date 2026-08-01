@@ -1,65 +1,74 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
-import { MemoryReviewQueue } from "../src/reviewQueue.js";
 import { createMemoryRouterServer } from "../src/server.js";
+import { memoryQuarantine } from "./quarantineTestUtils.js";
 
 async function withServer<T>(
-  fn: (
-    baseUrl: string,
-    hindsight: FakeHindsightGateway,
-    reviewQueue: MemoryReviewQueue,
-  ) => Promise<T>,
+  run: (context: {
+    baseUrl: string;
+    hindsight: FakeHindsightGateway;
+    repository: ReturnType<typeof memoryQuarantine>["repository"];
+  }) => Promise<T>,
 ): Promise<T> {
   const hindsight = new FakeHindsightGateway();
-  const reviewQueue = new MemoryReviewQueue();
+  const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
     hindsight,
-    reviewQueue,
+    quarantineRepository: quarantine.repository,
+    quarantineStore: quarantine.store,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  if (!address || typeof address === "string")
+  if (!address || typeof address === "string") {
     throw new Error("unexpected server address");
+  }
   try {
-    return await fn(`http://127.0.0.1:${address.port}`, hindsight, reviewQueue);
+    return await run({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      hindsight,
+      repository: quarantine.repository,
+    });
   } finally {
     await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve())),
+      server.close((error) => (error ? reject(error) : resolve())),
     );
   }
 }
 
 describe("OpenClaw Hindsight plugin contract", () => {
-  it("accepts retain payload shape produced by HindsightClient.retain", async () => {
-    await withServer(async (baseUrl, hindsight) => {
-      const res = await fetch(`${baseUrl}/v1/default/banks/main/memories`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          items: [
-            {
-              content: "Verified router contract retain payload.",
-              context: "OpenClaw transcript",
-              document_id: "openclaw:agent:main",
-              metadata: { source: "openclaw" },
-              tags: ["source_system:openclaw"],
-              update_mode: "append",
-            },
-          ],
-          async: true,
-        }),
-      });
-      expect(res.status).toBe(200);
+  it("accepts the retain payload produced by HindsightClient.retain", async () => {
+    await withServer(async ({ baseUrl, hindsight }) => {
+      const response = await fetch(
+        `${baseUrl}/v1/default/banks/main/memories`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            items: [
+              {
+                content: "Verified router contract retain payload.",
+                context: "OpenClaw transcript",
+                document_id: "openclaw:agent:main",
+                metadata: { source: "openclaw" },
+                tags: ["source_system:openclaw"],
+                update_mode: "append",
+              },
+            ],
+            async: true,
+          }),
+        },
+      );
+      expect(response.status).toBe(200);
       expect(hindsight.retained).toHaveLength(1);
       expect(hindsight.retained[0].bankId).toBe("main");
     });
   });
 
-  it("accepts recall payload shape produced by HindsightClient.recall", async () => {
-    await withServer(async (baseUrl, hindsight) => {
-      const res = await fetch(
+  it("accepts the recall payload produced by HindsightClient.recall", async () => {
+    await withServer(async ({ baseUrl, hindsight }) => {
+      const response = await fetch(
         `${baseUrl}/v1/default/banks/dev/memories/recall`,
         {
           method: "POST",
@@ -73,8 +82,8 @@ describe("OpenClaw Hindsight plugin contract", () => {
           }),
         },
       );
-      expect(res.status).toBe(200);
-      const body = await res.json();
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { results: unknown[] };
       expect(body.results.length).toBeGreaterThan(0);
       expect(hindsight.recalled.map((item) => item.bankId)).toEqual([
         "dev",
@@ -83,16 +92,18 @@ describe("OpenClaw Hindsight plugin contract", () => {
     });
   });
 
-  it("logs unknown Hindsight endpoints instead of proxying them", async () => {
-    await withServer(async (baseUrl, hindsight, reviewQueue) => {
-      const res = await fetch(`${baseUrl}/v1/default/banks/main/config`);
-      expect(res.status).toBe(404);
+  it("records unknown Hindsight endpoints instead of proxying them", async () => {
+    await withServer(async ({ baseUrl, hindsight, repository }) => {
+      const response = await fetch(`${baseUrl}/v1/default/banks/main/config`);
+      expect(response.status).toBe(404);
       expect(hindsight.retained).toHaveLength(0);
       expect(hindsight.recalled).toHaveLength(0);
-      expect(reviewQueue.records[0]).toMatchObject({
-        reason: "denied_endpoint",
-        path: "/v1/default/banks/main/config",
-      });
+      expect(await repository.listReviewable()).toEqual([
+        expect.objectContaining({
+          kind: "security_event",
+          reason: "denied_endpoint",
+        }),
+      ]);
     });
   });
 });
