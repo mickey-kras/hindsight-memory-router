@@ -1,22 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
-import { MemoryQuarantineStore } from "../src/quarantine/quarantineStore.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
-import { MemoryReviewQueue } from "../src/reviewQueue.js";
 import {
   createMemoryRouterServer,
   type CreateMemoryRouterServerOptions,
 } from "../src/server.js";
+import { memoryQuarantine } from "./quarantineTestUtils.js";
 
 async function withServer<T>(
   options: CreateMemoryRouterServerOptions,
   run: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
+  const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
     hindsight: new FakeHindsightGateway(),
-    reviewQueue: new MemoryReviewQueue(),
-    quarantineStore: new MemoryQuarantineStore(),
+    quarantineRepository: quarantine.repository,
+    quarantineStore: quarantine.store,
     ...options,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -43,6 +43,10 @@ describe("server request branches", () => {
         headers: { authorization: "Bearer router-token" },
       });
       expect(authorized.status).toBe(200);
+      expect(await authorized.json()).toMatchObject({
+        api_version: "0.9.0",
+        features: { quarantine_database: true },
+      });
     });
   });
 
@@ -54,15 +58,21 @@ describe("server request branches", () => {
     });
   });
 
-  it("returns a structured error for unknown admin routes", async () => {
+  it("returns structured errors for unknown admin routes and invalid queries", async () => {
     await withServer({ adminToken: "admin-token" }, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/admin/unknown`, {
-        headers: { authorization: "Bearer admin-token" },
-      });
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({
+      const headers = { authorization: "Bearer admin-token" };
+      const unknown = await fetch(`${baseUrl}/admin/unknown`, { headers });
+      expect(unknown.status).toBe(404);
+      expect(await unknown.json()).toEqual({
         error: "admin_endpoint_not_found",
       });
+
+      const invalidQuery = await fetch(
+        `${baseUrl}/admin/quarantine/queue?limit=0`,
+        { headers },
+      );
+      expect(invalidQuery.status).toBe(400);
+      expect(await invalidQuery.json()).toMatchObject({ error: "invalid_query" });
     });
   });
 
@@ -94,6 +104,16 @@ describe("server request branches", () => {
       expect(response.status).toBe(413);
       expect(await response.json()).toMatchObject({
         error: "payload_too_large",
+      });
+    });
+  });
+
+  it("encrypts denied endpoint security events", async () => {
+    await withServer({}, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/unknown`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
+        error: "endpoint denied by memory-router policy",
       });
     });
   });
