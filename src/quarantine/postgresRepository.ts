@@ -3,10 +3,7 @@ import postgres, {
   type Sql,
   type TransactionSql,
 } from "postgres";
-import {
-  SqlQuarantineRepository,
-  type SqlDatabase,
-} from "./sqlRepository.js";
+import { SqlQuarantineRepository, type SqlDatabase } from "./sqlRepository.js";
 
 export class PostgresQuarantineRepository extends SqlQuarantineRepository {
   constructor(connectionString: string) {
