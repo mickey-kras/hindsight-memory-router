@@ -37,17 +37,11 @@ const expectedOperations = new Map<string, string>([
   ["GET /health", "getHealth"],
   ["GET /version", "getVersion"],
   ["POST /v1/default/banks/{writer_id}/memories", "retainMemory"],
-  [
-    "POST /v1/default/banks/{writer_id}/memories/recall",
-    "recallMemory",
-  ],
+  ["POST /v1/default/banks/{writer_id}/memories/recall", "recallMemory"],
   ["GET /admin/quarantine/queue", "listQuarantineQueue"],
   ["GET /admin/quarantine/stats", "getQuarantineStats"],
   ["POST /admin/quarantine/cleanup", "cleanupQuarantine"],
-  [
-    "GET /admin/quarantine/items/{quarantine_id}",
-    "getQuarantineItem",
-  ],
+  ["GET /admin/quarantine/items/{quarantine_id}", "getQuarantineItem"],
   [
     "POST /admin/quarantine/items/{quarantine_id}/approve",
     "approveQuarantineItem",
@@ -135,9 +129,7 @@ describe("OpenAPI contract", () => {
     ).toBe("RouterToken");
     expect(
       securityScheme(
-        actual.get(
-          "POST /v1/default/banks/{writer_id}/memories/recall",
-        ) ?? {},
+        actual.get("POST /v1/default/banks/{writer_id}/memories/recall") ?? {},
       ),
     ).toBe("RouterToken");
 
@@ -152,9 +144,9 @@ describe("OpenAPI contract", () => {
     const approve = operations().get(
       "POST /admin/quarantine/items/{quarantine_id}/approve",
     );
-    expect(approve?.requestBody?.content?.["application/json"]?.schema?.$ref).toBe(
-      "#/components/schemas/ApproveRequest",
-    );
+    expect(
+      approve?.requestBody?.content?.["application/json"]?.schema?.$ref,
+    ).toBe("#/components/schemas/ApproveRequest");
     expect(approve?.description).toContain("complete object unchanged");
     expect(approve?.description).toContain("SHA-256");
   });
