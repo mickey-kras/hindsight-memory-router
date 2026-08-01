@@ -63,7 +63,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       `${input.source ?? "unknown"}:${input.writerId ?? "unknown"}`,
     );
 
-    const quarantineId = `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
+    const quarantineId = await this.resolveQuarantineId(input);
     const decrypted: DecryptedQuarantineObject = {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
@@ -127,6 +127,21 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       await this.repository.insert(item);
     }
     return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+  }
+
+  private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
+    if (
+      input.kind === "recalled_memory" &&
+      input.sourceBank !== undefined &&
+      input.sourceMemoryId !== undefined
+    ) {
+      const existing = await this.repository.findMemoryState(
+        input.sourceBank,
+        input.sourceMemoryId,
+      );
+      if (existing) return existing.quarantine_id;
+    }
+    return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
 }
 
