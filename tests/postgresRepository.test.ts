@@ -24,9 +24,8 @@ beforeEach(() => {
 
 describe("PostgresQuarantineRepository", () => {
   it("initializes, executes transactional writes, and closes the pool", async () => {
-    const { PostgresQuarantineRepository } = await import(
-      "../src/quarantine/postgresRepository.js"
-    );
+    const { PostgresQuarantineRepository } =
+      await import("../src/quarantine/postgresRepository.js");
     const repository = new PostgresQuarantineRepository(
       "postgresql://router:test@database/router",
     );

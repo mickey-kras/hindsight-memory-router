@@ -82,7 +82,12 @@ createServer(async (req, res) => {
       const body = await readJson(req);
       const bankId = decodeURIComponent(memory[1]);
       const memoryId = decodeURIComponent(memory[2]);
-      record({ kind: "invalidate", bank_id: bankId, memory_id: memoryId, body });
+      record({
+        kind: "invalidate",
+        bank_id: bankId,
+        memory_id: memoryId,
+        body,
+      });
       return send(res, 200, { success: true, memory_id: memoryId });
     }
 
