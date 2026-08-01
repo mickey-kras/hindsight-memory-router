@@ -1,0 +1,12 @@
+services:
+  swagger-ui:
+    image: swaggerapi/swagger-ui:v5.32.11
+    profiles: ["docs"]
+    environment:
+      SWAGGER_JSON: /spec/openapi.json
+      SUPPORTED_SUBMIT_METHODS: "[]"
+      DISPLAY_REQUEST_DURATION: "true"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ../openapi/openapi.json:/spec/openapi.json:ro
