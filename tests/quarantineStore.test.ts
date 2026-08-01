@@ -54,7 +54,6 @@ describe("EncryptedDatabaseQuarantineStore", () => {
       payload: { result: { id: "memory-1", text: "changed" } },
     });
 
-    expect(repository.items).toHaveLength?.(undefined);
     expect(repository.items.size).toBe(1);
     expect(await repository.get(first.quarantine_id)).toMatchObject({
       status: "pending",
