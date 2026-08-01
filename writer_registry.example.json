@@ -39,7 +39,6 @@
   },
   "defaults": {
     "unknown_writer_action": "review_queue",
-    "suspicious_content_action": "review_queue",
-    "review_queue_path": "/volume1/reports/hindsight-review/review.jsonl"
+    "suspicious_content_action": "review_queue"
   }
 }
