@@ -3,6 +3,7 @@ import { HttpError } from "../httpError.js";
 import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
 import {
   createEncryptedQuarantineEnvelope,
+  decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
 import type { NewQuarantineItem, QuarantineRepository } from "./repository.js";
@@ -46,12 +47,14 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
 
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private readonly limiter: FixedWindowLimiter;
+  private readonly publicKey: string;
 
   constructor(
-    private readonly publicKey: string,
+    publicKey: string,
     readonly repository: QuarantineRepository,
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
   ) {
+    this.publicKey = decodePublicKey(publicKey);
     this.limiter = new FixedWindowLimiter(
       limits.rateLimitMax,
       limits.rateLimitWindowMs,
