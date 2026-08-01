@@ -127,7 +127,10 @@ admin_get() {
 
 admin_post() {
   local path="$1"
-  local body="${2:-{}}"
+  local body="${2-}"
+  if [[ $# -lt 2 ]]; then
+    body='{}'
+  fi
   curl -fsS \
     -H "Authorization: Bearer ${admin_token}" \
     -H "Content-Type: application/json" \
