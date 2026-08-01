@@ -75,6 +75,17 @@ createServer(async (req, res) => {
       });
     }
 
+    const memory = url.pathname.match(
+      /^\/v1\/default\/banks\/([^/]+)\/memories\/([^/]+)$/,
+    );
+    if (method === "PATCH" && memory) {
+      const body = await readJson(req);
+      const bankId = decodeURIComponent(memory[1]);
+      const memoryId = decodeURIComponent(memory[2]);
+      record({ kind: "invalidate", bank_id: bankId, memory_id: memoryId, body });
+      return send(res, 200, { success: true, memory_id: memoryId });
+    }
+
     return send(res, 404, { error: "not found" });
   } catch {
     return send(res, 500, { error: "internal error" });
