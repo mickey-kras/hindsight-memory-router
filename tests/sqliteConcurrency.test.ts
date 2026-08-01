@@ -52,9 +52,7 @@ describe("SQLite quarantine concurrency", () => {
         ),
       );
 
-      expect(new Set(writes.map((write) => write.quarantine_id))).toHaveSize(
-        12,
-      );
+      expect(new Set(writes.map((write) => write.quarantine_id)).size).toBe(12);
       await expect(repository.stats()).resolves.toMatchObject({
         total_items: 12,
         pending_items: 12,
