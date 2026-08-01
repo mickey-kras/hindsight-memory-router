@@ -67,10 +67,7 @@ describe("quarantine envelope validation", () => {
         { ...envelope, created_at: undefined },
         "created_at must be a non-empty string",
       ],
-      [
-        { ...envelope, writer_id: "" },
-        "writer_id must be a non-empty string",
-      ],
+      [{ ...envelope, writer_id: "" }, "writer_id must be a non-empty string"],
       [
         {
           ...envelope,
@@ -120,9 +117,9 @@ describe("quarantine envelope validation", () => {
     >;
     delete envelopeWithoutOptional.writer_id;
     delete envelopeWithoutOptional.source;
-    expect(parseEncryptedQuarantineEnvelope(envelopeWithoutOptional)).not.toHaveProperty(
-      "writer_id",
-    );
+    expect(
+      parseEncryptedQuarantineEnvelope(envelopeWithoutOptional),
+    ).not.toHaveProperty("writer_id");
 
     const decryptedWithoutOptional = structuredClone(decrypted) as Record<
       string,
@@ -130,9 +127,9 @@ describe("quarantine envelope validation", () => {
     >;
     delete decryptedWithoutOptional.writer_id;
     delete decryptedWithoutOptional.source;
-    expect(parseDecryptedQuarantineObject(decryptedWithoutOptional)).not.toHaveProperty(
-      "source",
-    );
+    expect(
+      parseDecryptedQuarantineObject(decryptedWithoutOptional),
+    ).not.toHaveProperty("source");
   });
 
   it("validates decrypted payload and private key forms", () => {
@@ -153,9 +150,9 @@ describe("quarantine envelope validation", () => {
       publicKeyEncoding: { type: "spki", format: "pem" },
     });
     expect(decodePrivateKey(privateKey)).toContain("BEGIN RSA PRIVATE KEY");
-    expect(decodePrivateKey(Buffer.from(privateKey).toString("base64"))).toContain(
-      "BEGIN RSA PRIVATE KEY",
-    );
+    expect(
+      decodePrivateKey(Buffer.from(privateKey).toString("base64")),
+    ).toContain("BEGIN RSA PRIVATE KEY");
   });
 
   it("detects authenticated metadata mismatch", () => {

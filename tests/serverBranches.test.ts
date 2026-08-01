@@ -72,7 +72,9 @@ describe("server request branches", () => {
         { headers },
       );
       expect(invalidQuery.status).toBe(400);
-      expect(await invalidQuery.json()).toMatchObject({ error: "invalid_query" });
+      expect(await invalidQuery.json()).toMatchObject({
+        error: "invalid_query",
+      });
     });
   });
 

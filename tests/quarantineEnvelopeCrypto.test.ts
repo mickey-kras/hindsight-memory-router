@@ -37,7 +37,9 @@ function decrypted(): DecryptedQuarantineObject {
     source: "test",
     payload: {
       action: "retain",
-      body: { items: [{ metadata: { z: "last", a: "first" }, content: "raw" }] },
+      body: {
+        items: [{ metadata: { z: "last", a: "first" }, content: "raw" }],
+      },
     },
   };
 }
@@ -91,9 +93,9 @@ describe("quarantine envelope crypto", () => {
         encryption: { ...envelope.encryption, tag_b64: "AA==" },
       }),
     ).toThrow("authentication tag length");
-    expect(() => createEncryptedQuarantineEnvelope(decrypted(), "bad-key")).toThrow(
-      "QUARANTINE_PUBLIC_KEY",
-    );
+    expect(() =>
+      createEncryptedQuarantineEnvelope(decrypted(), "bad-key"),
+    ).toThrow("QUARANTINE_PUBLIC_KEY");
     expect(() => decryptQuarantineEnvelope(envelope, "bad-key")).toThrow(
       "private key",
     );
@@ -113,7 +115,10 @@ describe("quarantine envelope crypto", () => {
     ).toThrow("digest mismatch");
     expect(() =>
       decryptQuarantineEnvelope(
-        { ...envelope, ciphertext_b64: Buffer.from("changed").toString("base64") },
+        {
+          ...envelope,
+          ciphertext_b64: Buffer.from("changed").toString("base64"),
+        },
         keys.privateKeyPem,
       ),
     ).toThrow();

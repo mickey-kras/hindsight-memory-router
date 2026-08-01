@@ -53,8 +53,12 @@ describe("SQL quarantine repository", () => {
       expect(await repository.listReviewable(1, 0)).toEqual([
         expect.objectContaining({ quarantine_id: first.quarantine_id }),
       ]);
-      expect(await repository.postpone(first.quarantine_id, "2026-07-03T00:00:00.000Z"))
-        .toMatchObject({ status: "postponed", postpone_count: 1 });
+      expect(
+        await repository.postpone(
+          first.quarantine_id,
+          "2026-07-03T00:00:00.000Z",
+        ),
+      ).toMatchObject({ status: "postponed", postpone_count: 1 });
       expect(await repository.stats()).toMatchObject({
         total_items: 2,
         pending_items: 1,
@@ -100,10 +104,12 @@ describe("SQL quarantine repository", () => {
         sourceContentSha256: "a".repeat(64),
         payload: { result: { id: "memory-1", text: "suspicious" } },
       });
-      expect(await repository.findMemoryState("ops", "memory-1")).toMatchObject({
-        quarantine_id: created.quarantine_id,
-        status: "pending",
-      });
+      expect(await repository.findMemoryState("ops", "memory-1")).toMatchObject(
+        {
+          quarantine_id: created.quarantine_id,
+          status: "pending",
+        },
+      );
 
       await repository.markMemoryReviewed(
         created.quarantine_id,
@@ -120,10 +126,7 @@ describe("SQL quarantine repository", () => {
         event_count: 2,
       });
       await expect(
-        repository.postpone(
-          created.quarantine_id,
-          "2026-07-01T02:00:00.000Z",
-        ),
+        repository.postpone(created.quarantine_id, "2026-07-01T02:00:00.000Z"),
       ).rejects.toMatchObject({ status: 409 });
     });
   });
@@ -136,12 +139,10 @@ describe("SQL quarantine repository", () => {
     expect(repositoryFromConnectionString("sqlite::memory:")).toBeInstanceOf(
       SqliteQuarantineRepository,
     );
-    expect(() => repositoryFromConnectionString("mysql://localhost/db")).toThrow(
-      "QUARANTINE_DATABASE_URL",
-    );
+    expect(() =>
+      repositoryFromConnectionString("mysql://localhost/db"),
+    ).toThrow("QUARANTINE_DATABASE_URL");
     expect(() => sqlitePath("sqlite:")).toThrow("path is required");
-    expect(toPostgresPlaceholders("a = ? AND b = ?")).toBe(
-      "a = $1 AND b = $2",
-    );
+    expect(toPostgresPlaceholders("a = ? AND b = ?")).toBe("a = $1 AND b = $2");
   });
 });
