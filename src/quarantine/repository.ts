@@ -102,12 +102,24 @@ export interface QuarantineRepository {
 }
 
 export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {
-  const {
-    encrypted: _encrypted,
-    source_content_sha256: _sourceContentSha256,
-    ...summary
-  } = item;
-  return summary;
+  return {
+    quarantine_id: item.quarantine_id,
+    created_at: item.created_at,
+    updated_at: item.updated_at,
+    kind: item.kind,
+    reason: item.reason,
+    ...(item.writer_id === undefined ? {} : { writer_id: item.writer_id }),
+    ...(item.source === undefined ? {} : { source: item.source }),
+    ...(item.source_bank === undefined
+      ? {}
+      : { source_bank: item.source_bank }),
+    ...(item.source_memory_id === undefined
+      ? {}
+      : { source_memory_id: item.source_memory_id }),
+    sha256: item.sha256,
+    status: item.status,
+    postpone_count: item.postpone_count,
+  };
 }
 
 export function quarantineEvent(
