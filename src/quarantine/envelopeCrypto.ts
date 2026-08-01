@@ -2,12 +2,14 @@ import {
   constants,
   createCipheriv,
   createDecipheriv,
-  createHash,
   privateDecrypt,
   publicEncrypt,
   randomBytes,
 } from "node:crypto";
+import { canonicalJson, sha256Hex } from "../canonicalJson.js";
 import type { ReviewReason } from "../types.js";
+
+export { sha256Hex } from "../canonicalJson.js";
 
 const GCM_AUTH_TAG_LENGTH_BYTES = 16;
 const GCM_IV_LENGTH_BYTES = 12;
@@ -98,7 +100,7 @@ export function createEncryptedQuarantineEnvelope(
 
 export function canonicalizeDecryptedQuarantineObject(value: unknown): string {
   const decrypted = parseDecryptedQuarantineObject(value);
-  return stableJson({
+  return canonicalJson({
     quarantine_id: decrypted.quarantine_id,
     created_at: decrypted.created_at,
     reason: decrypted.reason,
@@ -108,10 +110,6 @@ export function canonicalizeDecryptedQuarantineObject(value: unknown): string {
     ...(decrypted.source === undefined ? {} : { source: decrypted.source }),
     payload: decrypted.payload,
   });
-}
-
-export function sha256Hex(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 export function parseEncryptedQuarantineEnvelope(
@@ -286,34 +284,9 @@ export function parseDecryptedQuarantineObject(
   };
 }
 
-function stableJson(value: unknown): string {
-  if (
-    value === null ||
-    typeof value === "string" ||
-    typeof value === "boolean"
-  ) {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("non-finite JSON number");
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
-  }
-  if (value && typeof value === "object") {
-    const object = value as Record<string, unknown>;
-    return `{${Object.keys(object)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
-      .join(",")}}`;
-  }
-  throw new Error("quarantine payload must contain JSON values only");
-}
-
 function jsonValue(value: unknown, label: string): unknown {
   try {
-    stableJson(value);
+    canonicalJson(value);
     return value;
   } catch {
     throw new Error(`${label} must contain JSON values only`);
