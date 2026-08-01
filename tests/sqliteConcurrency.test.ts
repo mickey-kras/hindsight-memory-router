@@ -13,9 +13,9 @@ const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((path) =>
-      rm(path, { recursive: true, force: true }),
-    ),
+    temporaryDirectories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 
@@ -28,20 +28,18 @@ describe("SQLite quarantine concurrency", () => {
     );
     await repository.initialize();
     const { publicKey } = quarantineKeys();
-    const store = new EncryptedDatabaseQuarantineStore(
-      publicKey,
-      repository,
-      {
-        ...DEFAULT_QUARANTINE_LIMITS,
-        rateLimitMax: 0,
-      },
-    );
+    const store = new EncryptedDatabaseQuarantineStore(publicKey, repository, {
+      ...DEFAULT_QUARANTINE_LIMITS,
+      rateLimitMax: 0,
+    });
 
     try {
       const writes = await Promise.all(
         Array.from({ length: 12 }, (_, index) =>
           store.put({
-            timestamp: new Date(Date.UTC(2026, 7, 1, 12, 0, index)).toISOString(),
+            timestamp: new Date(
+              Date.UTC(2026, 7, 1, 12, 0, index),
+            ).toISOString(),
             kind: "retain_request",
             reason: "unknown_writer",
             writerId: `writer-${index}`,
@@ -54,7 +52,9 @@ describe("SQLite quarantine concurrency", () => {
         ),
       );
 
-      expect(new Set(writes.map((write) => write.quarantine_id))).toHaveSize(12);
+      expect(new Set(writes.map((write) => write.quarantine_id))).toHaveSize(
+        12,
+      );
       await expect(repository.stats()).resolves.toMatchObject({
         total_items: 12,
         pending_items: 12,

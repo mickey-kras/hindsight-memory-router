@@ -95,7 +95,9 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       this.repository.get(quarantineId),
     ]);
     const existingReviewable =
-      existing?.status === "pending" || existing?.status === "postponed" ? 1 : 0;
+      existing?.status === "pending" || existing?.status === "postponed"
+        ? 1
+        : 0;
     const existingEncryptedBytes = existing?.encrypted
       ? Buffer.byteLength(JSON.stringify(existing.encrypted))
       : 0;

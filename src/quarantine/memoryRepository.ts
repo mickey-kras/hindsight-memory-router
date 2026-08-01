@@ -61,15 +61,10 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     if (!existing) return this.insert(item);
     this.items.set(item.quarantine_id, { ...item });
     this.events.push(
-      quarantineEvent(
-        item.quarantine_id,
-        "requarantined",
-        item.created_at,
-        {
-          reason: item.reason,
-          sha256: item.sha256,
-        },
-      ),
+      quarantineEvent(item.quarantine_id, "requarantined", item.created_at, {
+        reason: item.reason,
+        sha256: item.sha256,
+      }),
     );
   }
 

@@ -8,9 +8,7 @@ describe("PostgreSQL placeholder translation", () => {
         "SELECT * FROM quarantine_items WHERE reason = ? AND status = ?",
         2,
       ),
-    ).toBe(
-      "SELECT * FROM quarantine_items WHERE reason = $1 AND status = $2",
-    );
+    ).toBe("SELECT * FROM quarantine_items WHERE reason = $1 AND status = $2");
   });
 
   it("preserves question marks in quoted values and comments", () => {
@@ -30,7 +28,10 @@ describe("PostgreSQL placeholder translation", () => {
       toPostgresPlaceholders("SELECT encrypted_envelope::jsonb ? 'payload'", 0),
     ).toThrow("placeholder count 1 does not match parameter count 0");
     expect(() =>
-      toPostgresPlaceholders("SELECT * FROM quarantine_items WHERE reason = ?", 0),
+      toPostgresPlaceholders(
+        "SELECT * FROM quarantine_items WHERE reason = ?",
+        0,
+      ),
     ).toThrow("placeholder count 1 does not match parameter count 0");
   });
 

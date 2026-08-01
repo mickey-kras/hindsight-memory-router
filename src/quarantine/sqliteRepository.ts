@@ -18,7 +18,9 @@ class SqliteDatabase implements SqlDatabase {
 
   executeScript(script: string): Promise<void> {
     return this.enqueue(() => {
-      this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+      this.database.exec(
+        "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;",
+      );
       this.database.exec(script);
     });
   }
@@ -41,9 +43,7 @@ class SqliteDatabase implements SqlDatabase {
     return this.enqueue(() => all<T>(this.database, statement, params));
   }
 
-  transaction<T>(
-    operation: (database: SqlDatabase) => Promise<T>,
-  ): Promise<T> {
+  transaction<T>(operation: (database: SqlDatabase) => Promise<T>): Promise<T> {
     return this.enqueue(async () => {
       this.database.exec("BEGIN IMMEDIATE");
       const transaction = new SqliteTransactionDatabase(this.database);
@@ -81,10 +81,7 @@ class SqliteTransactionDatabase implements SqlDatabase {
     this.database.exec(script);
   }
 
-  async run(
-    statement: string,
-    params: readonly unknown[] = [],
-  ): Promise<void> {
+  async run(statement: string, params: readonly unknown[] = []): Promise<void> {
     run(this.database, statement, params);
   }
 

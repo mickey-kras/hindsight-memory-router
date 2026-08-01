@@ -152,12 +152,10 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       await updateItem(database, item.quarantine_id, item);
       await insertEvent(
         database,
-        quarantineEvent(
-          item.quarantine_id,
-          "requarantined",
-          item.created_at,
-          { reason: item.reason, sha256: item.sha256 },
-        ),
+        quarantineEvent(item.quarantine_id, "requarantined", item.created_at, {
+          reason: item.reason,
+          sha256: item.sha256,
+        }),
       );
     });
   }

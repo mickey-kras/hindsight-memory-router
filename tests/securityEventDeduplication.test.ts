@@ -28,10 +28,8 @@ describe("denied endpoint quarantine", () => {
     const items = await quarantine.repository.listReviewable();
     expect(items).toHaveLength(2);
     expect(new Set(items.map((item) => item.quarantine_id)).size).toBe(2);
-    expect(quarantine.repository.events.map((event) => event.event_type)).toEqual([
-      "quarantined",
-      "requarantined",
-      "quarantined",
-    ]);
+    expect(
+      quarantine.repository.events.map((event) => event.event_type),
+    ).toEqual(["quarantined", "requarantined", "quarantined"]);
   });
 });

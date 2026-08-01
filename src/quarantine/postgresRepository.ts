@@ -178,11 +178,10 @@ function blockCommentEnd(statement: string, start: number): number {
   return end + 2;
 }
 
-function dollarQuoteDelimiter(
-  statement: string,
-  start: number,
-): string | null {
-  const match = statement.slice(start).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+function dollarQuoteDelimiter(statement: string, start: number): string | null {
+  const match = statement
+    .slice(start)
+    .match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
   return match?.[0] ?? null;
 }
 
