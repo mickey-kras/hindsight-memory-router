@@ -5,8 +5,7 @@ export type BankId =
   | "dev"
   | "creative"
   | "ops"
-  | "research"
-  | "quarantine";
+  | "research";
 
 export const BANK_IDS: readonly BankId[] = [
   "core",
@@ -16,7 +15,6 @@ export const BANK_IDS: readonly BankId[] = [
   "creative",
   "ops",
   "research",
-  "quarantine",
 ] as const;
 
 export interface WriterRule {
@@ -31,7 +29,6 @@ export interface WriterRegistry {
   defaults: {
     unknown_writer_action: "review_queue";
     suspicious_content_action: "review_queue";
-    review_queue_path: string;
   };
 }
 
@@ -84,22 +81,32 @@ export type ReviewReason =
   | "unknown_writer"
   | "suspicious_content"
   | "suspicious_query"
+  | "recalled_suspicious_memory"
   | "denied_endpoint";
 
-export type ReviewDecision = "pending" | "rejected" | "postponed" | "promoted";
+export type QuarantineKind =
+  | "retain_request"
+  | "recall_request"
+  | "recalled_memory"
+  | "security_event";
 
-export interface ReviewRecord {
-  timestamp: string;
+export type QuarantineStatus =
+  | "pending"
+  | "postponed"
+  | "reviewed_allowed"
+  | "reviewed_blocked";
+
+export interface QuarantineItemSummary {
+  quarantine_id: string;
+  created_at: string;
+  updated_at: string;
+  kind: QuarantineKind;
+  reason: ReviewReason;
   writer_id?: string;
   source?: string;
-  reason: ReviewReason;
-  quarantine_id?: string;
-  sha256?: string;
-  preview: string;
-  decision: ReviewDecision;
-  postpone_count?: number;
-  method?: string;
-  path?: string;
-  decided_at?: string;
-  target_bank?: BankId;
+  source_bank?: BankId;
+  source_memory_id?: string;
+  sha256: string;
+  status: QuarantineStatus;
+  postpone_count: number;
 }
