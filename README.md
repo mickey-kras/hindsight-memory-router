@@ -8,7 +8,7 @@
 [![docker pulls](https://img.shields.io/docker/pulls/mickeykrasilnikov/hindsight-memory-router)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
 [![ghcr](https://img.shields.io/badge/ghcr.io-mickey--kras%2Fhindsight--memory--router-blue)](https://github.com/mickey-kras/hindsight-memory-router/pkgs/container/hindsight-memory-router)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![node >=22](https://img.shields.io/badge/node-%3E%3D22-brightgreen.svg)](https://nodejs.org)
+[![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org)
 
 Hindsight-compatible memory policy router for OpenClaw.
 
@@ -98,9 +98,9 @@ sqlite:relative/path/quarantine.db
 postgresql://user:password@database:5432/router
 ```
 
-SQLite is the default and enables WAL mode. PostgreSQL is intended for deployments that need shared or remote quarantine state. Both backends create indexed `quarantine_items` and append-only `quarantine_events` tables.
+SQLite is the default and enables WAL mode. PostgreSQL is intended for deployments that need shared or remote quarantine state. Both backends create indexed `quarantine_items` and append-only `quarantine_events` tables. In PostgreSQL deployments, use a separate database or schema from Hindsight's application data so the security control plane is independently scoped and backed up.
 
-`QUARANTINE_PRIVATE_KEY` is deliberately not a router configuration value. Keep it outside the router runtime and supply it only to an authorized local review client.
+`QUARANTINE_PUBLIC_KEY` is validated when the router starts. `QUARANTINE_PRIVATE_KEY` is deliberately not a router configuration value. Keep it outside the router runtime and supply it only to an authorized local review client.
 
 OpenClaw plugin config:
 
@@ -132,7 +132,7 @@ known writer -> only allowed read banks
 unknown writer -> empty results + encrypted review item
 suspicious query -> empty results + encrypted review item
 suspicious recalled result -> suppressed + encrypted review item
-reviewed allowed result -> returned only while its exact digest is unchanged
+reviewed allowed result -> returned only while its evaluated text is unchanged
 reviewed blocked result -> suppressed and invalidated in Hindsight
 ```
 
@@ -150,7 +150,7 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight.
+Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
 
 ## Manual review
 
@@ -169,9 +169,9 @@ private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.
 - `reject`: delete an unapproved retain/request item, or invalidate a rejected recalled memory in Hindsight.
 - `postpone`: leave it reviewable and increment its postpone count.
 
-Approval is exact-content only. Any change to content, context, tags, metadata, document identifiers, source, writer, reason, or timestamp produces `quarantine_hash_mismatch`. To alter a memory, reject the quarantined item and submit a new retain request.
+Approval is exact-object only. Any change to content, context, tags, metadata, document identifiers, source, writer, reason, or timestamp produces `quarantine_hash_mismatch`. To alter a memory, reject the quarantined item and submit a new retain request.
 
-For an approved retain request, the target bank comes from the current writer registry. The router writes the exact original body to Hindsight, removes the quarantine row, and keeps the approval event. For an approved recalled memory, the router removes ciphertext and records its exact digest as reviewed and allowed.
+For an approved retain request, the target bank comes from the current writer registry. The router writes the exact original body to Hindsight, removes the quarantine row, and keeps the approval event. For an approved recalled memory, the router removes ciphertext and records the SHA-256 of the safety-evaluated text as reviewed and allowed. Metadata-only changes do not force another review; changed text does.
 
 ## Cleanup
 
@@ -212,7 +212,7 @@ npm run security:audit
 npm run aislop:ci
 ```
 
-CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real Compose smoke tests. The fake stack exercises SQLite; the real Hindsight stack exercises PostgreSQL quarantine storage.
+CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real Compose smoke tests. The fake stack exercises SQLite; the real Hindsight stack exercises PostgreSQL quarantine storage in a database separate from Hindsight's application database.
 
 ## License
 
