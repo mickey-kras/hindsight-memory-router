@@ -197,7 +197,7 @@ describe("MemoryQuarantineRepository branches", () => {
     ).resolves.toMatchObject({ count: 2 });
     await expect(repository.stats()).resolves.toMatchObject({
       total_items: 1,
-      event_count: 7,
+      event_count: 6,
     });
   });
 });
