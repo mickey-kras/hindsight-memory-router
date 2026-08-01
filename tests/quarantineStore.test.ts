@@ -28,7 +28,7 @@ describe("EncryptedDatabaseQuarantineStore", () => {
   });
 
   it("deduplicates recalled memory review state by bank and memory id", async () => {
-    const { store, repository } = memoryQuarantine();
+    const { store, repository, keys } = memoryQuarantine();
     const first = await store.put({
       timestamp: "2026-06-24T00:00:00.000Z",
       kind: "recalled_memory",
@@ -44,7 +44,7 @@ describe("EncryptedDatabaseQuarantineStore", () => {
       "2026-06-24T00:01:00.000Z",
     );
 
-    await store.put({
+    const second = await store.put({
       timestamp: "2026-06-24T00:02:00.000Z",
       kind: "recalled_memory",
       reason: "recalled_suspicious_memory",
@@ -54,10 +54,18 @@ describe("EncryptedDatabaseQuarantineStore", () => {
       payload: { result: { id: "memory-1", text: "changed" } },
     });
 
+    expect(second.quarantine_id).toBe(first.quarantine_id);
     expect(repository.items.size).toBe(1);
-    expect(await repository.get(first.quarantine_id)).toMatchObject({
+    const stored = await repository.get(first.quarantine_id);
+    expect(stored).toMatchObject({
       status: "pending",
       source_content_sha256: "b".repeat(64),
+    });
+    expect(
+      decryptQuarantineEnvelope(stored?.encrypted, keys.privateKey),
+    ).toMatchObject({
+      quarantine_id: first.quarantine_id,
+      payload: { result: { id: "memory-1", text: "changed" } },
     });
     expect(repository.events.map((event) => event.event_type)).toEqual([
       "quarantined",
