@@ -63,16 +63,14 @@ describe("MemoryQuarantineRepository branches", () => {
   it("covers missing records and invalid state transitions", async () => {
     const repository = new MemoryQuarantineRepository();
     await expect(repository.get("missing")).resolves.toBeNull();
-    await expect(repository.findMemoryState("ops", "missing")).resolves.toBeNull();
+    await expect(
+      repository.findMemoryState("ops", "missing"),
+    ).resolves.toBeNull();
     await expect(
       repository.postpone("missing", "2026-08-01T00:00:00.000Z"),
     ).rejects.toMatchObject({ status: 404 });
     await expect(
-      repository.remove(
-        "missing",
-        "rejected",
-        "2026-08-01T00:00:00.000Z",
-      ),
+      repository.remove("missing", "rejected", "2026-08-01T00:00:00.000Z"),
     ).rejects.toMatchObject({ status: 404 });
 
     const ordinary = item(
@@ -93,10 +91,7 @@ describe("MemoryQuarantineRepository branches", () => {
       status: "reviewed_allowed",
     });
     await expect(
-      repository.postpone(
-        ordinary.quarantine_id,
-        "2026-08-01T02:00:00.000Z",
-      ),
+      repository.postpone(ordinary.quarantine_id, "2026-08-01T02:00:00.000Z"),
     ).rejects.toMatchObject({
       status: 409,
       code: "quarantine_already_finalized",

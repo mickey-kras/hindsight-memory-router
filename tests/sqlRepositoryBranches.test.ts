@@ -14,7 +14,9 @@ async function withRepository<T>(
   }) => Promise<T>,
 ): Promise<T> {
   const directory = mkdtempSync(join(tmpdir(), "sql-repository-branches-"));
-  const repository = new SqliteQuarantineRepository(join(directory, "state.db"));
+  const repository = new SqliteQuarantineRepository(
+    join(directory, "state.db"),
+  );
   const keys = quarantineKeys();
   await repository.initialize();
   try {

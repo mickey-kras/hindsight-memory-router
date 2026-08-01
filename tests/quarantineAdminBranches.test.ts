@@ -58,12 +58,11 @@ async function addItem(
     sourceBank: input.sourceBank,
     sourceMemoryId: input.sourceMemoryId,
     sourceContentSha256: input.sourceContentSha256,
-    payload:
-      input.payload ?? {
-        action: "retain",
-        writer_id: "ops",
-        body: { items: [{ content: "exact original" }] },
-      },
+    payload: input.payload ?? {
+      action: "retain",
+      writer_id: "ops",
+      body: { items: [{ content: "exact original" }] },
+    },
   });
   const item = await state.repository.get(stored.quarantine_id);
   if (!item?.encrypted) throw new Error("expected encrypted item");
@@ -259,7 +258,9 @@ describe("QuarantineAdminService validation", () => {
       source_bank: undefined,
       source_memory_id: undefined,
     });
-    await expect(missingSource.service.reject(ordinary.id)).rejects.toMatchObject({
+    await expect(
+      missingSource.service.reject(ordinary.id),
+    ).rejects.toMatchObject({
       status: 409,
       code: "quarantine_source_missing",
     });
