@@ -1,18 +1,11 @@
 import { randomBytes } from "node:crypto";
 import { HttpError } from "../httpError.js";
-import type {
-  BankId,
-  QuarantineKind,
-  ReviewReason,
-} from "../types.js";
+import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
 import {
   createEncryptedQuarantineEnvelope,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
-import type {
-  NewQuarantineItem,
-  QuarantineRepository,
-} from "./repository.js";
+import type { NewQuarantineItem, QuarantineRepository } from "./repository.js";
 
 export interface QuarantineInput {
   timestamp: string;
@@ -66,7 +59,9 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    this.limiter.consume(`${input.source ?? "unknown"}:${input.writerId ?? "unknown"}`);
+    this.limiter.consume(
+      `${input.source ?? "unknown"}:${input.writerId ?? "unknown"}`,
+    );
 
     const quarantineId = `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
     const decrypted: DecryptedQuarantineObject = {
@@ -77,7 +72,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       ...(input.source === undefined ? {} : { source: input.source }),
       payload: input.payload,
     };
-    const encrypted = createEncryptedQuarantineEnvelope(decrypted, this.publicKey);
+    const encrypted = createEncryptedQuarantineEnvelope(
+      decrypted,
+      this.publicKey,
+    );
     const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
     if (encryptedBytes > this.limits.maxItemBytes) {
       throw new HttpError(

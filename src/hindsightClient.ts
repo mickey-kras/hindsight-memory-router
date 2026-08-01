@@ -5,7 +5,11 @@ export interface HindsightGateway {
   version(): Promise<unknown>;
   retain(bankId: string, body: RetainBody): Promise<unknown>;
   recall(bankId: string, body: RecallBody): Promise<RecallResponse>;
-  invalidateMemory(bankId: string, memoryId: string, reason: string): Promise<void>;
+  invalidateMemory(
+    bankId: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<void>;
 }
 
 export class FetchHindsightGateway implements HindsightGateway {

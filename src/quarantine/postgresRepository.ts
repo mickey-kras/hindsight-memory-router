@@ -153,7 +153,10 @@ export class PostgresQuarantineRepository implements QuarantineRepository {
     return rows[0] ? parseStoredItem(rows[0]) : null;
   }
 
-  async postpone(quarantineId: string, at: string): Promise<StoredQuarantineItem> {
+  async postpone(
+    quarantineId: string,
+    at: string,
+  ): Promise<StoredQuarantineItem> {
     return this.sql.begin(async (sql) => {
       const current = await requireReviewable(sql, quarantineId);
       await sql`
@@ -219,7 +222,10 @@ export class PostgresQuarantineRepository implements QuarantineRepository {
     await this.sql.begin(async (sql) => {
       await requireItem(sql, quarantineId);
       await sql`DELETE FROM quarantine_items WHERE quarantine_id = ${quarantineId}`;
-      await insertEvent(sql, quarantineEvent(quarantineId, eventType, at, details));
+      await insertEvent(
+        sql,
+        quarantineEvent(quarantineId, eventType, at, details),
+      );
     });
   }
 

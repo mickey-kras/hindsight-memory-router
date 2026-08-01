@@ -92,8 +92,7 @@ export class SqliteQuarantineRepository implements QuarantineRepository {
            WHERE source_bank = ? AND source_memory_id = ?`,
         )
         .get(item.source_bank, item.source_memory_id) as
-        | Record<string, unknown>
-        | undefined;
+        Record<string, unknown> | undefined;
       if (!existing) {
         this.insertItem(item);
         this.insertEvent(
@@ -164,7 +163,10 @@ export class SqliteQuarantineRepository implements QuarantineRepository {
     return row ? parseStoredItem(row) : null;
   }
 
-  async postpone(quarantineId: string, at: string): Promise<StoredQuarantineItem> {
+  async postpone(
+    quarantineId: string,
+    at: string,
+  ): Promise<StoredQuarantineItem> {
     return this.transaction(() => {
       const current = this.requireReviewable(quarantineId);
       this.database

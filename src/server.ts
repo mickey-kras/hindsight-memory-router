@@ -76,7 +76,9 @@ function buildHindsight(
   );
 }
 
-function buildRegistry(options: CreateMemoryRouterServerOptions): WriterRegistry {
+function buildRegistry(
+  options: CreateMemoryRouterServerOptions,
+): WriterRegistry {
   return options.registry ?? loadRegistry(REGISTRY_PATH);
 }
 
@@ -306,11 +308,7 @@ function parseAdminItemPath(pathname: string): {
   if (!match) return null;
   return {
     quarantineId: decodeURIComponent(match[1]),
-    action: (match[2] ?? "read") as
-      | "read"
-      | "approve"
-      | "reject"
-      | "postpone",
+    action: (match[2] ?? "read") as "read" | "approve" | "reject" | "postpone",
   };
 }
 
@@ -348,9 +346,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       });
       const shutdown = () => {
         server.close(() => {
-          quarantineRepository
-            .close()
-            .finally(() => process.exit(0));
+          quarantineRepository.close().finally(() => process.exit(0));
         });
       };
       process.once("SIGINT", shutdown);

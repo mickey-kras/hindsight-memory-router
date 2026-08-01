@@ -1,11 +1,5 @@
 export type BankId =
-  | "core"
-  | "main"
-  | "personal"
-  | "dev"
-  | "creative"
-  | "ops"
-  | "research";
+  "core" | "main" | "personal" | "dev" | "creative" | "ops" | "research";
 
 export const BANK_IDS: readonly BankId[] = [
   "core",
@@ -85,16 +79,10 @@ export type ReviewReason =
   | "denied_endpoint";
 
 export type QuarantineKind =
-  | "retain_request"
-  | "recall_request"
-  | "recalled_memory"
-  | "security_event";
+  "retain_request" | "recall_request" | "recalled_memory" | "security_event";
 
 export type QuarantineStatus =
-  | "pending"
-  | "postponed"
-  | "reviewed_allowed"
-  | "reviewed_blocked";
+  "pending" | "postponed" | "reviewed_allowed" | "reviewed_blocked";
 
 export interface QuarantineItemSummary {
   quarantine_id: string;

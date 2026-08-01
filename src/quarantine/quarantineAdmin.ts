@@ -136,9 +136,7 @@ export class QuarantineAdminService {
     );
   }
 
-  async reject(
-    quarantineId: string,
-  ): Promise<Record<string, unknown>> {
+  async reject(quarantineId: string): Promise<Record<string, unknown>> {
     const item = await this.requireReviewable(quarantineId);
     if (item.kind === "recalled_memory") {
       if (!item.source_bank || !item.source_memory_id) {
@@ -206,7 +204,10 @@ export class QuarantineAdminService {
     if (body.dry_run !== false) {
       return { dry_run: true, ...preview };
     }
-    if (!Number.isSafeInteger(body.expected_count) || body.expected_count! < 0) {
+    if (
+      !Number.isSafeInteger(body.expected_count) ||
+      body.expected_count! < 0
+    ) {
       throw new HttpError(
         400,
         "expected_count_required",
@@ -302,7 +303,11 @@ export class QuarantineAdminService {
 function parseRetainBody(value: unknown): RetainBody {
   const object = requireObject(value, "retain body");
   if (!Array.isArray(object.items)) {
-    throw new HttpError(400, "invalid_retain_body", "retain body items are required");
+    throw new HttpError(
+      400,
+      "invalid_retain_body",
+      "retain body items are required",
+    );
   }
   return object as unknown as RetainBody;
 }

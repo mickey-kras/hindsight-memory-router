@@ -20,7 +20,8 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   async close(): Promise<void> {}
 
   async insert(item: NewQuarantineItem): Promise<void> {
-    if (this.items.has(item.quarantine_id)) throw new Error("duplicate quarantine_id");
+    if (this.items.has(item.quarantine_id))
+      throw new Error("duplicate quarantine_id");
     this.items.set(item.quarantine_id, { ...item });
     this.events.push(
       quarantineEvent(item.quarantine_id, "quarantined", item.created_at, {
@@ -43,10 +44,15 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       quarantine_id: existing.quarantine_id,
     });
     this.events.push(
-      quarantineEvent(existing.quarantine_id, "requarantined", item.created_at, {
-        reason: item.reason,
-        sha256: item.sha256,
-      }),
+      quarantineEvent(
+        existing.quarantine_id,
+        "requarantined",
+        item.created_at,
+        {
+          reason: item.reason,
+          sha256: item.sha256,
+        },
+      ),
     );
   }
 
@@ -56,7 +62,9 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
 
   async listReviewable(limit = 100, offset = 0) {
     return [...this.items.values()]
-      .filter((item) => item.status === "pending" || item.status === "postponed")
+      .filter(
+        (item) => item.status === "pending" || item.status === "postponed",
+      )
       .sort((left, right) => left.created_at.localeCompare(right.created_at))
       .slice(offset, offset + limit)
       .map(toSummary);
@@ -71,7 +79,10 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     );
   }
 
-  async postpone(quarantineId: string, at: string): Promise<StoredQuarantineItem> {
+  async postpone(
+    quarantineId: string,
+    at: string,
+  ): Promise<StoredQuarantineItem> {
     const item = this.requireReviewable(quarantineId);
     const next: StoredQuarantineItem = {
       ...item,
@@ -136,13 +147,17 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     const values = [...this.items.values()];
     const encryptedBytes = values.reduce(
       (total, item) =>
-        total + (item.encrypted ? Buffer.byteLength(JSON.stringify(item.encrypted)) : 0),
+        total +
+        (item.encrypted
+          ? Buffer.byteLength(JSON.stringify(item.encrypted))
+          : 0),
       0,
     );
     return {
       total_items: values.length,
       pending_items: values.filter((item) => item.status === "pending").length,
-      postponed_items: values.filter((item) => item.status === "postponed").length,
+      postponed_items: values.filter((item) => item.status === "postponed")
+        .length,
       reviewed_allowed_items: values.filter(
         (item) => item.status === "reviewed_allowed",
       ).length,
@@ -161,7 +176,9 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       encrypted_bytes: items.reduce(
         (total, item) =>
           total +
-          (item.encrypted ? Buffer.byteLength(JSON.stringify(item.encrypted)) : 0),
+          (item.encrypted
+            ? Buffer.byteLength(JSON.stringify(item.encrypted))
+            : 0),
         0,
       ),
     };

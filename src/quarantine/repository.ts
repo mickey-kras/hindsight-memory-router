@@ -75,7 +75,10 @@ export interface QuarantineRepository {
   insert(item: NewQuarantineItem): Promise<void>;
   upsertRecalledMemory(item: NewQuarantineItem): Promise<void>;
   get(quarantineId: string): Promise<StoredQuarantineItem | null>;
-  listReviewable(limit?: number, offset?: number): Promise<QuarantineItemSummary[]>;
+  listReviewable(
+    limit?: number,
+    offset?: number,
+  ): Promise<QuarantineItemSummary[]>;
   findMemoryState(
     bankId: BankId,
     memoryId: string,
@@ -137,7 +140,9 @@ export function quarantineEvent(
   };
 }
 
-export function parseStoredItem(row: Record<string, unknown>): StoredQuarantineItem {
+export function parseStoredItem(
+  row: Record<string, unknown>,
+): StoredQuarantineItem {
   return {
     quarantine_id: String(row.quarantine_id),
     created_at: String(row.created_at),
@@ -146,7 +151,9 @@ export function parseStoredItem(row: Record<string, unknown>): StoredQuarantineI
     reason: row.reason as ReviewReason,
     ...(row.writer_id == null ? {} : { writer_id: String(row.writer_id) }),
     ...(row.source == null ? {} : { source: String(row.source) }),
-    ...(row.source_bank == null ? {} : { source_bank: row.source_bank as BankId }),
+    ...(row.source_bank == null
+      ? {}
+      : { source_bank: row.source_bank as BankId }),
     ...(row.source_memory_id == null
       ? {}
       : { source_memory_id: String(row.source_memory_id) }),
@@ -157,7 +164,9 @@ export function parseStoredItem(row: Record<string, unknown>): StoredQuarantineI
     encrypted:
       row.encrypted_envelope == null
         ? null
-        : (JSON.parse(String(row.encrypted_envelope)) as EncryptedQuarantineEnvelope),
+        : (JSON.parse(
+            String(row.encrypted_envelope),
+          ) as EncryptedQuarantineEnvelope),
     status: row.status as QuarantineStatus,
     postpone_count: Number(row.postpone_count),
   };

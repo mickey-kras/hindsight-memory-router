@@ -96,9 +96,7 @@ export function createEncryptedQuarantineEnvelope(
   };
 }
 
-export function canonicalizeDecryptedQuarantineObject(
-  value: unknown,
-): string {
+export function canonicalizeDecryptedQuarantineObject(value: unknown): string {
   const decrypted = parseDecryptedQuarantineObject(value);
   return stableJson({
     quarantine_id: decrypted.quarantine_id,
@@ -289,7 +287,11 @@ export function parseDecryptedQuarantineObject(
 }
 
 function stableJson(value: unknown): string {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
     return JSON.stringify(value);
   }
   if (typeof value === "number") {
