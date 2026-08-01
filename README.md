@@ -16,7 +16,7 @@ Hindsight-compatible memory policy router for OpenClaw.
 OpenClaw Hindsight plugin -> memory-router -> Hindsight API
 ```
 
-The router is a facade/decorator, not a second memory system.
+The router is a policy facade. Approved memory belongs in Hindsight; unapproved material belongs only in encrypted quarantine storage.
 
 ## What it does
 
@@ -24,10 +24,11 @@ The router is a facade/decorator, not a second memory system.
 writer identity required
 bank chosen by policy, not by agent
 recall is ACL-filtered
-unknown/suspicious input is encrypted before review
+unknown or suspicious material is encrypted before review
+suspicious recalled memories stay blocked until reviewed
 router stores only the quarantine public key
-review clients decrypt locally with a separately managed private key
-unknown Hindsight endpoints are denied and logged
+private-key decryption happens outside the router and Infosphere
+unknown Hindsight endpoints are denied and recorded
 ```
 
 ## API
@@ -35,27 +36,27 @@ unknown Hindsight endpoints are denied and logged
 Normal facade:
 
 ```text
-GET  /health                         anonymous
-GET  /version                        router token
-POST /v1/default/banks/{writer}/memories
-POST /v1/default/banks/{writer}/memories/recall
+GET  /health                                      anonymous
+GET  /version                                     router token
+POST /v1/default/banks/{writer}/memories          router token
+POST /v1/default/banks/{writer}/memories/recall   router token
 ```
 
-Quarantine admin:
+Quarantine administration:
 
 ```text
 GET  /admin/quarantine/queue
+GET  /admin/quarantine/stats
+POST /admin/quarantine/cleanup
 GET  /admin/quarantine/items/{quarantine_id}
+POST /admin/quarantine/items/{quarantine_id}/approve
 POST /admin/quarantine/items/{quarantine_id}/reject
 POST /admin/quarantine/items/{quarantine_id}/postpone
-POST /admin/quarantine/items/{quarantine_id}/promote
 ```
 
-The item endpoint returns the encrypted envelope and safe queue metadata. It never returns decrypted payload content.
+Admin endpoints require `MEMORY_ROUTER_ADMIN_TOKEN`. The item endpoint returns metadata and the encrypted envelope; it never decrypts the payload.
 
-All other Hindsight endpoints are denied by default.
-
-The Hindsight `bank_id` path value is treated as `writer_id`. Router policy decides the real bank.
+All other Hindsight endpoints are denied by default. The Hindsight `bank_id` path value is treated as a router `writer_id`; policy chooses the real bank.
 
 ## Docker
 
@@ -70,8 +71,6 @@ ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
 
 The container runs as the non-root `node` user.
 
-On startup, it checks that configured quarantine/review storage paths are writable. Bad volume permissions fail fast instead of causing later request-time 500s.
-
 ## Configuration
 
 ```text
@@ -82,11 +81,26 @@ HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
-QUARANTINE_OBJECT_DIR=/volume1/reports/hindsight-quarantine/objects
+QUARANTINE_DATABASE_URL=sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
 QUARANTINE_MAX_POSTPONES=3
+QUARANTINE_MAX_ITEM_BYTES=1048576
+QUARANTINE_MAX_PENDING_ITEMS=1000
+QUARANTINE_MAX_ENCRYPTED_BYTES=104857600
+QUARANTINE_RATE_LIMIT_MAX=30
+QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
 ```
 
-`QUARANTINE_PRIVATE_KEY` is not a router configuration value. Keep it outside the router runtime and provide it only to an authorized review client when decrypting an item.
+`QUARANTINE_DATABASE_URL` supports:
+
+```text
+sqlite:/absolute/path/quarantine.db
+sqlite:relative/path/quarantine.db
+postgresql://user:password@database:5432/router
+```
+
+SQLite is the default and enables WAL mode. PostgreSQL is intended for deployments that need shared or remote quarantine state. Both backends create indexed `quarantine_items` and append-only `quarantine_events` tables.
+
+`QUARANTINE_PRIVATE_KEY` is deliberately not a router configuration value. Keep it outside the router runtime and supply it only to an authorized local review client.
 
 OpenClaw plugin config:
 
@@ -106,47 +120,85 @@ enableKnowledgeTools = false initially
 Retain:
 
 ```text
-known writer + clean content -> assigned write bank
-unknown writer -> encrypted quarantine + safe review ref
-suspicious content -> encrypted quarantine + safe review ref
+known writer + clean content -> assigned Hindsight write bank
+unknown writer -> encrypted quarantine database row
+suspicious content -> encrypted quarantine database row
 ```
 
 Recall:
 
 ```text
 known writer -> only allowed read banks
-unknown writer -> empty results + encrypted quarantine ref
-suspicious query -> empty results + encrypted quarantine ref
-suspicious recalled result -> suppressed
+unknown writer -> empty results + encrypted review item
+suspicious query -> empty results + encrypted review item
+suspicious recalled result -> suppressed + encrypted review item
+reviewed allowed result -> returned only while its exact digest is unchanged
+reviewed blocked result -> suppressed and invalidated in Hindsight
 ```
 
-No writer recalls `quarantine`. The `main` writer does not recall `research`.
+There is no Hindsight `quarantine` bank. Quarantine is operational security state, not searchable memory.
 
-## Quarantine
+## Quarantine storage
+
+`quarantine_items` holds current state and encrypted envelopes. It never stores unencrypted payloads. `quarantine_events` is append-only and retains audit events after item ciphertext is removed.
 
 ```text
-raw payload -> encrypted object store
-review queue -> quarantine_id + metadata only
-Hindsight quarantine bank -> safe index record only
-admin item API -> encrypted envelope only
-authorized review client -> local decryption with separately managed private key
-promote -> explicit approved/sanitized content only
+raw JSON payload
+    -> canonical SHA-256
+    -> AES-256-GCM envelope
+    -> SQLite or PostgreSQL quarantine_items
+    -> no Hindsight write
 ```
 
-No original text is written to the review queue or searchable memory. Queue listing, reject, postpone, and promotion do not require the private key.
+Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight.
 
-Local review flow:
+## Manual review
 
-1. List pending items with the admin token.
-2. Fetch one encrypted envelope with the admin token and save the JSON response.
-3. Decrypt locally, supplying the private key through stdin:
+1. List pending items using the admin token.
+2. Fetch an encrypted item response.
+3. Decrypt locally:
 
 ```bash
 npm run build
 private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.json
 ```
 
-4. Reject, postpone, or explicitly promote sanitized content through the admin API.
+4. Choose one action:
+
+- `approve`: send the complete decrypted object unchanged. The router canonicalizes it and compares its SHA-256 with the original stored digest before acting.
+- `reject`: delete an unapproved retain/request item, or invalidate a rejected recalled memory in Hindsight.
+- `postpone`: leave it reviewable and increment its postpone count.
+
+Approval is exact-content only. Any change to content, context, tags, metadata, document identifiers, source, writer, reason, or timestamp produces `quarantine_hash_mismatch`. To alter a memory, reject the quarantined item and submit a new retain request.
+
+For an approved retain request, the target bank comes from the current writer registry. The router writes the exact original body to Hindsight, removes the quarantine row, and keeps the approval event. For an approved recalled memory, the router removes ciphertext and records its exact digest as reviewed and allowed.
+
+## Cleanup
+
+Preview cleanup first:
+
+```json
+{
+  "scope": "pending",
+  "reasons": ["unknown_writer"],
+  "older_than": "2026-07-01T00:00:00Z",
+  "dry_run": true
+}
+```
+
+Execute only with the returned count:
+
+```json
+{
+  "scope": "pending",
+  "reasons": ["unknown_writer"],
+  "older_than": "2026-07-01T00:00:00Z",
+  "dry_run": false,
+  "expected_count": 42
+}
+```
+
+If the selection changes between preview and execution, cleanup returns `409` rather than deleting a different set.
 
 ## Checks
 
@@ -154,12 +206,13 @@ private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.
 npm run format:check
 npm run lint
 npm test
+npm run test:coverage
 npm run typecheck
 npm run security:audit
 npm run aislop:ci
 ```
 
-CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real compose smoke tests.
+CI also runs CodeQL, Gitleaks, Semgrep, Hadolint, Docker build, and fake/real Compose smoke tests. The fake stack exercises SQLite; the real Hindsight stack exercises PostgreSQL quarantine storage.
 
 ## License
 
