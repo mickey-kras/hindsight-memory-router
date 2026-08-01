@@ -1,34 +1,29 @@
+import { createHash } from "node:crypto";
 import type { HindsightGateway } from "./hindsightClient.js";
+import { getWriter } from "./registry.js";
+import type { QuarantineRepository } from "./quarantine/repository.js";
+import type { QuarantineStore } from "./quarantine/quarantineStore.js";
+import { scanContent, type SafetyFinding } from "./safety.js";
 import type {
+  BankId,
   MemoryItem,
   RecallBody,
   RecallResponse,
+  RecallResult,
   RetainBody,
-  ReviewRecord,
   WriterRegistry,
 } from "./types.js";
-import { getWriter } from "./registry.js";
-import {
-  MemoryQuarantineStore,
-  type QuarantineStore,
-} from "./quarantine/quarantineStore.js";
-import type { ReviewQueue } from "./reviewQueue.js";
-import { scanContent, type SafetyFinding } from "./safety.js";
 
 export interface RouterPolicyDeps {
   registry: WriterRegistry;
   hindsight: HindsightGateway;
-  reviewQueue: ReviewQueue;
-  quarantineStore?: QuarantineStore;
+  quarantineStore: QuarantineStore;
+  quarantineRepository: QuarantineRepository;
   now?: () => Date;
 }
 
 export class RouterPolicy {
-  private readonly quarantineStore: QuarantineStore;
-
-  constructor(private readonly deps: RouterPolicyDeps) {
-    this.quarantineStore = deps.quarantineStore ?? new MemoryQuarantineStore();
-  }
+  constructor(private readonly deps: RouterPolicyDeps) {}
 
   async retain(
     writerId: string,
@@ -85,6 +80,7 @@ export class RouterPolicy {
       await this.quarantine({
         writerId,
         source,
+        kind: "recall_request",
         reason: "unknown_writer",
         payload: { action: "recall", writer_id: writerId, body },
       });
@@ -96,6 +92,7 @@ export class RouterPolicy {
       await this.quarantine({
         writerId,
         source,
+        kind: "recall_request",
         reason: "suspicious_query",
         payload: { action: "recall", writer_id: writerId, body },
       });
@@ -103,31 +100,78 @@ export class RouterPolicy {
     }
 
     const responses = await Promise.all(
-      writer.read_banks.map((bankId) =>
-        this.deps.hindsight.recall(bankId, body),
-      ),
+      writer.read_banks.map(async (bankId) => ({
+        bankId,
+        response: await this.deps.hindsight.recall(bankId, body),
+      })),
     );
-    const results = responses
-      .flatMap((response) => response.results ?? [])
-      .filter((result) => scanContent(result.text ?? "").safe);
-
+    const results: RecallResult[] = [];
+    for (const { bankId, response } of responses) {
+      for (const result of response.results ?? []) {
+        if (await this.allowRecalledResult(writerId, source, bankId, result)) {
+          results.push(result);
+        }
+      }
+    }
     return { results };
   }
 
-  denyEndpoint(
+  async denyEndpoint(
     method: string,
     path: string,
     writerId?: string,
-  ): { error: string } {
-    this.enqueueReview({
+  ): Promise<{ error: string }> {
+    await this.quarantine({
       writerId,
       source: "http",
+      kind: "security_event",
       reason: "denied_endpoint",
-      preview: `${method} ${path}`,
-      method,
-      path,
+      payload: { action: "denied_endpoint", method, path },
     });
     return { error: "endpoint denied by memory-router policy" };
+  }
+
+  private async allowRecalledResult(
+    writerId: string,
+    source: string,
+    bankId: BankId,
+    result: RecallResult,
+  ): Promise<boolean> {
+    const state = await this.deps.quarantineRepository.findMemoryState(
+      bankId,
+      result.id,
+    );
+    if (state?.status === "reviewed_blocked") return false;
+
+    const resultScan = scanContent(result.text ?? "");
+    if (resultScan.safe) return true;
+
+    const sourceContentSha256 = digestJson(result);
+    if (
+      state?.status === "reviewed_allowed" &&
+      state.source_content_sha256 === sourceContentSha256
+    ) {
+      return true;
+    }
+    if (state?.status === "pending" || state?.status === "postponed") {
+      return false;
+    }
+
+    await this.quarantine({
+      writerId,
+      source,
+      kind: "recalled_memory",
+      reason: "recalled_suspicious_memory",
+      sourceBank: bankId,
+      sourceMemoryId: result.id,
+      sourceContentSha256,
+      payload: {
+        action: "recalled_memory",
+        bank_id: bankId,
+        result,
+      },
+    });
+    return false;
   }
 
   private async quarantineRetain(input: {
@@ -140,6 +184,7 @@ export class RouterPolicy {
     const quarantine = await this.quarantine({
       writerId: input.writerId,
       source: input.source,
+      kind: "retain_request",
       reason: input.reason,
       payload: {
         action: "retain",
@@ -159,74 +204,33 @@ export class RouterPolicy {
   private async quarantine(input: {
     writerId?: string;
     source?: string;
-    reason: ReviewRecord["reason"];
+    kind:
+      | "retain_request"
+      | "recall_request"
+      | "recalled_memory"
+      | "security_event";
+    reason:
+      | "unknown_writer"
+      | "suspicious_content"
+      | "suspicious_query"
+      | "recalled_suspicious_memory"
+      | "denied_endpoint";
+    sourceBank?: BankId;
+    sourceMemoryId?: string;
+    sourceContentSha256?: string;
     payload: unknown;
   }) {
-    const now = this.deps.now?.() ?? new Date();
-    const timestamp = now.toISOString();
-    const stored = this.quarantineStore.put({
+    const timestamp = (this.deps.now?.() ?? new Date()).toISOString();
+    return this.deps.quarantineStore.put({
       timestamp,
+      kind: input.kind,
       writerId: input.writerId,
       source: input.source,
       reason: input.reason,
+      sourceBank: input.sourceBank,
+      sourceMemoryId: input.sourceMemoryId,
+      sourceContentSha256: input.sourceContentSha256,
       payload: input.payload,
-    });
-
-    this.enqueueReview({
-      writerId: input.writerId,
-      source: input.source,
-      reason: input.reason,
-      quarantineId: stored.quarantine_id,
-      sha256: stored.sha256,
-      preview: `encrypted quarantine item ${stored.quarantine_id}`,
-    });
-
-    await this.deps.hindsight.retain("quarantine", {
-      async: true,
-      items: [
-        {
-          content: `Encrypted quarantine item ${stored.quarantine_id} pending review.`,
-          context: "memory-router quarantine index",
-          document_id: `quarantine:${stored.quarantine_id}`,
-          metadata: {
-            router_decision: "quarantined",
-            quarantine_id: stored.quarantine_id,
-            quarantine_reason: input.reason,
-            quarantine_sha256: stored.sha256,
-            writer_id: input.writerId ?? "unknown",
-          },
-          tags: ["quarantine", input.reason],
-          update_mode: "append",
-        },
-      ],
-    });
-
-    return stored;
-  }
-
-  private enqueueReview(input: {
-    writerId?: string;
-    source?: string;
-    reason: ReviewRecord["reason"];
-    quarantineId?: string;
-    sha256?: string;
-    preview: string;
-    method?: string;
-    path?: string;
-  }): void {
-    const now = this.deps.now?.() ?? new Date();
-    this.deps.reviewQueue.enqueue({
-      timestamp: now.toISOString(),
-      writer_id: input.writerId,
-      source: input.source,
-      reason: input.reason,
-      quarantine_id: input.quarantineId,
-      sha256: input.sha256,
-      preview: input.preview,
-      decision: "pending",
-      postpone_count: input.quarantineId ? 0 : undefined,
-      method: input.method,
-      path: input.path,
     });
   }
 }
@@ -245,4 +249,29 @@ function scanMemoryItem(item: MemoryItem): {
 
   const findings = fields.flatMap((value) => scanContent(value).findings);
   return { safe: findings.length === 0, findings };
+}
+
+function digestJson(value: unknown): string {
+  return createHash("sha256").update(stableJson(value)).digest("hex");
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error("non-finite JSON number");
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJson).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const object = value as Record<string, unknown>;
+    return `{${Object.keys(object)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(object[key])}`)
+      .join(",")}}`;
+  }
+  throw new Error("recall result must contain JSON values only");
 }
