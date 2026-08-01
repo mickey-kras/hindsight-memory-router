@@ -126,6 +126,7 @@ export class RouterPolicy {
       source: "http",
       kind: "security_event",
       reason: "denied_endpoint",
+      dedupeKey: `${method}:${path}`,
       payload: { action: "denied_endpoint", method, path },
     });
     return { error: "endpoint denied by memory-router policy" };
@@ -218,6 +219,7 @@ export class RouterPolicy {
     sourceBank?: BankId;
     sourceMemoryId?: string;
     sourceContentSha256?: string;
+    dedupeKey?: string;
     payload: unknown;
   }) {
     const timestamp = (this.deps.now?.() ?? new Date()).toISOString();
@@ -230,6 +232,7 @@ export class RouterPolicy {
       sourceBank: input.sourceBank,
       sourceMemoryId: input.sourceMemoryId,
       sourceContentSha256: input.sourceContentSha256,
+      dedupeKey: input.dedupeKey,
       payload: input.payload,
     });
   }
