@@ -2,12 +2,14 @@ import { timingSafeEqual } from "node:crypto";
 import type { HindsightGateway } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import { getWriter } from "../registry.js";
-import type {
-  BankId,
-  RecallResult,
-  RetainBody,
-  ReviewReason,
-  WriterRegistry,
+import {
+  BANK_IDS,
+  type BankId,
+  type MemoryItem,
+  type RecallResult,
+  type RetainBody,
+  type ReviewReason,
+  type WriterRegistry,
 } from "../types.js";
 import {
   canonicalizeDecryptedQuarantineObject,
@@ -204,9 +206,11 @@ export class QuarantineAdminService {
     if (body.dry_run !== false) {
       return { dry_run: true, ...preview };
     }
+    const expectedCount = body.expected_count;
     if (
-      !Number.isSafeInteger(body.expected_count) ||
-      body.expected_count! < 0
+      typeof expectedCount !== "number" ||
+      !Number.isSafeInteger(expectedCount) ||
+      expectedCount < 0
     ) {
       throw new HttpError(
         400,
@@ -216,7 +220,7 @@ export class QuarantineAdminService {
     }
     const result = await this.options.repository.cleanup(
       filter,
-      body.expected_count!,
+      expectedCount,
       this.nowIso(),
     );
     return { dry_run: false, ...result };
@@ -302,14 +306,28 @@ export class QuarantineAdminService {
 
 function parseRetainBody(value: unknown): RetainBody {
   const object = requireObject(value, "retain body");
-  if (!Array.isArray(object.items)) {
+  if (!isRetainBody(object)) {
     throw new HttpError(
       400,
       "invalid_retain_body",
-      "retain body items are required",
+      "retain body items with string content are required",
     );
   }
-  return object as unknown as RetainBody;
+  return object;
+}
+
+function isRetainBody(value: Record<string, unknown>): value is RetainBody {
+  return Array.isArray(value.items) && value.items.every(isMemoryItem);
+}
+
+function isMemoryItem(value: unknown): value is MemoryItem {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "content" in value &&
+    typeof value.content === "string"
+  );
 }
 
 function parseRecalledMemoryPayload(value: unknown): {
@@ -324,7 +342,11 @@ function parseRecalledMemoryPayload(value: unknown): {
       "recalled memory approval requires a recalled memory payload",
     );
   }
-  const bankId = requireString(object.bank_id, "bank_id") as BankId;
+  const bankIdValue = requireString(object.bank_id, "bank_id");
+  const bankId = BANK_IDS.find((candidate) => candidate === bankIdValue);
+  if (!bankId) {
+    throw new HttpError(400, "invalid_request", "bank_id is invalid");
+  }
   const result = requireObject(object.result, "recalled result");
   return {
     bank_id: bankId,
