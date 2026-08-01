@@ -18,9 +18,7 @@ export function quarantineKeys(): {
   return { publicKey, privateKey };
 }
 
-export function memoryQuarantine(
-  limits: Partial<QuarantineStoreLimits> = {},
-) {
+export function memoryQuarantine(limits: Partial<QuarantineStoreLimits> = {}) {
   const keys = quarantineKeys();
   const repository = new MemoryQuarantineRepository();
   const store = new EncryptedDatabaseQuarantineStore(

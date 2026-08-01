@@ -1,10 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import {
-  SqlQuarantineRepository,
-  type SqlDatabase,
-} from "./sqlRepository.js";
+import { SqlQuarantineRepository, type SqlDatabase } from "./sqlRepository.js";
 
 export class SqliteQuarantineRepository extends SqlQuarantineRepository {
   constructor(path: string) {
@@ -23,10 +20,7 @@ class SqliteDatabase implements SqlDatabase {
     this.database.exec(script);
   }
 
-  async run(
-    statement: string,
-    params: readonly unknown[] = [],
-  ): Promise<void> {
+  async run(statement: string, params: readonly unknown[] = []): Promise<void> {
     this.database
       .prepare(statement)
       .run(...(params as readonly SQLInputValue[]));

@@ -1,8 +1,5 @@
 import postgres, { type Sql } from "postgres";
-import {
-  SqlQuarantineRepository,
-  type SqlDatabase,
-} from "./sqlRepository.js";
+import { SqlQuarantineRepository, type SqlDatabase } from "./sqlRepository.js";
 
 export class PostgresQuarantineRepository extends SqlQuarantineRepository {
   constructor(connectionString: string) {
@@ -23,10 +20,7 @@ class PostgresDatabase implements SqlDatabase {
     await this.sql.unsafe(script);
   }
 
-  async run(
-    statement: string,
-    params: readonly unknown[] = [],
-  ): Promise<void> {
+  async run(statement: string, params: readonly unknown[] = []): Promise<void> {
     await this.sql.unsafe(toPostgresPlaceholders(statement), [...params]);
   }
 
@@ -34,10 +28,9 @@ class PostgresDatabase implements SqlDatabase {
     statement: string,
     params: readonly unknown[] = [],
   ): Promise<T | undefined> {
-    const rows = await this.sql.unsafe<T[]>(
-      toPostgresPlaceholders(statement),
-      [...params],
-    );
+    const rows = await this.sql.unsafe<T[]>(toPostgresPlaceholders(statement), [
+      ...params,
+    ]);
     return rows[0];
   }
 

@@ -173,7 +173,10 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     return row ? parseStoredItem(row) : null;
   }
 
-  async postpone(quarantineId: string, at: string): Promise<StoredQuarantineItem> {
+  async postpone(
+    quarantineId: string,
+    at: string,
+  ): Promise<StoredQuarantineItem> {
     return this.database.transaction(async (database) => {
       const current = await requireReviewable(database, quarantineId);
       await database.run(
