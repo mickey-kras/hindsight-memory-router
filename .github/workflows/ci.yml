@@ -32,7 +32,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - run: npm install
 
       - name: Auto-fix before gates
         if: >-
@@ -50,6 +50,8 @@ jobs:
 
       - run: npm run format:check
       - run: npm run lint
+      - name: OpenAPI contract
+        run: npm run openapi:lint
       - name: Tests and coverage
         run: npm run test:coverage
       - run: npm run typecheck
