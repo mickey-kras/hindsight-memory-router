@@ -26,7 +26,7 @@ class PostgresDatabase implements SqlDatabase {
 
   async run(statement: string, params: readonly unknown[] = []): Promise<void> {
     await this.sql.unsafe(
-      toPostgresPlaceholders(statement),
+      toPostgresPlaceholders(statement, params.length),
       postgresParameters(params),
     );
   }
@@ -36,7 +36,7 @@ class PostgresDatabase implements SqlDatabase {
     params: readonly unknown[] = [],
   ): Promise<T | undefined> {
     const rows = await this.sql.unsafe<T[]>(
-      toPostgresPlaceholders(statement),
+      toPostgresPlaceholders(statement, params.length),
       postgresParameters(params),
     );
     return rows[0];
@@ -47,7 +47,7 @@ class PostgresDatabase implements SqlDatabase {
     params: readonly unknown[] = [],
   ): Promise<T[]> {
     const rows = await this.sql.unsafe<T[]>(
-      toPostgresPlaceholders(statement),
+      toPostgresPlaceholders(statement, params.length),
       postgresParameters(params),
     );
     return [...rows];
@@ -88,9 +88,111 @@ class TransactionResult<T> {
   }
 }
 
-export function toPostgresPlaceholders(statement: string): string {
+export function toPostgresPlaceholders(
+  statement: string,
+  parameterCount: number,
+): string {
+  let output = "";
+  let placeholderIndex = 0;
   let index = 0;
-  return statement.replace(/\?/g, () => `$${++index}`);
+
+  while (index < statement.length) {
+    const character = statement[index];
+    const next = statement[index + 1];
+
+    if (character === "'") {
+      const end = quotedEnd(statement, index, "'");
+      output += statement.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === '"') {
+      const end = quotedEnd(statement, index, '"');
+      output += statement.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === "-" && next === "-") {
+      const end = lineCommentEnd(statement, index);
+      output += statement.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === "/" && next === "*") {
+      const end = blockCommentEnd(statement, index);
+      output += statement.slice(index, end);
+      index = end;
+      continue;
+    }
+    if (character === "$") {
+      const delimiter = dollarQuoteDelimiter(statement, index);
+      if (delimiter) {
+        const end = dollarQuoteEnd(statement, index, delimiter);
+        output += statement.slice(index, end);
+        index = end;
+        continue;
+      }
+    }
+    if (character === "?") {
+      placeholderIndex += 1;
+      output += `$${placeholderIndex}`;
+      index += 1;
+      continue;
+    }
+
+    output += character;
+    index += 1;
+  }
+
+  if (placeholderIndex !== parameterCount) {
+    throw new Error(
+      `SQL placeholder count ${placeholderIndex} does not match parameter count ${parameterCount}`,
+    );
+  }
+  return output;
+}
+
+function quotedEnd(statement: string, start: number, quote: string): number {
+  let index = start + 1;
+  while (index < statement.length) {
+    if (statement[index] === quote) {
+      if (statement[index + 1] === quote) {
+        index += 2;
+        continue;
+      }
+      return index + 1;
+    }
+    index += 1;
+  }
+  throw new Error("unterminated SQL quoted value");
+}
+
+function lineCommentEnd(statement: string, start: number): number {
+  const end = statement.indexOf("\n", start + 2);
+  return end === -1 ? statement.length : end + 1;
+}
+
+function blockCommentEnd(statement: string, start: number): number {
+  const end = statement.indexOf("*/", start + 2);
+  if (end === -1) throw new Error("unterminated SQL block comment");
+  return end + 2;
+}
+
+function dollarQuoteDelimiter(statement: string, start: number): string | null {
+  const match = statement
+    .slice(start)
+    .match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+  return match?.[0] ?? null;
+}
+
+function dollarQuoteEnd(
+  statement: string,
+  start: number,
+  delimiter: string,
+): number {
+  const end = statement.indexOf(delimiter, start + delimiter.length);
+  if (end === -1) throw new Error("unterminated SQL dollar-quoted value");
+  return end + delimiter.length;
 }
 
 function postgresParameters(

@@ -69,7 +69,7 @@ services:
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
-      QUARANTINE_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/hindsight
+      QUARANTINE_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/quarantine
     ports:
       - "127.0.0.1:8890:8890"
     networks:

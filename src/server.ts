@@ -11,7 +11,6 @@ import {
 } from "./hindsightClient.js";
 import { HttpError, safeErrorBody } from "./httpError.js";
 import { RouterPolicy } from "./policy.js";
-import { MemoryQuarantineRepository } from "./quarantine/memoryRepository.js";
 import {
   QuarantineAdminService,
   type ApproveBody,
@@ -113,8 +112,7 @@ export function createMemoryRouterServer(
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const registry = buildRegistry(options);
   const hindsight = buildHindsight(options);
-  const quarantineRepository =
-    options.quarantineRepository ?? new MemoryQuarantineRepository();
+  const quarantineRepository = requireQuarantineRepository(options);
   const quarantineStore =
     options.quarantineStore ??
     new EncryptedDatabaseQuarantineStore(
@@ -238,6 +236,17 @@ export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMe
     quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
   });
   return { server, quarantineRepository };
+}
+
+function requireQuarantineRepository(
+  options: CreateMemoryRouterServerOptions,
+): QuarantineRepository {
+  if (!options.quarantineRepository) {
+    throw new Error(
+      "quarantineRepository is required; use createConfiguredMemoryRouterServer for environment-based configuration",
+    );
+  }
+  return options.quarantineRepository;
 }
 
 function isAuthorized(req: IncomingMessage, routerToken?: string): boolean {

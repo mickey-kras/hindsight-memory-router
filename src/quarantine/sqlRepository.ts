@@ -113,27 +113,7 @@ export class SqlQuarantineRepository implements QuarantineRepository {
         return;
       }
 
-      const envelope = JSON.stringify(item.encrypted);
-      await database.run(
-        `UPDATE quarantine_items SET
-           created_at = ?, updated_at = ?, kind = ?, reason = ?, writer_id = ?, source = ?,
-           source_content_sha256 = ?, sha256 = ?, encrypted_envelope = ?, encrypted_bytes = ?,
-           status = 'pending', postpone_count = 0
-         WHERE quarantine_id = ?`,
-        [
-          item.created_at,
-          item.updated_at,
-          item.kind,
-          item.reason,
-          item.writer_id ?? null,
-          item.source ?? null,
-          item.source_content_sha256 ?? null,
-          item.sha256,
-          envelope,
-          Buffer.byteLength(envelope),
-          existing.quarantine_id,
-        ],
-      );
+      await updateItem(database, existing.quarantine_id, item);
       await insertEvent(
         database,
         quarantineEvent(
@@ -142,6 +122,40 @@ export class SqlQuarantineRepository implements QuarantineRepository {
           item.created_at,
           { reason: item.reason, sha256: item.sha256 },
         ),
+      );
+    });
+  }
+
+  async upsertSecurityEvent(item: NewQuarantineItem): Promise<void> {
+    if (item.kind !== "security_event") {
+      throw new Error("security event item is required");
+    }
+    await this.database.transaction(async (database) => {
+      const existing = await database.get<{ quarantine_id: string }>(
+        `SELECT quarantine_id FROM quarantine_items
+         WHERE quarantine_id = ?${database.rowLockClause}`,
+        [item.quarantine_id],
+      );
+      if (!existing) {
+        await insertItem(database, item);
+        await insertEvent(
+          database,
+          quarantineEvent(item.quarantine_id, "quarantined", item.created_at, {
+            kind: item.kind,
+            reason: item.reason,
+            sha256: item.sha256,
+          }),
+        );
+        return;
+      }
+
+      await updateItem(database, item.quarantine_id, item);
+      await insertEvent(
+        database,
+        quarantineEvent(item.quarantine_id, "requarantined", item.created_at, {
+          reason: item.reason,
+          sha256: item.sha256,
+        }),
       );
     });
   }
@@ -357,6 +371,36 @@ async function insertItem(
       Buffer.byteLength(envelope),
       item.status,
       item.postpone_count,
+    ],
+  );
+}
+
+async function updateItem(
+  database: SqlDatabase,
+  quarantineId: string,
+  item: NewQuarantineItem,
+): Promise<void> {
+  const envelope = JSON.stringify(item.encrypted);
+  await database.run(
+    `UPDATE quarantine_items SET
+       created_at = ?, updated_at = ?, kind = ?, reason = ?, writer_id = ?, source = ?,
+       source_bank = ?, source_memory_id = ?, source_content_sha256 = ?, sha256 = ?,
+       encrypted_envelope = ?, encrypted_bytes = ?, status = 'pending', postpone_count = 0
+     WHERE quarantine_id = ?`,
+    [
+      item.created_at,
+      item.updated_at,
+      item.kind,
+      item.reason,
+      item.writer_id ?? null,
+      item.source ?? null,
+      item.source_bank ?? null,
+      item.source_memory_id ?? null,
+      item.source_content_sha256 ?? null,
+      item.sha256,
+      envelope,
+      Buffer.byteLength(envelope),
+      quarantineId,
     ],
   );
 }

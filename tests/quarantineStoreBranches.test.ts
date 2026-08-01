@@ -143,6 +143,8 @@ describe("SQL quarantine repository", () => {
       repositoryFromConnectionString("mysql://localhost/db"),
     ).toThrow("QUARANTINE_DATABASE_URL");
     expect(() => sqlitePath("sqlite:")).toThrow("path is required");
-    expect(toPostgresPlaceholders("a = ? AND b = ?")).toBe("a = $1 AND b = $2");
+    expect(toPostgresPlaceholders("a = ? AND b = ?", 2)).toBe(
+      "a = $1 AND b = $2",
+    );
   });
 });

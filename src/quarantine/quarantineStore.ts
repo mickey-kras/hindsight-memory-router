@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { sha256Hex } from "../canonicalJson.js";
 import { HttpError } from "../httpError.js";
 import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
 import {
   createEncryptedQuarantineEnvelope,
+  decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
 import type { NewQuarantineItem, QuarantineRepository } from "./repository.js";
@@ -16,6 +18,7 @@ export interface QuarantineInput {
   sourceBank?: BankId;
   sourceMemoryId?: string;
   sourceContentSha256?: string;
+  dedupeKey?: string;
   payload: unknown;
 }
 
@@ -46,12 +49,14 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
 
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private readonly limiter: FixedWindowLimiter;
+  private readonly publicKey: string;
 
   constructor(
-    private readonly publicKey: string,
+    publicKey: string,
     readonly repository: QuarantineRepository,
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
   ) {
+    this.publicKey = decodePublicKey(publicKey);
     this.limiter = new FixedWindowLimiter(
       limits.rateLimitMax,
       limits.rateLimitWindowMs,
@@ -85,11 +90,24 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    const stats = await this.repository.stats();
-    const pendingItems = stats.pending_items + stats.postponed_items;
+    const [stats, existing] = await Promise.all([
+      this.repository.stats(),
+      this.repository.get(quarantineId),
+    ]);
+    const existingReviewable =
+      existing?.status === "pending" || existing?.status === "postponed"
+        ? 1
+        : 0;
+    const existingEncryptedBytes = existing?.encrypted
+      ? Buffer.byteLength(JSON.stringify(existing.encrypted))
+      : 0;
+    const nextPendingItems =
+      stats.pending_items + stats.postponed_items - existingReviewable + 1;
+    const nextEncryptedBytes =
+      stats.encrypted_bytes - existingEncryptedBytes + encryptedBytes;
     if (
-      pendingItems >= this.limits.maxPendingItems ||
-      stats.encrypted_bytes + encryptedBytes > this.limits.maxEncryptedBytes
+      nextPendingItems > this.limits.maxPendingItems ||
+      nextEncryptedBytes > this.limits.maxEncryptedBytes
     ) {
       throw new HttpError(
         507,
@@ -123,6 +141,8 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
 
     if (input.kind === "recalled_memory") {
       await this.repository.upsertRecalledMemory(item);
+    } else if (input.kind === "security_event") {
+      await this.repository.upsertSecurityEvent(item);
     } else {
       await this.repository.insert(item);
     }
@@ -130,6 +150,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
+    if (input.kind === "security_event" && input.dedupeKey) {
+      const digest = sha256Hex(input.dedupeKey);
+      return `q_security${digest.slice(0, 48)}_${digest.slice(48)}`;
+    }
     if (
       input.kind === "recalled_memory" &&
       input.sourceBank !== undefined &&
