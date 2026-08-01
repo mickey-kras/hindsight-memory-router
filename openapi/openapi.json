@@ -47,6 +47,9 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the health handler."
           }
         }
       }
@@ -860,7 +863,12 @@
       },
       "QuarantineStatus": {
         "type": "string",
-        "enum": ["pending", "postponed", "reviewed_allowed", "reviewed_blocked"]
+        "enum": [
+          "pending",
+          "postponed",
+          "reviewed_allowed",
+          "reviewed_blocked"
+        ]
       },
       "QuarantineItemSummary": {
         "type": "object",
@@ -1026,7 +1034,12 @@
       "DecryptedQuarantineObject": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["quarantine_id", "created_at", "reason", "payload"],
+        "required": [
+          "quarantine_id",
+          "created_at",
+          "reason",
+          "payload"
+        ],
         "properties": {
           "quarantine_id": {
             "$ref": "#/components/schemas/QuarantineId"
