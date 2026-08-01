@@ -151,7 +151,8 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
 
   private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
     if (input.kind === "security_event" && input.dedupeKey) {
-      return `q_security_${sha256Hex(input.dedupeKey).slice(0, 16)}`;
+      const digest = sha256Hex(input.dedupeKey);
+      return `q_security${digest.slice(0, 48)}_${digest.slice(48)}`;
     }
     if (
       input.kind === "recalled_memory" &&
