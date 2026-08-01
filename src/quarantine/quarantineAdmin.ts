@@ -1,201 +1,297 @@
+import { timingSafeEqual } from "node:crypto";
 import type { HindsightGateway } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
+import { getWriter } from "../registry.js";
+import type {
+  BankId,
+  RecallResult,
+  RetainBody,
+  ReviewReason,
+  WriterRegistry,
+} from "../types.js";
 import {
-  assertSafeQuarantineId,
-  deleteEncryptedQuarantineObject,
-  readEncryptedQuarantineEnvelope,
-} from "./quarantineStore.js";
-import { readReviewQueue, writeReviewQueue } from "../reviewQueue.js";
-import { scanContent } from "../safety.js";
-import { BANK_IDS, type BankId, type ReviewRecord } from "../types.js";
+  canonicalizeDecryptedQuarantineObject,
+  parseDecryptedQuarantineObject,
+  sha256Hex,
+  type DecryptedQuarantineObject,
+} from "./envelopeCrypto.js";
+import type {
+  CleanupFilter,
+  QuarantineRepository,
+  StoredQuarantineItem,
+} from "./repository.js";
 
 export interface QuarantineAdminServiceOptions {
-  reviewQueuePath: string;
-  quarantineObjectDir: string;
+  repository: QuarantineRepository;
   hindsight: HindsightGateway;
+  registry: WriterRegistry;
   maxPostpones?: number;
   now?: () => Date;
 }
 
-export interface PromoteBody {
-  target_bank?: string;
-  content?: string;
-  context?: string | null;
-  document_id?: string | null;
-  metadata?: Record<string, string> | null;
-  tags?: string[] | null;
+export interface ApproveBody {
+  decrypted?: unknown;
+}
+
+export interface CleanupBody {
+  scope?: "pending" | "all";
+  reasons?: ReviewReason[];
+  older_than?: string;
+  dry_run?: boolean;
+  expected_count?: number;
 }
 
 export class QuarantineAdminService {
   constructor(private readonly options: QuarantineAdminServiceOptions) {}
 
-  listQueue(): { items: ReviewRecord[] } {
+  async listQueue(limit = 100, offset = 0) {
     return {
-      items: readReviewQueue(this.options.reviewQueuePath).filter(
-        (record) => record.quarantine_id && record.decision === "pending",
-      ),
+      items: await this.options.repository.listReviewable(limit, offset),
     };
   }
 
-  readItem(quarantineId: string): unknown {
-    const record = this.requirePendingRecord(quarantineId);
-    const encrypted = readEncryptedQuarantineEnvelope(
-      this.options.quarantineObjectDir,
-      quarantineId,
-    );
+  async readItem(quarantineId: string): Promise<unknown> {
+    const item = await this.requireReviewable(quarantineId);
+    if (!item.encrypted) {
+      throw new HttpError(
+        409,
+        "quarantine_payload_unavailable",
+        "quarantine payload is no longer available",
+      );
+    }
+    const { encrypted, ...record } = item;
     return { record, encrypted };
   }
 
-  reject(quarantineId: string): { rejected: true; quarantine_id: string } {
-    this.requirePendingRecord(quarantineId);
-    this.updateRecord(quarantineId, (record) => ({
-      ...record,
-      decision: "rejected",
-      decided_at: this.nowIso(),
-    }));
-    deleteEncryptedQuarantineObject(
-      this.options.quarantineObjectDir,
+  async approve(
+    quarantineId: string,
+    body: ApproveBody,
+  ): Promise<Record<string, unknown>> {
+    const item = await this.requireReviewable(quarantineId);
+    const decrypted = this.verifyExactDecryptedItem(item, body.decrypted);
+
+    if (item.kind === "retain_request") {
+      const payload = requireObject(decrypted.payload, "quarantine payload");
+      if (payload.action !== "retain") {
+        throw new HttpError(
+          409,
+          "invalid_quarantine_payload",
+          "retain approval requires a retain request",
+        );
+      }
+      const writerId = requireString(payload.writer_id, "writer_id");
+      const writer = getWriter(this.options.registry, writerId);
+      if (!writer) {
+        throw new HttpError(
+          409,
+          "writer_not_registered",
+          "register the writer before approving its original retain request",
+        );
+      }
+      const retainBody = parseRetainBody(payload.body);
+      await this.options.hindsight.retain(writer.write_bank, retainBody);
+      await this.options.repository.remove(
+        quarantineId,
+        "approved",
+        this.nowIso(),
+        { writer_id: writerId, target_bank: writer.write_bank },
+      );
+      return {
+        approved: true,
+        quarantine_id: quarantineId,
+        target_bank: writer.write_bank,
+      };
+    }
+
+    if (item.kind === "recalled_memory") {
+      const recalled = parseRecalledMemoryPayload(decrypted.payload);
+      if (
+        recalled.bank_id !== item.source_bank ||
+        recalled.result.id !== item.source_memory_id
+      ) {
+        throw new HttpError(
+          409,
+          "quarantine_source_mismatch",
+          "recalled memory source does not match quarantine metadata",
+        );
+      }
+      await this.options.repository.markMemoryReviewed(
+        quarantineId,
+        "reviewed_allowed",
+        this.nowIso(),
+      );
+      return {
+        reviewed: true,
+        allowed: true,
+        quarantine_id: quarantineId,
+        source_bank: recalled.bank_id,
+        source_memory_id: recalled.result.id,
+      };
+    }
+
+    throw new HttpError(
+      409,
+      "invalid_review_action",
+      "this quarantine item cannot be approved into memory",
+    );
+  }
+
+  async reject(
+    quarantineId: string,
+  ): Promise<Record<string, unknown>> {
+    const item = await this.requireReviewable(quarantineId);
+    if (item.kind === "recalled_memory") {
+      if (!item.source_bank || !item.source_memory_id) {
+        throw new HttpError(
+          409,
+          "quarantine_source_missing",
+          "recalled memory source metadata is missing",
+        );
+      }
+      await this.options.hindsight.invalidateMemory(
+        item.source_bank,
+        item.source_memory_id,
+        `Rejected by memory-router quarantine review ${quarantineId}`,
+      );
+      await this.options.repository.markMemoryReviewed(
+        quarantineId,
+        "reviewed_blocked",
+        this.nowIso(),
+      );
+      return {
+        reviewed: true,
+        allowed: false,
+        quarantine_id: quarantineId,
+        source_bank: item.source_bank,
+        source_memory_id: item.source_memory_id,
+      };
+    }
+
+    await this.options.repository.remove(
       quarantineId,
+      "rejected",
+      this.nowIso(),
     );
     return { rejected: true, quarantine_id: quarantineId };
   }
 
-  postpone(quarantineId: string): {
-    postponed: true;
-    quarantine_id: string;
-    count: number;
-  } {
+  async postpone(quarantineId: string) {
+    const item = await this.requireReviewable(quarantineId);
     const maxPostpones = this.options.maxPostpones ?? 3;
-    const record = this.requirePendingRecord(quarantineId);
-    const count = record.postpone_count ?? 0;
-    if (count >= maxPostpones) {
+    if (item.postpone_count >= maxPostpones) {
       throw new HttpError(
         409,
         "postpone_limit_reached",
         "maximum postpone count reached",
       );
     }
-    const next = {
-      ...record,
-      decision: "pending" as const,
-      postpone_count: count + 1,
-      timestamp: this.nowIso(),
-    };
-    const records = readReviewQueue(this.options.reviewQueuePath).filter(
-      (item) => item.quarantine_id !== quarantineId,
-    );
-    records.push(next);
-    writeReviewQueue(this.options.reviewQueuePath, records);
-    return { postponed: true, quarantine_id: quarantineId, count: count + 1 };
-  }
-
-  async promote(
-    quarantineId: string,
-    body: PromoteBody,
-  ): Promise<{ promoted: true; quarantine_id: string; target_bank: BankId }> {
-    this.requirePendingRecord(quarantineId);
-    const targetBank = parseBankId(body.target_bank);
-    if (targetBank === "quarantine") {
-      throw new HttpError(
-        400,
-        "invalid_target_bank",
-        "cannot promote to quarantine bank",
-      );
-    }
-    const content = body.content?.trim();
-    if (!content) {
-      throw new HttpError(
-        400,
-        "approved_content_required",
-        "approved content is required",
-      );
-    }
-    const scan = scanContent(content);
-    if (!scan.safe) {
-      throw new HttpError(
-        400,
-        "approved_content_rejected",
-        "approved content failed safety scan",
-      );
-    }
-
-    const metadata: Record<string, string> = body.metadata
-      ? { ...body.metadata }
-      : {};
-    metadata.router_decision = "promoted_from_quarantine";
-    metadata.quarantine_id = quarantineId;
-
-    await this.options.hindsight.retain(targetBank, {
-      async: true,
-      items: [
-        {
-          content,
-          context: body.context ?? "memory-router quarantine promotion",
-          document_id: body.document_id ?? `promoted:${quarantineId}`,
-          metadata,
-          tags: body.tags ?? ["quarantine-promoted"],
-          update_mode: "append",
-        },
-      ],
-    });
-
-    this.updateRecord(quarantineId, (record) => ({
-      ...record,
-      decision: "promoted",
-      decided_at: this.nowIso(),
-      target_bank: targetBank,
-    }));
-    deleteEncryptedQuarantineObject(
-      this.options.quarantineObjectDir,
+    const next = await this.options.repository.postpone(
       quarantineId,
+      this.nowIso(),
     );
     return {
-      promoted: true,
+      postponed: true,
       quarantine_id: quarantineId,
-      target_bank: targetBank,
+      count: next.postpone_count,
     };
   }
 
-  private requirePendingRecord(quarantineId: string): ReviewRecord {
+  async stats() {
+    return this.options.repository.stats();
+  }
+
+  async cleanup(body: CleanupBody) {
+    const filter = parseCleanupFilter(body);
+    const preview = await this.options.repository.previewCleanup(filter);
+    if (body.dry_run !== false) {
+      return { dry_run: true, ...preview };
+    }
+    if (!Number.isSafeInteger(body.expected_count) || body.expected_count! < 0) {
+      throw new HttpError(
+        400,
+        "expected_count_required",
+        "expected_count from a dry run is required",
+      );
+    }
+    const result = await this.options.repository.cleanup(
+      filter,
+      body.expected_count!,
+      this.nowIso(),
+    );
+    return { dry_run: false, ...result };
+  }
+
+  private verifyExactDecryptedItem(
+    item: StoredQuarantineItem,
+    value: unknown,
+  ): DecryptedQuarantineObject {
+    if (!item.encrypted) {
+      throw new HttpError(
+        409,
+        "quarantine_payload_unavailable",
+        "quarantine payload is no longer available",
+      );
+    }
+    let decrypted: DecryptedQuarantineObject;
     try {
-      assertSafeQuarantineId(quarantineId);
-    } catch {
+      decrypted = parseDecryptedQuarantineObject(value);
+    } catch (error) {
+      throw new HttpError(
+        400,
+        "invalid_decrypted_quarantine",
+        error instanceof Error ? error.message : "invalid decrypted quarantine",
+      );
+    }
+    const actual = sha256Hex(canonicalizeDecryptedQuarantineObject(decrypted));
+    if (!sameDigest(actual, item.sha256)) {
+      throw new HttpError(
+        409,
+        "quarantine_hash_mismatch",
+        "decrypted quarantine content differs from the original item",
+      );
+    }
+    if (
+      decrypted.quarantine_id !== item.quarantine_id ||
+      decrypted.created_at !== item.created_at ||
+      decrypted.reason !== item.reason ||
+      decrypted.writer_id !== item.writer_id ||
+      decrypted.source !== item.source
+    ) {
+      throw new HttpError(
+        409,
+        "quarantine_metadata_mismatch",
+        "decrypted quarantine metadata differs from the stored item",
+      );
+    }
+    return decrypted;
+  }
+
+  private async requireReviewable(
+    quarantineId: string,
+  ): Promise<StoredQuarantineItem> {
+    if (!/^q_[0-9A-Za-z]+_[0-9a-f]{16}$/.test(quarantineId)) {
       throw new HttpError(
         400,
         "invalid_quarantine_id",
         "invalid quarantine_id",
       );
     }
-    const record = readReviewQueue(this.options.reviewQueuePath).find(
-      (item) => item.quarantine_id === quarantineId,
-    );
-    if (!record)
+    const item = await this.options.repository.get(quarantineId);
+    if (!item) {
       throw new HttpError(
         404,
         "quarantine_not_found",
         "quarantine item not found",
       );
-    if (record.decision !== "pending") {
+    }
+    if (item.status !== "pending" && item.status !== "postponed") {
       throw new HttpError(
         409,
         "quarantine_already_finalized",
-        "quarantine item is not pending",
+        "quarantine item is not pending review",
       );
     }
-    return record;
-  }
-
-  private updateRecord(
-    quarantineId: string,
-    update: (record: ReviewRecord) => ReviewRecord,
-  ): void {
-    const records = readReviewQueue(this.options.reviewQueuePath);
-    writeReviewQueue(
-      this.options.reviewQueuePath,
-      records.map((record) =>
-        record.quarantine_id === quarantineId ? update(record) : record,
-      ),
-    );
+    return item;
   }
 
   private nowIso(): string {
@@ -203,10 +299,70 @@ export class QuarantineAdminService {
   }
 }
 
-function parseBankId(value: string | undefined): BankId {
-  if (!value)
-    throw new HttpError(400, "target_bank_required", "target_bank is required");
-  if (!BANK_IDS.includes(value as BankId))
-    throw new HttpError(400, "invalid_target_bank", "invalid target_bank");
-  return value as BankId;
+function parseRetainBody(value: unknown): RetainBody {
+  const object = requireObject(value, "retain body");
+  if (!Array.isArray(object.items)) {
+    throw new HttpError(400, "invalid_retain_body", "retain body items are required");
+  }
+  return object as unknown as RetainBody;
+}
+
+function parseRecalledMemoryPayload(value: unknown): {
+  bank_id: BankId;
+  result: RecallResult;
+} {
+  const object = requireObject(value, "recalled memory payload");
+  if (object.action !== "recalled_memory") {
+    throw new HttpError(
+      409,
+      "invalid_quarantine_payload",
+      "recalled memory approval requires a recalled memory payload",
+    );
+  }
+  const bankId = requireString(object.bank_id, "bank_id") as BankId;
+  const result = requireObject(object.result, "recalled result");
+  return {
+    bank_id: bankId,
+    result: {
+      ...result,
+      id: requireString(result.id, "memory id"),
+      text: requireString(result.text, "memory text"),
+    },
+  };
+}
+
+function parseCleanupFilter(body: CleanupBody): CleanupFilter {
+  if (body.older_than && Number.isNaN(Date.parse(body.older_than))) {
+    throw new HttpError(
+      400,
+      "invalid_cleanup_time",
+      "older_than must be an ISO timestamp",
+    );
+  }
+  return {
+    scope: body.scope ?? "pending",
+    ...(body.reasons?.length ? { reasons: body.reasons } : {}),
+    ...(body.older_than ? { older_than: body.older_than } : {}),
+  };
+}
+
+function sameDigest(left: string, right: string): boolean {
+  if (!/^[0-9a-f]{64}$/.test(left) || !/^[0-9a-f]{64}$/.test(right)) {
+    return false;
+  }
+  return timingSafeEqual(Buffer.from(left, "hex"), Buffer.from(right, "hex"));
+}
+
+function requireObject(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "invalid_request", `${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value) {
+    throw new HttpError(400, "invalid_request", `${label} is required`);
+  }
+  return value;
 }
