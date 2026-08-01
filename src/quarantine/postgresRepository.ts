@@ -59,9 +59,10 @@ class PostgresDatabase implements SqlDatabase {
     if (!this.root) {
       throw new Error("nested PostgreSQL transactions are not supported");
     }
-    return this.root.begin((transaction) =>
-      operation(new PostgresDatabase(transaction)),
-    );
+    const [result] = await this.root.begin(async (transaction) => [
+      await operation(new PostgresDatabase(transaction)),
+    ]);
+    return result;
   }
 
   async close(): Promise<void> {
