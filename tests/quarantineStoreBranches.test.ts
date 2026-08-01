@@ -1,164 +1,147 @@
-import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { toPostgresPlaceholders } from "../src/quarantine/postgresRepository.js";
 import {
-  decodePrivateKey,
-  decryptQuarantineEnvelope,
-} from "../src/quarantine/envelopeCrypto.js";
-import {
-  assertSafeQuarantineId,
-  deleteEncryptedQuarantineObject,
-  encryptedQuarantineObjectPath,
-  EncryptedFileQuarantineStore,
-  MemoryQuarantineStore,
-  readEncryptedQuarantineEnvelope,
-} from "../src/quarantine/quarantineStore.js";
+  repositoryFromConnectionString,
+  sqlitePath,
+} from "../src/quarantine/repositoryFactory.js";
+import { SqliteQuarantineRepository } from "../src/quarantine/sqliteRepository.js";
+import { EncryptedDatabaseQuarantineStore } from "../src/quarantine/quarantineStore.js";
+import { quarantineKeys } from "./quarantineTestUtils.js";
 
-function keyPair() {
-  const { publicKey, privateKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-    publicKeyEncoding: { type: "spki", format: "pem" },
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-  });
-  return {
-    publicKeyPem: publicKey,
-    privateKeyPem: privateKey,
-    publicKeyBase64: Buffer.from(publicKey).toString("base64"),
-    privateKeyBase64: Buffer.from(privateKey).toString("base64"),
-  };
-}
-
-function createEnvelope() {
-  const directory = mkdtempSync(join(tmpdir(), "quarantine-branches-"));
-  const keys = keyPair();
-  const store = new EncryptedFileQuarantineStore(
-    keys.publicKeyBase64,
-    directory,
+async function withSqlite<T>(
+  run: (context: {
+    repository: SqliteQuarantineRepository;
+    store: EncryptedDatabaseQuarantineStore;
+  }) => Promise<T>,
+): Promise<T> {
+  const directory = mkdtempSync(join(tmpdir(), "quarantine-sqlite-"));
+  const repository = new SqliteQuarantineRepository(
+    join(directory, "quarantine.db"),
   );
-  const result = store.put({
-    timestamp: "2026-07-31T00:00:00.000Z",
-    reason: "unknown_writer",
-    payload: { content: "review locally" },
-  });
-  return {
-    directory,
-    keys,
-    result,
-    envelope: readEncryptedQuarantineEnvelope(directory, result.quarantine_id),
-  };
+  const keys = quarantineKeys();
+  await repository.initialize();
+  try {
+    return await run({
+      repository,
+      store: new EncryptedDatabaseQuarantineStore(keys.publicKey, repository),
+    });
+  } finally {
+    await repository.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
-describe("quarantine store branches", () => {
-  it("validates public and private key configuration", () => {
-    const directory = mkdtempSync(join(tmpdir(), "quarantine-keys-"));
-    const keys = keyPair();
-    const input = {
-      timestamp: "2026-07-31T00:00:00.000Z",
-      reason: "unknown_writer" as const,
-      payload: { content: "payload" },
-    };
-    try {
-      expect(() =>
-        new EncryptedFileQuarantineStore(undefined, directory).put(input),
-      ).toThrow("QUARANTINE_PUBLIC_KEY is required");
-      expect(() =>
-        new EncryptedFileQuarantineStore("not-a-key", directory).put(input),
-      ).toThrow("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM");
-      expect(() =>
-        new EncryptedFileQuarantineStore(
-          keys.publicKeyPem.replaceAll("\n", "\\n"),
-          directory,
-        ).put(input),
-      ).not.toThrow();
+describe("SQL quarantine repository", () => {
+  it("persists indexed review state and append-only event counts", async () => {
+    await withSqlite(async ({ repository, store }) => {
+      const first = await store.put({
+        timestamp: "2026-07-01T00:00:00.000Z",
+        kind: "retain_request",
+        reason: "unknown_writer",
+        payload: { content: "first" },
+      });
+      await store.put({
+        timestamp: "2026-07-02T00:00:00.000Z",
+        kind: "retain_request",
+        reason: "suspicious_content",
+        payload: { content: "second" },
+      });
 
-      expect(() => decodePrivateKey(" ")).toThrow("private key is required");
-      expect(() => decodePrivateKey("not-a-key")).toThrow(
-        "private key must be PEM or base64-encoded PEM",
-      );
-      expect(
-        decodePrivateKey(keys.privateKeyPem.replaceAll("\n", "\\n")),
-      ).toContain("BEGIN PRIVATE KEY");
-      expect(decodePrivateKey(keys.privateKeyBase64)).toContain(
-        "BEGIN PRIVATE KEY",
-      );
-    } finally {
-      rmSync(directory, { recursive: true, force: true });
-    }
-  });
+      expect(await repository.listReviewable(1, 0)).toEqual([
+        expect.objectContaining({ quarantine_id: first.quarantine_id }),
+      ]);
+      expect(await repository.postpone(first.quarantine_id, "2026-07-03T00:00:00.000Z"))
+        .toMatchObject({ status: "postponed", postpone_count: 1 });
+      expect(await repository.stats()).toMatchObject({
+        total_items: 2,
+        pending_items: 1,
+        postponed_items: 1,
+        event_count: 3,
+      });
 
-  it("validates quarantine ids and derives safe object paths", () => {
-    const id = "q_20260731_0123456789abcdef";
-    expect(() => assertSafeQuarantineId(id)).not.toThrow();
-    expect(encryptedQuarantineObjectPath("/tmp/quarantine", id)).toBe(
-      `/tmp/quarantine/${id}.enc.json`,
-    );
-    expect(() => assertSafeQuarantineId("../escape")).toThrow(
-      "invalid quarantine_id",
-    );
-  });
-
-  it("rejects malformed authentication tags and digest mismatches", () => {
-    const context = createEnvelope();
-    try {
-      expect(() =>
-        decryptQuarantineEnvelope(
-          {
-            ...context.envelope,
-            encryption: { ...context.envelope.encryption, tag_b64: "AA==" },
-          },
-          context.keys.privateKeyPem,
+      const preview = await repository.previewCleanup({
+        scope: "pending",
+        reasons: ["unknown_writer"],
+      });
+      expect(preview.count).toBe(1);
+      await expect(
+        repository.cleanup(
+          { scope: "pending", reasons: ["unknown_writer"] },
+          2,
+          "2026-07-04T00:00:00.000Z",
         ),
-      ).toThrow("invalid AES-GCM authentication tag length");
-
-      expect(() =>
-        decryptQuarantineEnvelope(
-          { ...context.envelope, sha256: "0".repeat(64) },
-          context.keys.privateKeyPem,
+      ).rejects.toMatchObject({ status: 409 });
+      await expect(
+        repository.cleanup(
+          { scope: "pending", reasons: ["unknown_writer"] },
+          1,
+          "2026-07-04T00:00:00.000Z",
         ),
-      ).toThrow("quarantine object digest mismatch");
-    } finally {
-      rmSync(context.directory, { recursive: true, force: true });
-    }
+      ).resolves.toMatchObject({ count: 1 });
+      expect(await repository.get(first.quarantine_id)).toBeNull();
+      expect(await repository.stats()).toMatchObject({
+        total_items: 1,
+        event_count: 4,
+      });
+    });
   });
 
-  it("reads, decrypts, and deletes encrypted objects", () => {
-    const context = createEnvelope();
-    const path = encryptedQuarantineObjectPath(
-      context.directory,
-      context.result.quarantine_id,
-    );
-    try {
-      expect(
-        decryptQuarantineEnvelope(
-          readEncryptedQuarantineEnvelope(
-            context.directory,
-            context.result.quarantine_id,
-          ),
-          context.keys.privateKeyBase64,
-        ),
-      ).toMatchObject({ payload: { content: "review locally" } });
-      expect(existsSync(path)).toBe(true);
-      deleteEncryptedQuarantineObject(
-        context.directory,
-        context.result.quarantine_id,
+  it("stores recalled-memory decisions without retaining ciphertext", async () => {
+    await withSqlite(async ({ repository, store }) => {
+      const created = await store.put({
+        timestamp: "2026-07-01T00:00:00.000Z",
+        kind: "recalled_memory",
+        reason: "recalled_suspicious_memory",
+        sourceBank: "ops",
+        sourceMemoryId: "memory-1",
+        sourceContentSha256: "a".repeat(64),
+        payload: { result: { id: "memory-1", text: "suspicious" } },
+      });
+      expect(await repository.findMemoryState("ops", "memory-1")).toMatchObject({
+        quarantine_id: created.quarantine_id,
+        status: "pending",
+      });
+
+      await repository.markMemoryReviewed(
+        created.quarantine_id,
+        "reviewed_blocked",
+        "2026-07-01T01:00:00.000Z",
       );
-      expect(existsSync(path)).toBe(false);
-    } finally {
-      rmSync(context.directory, { recursive: true, force: true });
-    }
+      expect(await repository.get(created.quarantine_id)).toMatchObject({
+        status: "reviewed_blocked",
+        encrypted: null,
+      });
+      expect(await repository.stats()).toMatchObject({
+        reviewed_blocked_items: 1,
+        encrypted_bytes: 0,
+        event_count: 2,
+      });
+      await expect(
+        repository.postpone(
+          created.quarantine_id,
+          "2026-07-01T02:00:00.000Z",
+        ),
+      ).rejects.toMatchObject({ status: 409 });
+    });
   });
 
-  it("records deterministic in-memory quarantine ids", () => {
-    const store = new MemoryQuarantineStore();
-    const input = {
-      timestamp: "2026-07-31T00:00:00.000Z",
-      reason: "unknown_writer" as const,
-      payload: { content: "payload" },
-    };
-    expect(store.put(input).quarantine_id).toBe("q_test_1");
-    expect(store.put(input).quarantine_id).toBe("q_test_2");
-    expect(store.records).toHaveLength(2);
+  it("parses database connection strings and PostgreSQL placeholders", async () => {
+    expect(sqlitePath("sqlite::memory:")).toBe(":memory:");
+    expect(sqlitePath("sqlite:///tmp/quarantine.db")).toBe(
+      "/tmp/quarantine.db",
+    );
+    expect(repositoryFromConnectionString("sqlite::memory:")).toBeInstanceOf(
+      SqliteQuarantineRepository,
+    );
+    expect(() => repositoryFromConnectionString("mysql://localhost/db")).toThrow(
+      "QUARANTINE_DATABASE_URL",
+    );
+    expect(() => sqlitePath("sqlite:")).toThrow("path is required");
+    expect(toPostgresPlaceholders("a = ? AND b = ?")).toBe(
+      "a = $1 AND b = $2",
+    );
   });
 });
