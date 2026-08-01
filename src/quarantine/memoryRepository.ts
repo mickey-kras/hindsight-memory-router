@@ -56,6 +56,23 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     );
   }
 
+  async upsertSecurityEvent(item: NewQuarantineItem): Promise<void> {
+    const existing = this.items.get(item.quarantine_id);
+    if (!existing) return this.insert(item);
+    this.items.set(item.quarantine_id, { ...item });
+    this.events.push(
+      quarantineEvent(
+        item.quarantine_id,
+        "requarantined",
+        item.created_at,
+        {
+          reason: item.reason,
+          sha256: item.sha256,
+        },
+      ),
+    );
+  }
+
   async get(quarantineId: string): Promise<StoredQuarantineItem | null> {
     return this.items.get(quarantineId) ?? null;
   }
