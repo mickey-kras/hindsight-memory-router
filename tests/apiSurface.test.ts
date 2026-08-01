@@ -1,37 +1,45 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
-import { MemoryReviewQueue } from "../src/reviewQueue.js";
 import { createMemoryRouterServer } from "../src/server.js";
+import { memoryQuarantine } from "./quarantineTestUtils.js";
 
 async function withServer<T>(
-  fn: (baseUrl: string, reviewQueue: MemoryReviewQueue) => Promise<T>,
+  fn: (context: {
+    baseUrl: string;
+    repository: ReturnType<typeof memoryQuarantine>["repository"];
+  }) => Promise<T>,
 ): Promise<T> {
-  const reviewQueue = new MemoryReviewQueue();
+  const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
     hindsight: new FakeHindsightGateway(),
-    reviewQueue,
+    quarantineRepository: quarantine.repository,
+    quarantineStore: quarantine.store,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
-  if (!address || typeof address === "string")
+  if (!address || typeof address === "string") {
     throw new Error("unexpected server address");
+  }
   try {
-    return await fn(`http://127.0.0.1:${address.port}`, reviewQueue);
+    return await fn({
+      baseUrl: `http://127.0.0.1:${address.port}`,
+      repository: quarantine.repository,
+    });
   } finally {
     await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve())),
+      server.close((error) => (error ? reject(error) : resolve())),
     );
   }
 }
 
 describe("memory-router API surface", () => {
   it("serves health", async () => {
-    await withServer(async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/health`);
-      expect(res.status).toBe(200);
-      expect(await res.json()).toMatchObject({
+    await withServer(async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/health`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({
         status: "healthy",
         service: "memory-router",
       });
@@ -39,21 +47,26 @@ describe("memory-router API surface", () => {
   });
 
   it("serves version", async () => {
-    await withServer(async (baseUrl) => {
-      const res = await fetch(`${baseUrl}/version`);
-      expect(res.status).toBe(200);
-      expect(await res.json()).toMatchObject({ api_version: "0.8.3" });
+    await withServer(async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/version`);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ api_version: "0.9.0" });
     });
   });
 
-  it("denies unknown endpoints", async () => {
-    await withServer(async (baseUrl, reviewQueue) => {
-      const res = await fetch(`${baseUrl}/v1/default/banks`);
-      expect(res.status).toBe(404);
-      expect(await res.json()).toMatchObject({
+  it("denies and records unknown endpoints as encrypted events", async () => {
+    await withServer(async ({ baseUrl, repository }) => {
+      const response = await fetch(`${baseUrl}/v1/default/banks`);
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({
         error: "endpoint denied by memory-router policy",
       });
-      expect(reviewQueue.records[0].reason).toBe("denied_endpoint");
+      expect(await repository.listReviewable()).toEqual([
+        expect.objectContaining({
+          kind: "security_event",
+          reason: "denied_endpoint",
+        }),
+      ]);
     });
   });
 });
