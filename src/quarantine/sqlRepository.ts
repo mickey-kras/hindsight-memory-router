@@ -8,6 +8,7 @@ import {
   type CleanupPreview,
   type NewQuarantineItem,
   type QuarantineCapacityLimits,
+  type QuarantineEventType,
   type QuarantineRepository,
   type QuarantineStats,
   type StoredQuarantineItem,
@@ -141,14 +142,12 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     at: string,
   ): Promise<void> {
     await this.database.transaction(async (database) => {
-      const current = await requireReviewable(database, quarantineId);
-      if (current.kind !== "recalled_memory") {
-        throw new HttpError(
-          409,
-          "invalid_review_action",
-          "only recalled memories can be marked reviewed",
-        );
-      }
+      const current = await requireReviewableKind(
+        database,
+        quarantineId,
+        "recalled_memory",
+        "only recalled memories can be marked reviewed",
+      );
       await markRecalledReviewed(database, current, status, at);
     });
   }
@@ -160,23 +159,19 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     operation: () => Promise<void>,
   ): Promise<void> {
     await this.database.transaction(async (database) => {
-      const current = await requireReviewable(database, quarantineId);
-      if (current.kind !== "retain_request") {
-        throw new HttpError(
-          409,
-          "invalid_review_action",
-          "only retain requests can be approved into Hindsight",
-        );
-      }
-      await operation();
-      await database.run(
-        `DELETE FROM quarantine_items
-         WHERE quarantine_id = ${database.placeholder(1)}`,
-        [quarantineId],
-      );
-      await insertEvent(
+      await requireReviewableKind(
         database,
-        quarantineEvent(quarantineId, "approved", at, details),
+        quarantineId,
+        "retain_request",
+        "only retain requests can be approved into Hindsight",
+      );
+      await operation();
+      await deleteWithEvent(
+        database,
+        quarantineId,
+        "approved",
+        at,
+        details,
       );
     });
   }
@@ -187,14 +182,12 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     operation: () => Promise<void>,
   ): Promise<void> {
     await this.database.transaction(async (database) => {
-      const current = await requireReviewable(database, quarantineId);
-      if (current.kind !== "recalled_memory") {
-        throw new HttpError(
-          409,
-          "invalid_review_action",
-          "only recalled memories can be invalidated",
-        );
-      }
+      const current = await requireReviewableKind(
+        database,
+        quarantineId,
+        "recalled_memory",
+        "only recalled memories can be invalidated",
+      );
       await operation();
       await markRecalledReviewed(database, current, "reviewed_blocked", at);
     });
@@ -208,15 +201,7 @@ export class SqlQuarantineRepository implements QuarantineRepository {
   ): Promise<void> {
     await this.database.transaction(async (database) => {
       await requireItem(database, quarantineId);
-      await database.run(
-        `DELETE FROM quarantine_items
-         WHERE quarantine_id = ${database.placeholder(1)}`,
-        [quarantineId],
-      );
-      await insertEvent(
-        database,
-        quarantineEvent(quarantineId, eventType, at, details),
-      );
+      await deleteWithEvent(database, quarantineId, eventType, at, details);
     });
   }
 
@@ -263,15 +248,9 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       let encryptedBytes = 0;
       for (const row of rows) {
         encryptedBytes += Number(row.encrypted_bytes);
-        await database.run(
-          `DELETE FROM quarantine_items
-           WHERE quarantine_id = ${database.placeholder(1)}`,
-          [row.quarantine_id],
-        );
-        await insertEvent(
-          database,
-          quarantineEvent(row.quarantine_id, "cleanup", at, { filter }),
-        );
+        await deleteWithEvent(database, row.quarantine_id, "cleanup", at, {
+          filter,
+        });
       }
       return { count: rows.length, encrypted_bytes: encryptedBytes };
     });
@@ -295,6 +274,37 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       }
     });
   }
+}
+
+async function requireReviewableKind(
+  database: SqlDatabase,
+  quarantineId: string,
+  kind: StoredQuarantineItem["kind"],
+  message: string,
+): Promise<StoredQuarantineItem> {
+  const item = await requireReviewable(database, quarantineId);
+  if (item.kind !== kind) {
+    throw new HttpError(409, "invalid_review_action", message);
+  }
+  return item;
+}
+
+async function deleteWithEvent(
+  database: SqlDatabase,
+  quarantineId: string,
+  eventType: QuarantineEventType,
+  at: string,
+  details: Record<string, unknown>,
+): Promise<void> {
+  await database.run(
+    `DELETE FROM quarantine_items
+     WHERE quarantine_id = ${database.placeholder(1)}`,
+    [quarantineId],
+  );
+  await insertEvent(
+    database,
+    quarantineEvent(quarantineId, eventType, at, details),
+  );
 }
 
 async function markRecalledReviewed(
