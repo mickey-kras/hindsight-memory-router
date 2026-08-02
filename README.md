@@ -56,6 +56,8 @@ POST /admin/quarantine/items/{quarantine_id}/postpone
 
 Admin endpoints require `MEMORY_ROUTER_ADMIN_TOKEN`. The item endpoint returns metadata and the encrypted envelope; it never decrypts the payload.
 
+Retain and recall bodies are validated before policy execution. Structurally invalid or empty requests return `400` rather than reaching Hindsight or failing as an internal error.
+
 All other Hindsight endpoints are denied by default. The Hindsight `bank_id` path value is treated as a router `writer_id`; policy chooses the real bank.
 
 ## Docker
@@ -100,7 +102,9 @@ postgresql://user:password@database:5432/router
 
 SQLite is the default and enables WAL mode. PostgreSQL is intended for deployments that need shared or remote quarantine state. Both backends create indexed `quarantine_items` and append-only `quarantine_events` tables. In PostgreSQL deployments, use a separate database or schema from Hindsight's application data so the security control plane is independently scoped and backed up.
 
-`QUARANTINE_PUBLIC_KEY` is validated when the router starts. `QUARANTINE_PRIVATE_KEY` is deliberately not a router configuration value. Keep it outside the router runtime and supply it only to an authorized local review client.
+`QUARANTINE_PUBLIC_KEY` is validated when the router starts. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail. Keep the private key outside the router runtime and supply it only to an authorized local review or migration client.
+
+`QUARANTINE_MAX_POSTPONES` and the other numeric quarantine limits must be non-negative integers; malformed values fail startup.
 
 OpenClaw plugin config:
 
@@ -150,9 +154,32 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
+Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
 
-The built-in fixed-window write limiter applies per router process. Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
+Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
+
+## Upgrade from JSONL/file quarantine
+
+The SQL release does not silently read the old JSONL queue or encrypted-object directory. Migrate reviewable items before deleting the legacy files:
+
+```bash
+npm run build
+private-key-command | npm run migrate:legacy-quarantine -- \
+  --queue /path/to/review.jsonl \
+  --objects /path/to/quarantine-objects \
+  --database sqlite:/path/to/quarantine.db
+```
+
+The command:
+
+- imports pending and postponed encrypted items;
+- decrypts locally, verifies the old envelope, and re-encrypts canonical content;
+- preserves the original quarantine ID and postpone count;
+- skips items already present, so rerunning is safe;
+- reports finalized records and records without encrypted payloads separately;
+- leaves the source JSONL and encrypted files untouched as a backup.
+
+Finalized legacy records remain available in the source JSONL audit archive; they are not recreated as active SQL items. Verify the printed summary and SQL statistics before removing or archiving the legacy directory.
 
 ## Manual review
 
@@ -174,6 +201,8 @@ private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.
 Approval is exact-object only. Any change to content, context, tags, metadata, document identifiers, source, writer, reason, or timestamp produces `quarantine_hash_mismatch`. To alter a memory, reject the quarantined item and submit a new retain request.
 
 For an approved retain request, the target bank comes from the current writer registry. The router writes the exact original body to Hindsight, removes the quarantine row, and keeps the approval event. For an approved recalled memory, the router removes ciphertext and records the SHA-256 of the safety-evaluated text as reviewed and allowed. Metadata-only changes do not force another review; changed text does.
+
+Approval writes and recalled-memory invalidations hold the database review lock until the Hindsight action and local state transition complete. This prevents concurrent admin requests or multiple PostgreSQL-backed router instances from issuing the same action twice. Hindsight and the quarantine database are still separate systems, so a process crash or ambiguous network failure after Hindsight applies an action but before the database commit cannot be rolled back atomically. In that rare case, inspect Hindsight's audit/state before retrying; do not blindly repeat the admin action.
 
 ## Cleanup
 

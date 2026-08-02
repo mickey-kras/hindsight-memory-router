@@ -2,12 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import type { HindsightGateway } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import { getWriter } from "../registry.js";
+import { parseRetainBody } from "../requestValidation.js";
 import {
   BANK_IDS,
   type BankId,
-  type MemoryItem,
   type RecallResult,
-  type RetainBody,
   type ReviewReason,
   type WriterRegistry,
 } from "../types.js";
@@ -91,12 +90,13 @@ export class QuarantineAdminService {
         );
       }
       const retainBody = parseRetainBody(payload.body);
-      await this.options.hindsight.retain(writer.write_bank, retainBody);
-      await this.options.repository.remove(
+      await this.options.repository.approveRetain(
         quarantineId,
-        "approved",
         this.nowIso(),
         { writer_id: writerId, target_bank: writer.write_bank },
+        async () => {
+          await this.options.hindsight.retain(writer.write_bank, retainBody);
+        },
       );
       return {
         approved: true,
@@ -141,29 +141,32 @@ export class QuarantineAdminService {
   async reject(quarantineId: string): Promise<Record<string, unknown>> {
     const item = await this.requireReviewable(quarantineId);
     if (item.kind === "recalled_memory") {
-      if (!item.source_bank || !item.source_memory_id) {
+      const sourceBank = item.source_bank;
+      const sourceMemoryId = item.source_memory_id;
+      if (!sourceBank || !sourceMemoryId) {
         throw new HttpError(
           409,
           "quarantine_source_missing",
           "recalled memory source metadata is missing",
         );
       }
-      await this.options.hindsight.invalidateMemory(
-        item.source_bank,
-        item.source_memory_id,
-        `Rejected by memory-router quarantine review ${quarantineId}`,
-      );
-      await this.options.repository.markMemoryReviewed(
+      await this.options.repository.rejectRecalledMemory(
         quarantineId,
-        "reviewed_blocked",
         this.nowIso(),
+        async () => {
+          await this.options.hindsight.invalidateMemory(
+            sourceBank,
+            sourceMemoryId,
+            `Rejected by memory-router quarantine review ${quarantineId}`,
+          );
+        },
       );
       return {
         reviewed: true,
         allowed: false,
         quarantine_id: quarantineId,
-        source_bank: item.source_bank,
-        source_memory_id: item.source_memory_id,
+        source_bank: sourceBank,
+        source_memory_id: sourceMemoryId,
       };
     }
 
@@ -302,32 +305,6 @@ export class QuarantineAdminService {
   private nowIso(): string {
     return (this.options.now?.() ?? new Date()).toISOString();
   }
-}
-
-function parseRetainBody(value: unknown): RetainBody {
-  const object = requireObject(value, "retain body");
-  if (!isRetainBody(object)) {
-    throw new HttpError(
-      400,
-      "invalid_retain_body",
-      "retain body items with string content are required",
-    );
-  }
-  return object;
-}
-
-function isRetainBody(value: Record<string, unknown>): value is RetainBody {
-  return Array.isArray(value.items) && value.items.every(isMemoryItem);
-}
-
-function isMemoryItem(value: unknown): value is MemoryItem {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    "content" in value &&
-    typeof value.content === "string"
-  );
 }
 
 function parseRecalledMemoryPayload(value: unknown): {

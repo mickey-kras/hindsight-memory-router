@@ -29,7 +29,8 @@ import {
   type QuarantineStoreLimits,
 } from "./quarantine/quarantineStore.js";
 import { loadRegistry } from "./registry.js";
-import type { RecallBody, RetainBody, WriterRegistry } from "./types.js";
+import { parseRecallBody, parseRetainBody } from "./requestValidation.js";
+import type { WriterRegistry } from "./types.js";
 
 const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
@@ -41,9 +42,7 @@ const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
 const QUARANTINE_DATABASE_URL =
   process.env.QUARANTINE_DATABASE_URL ?? DEFAULT_QUARANTINE_DATABASE_URL;
-const QUARANTINE_MAX_POSTPONES = Number(
-  process.env.QUARANTINE_MAX_POSTPONES ?? "3",
-);
+const QUARANTINE_MAX_POSTPONES = numberEnv("QUARANTINE_MAX_POSTPONES", 3);
 const MAX_BODY_BYTES = Number(
   process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576",
 );
@@ -168,7 +167,7 @@ export function createMemoryRouterServer(
           return send(res, 200, await admin.stats());
         }
         if (method === "POST" && pathname === "/admin/quarantine/cleanup") {
-          const body = await readJson<CleanupBody>(req, maxBodyBytes);
+          const body = (await readJson(req, maxBodyBytes)) as CleanupBody;
           return send(res, 200, await admin.cleanup(body));
         }
 
@@ -177,7 +176,7 @@ export function createMemoryRouterServer(
           return send(res, 200, await admin.readItem(itemPath.quarantineId));
         }
         if (itemPath?.action === "approve" && method === "POST") {
-          const body = await readJson<ApproveBody>(req, maxBodyBytes);
+          const body = (await readJson(req, maxBodyBytes)) as ApproveBody;
           return send(
             res,
             200,
@@ -212,13 +211,13 @@ export function createMemoryRouterServer(
 
       const memoryPath = parseMemoryPath(pathname);
       if (method === "POST" && memoryPath?.action === "retain") {
-        const body = await readJson<RetainBody>(req, maxBodyBytes);
+        const body = parseRetainBody(await readJson(req, maxBodyBytes));
         const result = await policy.retain(memoryPath.writerId, body);
         return send(res, 200, result);
       }
 
       if (method === "POST" && memoryPath?.action === "recall") {
-        const body = await readJson<RecallBody>(req, maxBodyBytes);
+        const body = parseRecallBody(await readJson(req, maxBodyBytes));
         const result = await policy.recall(memoryPath.writerId, body);
         return send(res, 200, result);
       }
@@ -236,6 +235,7 @@ export function createMemoryRouterServer(
 }
 
 export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
+  assertNoPrivateKeyEnvironment();
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
@@ -244,6 +244,19 @@ export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMe
     quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
   });
   return { server, quarantineRepository };
+}
+
+export function assertNoPrivateKeyEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  const injected = Object.keys(environment).find((name) =>
+    name.startsWith("QUARANTINE_PRIVATE_KEY"),
+  );
+  if (injected) {
+    throw new Error(
+      `${injected} must not be available to the memory-router process`,
+    );
+  }
 }
 
 function requireQuarantineRepository(
@@ -269,10 +282,10 @@ function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
   return req.headers.authorization === `Bearer ${token}`;
 }
 
-async function readJson<T>(
+async function readJson(
   req: IncomingMessage,
   maxBodyBytes: number,
-): Promise<T> {
+): Promise<unknown> {
   const chunks: Buffer[] = [];
   let totalBytes = 0;
   for await (const chunk of req) {
@@ -284,9 +297,9 @@ async function readJson<T>(
     chunks.push(buffer);
   }
   const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw) return {} as T;
+  if (!raw) return {};
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw) as unknown;
   } catch {
     throw new HttpError(400, "invalid_json", "invalid JSON body");
   }

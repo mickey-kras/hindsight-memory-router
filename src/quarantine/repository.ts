@@ -104,6 +104,17 @@ export interface QuarantineRepository {
     status: "reviewed_allowed" | "reviewed_blocked",
     at: string,
   ): Promise<void>;
+  approveRetain(
+    quarantineId: string,
+    at: string,
+    details: Record<string, unknown>,
+    operation: () => Promise<void>,
+  ): Promise<void>;
+  rejectRecalledMemory(
+    quarantineId: string,
+    at: string,
+    operation: () => Promise<void>,
+  ): Promise<void>;
   remove(
     quarantineId: string,
     eventType: "approved" | "rejected" | "cleanup",

@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
+    "migrate:legacy-quarantine": "node dist/src/cli/migrateLegacyQuarantine.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "openapi:lint": "redocly lint openapi/openapi.json --config redocly.yaml",

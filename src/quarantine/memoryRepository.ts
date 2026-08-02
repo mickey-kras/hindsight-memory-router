@@ -16,6 +16,7 @@ import {
 export class MemoryQuarantineRepository implements QuarantineRepository {
   readonly items = new Map<string, StoredQuarantineItem>();
   readonly events: QuarantineEvent[] = [];
+  private reviewTail: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
@@ -105,32 +106,45 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     status: "reviewed_allowed" | "reviewed_blocked",
     at: string,
   ): Promise<void> {
-    const item = this.requireReviewable(quarantineId);
-    if (item.kind !== "recalled_memory") {
-      throw new HttpError(
-        409,
-        "invalid_review_action",
-        "only recalled memories can be marked reviewed",
-      );
-    }
-    this.items.set(quarantineId, {
-      ...item,
-      status,
-      encrypted: null,
-      updated_at: at,
-    });
-    this.events.push(
-      quarantineEvent(
-        quarantineId,
-        status === "reviewed_allowed" ? "reviewed_allowed" : "reviewed_blocked",
-        at,
-        {
-          source_bank: item.source_bank,
-          source_memory_id: item.source_memory_id,
-          source_content_sha256: item.source_content_sha256,
-        },
-      ),
+    const item = this.requireReviewableKind(
+      quarantineId,
+      "recalled_memory",
+      "only recalled memories can be marked reviewed",
     );
+    this.setReviewed(item, status, at);
+  }
+
+  approveRetain(
+    quarantineId: string,
+    at: string,
+    details: Record<string, unknown>,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    return this.exclusiveReview(async () => {
+      this.requireReviewableKind(
+        quarantineId,
+        "retain_request",
+        "only retain requests can be approved into Hindsight",
+      );
+      await operation();
+      this.removeCurrent(quarantineId, "approved", at, details);
+    });
+  }
+
+  rejectRecalledMemory(
+    quarantineId: string,
+    at: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    return this.exclusiveReview(async () => {
+      const item = this.requireReviewableKind(
+        quarantineId,
+        "recalled_memory",
+        "only recalled memories can be invalidated",
+      );
+      await operation();
+      this.setReviewed(item, "reviewed_blocked", at);
+    });
   }
 
   async remove(
@@ -140,8 +154,7 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     details: Record<string, unknown> = {},
   ): Promise<void> {
     this.requireItem(quarantineId);
-    this.items.delete(quarantineId);
-    this.events.push(quarantineEvent(quarantineId, eventType, at, details));
+    this.removeCurrent(quarantineId, eventType, at, details);
   }
 
   async stats(): Promise<QuarantineStats> {
@@ -288,6 +301,62 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       );
     }
     return item;
+  }
+
+  private requireReviewableKind(
+    quarantineId: string,
+    kind: StoredQuarantineItem["kind"],
+    message: string,
+  ): StoredQuarantineItem {
+    const item = this.requireReviewable(quarantineId);
+    if (item.kind !== kind) {
+      throw new HttpError(409, "invalid_review_action", message);
+    }
+    return item;
+  }
+
+  private removeCurrent(
+    quarantineId: string,
+    eventType: "approved" | "rejected" | "cleanup",
+    at: string,
+    details: Record<string, unknown>,
+  ): void {
+    this.items.delete(quarantineId);
+    this.events.push(quarantineEvent(quarantineId, eventType, at, details));
+  }
+
+  private setReviewed(
+    item: StoredQuarantineItem,
+    status: "reviewed_allowed" | "reviewed_blocked",
+    at: string,
+  ): void {
+    this.items.set(item.quarantine_id, {
+      ...item,
+      status,
+      encrypted: null,
+      updated_at: at,
+    });
+    this.events.push(
+      quarantineEvent(
+        item.quarantine_id,
+        status === "reviewed_allowed" ? "reviewed_allowed" : "reviewed_blocked",
+        at,
+        {
+          source_bank: item.source_bank,
+          source_memory_id: item.source_memory_id,
+          source_content_sha256: item.source_content_sha256,
+        },
+      ),
+    );
+  }
+
+  private exclusiveReview<T>(operation: () => Promise<T>): Promise<T> {
+    const current = this.reviewTail.then(operation);
+    this.reviewTail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
   }
 }
 
