@@ -30,6 +30,11 @@ export interface NewQuarantineItem {
   postpone_count: 0;
 }
 
+export interface QuarantineCapacityLimits {
+  maxPendingItems: number;
+  maxEncryptedBytes: number;
+}
+
 export type QuarantineEventType =
   | "quarantined"
   | "requarantined"
@@ -72,9 +77,18 @@ export interface CleanupPreview {
 export interface QuarantineRepository {
   initialize(): Promise<void>;
   close(): Promise<void>;
-  insert(item: NewQuarantineItem): Promise<void>;
-  upsertRecalledMemory(item: NewQuarantineItem): Promise<void>;
-  upsertSecurityEvent(item: NewQuarantineItem): Promise<void>;
+  insert(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
+  upsertRecalledMemory(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
+  upsertSecurityEvent(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
   get(quarantineId: string): Promise<StoredQuarantineItem | null>;
   listReviewable(
     limit?: number,
