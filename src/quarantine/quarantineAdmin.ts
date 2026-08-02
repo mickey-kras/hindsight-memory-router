@@ -141,7 +141,9 @@ export class QuarantineAdminService {
   async reject(quarantineId: string): Promise<Record<string, unknown>> {
     const item = await this.requireReviewable(quarantineId);
     if (item.kind === "recalled_memory") {
-      if (!item.source_bank || !item.source_memory_id) {
+      const sourceBank = item.source_bank;
+      const sourceMemoryId = item.source_memory_id;
+      if (!sourceBank || !sourceMemoryId) {
         throw new HttpError(
           409,
           "quarantine_source_missing",
@@ -153,8 +155,8 @@ export class QuarantineAdminService {
         this.nowIso(),
         async () => {
           await this.options.hindsight.invalidateMemory(
-            item.source_bank!,
-            item.source_memory_id!,
+            sourceBank,
+            sourceMemoryId,
             `Rejected by memory-router quarantine review ${quarantineId}`,
           );
         },
@@ -163,8 +165,8 @@ export class QuarantineAdminService {
         reviewed: true,
         allowed: false,
         quarantine_id: quarantineId,
-        source_bank: item.source_bank,
-        source_memory_id: item.source_memory_id,
+        source_bank: sourceBank,
+        source_memory_id: sourceMemoryId,
       };
     }
 
