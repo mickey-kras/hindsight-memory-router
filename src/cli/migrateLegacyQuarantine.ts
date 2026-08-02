@@ -1,5 +1,9 @@
 import { readFile } from "node:fs/promises";
-import { migrateLegacyQuarantine } from "../quarantine/legacyMigration.js";
+import {
+  migrateLegacyQuarantine,
+  type LegacyMigrationOptions,
+  type LegacyMigrationSummary,
+} from "../quarantine/legacyMigration.js";
 import { DEFAULT_QUARANTINE_DATABASE_URL } from "../quarantine/repositoryFactory.js";
 
 interface Arguments {
@@ -8,24 +12,58 @@ interface Arguments {
   databaseUrl: string;
 }
 
-export async function main(argv = process.argv.slice(2)): Promise<void> {
-  const args = parseArguments(argv);
-  const privateKey = await readFile(0, "utf8");
-  const summary = await migrateLegacyQuarantine({
-    queuePath: args.queuePath,
-    objectDirectory: args.objectDirectory,
-    databaseUrl: args.databaseUrl,
-    privateKey,
-  });
-  process.stdout.write(`${JSON.stringify(summary)}\n`);
+interface CliContext {
+  environment: NodeJS.ProcessEnv;
+  readPrivateKey: () => Promise<string>;
+  migrate: (options: LegacyMigrationOptions) => Promise<LegacyMigrationSummary>;
+  stdout: Pick<NodeJS.WriteStream, "write">;
+  stderr: Pick<NodeJS.WriteStream, "write">;
 }
 
-function parseArguments(argv: string[]): Arguments {
+const DEFAULT_CONTEXT: CliContext = {
+  environment: process.env,
+  readPrivateKey: () => readFile(0, "utf8"),
+  migrate: migrateLegacyQuarantine,
+  stdout: process.stdout,
+  stderr: process.stderr,
+};
+
+export async function runMigrateLegacyQuarantineCli(
+  argv = process.argv.slice(2),
+  context: Partial<CliContext> = {},
+): Promise<number> {
+  const runtime = { ...DEFAULT_CONTEXT, ...context };
+  try {
+    const args = parseArguments(argv, runtime.environment);
+    const privateKey = (await runtime.readPrivateKey()).trim();
+    if (!privateKey) throw new Error("private key is required on stdin");
+    const summary = await runtime.migrate({
+      queuePath: args.queuePath,
+      objectDirectory: args.objectDirectory,
+      databaseUrl: args.databaseUrl,
+      privateKey,
+    });
+    runtime.stdout.write(`${JSON.stringify(summary)}\n`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "migration failed";
+    runtime.stderr.write(`legacy quarantine migration failed: ${message}\n`);
+    return 1;
+  }
+}
+
+export function parseArguments(
+  argv: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): Arguments {
   const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 2) {
     const name = argv[index];
     const value = argv[index + 1];
     if (!name?.startsWith("--") || !value) usage();
+    if (name !== "--queue" && name !== "--objects" && name !== "--database") {
+      usage();
+    }
     values.set(name, value);
   }
 
@@ -37,7 +75,7 @@ function parseArguments(argv: string[]): Arguments {
     objectDirectory,
     databaseUrl:
       values.get("--database") ??
-      process.env.QUARANTINE_DATABASE_URL ??
+      environment.QUARANTINE_DATABASE_URL ??
       DEFAULT_QUARANTINE_DATABASE_URL,
   };
 }
@@ -49,9 +87,7 @@ function usage(): never {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : "migration failed";
-    process.stderr.write(`legacy quarantine migration failed: ${message}\n`);
-    process.exit(1);
+  runMigrateLegacyQuarantineCli().then((code) => {
+    process.exitCode = code;
   });
 }
