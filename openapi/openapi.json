@@ -1,0 +1,1266 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hindsight Memory Router API",
+    "version": "0.9.0",
+    "description": "Policy facade for Hindsight memory retain and recall operations, with an encrypted manual-review quarantine control plane. The router never possesses the quarantine private key.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8890",
+      "description": "Local memory-router"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Service",
+      "description": "Service health and capability metadata."
+    },
+    {
+      "name": "Memory",
+      "description": "Hindsight-compatible retain and recall facade. The bank path value is interpreted as a router writer ID."
+    },
+    {
+      "name": "Quarantine administration",
+      "description": "Manual review operations protected by the dedicated router admin token."
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Check router health",
+        "description": "Returns process-level health without requiring authentication.",
+        "tags": ["Service"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Router is healthy.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the health handler."
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "Get router API version and features",
+        "tags": ["Service"],
+        "security": [
+          {
+            "RouterToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Router version and enabled capabilities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{writer_id}/memories": {
+      "post": {
+        "operationId": "retainMemory",
+        "summary": "Retain memory through writer policy",
+        "description": "Routes a clean request to the writer's configured Hindsight bank. Unknown writers or suspicious fields are encrypted into quarantine and are not written to Hindsight.",
+        "tags": ["Memory"],
+        "security": [
+          {
+            "RouterToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WriterId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Hindsight retain response, or a quarantine reference when policy blocks the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/QuarantinedResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UpstreamResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/QuarantineRateLimited"
+          },
+          "507": {
+            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{writer_id}/memories/recall": {
+      "post": {
+        "operationId": "recallMemory",
+        "summary": "Recall memory through writer policy",
+        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed.",
+        "tags": ["Memory"],
+        "security": [
+          {
+            "RouterToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WriterId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "ACL-filtered and safety-filtered recall results.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/QuarantineRateLimited"
+          },
+          "507": {
+            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/queue": {
+      "get": {
+        "operationId": "listQuarantineQueue",
+        "summary": "List items awaiting review",
+        "description": "Returns metadata only. Encrypted payloads are fetched one item at a time.",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of items to return.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "description": "Number of reviewable items to skip.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pending and postponed items ordered by creation time.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuarantineQueueResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/stats": {
+      "get": {
+        "operationId": "getQuarantineStats",
+        "summary": "Get quarantine storage statistics",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current item, ciphertext, and append-only event counts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuarantineStats"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/cleanup": {
+      "post": {
+        "operationId": "cleanupQuarantine",
+        "summary": "Preview or execute bulk quarantine cleanup",
+        "description": "Cleanup defaults to a dry run. Execution requires the exact count returned by a prior preview; a changed selection returns 409.",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CleanupRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Cleanup preview or execution result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}": {
+      "get": {
+        "operationId": "getQuarantineItem",
+        "summary": "Fetch an encrypted quarantine item",
+        "description": "Returns current metadata and an encrypted envelope for local decryption. It never returns plaintext.",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Encrypted item and review metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QuarantineItemResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/approve": {
+      "post": {
+        "operationId": "approveQuarantineItem",
+        "summary": "Approve the exact original quarantined object",
+        "description": "The caller decrypts locally and submits the complete object unchanged. The router canonicalizes it and compares its SHA-256 with the original digest. A changed field is rejected. Retain requests are written to the writer's current configured bank; recalled memories are marked reviewed and allowed only for their unchanged digest.",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retain approval or recalled-memory allow decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/reject": {
+      "post": {
+        "operationId": "rejectQuarantineItem",
+        "summary": "Reject a quarantine item",
+        "description": "Removes an unapproved request from current quarantine state. For a recalled memory, invalidates the Hindsight memory and stores a reviewed-blocked audit state.",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request rejection or recalled-memory block decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/postpone": {
+      "post": {
+        "operationId": "postponeQuarantineItem",
+        "summary": "Postpone a quarantine review",
+        "tags": ["Quarantine administration"],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated postpone count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostponeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "RouterToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Normal memory-router consumer token from MEMORY_ROUTER_TOKEN."
+      },
+      "AdminToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "API key",
+        "description": "Manual review token from MEMORY_ROUTER_ADMIN_TOKEN. This token must not be exposed to agents."
+      }
+    },
+    "parameters": {
+      "WriterId": {
+        "name": "writer_id",
+        "in": "path",
+        "required": true,
+        "description": "Router writer identity. Policy maps it to one or more actual Hindsight banks.",
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "QuarantineId": {
+        "name": "quarantine_id",
+        "in": "path",
+        "required": true,
+        "description": "Opaque quarantine identifier.",
+        "schema": {
+          "type": "string",
+          "pattern": "^q_[0-9A-Za-z]+_[0-9a-f]{16}$"
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Request validation failed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Router token is missing or invalid.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "AdminUnauthorized": {
+        "description": "Admin token is missing or invalid.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Quarantine item was not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The requested review transition conflicts with current state, stored metadata, or the original digest.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "The HTTP body or encrypted quarantine item exceeds the configured size limit.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "QuarantineRateLimited": {
+        "description": "Too many quarantine writes were generated for the source and writer within the configured window.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "QuarantineCapacityExceeded": {
+        "description": "Persistent quarantine item or ciphertext capacity is exhausted. The router fails closed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status", "service"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "const": "healthy"
+          },
+          "service": {
+            "type": "string",
+            "const": "memory-router"
+          }
+        }
+      },
+      "VersionResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["api_version", "router", "features"],
+        "properties": {
+          "api_version": {
+            "type": "string",
+            "const": "0.9.0"
+          },
+          "router": {
+            "type": "string",
+            "const": "memory-router"
+          },
+          "features": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "policy_facade",
+              "encrypted_quarantine",
+              "quarantine_admin_api",
+              "quarantine_database"
+            ],
+            "properties": {
+              "policy_facade": {
+                "type": "boolean",
+                "const": true
+              },
+              "encrypted_quarantine": {
+                "type": "boolean",
+                "const": true
+              },
+              "quarantine_admin_api": {
+                "type": "boolean",
+                "const": true
+              },
+              "quarantine_database": {
+                "type": "boolean",
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "MemoryItem": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1
+          },
+          "context": {
+            "type": ["string", "null"]
+          },
+          "document_id": {
+            "type": ["string", "null"]
+          },
+          "metadata": {
+            "type": ["object", "null"],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "string"
+            }
+          },
+          "timestamp": {
+            "type": ["string", "null"],
+            "format": "date-time"
+          },
+          "update_mode": {
+            "type": ["string", "null"],
+            "enum": ["replace", "append", null]
+          }
+        },
+        "additionalProperties": true
+      },
+      "RetainRequest": {
+        "type": "object",
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/components/schemas/MemoryItem"
+            }
+          },
+          "async": {
+            "type": "boolean"
+          },
+          "document_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "RecallRequest": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "budget": {
+            "type": "string",
+            "enum": ["low", "mid", "high"]
+          },
+          "types": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags": {
+            "type": ["array", "null"],
+            "items": {
+              "type": "string"
+            }
+          },
+          "tags_match": {
+            "type": "string"
+          },
+          "trace": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": true
+      },
+      "RecallResult": {
+        "type": "object",
+        "required": ["id", "text"],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "type": ["string", "null"]
+          },
+          "metadata": {
+            "type": ["object", "null"],
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "RecallResponse": {
+        "type": "object",
+        "required": ["results"],
+        "properties": {
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RecallResult"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "QuarantinedResponse": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["queued", "reason", "quarantine_id"],
+        "properties": {
+          "queued": {
+            "type": "boolean",
+            "const": true
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        }
+      },
+      "UpstreamResponse": {
+        "type": "object",
+        "description": "Response returned by the configured Hindsight version.",
+        "additionalProperties": true
+      },
+      "QuarantineId": {
+        "type": "string",
+        "pattern": "^q_[0-9A-Za-z]+_[0-9a-f]{16}$"
+      },
+      "ReviewReason": {
+        "type": "string",
+        "enum": [
+          "unknown_writer",
+          "suspicious_content",
+          "suspicious_query",
+          "recalled_suspicious_memory",
+          "denied_endpoint"
+        ]
+      },
+      "QuarantineKind": {
+        "type": "string",
+        "enum": [
+          "retain_request",
+          "recall_request",
+          "recalled_memory",
+          "security_event"
+        ]
+      },
+      "QuarantineStatus": {
+        "type": "string",
+        "enum": ["pending", "postponed", "reviewed_allowed", "reviewed_blocked"]
+      },
+      "QuarantineItemSummary": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "quarantine_id",
+          "created_at",
+          "updated_at",
+          "kind",
+          "reason",
+          "sha256",
+          "status",
+          "postpone_count"
+        ],
+        "properties": {
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/QuarantineKind"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "writer_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "source_bank": {
+            "type": "string"
+          },
+          "source_memory_id": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/QuarantineStatus"
+          },
+          "postpone_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "QuarantineQueueResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["items"],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuarantineItemSummary"
+            }
+          }
+        }
+      },
+      "EncryptionMetadata": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "algorithm",
+          "key_wrap",
+          "wrapped_key_b64",
+          "iv_b64",
+          "tag_b64"
+        ],
+        "properties": {
+          "algorithm": {
+            "type": "string",
+            "const": "AES-256-GCM"
+          },
+          "key_wrap": {
+            "type": "string",
+            "const": "RSA-OAEP-SHA256"
+          },
+          "wrapped_key_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "iv_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          },
+          "tag_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "EncryptedQuarantineEnvelope": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "quarantine_id",
+          "created_at",
+          "reason",
+          "sha256",
+          "encryption",
+          "ciphertext_b64"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "writer_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "encryption": {
+            "$ref": "#/components/schemas/EncryptionMetadata"
+          },
+          "ciphertext_b64": {
+            "type": "string",
+            "contentEncoding": "base64"
+          }
+        }
+      },
+      "QuarantineItemResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["record", "encrypted"],
+        "properties": {
+          "record": {
+            "$ref": "#/components/schemas/QuarantineItemSummary"
+          },
+          "encrypted": {
+            "$ref": "#/components/schemas/EncryptedQuarantineEnvelope"
+          }
+        }
+      },
+      "DecryptedQuarantineObject": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["quarantine_id", "created_at", "reason", "payload"],
+        "properties": {
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ReviewReason"
+          },
+          "writer_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "payload": {
+            "description": "Complete decrypted JSON payload. It must be submitted unchanged for approval."
+          }
+        }
+      },
+      "ApproveRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["decrypted"],
+        "properties": {
+          "decrypted": {
+            "$ref": "#/components/schemas/DecryptedQuarantineObject"
+          }
+        }
+      },
+      "ApproveResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["approved", "quarantine_id", "target_bank"],
+            "properties": {
+              "approved": {
+                "type": "boolean",
+                "const": true
+              },
+              "quarantine_id": {
+                "$ref": "#/components/schemas/QuarantineId"
+              },
+              "target_bank": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/RecalledMemoryDecision"
+          }
+        ]
+      },
+      "RejectResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rejected", "quarantine_id"],
+            "properties": {
+              "rejected": {
+                "type": "boolean",
+                "const": true
+              },
+              "quarantine_id": {
+                "$ref": "#/components/schemas/QuarantineId"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/RecalledMemoryDecision"
+          }
+        ]
+      },
+      "RecalledMemoryDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reviewed",
+          "allowed",
+          "quarantine_id",
+          "source_bank",
+          "source_memory_id"
+        ],
+        "properties": {
+          "reviewed": {
+            "type": "boolean",
+            "const": true
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "source_bank": {
+            "type": "string"
+          },
+          "source_memory_id": {
+            "type": "string"
+          }
+        }
+      },
+      "PostponeResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["postponed", "quarantine_id", "count"],
+        "properties": {
+          "postponed": {
+            "type": "boolean",
+            "const": true
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "QuarantineStats": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "total_items",
+          "pending_items",
+          "postponed_items",
+          "reviewed_allowed_items",
+          "reviewed_blocked_items",
+          "encrypted_bytes",
+          "event_count"
+        ],
+        "properties": {
+          "total_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "postponed_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reviewed_allowed_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reviewed_blocked_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "encrypted_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "event_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "CleanupRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": ["pending", "all"],
+            "default": "pending"
+          },
+          "reasons": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "$ref": "#/components/schemas/ReviewReason"
+            }
+          },
+          "older_than": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "expected_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Required when dry_run is false. Use the count returned by a prior preview."
+          }
+        }
+      },
+      "CleanupResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["dry_run", "count", "encrypted_bytes"],
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "encrypted_bytes": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}
