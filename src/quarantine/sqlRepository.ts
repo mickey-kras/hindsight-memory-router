@@ -149,29 +149,54 @@ export class SqlQuarantineRepository implements QuarantineRepository {
           "only recalled memories can be marked reviewed",
         );
       }
-      const p = (index: number) => database.placeholder(index);
+      await markRecalledReviewed(database, current, status, at);
+    });
+  }
+
+  async approveRetain(
+    quarantineId: string,
+    at: string,
+    details: Record<string, unknown>,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    await this.database.transaction(async (database) => {
+      const current = await requireReviewable(database, quarantineId);
+      if (current.kind !== "retain_request") {
+        throw new HttpError(
+          409,
+          "invalid_review_action",
+          "only retain requests can be approved into Hindsight",
+        );
+      }
+      await operation();
       await database.run(
-        `UPDATE quarantine_items
-         SET status = ${p(1)}, encrypted_envelope = NULL,
-             encrypted_bytes = 0, updated_at = ${p(2)}
-         WHERE quarantine_id = ${p(3)}`,
-        [status, at, quarantineId],
+        `DELETE FROM quarantine_items
+         WHERE quarantine_id = ${database.placeholder(1)}`,
+        [quarantineId],
       );
       await insertEvent(
         database,
-        quarantineEvent(
-          quarantineId,
-          status === "reviewed_allowed"
-            ? "reviewed_allowed"
-            : "reviewed_blocked",
-          at,
-          {
-            source_bank: current.source_bank,
-            source_memory_id: current.source_memory_id,
-            source_content_sha256: current.source_content_sha256,
-          },
-        ),
+        quarantineEvent(quarantineId, "approved", at, details),
       );
+    });
+  }
+
+  async rejectRecalledMemory(
+    quarantineId: string,
+    at: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    await this.database.transaction(async (database) => {
+      const current = await requireReviewable(database, quarantineId);
+      if (current.kind !== "recalled_memory") {
+        throw new HttpError(
+          409,
+          "invalid_review_action",
+          "only recalled memories can be invalidated",
+        );
+      }
+      await operation();
+      await markRecalledReviewed(database, current, "reviewed_blocked", at);
     });
   }
 
@@ -270,4 +295,33 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       }
     });
   }
+}
+
+async function markRecalledReviewed(
+  database: SqlDatabase,
+  current: StoredQuarantineItem,
+  status: "reviewed_allowed" | "reviewed_blocked",
+  at: string,
+): Promise<void> {
+  const p = (index: number) => database.placeholder(index);
+  await database.run(
+    `UPDATE quarantine_items
+     SET status = ${p(1)}, encrypted_envelope = NULL,
+         encrypted_bytes = 0, updated_at = ${p(2)}
+     WHERE quarantine_id = ${p(3)}`,
+    [status, at, current.quarantine_id],
+  );
+  await insertEvent(
+    database,
+    quarantineEvent(
+      current.quarantine_id,
+      status === "reviewed_allowed" ? "reviewed_allowed" : "reviewed_blocked",
+      at,
+      {
+        source_bank: current.source_bank,
+        source_memory_id: current.source_memory_id,
+        source_content_sha256: current.source_content_sha256,
+      },
+    ),
+  );
 }
