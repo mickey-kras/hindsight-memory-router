@@ -106,14 +106,11 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     status: "reviewed_allowed" | "reviewed_blocked",
     at: string,
   ): Promise<void> {
-    const item = this.requireReviewable(quarantineId);
-    if (item.kind !== "recalled_memory") {
-      throw new HttpError(
-        409,
-        "invalid_review_action",
-        "only recalled memories can be marked reviewed",
-      );
-    }
+    const item = this.requireReviewableKind(
+      quarantineId,
+      "recalled_memory",
+      "only recalled memories can be marked reviewed",
+    );
     this.setReviewed(item, status, at);
   }
 
@@ -124,17 +121,13 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     operation: () => Promise<void>,
   ): Promise<void> {
     return this.exclusiveReview(async () => {
-      const item = this.requireReviewable(quarantineId);
-      if (item.kind !== "retain_request") {
-        throw new HttpError(
-          409,
-          "invalid_review_action",
-          "only retain requests can be approved into Hindsight",
-        );
-      }
+      this.requireReviewableKind(
+        quarantineId,
+        "retain_request",
+        "only retain requests can be approved into Hindsight",
+      );
       await operation();
-      this.items.delete(quarantineId);
-      this.events.push(quarantineEvent(quarantineId, "approved", at, details));
+      this.removeCurrent(quarantineId, "approved", at, details);
     });
   }
 
@@ -144,14 +137,11 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     operation: () => Promise<void>,
   ): Promise<void> {
     return this.exclusiveReview(async () => {
-      const item = this.requireReviewable(quarantineId);
-      if (item.kind !== "recalled_memory") {
-        throw new HttpError(
-          409,
-          "invalid_review_action",
-          "only recalled memories can be invalidated",
-        );
-      }
+      const item = this.requireReviewableKind(
+        quarantineId,
+        "recalled_memory",
+        "only recalled memories can be invalidated",
+      );
       await operation();
       this.setReviewed(item, "reviewed_blocked", at);
     });
@@ -164,8 +154,7 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     details: Record<string, unknown> = {},
   ): Promise<void> {
     this.requireItem(quarantineId);
-    this.items.delete(quarantineId);
-    this.events.push(quarantineEvent(quarantineId, eventType, at, details));
+    this.removeCurrent(quarantineId, eventType, at, details);
   }
 
   async stats(): Promise<QuarantineStats> {
@@ -312,6 +301,28 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       );
     }
     return item;
+  }
+
+  private requireReviewableKind(
+    quarantineId: string,
+    kind: StoredQuarantineItem["kind"],
+    message: string,
+  ): StoredQuarantineItem {
+    const item = this.requireReviewable(quarantineId);
+    if (item.kind !== kind) {
+      throw new HttpError(409, "invalid_review_action", message);
+    }
+    return item;
+  }
+
+  private removeCurrent(
+    quarantineId: string,
+    eventType: "approved" | "rejected" | "cleanup",
+    at: string,
+    details: Record<string, unknown>,
+  ): void {
+    this.items.delete(quarantineId);
+    this.events.push(quarantineEvent(quarantineId, eventType, at, details));
   }
 
   private setReviewed(
