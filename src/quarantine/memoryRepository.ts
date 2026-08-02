@@ -16,6 +16,7 @@ import {
 export class MemoryQuarantineRepository implements QuarantineRepository {
   readonly items = new Map<string, StoredQuarantineItem>();
   readonly events: QuarantineEvent[] = [];
+  private reviewTail: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
@@ -113,24 +114,47 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
         "only recalled memories can be marked reviewed",
       );
     }
-    this.items.set(quarantineId, {
-      ...item,
-      status,
-      encrypted: null,
-      updated_at: at,
+    this.setReviewed(item, status, at);
+  }
+
+  approveRetain(
+    quarantineId: string,
+    at: string,
+    details: Record<string, unknown>,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    return this.exclusiveReview(async () => {
+      const item = this.requireReviewable(quarantineId);
+      if (item.kind !== "retain_request") {
+        throw new HttpError(
+          409,
+          "invalid_review_action",
+          "only retain requests can be approved into Hindsight",
+        );
+      }
+      await operation();
+      this.items.delete(quarantineId);
+      this.events.push(quarantineEvent(quarantineId, "approved", at, details));
     });
-    this.events.push(
-      quarantineEvent(
-        quarantineId,
-        status === "reviewed_allowed" ? "reviewed_allowed" : "reviewed_blocked",
-        at,
-        {
-          source_bank: item.source_bank,
-          source_memory_id: item.source_memory_id,
-          source_content_sha256: item.source_content_sha256,
-        },
-      ),
-    );
+  }
+
+  rejectRecalledMemory(
+    quarantineId: string,
+    at: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    return this.exclusiveReview(async () => {
+      const item = this.requireReviewable(quarantineId);
+      if (item.kind !== "recalled_memory") {
+        throw new HttpError(
+          409,
+          "invalid_review_action",
+          "only recalled memories can be invalidated",
+        );
+      }
+      await operation();
+      this.setReviewed(item, "reviewed_blocked", at);
+    });
   }
 
   async remove(
@@ -288,6 +312,40 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       );
     }
     return item;
+  }
+
+  private setReviewed(
+    item: StoredQuarantineItem,
+    status: "reviewed_allowed" | "reviewed_blocked",
+    at: string,
+  ): void {
+    this.items.set(item.quarantine_id, {
+      ...item,
+      status,
+      encrypted: null,
+      updated_at: at,
+    });
+    this.events.push(
+      quarantineEvent(
+        item.quarantine_id,
+        status === "reviewed_allowed" ? "reviewed_allowed" : "reviewed_blocked",
+        at,
+        {
+          source_bank: item.source_bank,
+          source_memory_id: item.source_memory_id,
+          source_content_sha256: item.source_content_sha256,
+        },
+      ),
+    );
+  }
+
+  private exclusiveReview<T>(operation: () => Promise<T>): Promise<T> {
+    const current = this.reviewTail.then(operation);
+    this.reviewTail = current.then(
+      () => undefined,
+      () => undefined,
+    );
+    return current;
   }
 }
 
