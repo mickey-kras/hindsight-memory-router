@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import {
   migrateLegacyQuarantine,
   type LegacyMigrationOptions,
@@ -22,7 +21,7 @@ interface CliContext {
 
 const DEFAULT_CONTEXT: CliContext = {
   environment: process.env,
-  readPrivateKey: () => readFile(0, "utf8"),
+  readPrivateKey: () => readStream(process.stdin),
   migrate: migrateLegacyQuarantine,
   stdout: process.stdout,
   stderr: process.stderr,
@@ -50,6 +49,14 @@ export async function runMigrateLegacyQuarantineCli(
     runtime.stderr.write(`legacy quarantine migration failed: ${message}\n`);
     return 1;
   }
+}
+
+export async function readStream(stream: NodeJS.ReadableStream): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 export function parseArguments(
