@@ -77,23 +77,62 @@ export interface CleanupPreview {
 export interface QuarantineRepository {
   initialize(): Promise<void>;
   close(): Promise<void>;
-  insert(item: NewQuarantineItem, capacity?: QuarantineCapacityLimits): Promise<void>;
-  upsertRecalledMemory(item: NewQuarantineItem, capacity?: QuarantineCapacityLimits): Promise<void>;
-  upsertSecurityEvent(item: NewQuarantineItem, capacity?: QuarantineCapacityLimits): Promise<void>;
+  insert(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
+  upsertRecalledMemory(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
+  upsertSecurityEvent(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
   get(quarantineId: string): Promise<StoredQuarantineItem | null>;
-  listReviewable(limit?: number, offset?: number): Promise<QuarantineItemSummary[]>;
-  findMemoryState(bankId: BankId, memoryId: string): Promise<StoredQuarantineItem | null>;
+  listReviewable(
+    limit?: number,
+    offset?: number,
+  ): Promise<QuarantineItemSummary[]>;
+  findMemoryState(
+    bankId: BankId,
+    memoryId: string,
+  ): Promise<StoredQuarantineItem | null>;
   postpone(quarantineId: string, at: string): Promise<StoredQuarantineItem>;
-  markMemoryReviewed(quarantineId: string, status: "reviewed_allowed" | "reviewed_blocked", at: string): Promise<void>;
-  approveRetain(quarantineId: string, at: string, details: Record<string, unknown>, operation: () => Promise<void>): Promise<void>;
-  rejectRecalledMemory(quarantineId: string, at: string, operation: () => Promise<void>): Promise<void>;
-  remove(quarantineId: string, eventType: "approved" | "rejected" | "cleanup", at: string, details?: Record<string, unknown>): Promise<void>;
+  markMemoryReviewed(
+    quarantineId: string,
+    status: "reviewed_allowed" | "reviewed_blocked",
+    at: string,
+  ): Promise<void>;
+  approveRetain(
+    quarantineId: string,
+    at: string,
+    details: Record<string, unknown>,
+    operation: () => Promise<void>,
+  ): Promise<void>;
+  rejectRecalledMemory(
+    quarantineId: string,
+    at: string,
+    operation: () => Promise<void>,
+  ): Promise<void>;
+  remove(
+    quarantineId: string,
+    eventType: "approved" | "rejected" | "cleanup",
+    at: string,
+    details?: Record<string, unknown>,
+  ): Promise<void>;
   stats(): Promise<QuarantineStats>;
   previewCleanup(filter: CleanupFilter): Promise<CleanupPreview>;
-  cleanup(filter: CleanupFilter, expectedCount: number, at: string): Promise<CleanupPreview>;
+  cleanup(
+    filter: CleanupFilter,
+    expectedCount: number,
+    at: string,
+  ): Promise<CleanupPreview>;
 }
 
-export async function pingQuarantineRepository(repository: QuarantineRepository): Promise<void> {
+export async function pingQuarantineRepository(
+  repository: QuarantineRepository,
+): Promise<void> {
   await repository.previewCleanup({ scope: "pending" });
 }
 
@@ -106,19 +145,36 @@ export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {
     reason: item.reason,
     ...(item.writer_id === undefined ? {} : { writer_id: item.writer_id }),
     ...(item.source === undefined ? {} : { source: item.source }),
-    ...(item.source_bank === undefined ? {} : { source_bank: item.source_bank }),
-    ...(item.source_memory_id === undefined ? {} : { source_memory_id: item.source_memory_id }),
+    ...(item.source_bank === undefined
+      ? {}
+      : { source_bank: item.source_bank }),
+    ...(item.source_memory_id === undefined
+      ? {}
+      : { source_memory_id: item.source_memory_id }),
     sha256: item.sha256,
     status: item.status,
     postpone_count: item.postpone_count,
   };
 }
 
-export function quarantineEvent(quarantineId: string, eventType: QuarantineEventType, occurredAt: string, details: Record<string, unknown> = {}): QuarantineEvent {
-  return { event_id: randomUUID(), quarantine_id: quarantineId, occurred_at: occurredAt, event_type: eventType, details };
+export function quarantineEvent(
+  quarantineId: string,
+  eventType: QuarantineEventType,
+  occurredAt: string,
+  details: Record<string, unknown> = {},
+): QuarantineEvent {
+  return {
+    event_id: randomUUID(),
+    quarantine_id: quarantineId,
+    occurred_at: occurredAt,
+    event_type: eventType,
+    details,
+  };
 }
 
-export function parseStoredItem(row: Record<string, unknown>): StoredQuarantineItem {
+export function parseStoredItem(
+  row: Record<string, unknown>,
+): StoredQuarantineItem {
   return {
     quarantine_id: String(row.quarantine_id),
     created_at: String(row.created_at),
@@ -127,11 +183,22 @@ export function parseStoredItem(row: Record<string, unknown>): StoredQuarantineI
     reason: row.reason as ReviewReason,
     ...(row.writer_id == null ? {} : { writer_id: String(row.writer_id) }),
     ...(row.source == null ? {} : { source: String(row.source) }),
-    ...(row.source_bank == null ? {} : { source_bank: row.source_bank as BankId }),
-    ...(row.source_memory_id == null ? {} : { source_memory_id: String(row.source_memory_id) }),
-    ...(row.source_content_sha256 == null ? {} : { source_content_sha256: String(row.source_content_sha256) }),
+    ...(row.source_bank == null
+      ? {}
+      : { source_bank: row.source_bank as BankId }),
+    ...(row.source_memory_id == null
+      ? {}
+      : { source_memory_id: String(row.source_memory_id) }),
+    ...(row.source_content_sha256 == null
+      ? {}
+      : { source_content_sha256: String(row.source_content_sha256) }),
     sha256: String(row.sha256),
-    encrypted: row.encrypted_envelope == null ? null : (JSON.parse(String(row.encrypted_envelope)) as EncryptedQuarantineEnvelope),
+    encrypted:
+      row.encrypted_envelope == null
+        ? null
+        : (JSON.parse(
+            String(row.encrypted_envelope),
+          ) as EncryptedQuarantineEnvelope),
     status: row.status as QuarantineStatus,
     postpone_count: Number(row.postpone_count),
   };
