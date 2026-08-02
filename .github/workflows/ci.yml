@@ -78,10 +78,32 @@ jobs:
         run: docker build -t hindsight-memory-router:ci .
 
       - name: Fake Hindsight compose smoke
-        run: bash tests/integration/smoke.sh fake
+        id: fake-smoke
+        run: |
+          set -o pipefail
+          bash tests/integration/smoke.sh fake 2>&1 | tee fake-smoke.log
+
+      - name: Upload fake smoke diagnostics
+        if: failure() && steps.fake-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fake-smoke-diagnostics
+          path: fake-smoke.log
+          if-no-files-found: error
 
       - name: Real Hindsight compose smoke
-        run: bash tests/integration/smoke.sh real
+        id: real-smoke
+        run: |
+          set -o pipefail
+          bash tests/integration/smoke.sh real 2>&1 | tee real-smoke.log
+
+      - name: Upload real smoke diagnostics
+        if: failure() && steps.real-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: real-smoke-diagnostics
+          path: real-smoke.log
+          if-no-files-found: error
 
   aislop:
     name: aislop status

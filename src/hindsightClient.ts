@@ -5,6 +5,11 @@ export interface HindsightGateway {
   version(): Promise<unknown>;
   retain(bankId: string, body: RetainBody): Promise<unknown>;
   recall(bankId: string, body: RecallBody): Promise<RecallResponse>;
+  invalidateMemory(
+    bankId: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<void>;
 }
 
 export class FetchHindsightGateway implements HindsightGateway {
@@ -37,6 +42,18 @@ export class FetchHindsightGateway implements HindsightGateway {
     ) as Promise<RecallResponse>;
   }
 
+  async invalidateMemory(
+    bankId: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<void> {
+    await this.request(
+      "PATCH",
+      `/v1/default/banks/${encodeURIComponent(bankId)}/memories/${encodeURIComponent(memoryId)}`,
+      { state: "invalidated", reason },
+    );
+  }
+
   private async request(
     method: string,
     path: string,
@@ -67,6 +84,11 @@ export class FetchHindsightGateway implements HindsightGateway {
 export class FakeHindsightGateway implements HindsightGateway {
   readonly retained: Array<{ bankId: string; body: RetainBody }> = [];
   readonly recalled: Array<{ bankId: string; body: RecallBody }> = [];
+  readonly invalidated: Array<{
+    bankId: string;
+    memoryId: string;
+    reason: string;
+  }> = [];
 
   async health(): Promise<unknown> {
     return { status: "healthy" };
@@ -93,5 +115,13 @@ export class FakeHindsightGateway implements HindsightGateway {
         },
       ],
     };
+  }
+
+  async invalidateMemory(
+    bankId: string,
+    memoryId: string,
+    reason: string,
+  ): Promise<void> {
+    this.invalidated.push({ bankId, memoryId, reason });
   }
 }

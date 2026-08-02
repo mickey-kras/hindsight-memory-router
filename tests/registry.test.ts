@@ -16,7 +16,6 @@ function registryWith(writers: WriterRegistry["writers"]): WriterRegistry {
     defaults: {
       unknown_writer_action: "review_queue",
       suspicious_content_action: "review_queue",
-      review_queue_path: "/tmp/review.jsonl",
     },
   };
 }
@@ -72,6 +71,17 @@ describe("registry", () => {
         ops: {
           role: "x",
           source: "x",
+          write_bank: "quarantine" as "ops",
+          read_banks: [],
+        },
+      }),
+      "writer ops cannot write quarantine",
+    ],
+    [
+      registryWith({
+        ops: {
+          role: "x",
+          source: "x",
           write_bank: "ops",
           read_banks: null as unknown as [],
         },
@@ -84,7 +94,7 @@ describe("registry", () => {
           role: "x",
           source: "x",
           write_bank: "ops",
-          read_banks: ["quarantine"],
+          read_banks: ["quarantine" as "ops"],
         },
       }),
       "writer ops cannot read quarantine",

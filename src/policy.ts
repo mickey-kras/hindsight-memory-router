@@ -1,34 +1,29 @@
+import { sha256Hex } from "./canonicalJson.js";
 import type { HindsightGateway } from "./hindsightClient.js";
+import { getWriter } from "./registry.js";
+import type { QuarantineRepository } from "./quarantine/repository.js";
+import type { QuarantineStore } from "./quarantine/quarantineStore.js";
+import { scanContent, type SafetyFinding } from "./safety.js";
 import type {
+  BankId,
   MemoryItem,
   RecallBody,
   RecallResponse,
+  RecallResult,
   RetainBody,
-  ReviewRecord,
   WriterRegistry,
 } from "./types.js";
-import { getWriter } from "./registry.js";
-import {
-  MemoryQuarantineStore,
-  type QuarantineStore,
-} from "./quarantine/quarantineStore.js";
-import type { ReviewQueue } from "./reviewQueue.js";
-import { scanContent, type SafetyFinding } from "./safety.js";
 
 export interface RouterPolicyDeps {
   registry: WriterRegistry;
   hindsight: HindsightGateway;
-  reviewQueue: ReviewQueue;
-  quarantineStore?: QuarantineStore;
+  quarantineStore: QuarantineStore;
+  quarantineRepository: QuarantineRepository;
   now?: () => Date;
 }
 
 export class RouterPolicy {
-  private readonly quarantineStore: QuarantineStore;
-
-  constructor(private readonly deps: RouterPolicyDeps) {
-    this.quarantineStore = deps.quarantineStore ?? new MemoryQuarantineStore();
-  }
+  constructor(private readonly deps: RouterPolicyDeps) {}
 
   async retain(
     writerId: string,
@@ -63,7 +58,7 @@ export class RouterPolicy {
       items: body.items.map((item) => ({
         ...item,
         metadata: {
-          ...(item.metadata ?? {}),
+          ...item.metadata,
           router_writer_id: writerId,
           router_source: source,
           router_decision: "allowed",
@@ -85,6 +80,7 @@ export class RouterPolicy {
       await this.quarantine({
         writerId,
         source,
+        kind: "recall_request",
         reason: "unknown_writer",
         payload: { action: "recall", writer_id: writerId, body },
       });
@@ -96,6 +92,7 @@ export class RouterPolicy {
       await this.quarantine({
         writerId,
         source,
+        kind: "recall_request",
         reason: "suspicious_query",
         payload: { action: "recall", writer_id: writerId, body },
       });
@@ -103,31 +100,108 @@ export class RouterPolicy {
     }
 
     const responses = await Promise.all(
-      writer.read_banks.map((bankId) =>
-        this.deps.hindsight.recall(bankId, body),
-      ),
+      writer.read_banks.map(async (bankId) => ({
+        bankId,
+        response: await this.deps.hindsight.recall(bankId, body),
+      })),
     );
-    const results = responses
-      .flatMap((response) => response.results ?? [])
-      .filter((result) => scanContent(result.text ?? "").safe);
-
+    const results: RecallResult[] = [];
+    for (const { bankId, response } of responses) {
+      for (const result of response.results ?? []) {
+        if (await this.allowRecalledResult(writerId, source, bankId, result)) {
+          results.push(result);
+        }
+      }
+    }
     return { results };
   }
 
-  denyEndpoint(
+  async denyEndpoint(
     method: string,
     path: string,
     writerId?: string,
-  ): { error: string } {
-    this.enqueueReview({
+  ): Promise<{ error: string }> {
+    await this.quarantine({
       writerId,
       source: "http",
+      kind: "security_event",
       reason: "denied_endpoint",
-      preview: `${method} ${path}`,
-      method,
-      path,
+      dedupeKey: `${method}:${path}`,
+      payload: { action: "denied_endpoint", method, path },
     });
     return { error: "endpoint denied by memory-router policy" };
+  }
+
+  private async allowRecalledResult(
+    writerId: string,
+    source: string,
+    bankId: BankId,
+    result: RecallResult,
+  ): Promise<boolean> {
+    const state = await this.deps.quarantineRepository.findMemoryState(
+      bankId,
+      result.id,
+    );
+    const sourceContentSha256 = sha256Hex(result.text ?? "");
+
+    if (state?.status === "reviewed_blocked") return false;
+    if (state?.status === "reviewed_allowed") {
+      if (state.source_content_sha256 === sourceContentSha256) return true;
+      await this.quarantineRecalledResult(
+        writerId,
+        source,
+        bankId,
+        result,
+        sourceContentSha256,
+      );
+      return false;
+    }
+    if (state?.status === "pending" || state?.status === "postponed") {
+      if (state.source_content_sha256 === sourceContentSha256) return false;
+      await this.quarantineRecalledResult(
+        writerId,
+        source,
+        bankId,
+        result,
+        sourceContentSha256,
+      );
+      return false;
+    }
+
+    const resultScan = scanContent(result.text ?? "");
+    if (resultScan.safe) return true;
+
+    await this.quarantineRecalledResult(
+      writerId,
+      source,
+      bankId,
+      result,
+      sourceContentSha256,
+    );
+    return false;
+  }
+
+  private async quarantineRecalledResult(
+    writerId: string,
+    source: string,
+    bankId: BankId,
+    result: RecallResult,
+    sourceContentSha256: string,
+  ): Promise<void> {
+    await this.quarantine({
+      writerId,
+      source,
+      kind: "recalled_memory",
+      reason: "recalled_suspicious_memory",
+      sourceBank: bankId,
+      sourceMemoryId: result.id,
+      sourceContentSha256,
+      payload: {
+        action: "recalled_memory",
+        bank_id: bankId,
+        result,
+      },
+    });
   }
 
   private async quarantineRetain(input: {
@@ -140,6 +214,7 @@ export class RouterPolicy {
     const quarantine = await this.quarantine({
       writerId: input.writerId,
       source: input.source,
+      kind: "retain_request",
       reason: input.reason,
       payload: {
         action: "retain",
@@ -159,74 +234,35 @@ export class RouterPolicy {
   private async quarantine(input: {
     writerId?: string;
     source?: string;
-    reason: ReviewRecord["reason"];
+    kind:
+      | "retain_request"
+      | "recall_request"
+      | "recalled_memory"
+      | "security_event";
+    reason:
+      | "unknown_writer"
+      | "suspicious_content"
+      | "suspicious_query"
+      | "recalled_suspicious_memory"
+      | "denied_endpoint";
+    sourceBank?: BankId;
+    sourceMemoryId?: string;
+    sourceContentSha256?: string;
+    dedupeKey?: string;
     payload: unknown;
   }) {
-    const now = this.deps.now?.() ?? new Date();
-    const timestamp = now.toISOString();
-    const stored = this.quarantineStore.put({
+    const timestamp = (this.deps.now?.() ?? new Date()).toISOString();
+    return this.deps.quarantineStore.put({
       timestamp,
+      kind: input.kind,
       writerId: input.writerId,
       source: input.source,
       reason: input.reason,
+      sourceBank: input.sourceBank,
+      sourceMemoryId: input.sourceMemoryId,
+      sourceContentSha256: input.sourceContentSha256,
+      dedupeKey: input.dedupeKey,
       payload: input.payload,
-    });
-
-    this.enqueueReview({
-      writerId: input.writerId,
-      source: input.source,
-      reason: input.reason,
-      quarantineId: stored.quarantine_id,
-      sha256: stored.sha256,
-      preview: `encrypted quarantine item ${stored.quarantine_id}`,
-    });
-
-    await this.deps.hindsight.retain("quarantine", {
-      async: true,
-      items: [
-        {
-          content: `Encrypted quarantine item ${stored.quarantine_id} pending review.`,
-          context: "memory-router quarantine index",
-          document_id: `quarantine:${stored.quarantine_id}`,
-          metadata: {
-            router_decision: "quarantined",
-            quarantine_id: stored.quarantine_id,
-            quarantine_reason: input.reason,
-            quarantine_sha256: stored.sha256,
-            writer_id: input.writerId ?? "unknown",
-          },
-          tags: ["quarantine", input.reason],
-          update_mode: "append",
-        },
-      ],
-    });
-
-    return stored;
-  }
-
-  private enqueueReview(input: {
-    writerId?: string;
-    source?: string;
-    reason: ReviewRecord["reason"];
-    quarantineId?: string;
-    sha256?: string;
-    preview: string;
-    method?: string;
-    path?: string;
-  }): void {
-    const now = this.deps.now?.() ?? new Date();
-    this.deps.reviewQueue.enqueue({
-      timestamp: now.toISOString(),
-      writer_id: input.writerId,
-      source: input.source,
-      reason: input.reason,
-      quarantine_id: input.quarantineId,
-      sha256: input.sha256,
-      preview: input.preview,
-      decision: "pending",
-      postpone_count: input.quarantineId ? 0 : undefined,
-      method: input.method,
-      path: input.path,
     });
   }
 }

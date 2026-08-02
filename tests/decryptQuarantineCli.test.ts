@@ -1,4 +1,3 @@
-import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,38 +9,34 @@ import {
   readPrivateKey,
   runDecryptQuarantineCli,
 } from "../src/cli/decryptQuarantine.js";
-import {
-  EncryptedFileQuarantineStore,
-  readEncryptedQuarantineEnvelope,
-} from "../src/quarantine/quarantineStore.js";
+import { createEncryptedQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
+import { quarantineKeys } from "./quarantineTestUtils.js";
 
 function createContext() {
   const directory = mkdtempSync(join(tmpdir(), "decrypt-quarantine-cli-"));
   const responsePath = join(directory, "response.json");
   const barePath = join(directory, "envelope.json");
-  const { publicKey, privateKey } = generateKeyPairSync("rsa", {
-    modulusLength: 2048,
-    publicKeyEncoding: { type: "spki", format: "pem" },
-    privateKeyEncoding: { type: "pkcs8", format: "pem" },
-  });
-  const store = new EncryptedFileQuarantineStore(
-    Buffer.from(publicKey).toString("base64"),
-    directory,
-  );
-  const result = store.put({
-    timestamp: "2026-07-31T07:00:00.000Z",
-    reason: "suspicious_content",
-    writerId: "unknown",
-    source: "cli-test",
-    payload: { content: "decrypt locally" },
-  });
-  const envelope = readEncryptedQuarantineEnvelope(
-    directory,
-    result.quarantine_id,
+  const keys = quarantineKeys();
+  const envelope = createEncryptedQuarantineEnvelope(
+    {
+      quarantine_id: "q_20260731070000000Z_0123456789abcdef",
+      created_at: "2026-07-31T07:00:00.000Z",
+      reason: "suspicious_content",
+      writer_id: "unknown",
+      source: "cli-test",
+      payload: { content: "decrypt locally" },
+    },
+    keys.publicKey,
   );
   writeFileSync(responsePath, JSON.stringify({ encrypted: envelope }), "utf8");
   writeFileSync(barePath, JSON.stringify(envelope), "utf8");
-  return { directory, responsePath, barePath, privateKey, envelope };
+  return {
+    directory,
+    responsePath,
+    barePath,
+    privateKey: keys.privateKey,
+    envelope,
+  };
 }
 
 function capture() {

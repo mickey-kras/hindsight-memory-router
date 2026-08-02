@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { createMemoryRouterServer } from "../src/server.js";
 import type { WriterRegistry } from "../src/types.js";
+import { memoryQuarantine } from "./quarantineTestUtils.js";
 
 const registry: WriterRegistry = {
   writers: {
@@ -15,7 +16,6 @@ const registry: WriterRegistry = {
   defaults: {
     unknown_writer_action: "review_queue",
     suspicious_content_action: "review_queue",
-    review_queue_path: "/tmp/review.jsonl",
   },
 };
 
@@ -34,23 +34,26 @@ const owaspMatrix = [
 
 async function withServer<T>(
   options: { maxBodyBytes?: number },
-  fn: (baseUrl: string) => Promise<T>,
+  run: (baseUrl: string) => Promise<T>,
 ): Promise<T> {
+  const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry,
     routerToken: "router-token",
     adminToken: "admin-token",
     maxBodyBytes: options.maxBodyBytes,
     hindsight: new FakeHindsightGateway(),
+    quarantineRepository: quarantine.repository,
+    quarantineStore: quarantine.store,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   if (!address || typeof address === "string") throw new Error("bad address");
   try {
-    return await fn(`http://127.0.0.1:${address.port}`);
+    return await run(`http://127.0.0.1:${address.port}`);
   } finally {
     await new Promise<void>((resolve, reject) =>
-      server.close((err) => (err ? reject(err) : resolve())),
+      server.close((error) => (error ? reject(error) : resolve())),
     );
   }
 }

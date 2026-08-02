@@ -24,12 +24,11 @@ services:
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
-      QUARANTINE_OBJECT_DIR: /state/quarantine/objects
+      QUARANTINE_DATABASE_URL: sqlite:/state/quarantine.db
     ports:
       - "127.0.0.1:8890:8890"
     volumes:
-      - ./tmp/fake/review:/volume1/reports/hindsight-review
-      - ./tmp/fake/quarantine:/state/quarantine
+      - ./tmp/fake/quarantine:/state
     networks:
       - internal
 

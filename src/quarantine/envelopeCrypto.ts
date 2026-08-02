@@ -1,10 +1,15 @@
 import {
   constants,
+  createCipheriv,
   createDecipheriv,
-  createHash,
   privateDecrypt,
+  publicEncrypt,
+  randomBytes,
 } from "node:crypto";
+import { canonicalJson, sha256Hex } from "../canonicalJson.js";
 import type { ReviewReason } from "../types.js";
+
+export { sha256Hex } from "../canonicalJson.js";
 
 const GCM_AUTH_TAG_LENGTH_BYTES = 16;
 const GCM_IV_LENGTH_BYTES = 12;
@@ -13,6 +18,7 @@ const REVIEW_REASONS = new Set<ReviewReason>([
   "unknown_writer",
   "suspicious_content",
   "suspicious_query",
+  "recalled_suspicious_memory",
   "denied_endpoint",
 ]);
 
@@ -46,6 +52,64 @@ export interface DecryptedQuarantineObject {
   writer_id?: string;
   source?: string;
   payload: unknown;
+}
+
+export function createEncryptedQuarantineEnvelope(
+  value: DecryptedQuarantineObject,
+  publicKeyInput: string,
+): EncryptedQuarantineEnvelope {
+  const decrypted = parseDecryptedQuarantineObject(value);
+  const plaintext = canonicalizeDecryptedQuarantineObject(decrypted);
+  const key = randomBytes(AES_KEY_LENGTH_BYTES);
+  const iv = randomBytes(GCM_IV_LENGTH_BYTES);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, {
+    authTagLength: GCM_AUTH_TAG_LENGTH_BYTES,
+  });
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+  const wrappedKey = publicEncrypt(
+    {
+      key: decodePublicKey(publicKeyInput),
+      oaepHash: "sha256",
+      padding: constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    key,
+  );
+  return {
+    version: 1,
+    quarantine_id: decrypted.quarantine_id,
+    created_at: decrypted.created_at,
+    reason: decrypted.reason,
+    ...(decrypted.writer_id === undefined
+      ? {}
+      : { writer_id: decrypted.writer_id }),
+    ...(decrypted.source === undefined ? {} : { source: decrypted.source }),
+    sha256: sha256Hex(plaintext),
+    encryption: {
+      algorithm: "AES-256-GCM",
+      key_wrap: "RSA-OAEP-SHA256",
+      [WRAPPED_KEY_FIELD]: wrappedKey.toString("base64"),
+      iv_b64: iv.toString("base64"),
+      tag_b64: cipher.getAuthTag().toString("base64"),
+    },
+    ciphertext_b64: ciphertext.toString("base64"),
+  };
+}
+
+export function canonicalizeDecryptedQuarantineObject(value: unknown): string {
+  const decrypted = parseDecryptedQuarantineObject(value);
+  return canonicalJson({
+    quarantine_id: decrypted.quarantine_id,
+    created_at: decrypted.created_at,
+    reason: decrypted.reason,
+    ...(decrypted.writer_id === undefined
+      ? {}
+      : { writer_id: decrypted.writer_id }),
+    ...(decrypted.source === undefined ? {} : { source: decrypted.source }),
+    payload: decrypted.payload,
+  });
 }
 
 export function parseEncryptedQuarantineEnvelope(
@@ -120,6 +184,18 @@ export function parseEncryptedQuarantineEnvelope(
   };
 }
 
+export function decodePublicKey(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) throw new Error("QUARANTINE_PUBLIC_KEY is required");
+  const pem = trimmed.includes("BEGIN PUBLIC KEY")
+    ? trimmed.replace(/\\n/g, "\n")
+    : Buffer.from(trimmed, "base64").toString("utf8");
+  if (!pem.includes("BEGIN PUBLIC KEY")) {
+    throw new Error("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM");
+  }
+  return pem;
+}
+
 export function decodePrivateKey(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) throw new Error("private key is required");
@@ -167,12 +243,11 @@ export function decryptQuarantineEnvelope(
     decipher.final(),
   ]).toString("utf8");
 
-  const digest = createHash("sha256").update(plaintext).digest("hex");
-  if (digest !== envelope.sha256) {
+  if (sha256Hex(plaintext) !== envelope.sha256) {
     throw new Error("quarantine object digest mismatch");
   }
 
-  const decrypted = parseDecryptedObject(JSON.parse(plaintext));
+  const decrypted = parseDecryptedQuarantineObject(JSON.parse(plaintext));
   if (
     decrypted.quarantine_id !== envelope.quarantine_id ||
     decrypted.created_at !== envelope.created_at ||
@@ -185,7 +260,9 @@ export function decryptQuarantineEnvelope(
   return decrypted;
 }
 
-function parseDecryptedObject(value: unknown): DecryptedQuarantineObject {
+export function parseDecryptedQuarantineObject(
+  value: unknown,
+): DecryptedQuarantineObject {
   const object = requireObject(value, "decrypted quarantine object");
   const reason = requireString(object.reason, "reason");
   if (!REVIEW_REASONS.has(reason as ReviewReason)) {
@@ -203,8 +280,17 @@ function parseDecryptedObject(value: unknown): DecryptedQuarantineObject {
     reason: reason as ReviewReason,
     ...(writerId === undefined ? {} : { writer_id: writerId }),
     ...(source === undefined ? {} : { source }),
-    payload: object.payload,
+    payload: jsonValue(object.payload, "payload"),
   };
+}
+
+function jsonValue(value: unknown, label: string): unknown {
+  try {
+    canonicalJson(value);
+    return value;
+  } catch {
+    throw new Error(`${label} must contain JSON values only`);
+  }
 }
 
 function requireObject(value: unknown, label: string): Record<string, unknown> {

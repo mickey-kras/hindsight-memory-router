@@ -45,10 +45,11 @@ describe("FetchHindsightGateway", () => {
     });
   });
 
-  it("encodes bank ids and serializes retain and recall bodies", async () => {
+  it("encodes bank and memory ids for retain, recall, and invalidation", async () => {
     const fetchMock = mockFetch(
       new Response(JSON.stringify({ ok: true }), { status: 200 }),
       new Response(JSON.stringify({ results: [] }), { status: 200 }),
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
     );
     const gateway = new FetchHindsightGateway("https://hindsight.test");
     const retainBody = { items: [{ content: "hello" }] };
@@ -56,6 +57,7 @@ describe("FetchHindsightGateway", () => {
 
     await gateway.retain("ops/team", retainBody);
     await gateway.recall("ops/team", recallBody);
+    await gateway.invalidateMemory("ops/team", "memory/id", "manual reject");
 
     expect(fetchMock.mock.calls[0]).toEqual([
       "https://hindsight.test/v1/default/banks/ops%2Fteam/memories",
@@ -68,10 +70,17 @@ describe("FetchHindsightGateway", () => {
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
       "https://hindsight.test/v1/default/banks/ops%2Fteam/memories/recall",
     );
-    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
-      method: "POST",
-      body: JSON.stringify(recallBody),
-    });
+    expect(fetchMock.mock.calls[2]).toEqual([
+      "https://hindsight.test/v1/default/banks/ops%2Fteam/memories/memory%2Fid",
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          state: "invalidated",
+          reason: "manual reject",
+        }),
+      },
+    ]);
   });
 
   it("throws an actionable error for failed upstream requests", async () => {
@@ -100,7 +109,11 @@ describe("FakeHindsightGateway", () => {
     await expect(gateway.recall("ops", recallBody)).resolves.toMatchObject({
       results: [{ id: "ops-result", text: "memory from ops" }],
     });
+    await gateway.invalidateMemory("ops", "memory-1", "rejected");
     expect(gateway.retained).toEqual([{ bankId: "ops", body: retainBody }]);
     expect(gateway.recalled).toEqual([{ bankId: "ops", body: recallBody }]);
+    expect(gateway.invalidated).toEqual([
+      { bankId: "ops", memoryId: "memory-1", reason: "rejected" },
+    ]);
   });
 });

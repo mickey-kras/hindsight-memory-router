@@ -1,26 +1,28 @@
+import { randomBytes } from "node:crypto";
+import { sha256Hex } from "../canonicalJson.js";
+import { HttpError } from "../httpError.js";
+import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
 import {
-  constants,
-  createCipheriv,
-  publicEncrypt,
-  randomBytes,
-} from "node:crypto";
-import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { resolve, sep } from "node:path";
-import {
-  parseEncryptedQuarantineEnvelope,
-  WRAPPED_KEY_FIELD,
-  type EncryptedQuarantineEnvelope,
+  createEncryptedQuarantineEnvelope,
+  decodePublicKey,
+  type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
-import { sha256 } from "../safety.js";
-import type { ReviewReason } from "../types.js";
-
-const GCM_AUTH_TAG_LENGTH_BYTES = 16;
+import type {
+  NewQuarantineItem,
+  QuarantineCapacityLimits,
+  QuarantineRepository,
+} from "./repository.js";
 
 export interface QuarantineInput {
   timestamp: string;
+  kind: QuarantineKind;
   reason: ReviewReason;
   writerId?: string;
   source?: string;
+  sourceBank?: BankId;
+  sourceMemoryId?: string;
+  sourceContentSha256?: string;
+  dedupeKey?: string;
   payload: unknown;
 }
 
@@ -30,137 +32,147 @@ export interface QuarantineResult {
 }
 
 export interface QuarantineStore {
-  put(input: QuarantineInput): QuarantineResult;
+  put(input: QuarantineInput): Promise<QuarantineResult>;
 }
 
-function publicKeyPemFromEnv(value?: string): string {
-  if (!value?.trim()) throw new Error("QUARANTINE_PUBLIC_KEY is required");
-
-  const trimmed = value.trim();
-  if (trimmed.includes("BEGIN PUBLIC KEY")) {
-    return trimmed.replace(/\\n/g, "\n");
-  }
-
-  const decoded = Buffer.from(trimmed, "base64").toString("utf8");
-  if (!decoded.includes("BEGIN PUBLIC KEY")) {
-    throw new Error("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM");
-  }
-  return decoded;
+export interface QuarantineStoreLimits {
+  maxItemBytes: number;
+  maxPendingItems: number;
+  maxEncryptedBytes: number;
+  rateLimitMax: number;
+  rateLimitWindowMs: number;
 }
 
-export function assertSafeQuarantineId(quarantineId: string): void {
-  if (!/^q_[0-9A-Za-z]+_[0-9a-f]{16}$/.test(quarantineId)) {
-    throw new Error("invalid quarantine_id");
-  }
-}
+export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
+  maxItemBytes: 1_048_576,
+  maxPendingItems: 1_000,
+  maxEncryptedBytes: 104_857_600,
+  rateLimitMax: 30,
+  rateLimitWindowMs: 60_000,
+};
 
-export function encryptedQuarantineObjectPath(
-  objectDir: string,
-  quarantineId: string,
-): string {
-  assertSafeQuarantineId(quarantineId);
-  const baseDir = resolve(objectDir);
-  const objectPath = resolve(baseDir, `${quarantineId}.enc.json`);
-  if (!objectPath.startsWith(`${baseDir}${sep}`)) {
-    throw new Error("invalid quarantine object path");
-  }
-  return objectPath;
-}
+export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
+  private readonly limiter: PerProcessFixedWindowLimiter;
+  private readonly publicKey: string;
+  private readonly capacity: QuarantineCapacityLimits;
 
-export function readEncryptedQuarantineEnvelope(
-  objectDir: string,
-  quarantineId: string,
-): EncryptedQuarantineEnvelope {
-  const raw = readFileSync(
-    encryptedQuarantineObjectPath(objectDir, quarantineId),
-    { encoding: "utf8" },
-  );
-  return parseEncryptedQuarantineEnvelope(JSON.parse(raw));
-}
-
-export function deleteEncryptedQuarantineObject(
-  objectDir: string,
-  quarantineId: string,
-): void {
-  unlinkSync(encryptedQuarantineObjectPath(objectDir, quarantineId));
-}
-
-export class EncryptedFileQuarantineStore implements QuarantineStore {
   constructor(
-    private readonly publicKeyEnv: string | undefined,
-    private readonly objectDir: string,
-  ) {}
-
-  put(input: QuarantineInput): QuarantineResult {
-    const publicKey = publicKeyPemFromEnv(this.publicKeyEnv);
-    const quarantineId = `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
-    const plaintext = JSON.stringify({
-      quarantine_id: quarantineId,
-      created_at: input.timestamp,
-      reason: input.reason,
-      writer_id: input.writerId,
-      source: input.source,
-      payload: input.payload,
-    });
-    const digest = sha256(plaintext);
-
-    const key = randomBytes(32);
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", key, iv, {
-      authTagLength: GCM_AUTH_TAG_LENGTH_BYTES,
-    });
-    const ciphertext = Buffer.concat([
-      cipher.update(plaintext, "utf8"),
-      cipher.final(),
-    ]);
-    const tag = cipher.getAuthTag();
-
-    const wrappedKey = publicEncrypt(
-      {
-        key: publicKey,
-        oaepHash: "sha256",
-        padding: constants.RSA_PKCS1_OAEP_PADDING,
-      },
-      key,
+    publicKey: string,
+    readonly repository: QuarantineRepository,
+    private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
+  ) {
+    this.publicKey = decodePublicKey(publicKey);
+    this.capacity = {
+      maxPendingItems: limits.maxPendingItems,
+      maxEncryptedBytes: limits.maxEncryptedBytes,
+    };
+    this.limiter = new PerProcessFixedWindowLimiter(
+      limits.rateLimitMax,
+      limits.rateLimitWindowMs,
     );
+  }
 
-    const envelope: EncryptedQuarantineEnvelope = {
-      version: 1,
+  async put(input: QuarantineInput): Promise<QuarantineResult> {
+    this.limiter.consume("quarantine-writes");
+
+    const quarantineId = await this.resolveQuarantineId(input);
+    const decrypted: DecryptedQuarantineObject = {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
       reason: input.reason,
-      writer_id: input.writerId,
-      source: input.source,
-      sha256: digest,
-      encryption: {
-        algorithm: "AES-256-GCM",
-        key_wrap: "RSA-OAEP-SHA256",
-        [WRAPPED_KEY_FIELD]: wrappedKey.toString("base64"),
-        iv_b64: iv.toString("base64"),
-        tag_b64: tag.toString("base64"),
-      },
-      ciphertext_b64: ciphertext.toString("base64"),
+      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
+      ...(input.source === undefined ? {} : { source: input.source }),
+      payload: input.payload,
+    };
+    const encrypted = createEncryptedQuarantineEnvelope(
+      decrypted,
+      this.publicKey,
+    );
+    const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
+    if (encryptedBytes > this.limits.maxItemBytes) {
+      throw new HttpError(
+        413,
+        "quarantine_item_too_large",
+        "encrypted quarantine item exceeds configured size limit",
+      );
+    }
+
+    const item: NewQuarantineItem = {
+      quarantine_id: quarantineId,
+      created_at: input.timestamp,
+      updated_at: input.timestamp,
+      kind: input.kind,
+      reason: input.reason,
+      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
+      ...(input.source === undefined ? {} : { source: input.source }),
+      ...(input.sourceBank === undefined
+        ? {}
+        : { source_bank: input.sourceBank }),
+      ...(input.sourceMemoryId === undefined
+        ? {}
+        : { source_memory_id: input.sourceMemoryId }),
+      ...(input.sourceContentSha256 === undefined
+        ? {}
+        : { source_content_sha256: input.sourceContentSha256 }),
+      sha256: encrypted.sha256,
+      encrypted,
+      status: "pending",
+      postpone_count: 0,
     };
 
-    mkdirSync(this.objectDir, { recursive: true, mode: 0o700 });
-    writeFileSync(
-      encryptedQuarantineObjectPath(this.objectDir, quarantineId),
-      JSON.stringify(envelope) + "\n",
-      { encoding: "utf8", mode: 0o600 },
-    );
+    if (input.kind === "recalled_memory") {
+      await this.repository.upsertRecalledMemory(item, this.capacity);
+    } else if (input.kind === "security_event") {
+      await this.repository.upsertSecurityEvent(item, this.capacity);
+    } else {
+      await this.repository.insert(item, this.capacity);
+    }
+    return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+  }
 
-    return { quarantine_id: quarantineId, sha256: digest };
+  private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
+    if (input.kind === "security_event" && input.dedupeKey) {
+      const digest = sha256Hex(input.dedupeKey);
+      return `q_security${digest.slice(0, 48)}_${digest.slice(48)}`;
+    }
+    if (
+      input.kind === "recalled_memory" &&
+      input.sourceBank !== undefined &&
+      input.sourceMemoryId !== undefined
+    ) {
+      const digest = sha256Hex(`${input.sourceBank}:${input.sourceMemoryId}`);
+      return `q_memory${digest.slice(0, 48)}_${digest.slice(48)}`;
+    }
+    return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
 }
 
-export class MemoryQuarantineStore implements QuarantineStore {
-  readonly records: Array<QuarantineInput & QuarantineResult> = [];
+// This protects one router process. Multi-instance deployments need a shared edge limit.
+class PerProcessFixedWindowLimiter {
+  private readonly windows = new Map<
+    string,
+    { startedAt: number; count: number }
+  >();
 
-  put(input: QuarantineInput): QuarantineResult {
-    const quarantineId = `q_test_${this.records.length + 1}`;
-    const digest = sha256(JSON.stringify(input));
-    const result = { quarantine_id: quarantineId, sha256: digest };
-    this.records.push({ ...input, ...result });
-    return result;
+  constructor(
+    private readonly max: number,
+    private readonly windowMs: number,
+  ) {}
+
+  consume(key: string, now = Date.now()): void {
+    if (this.max <= 0 || this.windowMs <= 0) return;
+    const current = this.windows.get(key);
+    if (!current || now - current.startedAt >= this.windowMs) {
+      this.windows.set(key, { startedAt: now, count: 1 });
+      return;
+    }
+    if (current.count >= this.max) {
+      throw new HttpError(
+        429,
+        "quarantine_rate_limited",
+        "too many quarantine writes",
+      );
+    }
+    current.count += 1;
   }
 }

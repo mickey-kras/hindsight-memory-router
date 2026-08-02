@@ -4,11 +4,12 @@
   "private": false,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
+    "migrate:legacy-quarantine": "node dist/src/cli/migrateLegacyQuarantine.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
@@ -22,6 +23,9 @@
     "check": "npm run format:check && npm run lint && npm run test:coverage && npm run typecheck && npm run security:audit && npm run aislop:ci",
     "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
     "hooks:install": "git config core.hooksPath .githooks"
+  },
+  "dependencies": {
+    "postgres": "3.4.9"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

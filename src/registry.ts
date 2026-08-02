@@ -43,7 +43,6 @@ export const DEFAULT_REGISTRY: WriterRegistry = {
   defaults: {
     unknown_writer_action: "review_queue",
     suspicious_content_action: "review_queue",
-    review_queue_path: "/volume1/reports/hindsight-review/review.jsonl",
   },
 };
 
@@ -62,18 +61,24 @@ export function getWriter(
 }
 
 export function validateRegistry(registry: WriterRegistry): void {
-  if (!registry || typeof registry !== "object")
+  if (!registry || typeof registry !== "object") {
     throw new Error("registry must be an object");
+  }
   if (!registry.writers || typeof registry.writers !== "object") {
     throw new Error("registry.writers must be an object");
   }
   for (const [writerId, rule] of Object.entries(registry.writers)) {
     if (!writerId.trim()) throw new Error("writer id cannot be empty");
-    if (!rule.write_bank)
+    if (!rule.write_bank) {
       throw new Error(`writer ${writerId} missing write_bank`);
-    if (!Array.isArray(rule.read_banks))
+    }
+    if (rule.write_bank === ("quarantine" as string)) {
+      throw new Error(`writer ${writerId} cannot write quarantine`);
+    }
+    if (!Array.isArray(rule.read_banks)) {
       throw new Error(`writer ${writerId} missing read_banks`);
-    if (rule.read_banks.includes("quarantine")) {
+    }
+    if ((rule.read_banks as string[]).includes("quarantine")) {
       throw new Error(`writer ${writerId} cannot read quarantine`);
     }
     if (writerId === "main" && rule.read_banks.includes("research")) {
