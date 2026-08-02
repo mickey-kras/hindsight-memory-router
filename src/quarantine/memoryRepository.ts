@@ -6,6 +6,7 @@ import {
   type CleanupFilter,
   type CleanupPreview,
   type NewQuarantineItem,
+  type QuarantineCapacityLimits,
   type QuarantineEvent,
   type QuarantineRepository,
   type QuarantineStats,
@@ -19,53 +20,41 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   async initialize(): Promise<void> {}
   async close(): Promise<void> {}
 
-  async insert(item: NewQuarantineItem): Promise<void> {
-    if (this.items.has(item.quarantine_id))
+  async insert(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (this.items.has(item.quarantine_id)) {
       throw new Error("duplicate quarantine_id");
-    this.items.set(item.quarantine_id, { ...item });
-    this.events.push(
-      quarantineEvent(item.quarantine_id, "quarantined", item.created_at, {
-        kind: item.kind,
-        reason: item.reason,
-        sha256: item.sha256,
-      }),
-    );
+    }
+    this.store(item, null, capacity);
   }
 
-  async upsertRecalledMemory(item: NewQuarantineItem): Promise<void> {
-    const existing = [...this.items.values()].find(
-      (entry) =>
-        entry.source_bank === item.source_bank &&
-        entry.source_memory_id === item.source_memory_id,
-    );
-    if (!existing) return this.insert(item);
-    this.items.set(existing.quarantine_id, {
-      ...item,
-      quarantine_id: existing.quarantine_id,
-    });
-    this.events.push(
-      quarantineEvent(
-        existing.quarantine_id,
-        "requarantined",
-        item.created_at,
-        {
-          reason: item.reason,
-          sha256: item.sha256,
-        },
-      ),
-    );
+  async upsertRecalledMemory(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (!item.source_bank || !item.source_memory_id) {
+      throw new Error("recalled memory source identity is required");
+    }
+    const existing =
+      [...this.items.values()].find(
+        (entry) =>
+          entry.source_bank === item.source_bank &&
+          entry.source_memory_id === item.source_memory_id,
+      ) ?? null;
+    this.store(item, existing, capacity);
   }
 
-  async upsertSecurityEvent(item: NewQuarantineItem): Promise<void> {
-    const existing = this.items.get(item.quarantine_id);
-    if (!existing) return this.insert(item);
-    this.items.set(item.quarantine_id, { ...item });
-    this.events.push(
-      quarantineEvent(item.quarantine_id, "requarantined", item.created_at, {
-        reason: item.reason,
-        sha256: item.sha256,
-      }),
-    );
+  async upsertSecurityEvent(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (item.kind !== "security_event") {
+      throw new Error("security event item is required");
+    }
+    const existing = this.items.get(item.quarantine_id) ?? null;
+    this.store(item, existing, capacity);
   }
 
   async get(quarantineId: string): Promise<StoredQuarantineItem | null> {
@@ -157,14 +146,6 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
 
   async stats(): Promise<QuarantineStats> {
     const values = [...this.items.values()];
-    const encryptedBytes = values.reduce(
-      (total, item) =>
-        total +
-        (item.encrypted
-          ? Buffer.byteLength(JSON.stringify(item.encrypted))
-          : 0),
-      0,
-    );
     return {
       total_items: values.length,
       pending_items: values.filter((item) => item.status === "pending").length,
@@ -176,7 +157,10 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       reviewed_blocked_items: values.filter(
         (item) => item.status === "reviewed_blocked",
       ).length,
-      encrypted_bytes: encryptedBytes,
+      encrypted_bytes: values.reduce(
+        (total, item) => total + encryptedBytes(item),
+        0,
+      ),
       event_count: this.events.length,
     };
   }
@@ -186,11 +170,7 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     return {
       count: items.length,
       encrypted_bytes: items.reduce(
-        (total, item) =>
-          total +
-          (item.encrypted
-            ? Buffer.byteLength(JSON.stringify(item.encrypted))
-            : 0),
+        (total, item) => total + encryptedBytes(item),
         0,
       ),
     };
@@ -213,6 +193,61 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       await this.remove(item.quarantine_id, "cleanup", at, { filter });
     }
     return preview;
+  }
+
+  private store(
+    item: NewQuarantineItem,
+    existing: StoredQuarantineItem | null,
+    capacity?: QuarantineCapacityLimits,
+  ): void {
+    this.assertCapacity(item, existing, capacity);
+    const quarantineId = existing?.quarantine_id ?? item.quarantine_id;
+    this.items.set(quarantineId, { ...item, quarantine_id: quarantineId });
+    this.events.push(
+      quarantineEvent(
+        quarantineId,
+        existing ? "requarantined" : "quarantined",
+        item.created_at,
+        {
+          kind: item.kind,
+          reason: item.reason,
+          sha256: item.sha256,
+        },
+      ),
+    );
+  }
+
+  private assertCapacity(
+    item: NewQuarantineItem,
+    existing: StoredQuarantineItem | null,
+    limits?: QuarantineCapacityLimits,
+  ): void {
+    if (!limits) return;
+    const values = [...this.items.values()];
+    const pendingItems = values.filter(
+      (entry) => entry.status === "pending" || entry.status === "postponed",
+    ).length;
+    const encryptedTotal = values.reduce(
+      (total, entry) => total + encryptedBytes(entry),
+      0,
+    );
+    const existingReviewable =
+      existing?.status === "pending" || existing?.status === "postponed"
+        ? 1
+        : 0;
+    const nextPending = pendingItems - existingReviewable + 1;
+    const nextEncrypted =
+      encryptedTotal - encryptedBytes(existing) + encryptedBytes(item);
+    if (
+      nextPending > limits.maxPendingItems ||
+      nextEncrypted > limits.maxEncryptedBytes
+    ) {
+      throw new HttpError(
+        507,
+        "quarantine_capacity_exceeded",
+        "quarantine capacity is exhausted",
+      );
+    }
   }
 
   private filtered(filter: CleanupFilter): StoredQuarantineItem[] {
@@ -254,4 +289,12 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     }
     return item;
   }
+}
+
+function encryptedBytes(
+  item: NewQuarantineItem | StoredQuarantineItem | null,
+): number {
+  return item?.encrypted
+    ? Buffer.byteLength(JSON.stringify(item.encrypted))
+    : 0;
 }
