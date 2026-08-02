@@ -90,12 +90,13 @@ export class QuarantineAdminService {
         );
       }
       const retainBody = parseRetainBody(payload.body);
-      await this.options.hindsight.retain(writer.write_bank, retainBody);
-      await this.options.repository.remove(
+      await this.options.repository.approveRetain(
         quarantineId,
-        "approved",
         this.nowIso(),
         { writer_id: writerId, target_bank: writer.write_bank },
+        async () => {
+          await this.options.hindsight.retain(writer.write_bank, retainBody);
+        },
       );
       return {
         approved: true,
@@ -147,15 +148,16 @@ export class QuarantineAdminService {
           "recalled memory source metadata is missing",
         );
       }
-      await this.options.hindsight.invalidateMemory(
-        item.source_bank,
-        item.source_memory_id,
-        `Rejected by memory-router quarantine review ${quarantineId}`,
-      );
-      await this.options.repository.markMemoryReviewed(
+      await this.options.repository.rejectRecalledMemory(
         quarantineId,
-        "reviewed_blocked",
         this.nowIso(),
+        async () => {
+          await this.options.hindsight.invalidateMemory(
+            item.source_bank!,
+            item.source_memory_id!,
+            `Rejected by memory-router quarantine review ${quarantineId}`,
+          );
+        },
       );
       return {
         reviewed: true,
