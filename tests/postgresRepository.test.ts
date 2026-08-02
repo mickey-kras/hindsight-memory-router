@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 describe("PostgresQuarantineRepository", () => {
-  it("initializes, executes transactional writes, and closes the pool", async () => {
+  it("uses native placeholders and a transaction-scoped capacity lock", async () => {
     const { PostgresQuarantineRepository } =
       await import("../src/quarantine/postgresRepository.js");
     const repository = new PostgresQuarantineRepository(
@@ -64,8 +64,18 @@ describe("PostgresQuarantineRepository", () => {
     );
     expect(rootSql.unsafe).toHaveBeenCalledOnce();
     expect(rootSql.begin).toHaveBeenCalledOnce();
-    expect(transactionSql.unsafe).toHaveBeenCalledTimes(2);
-    expect(transactionSql.unsafe.mock.calls[0]?.[0]).toContain("$1");
+
+    const statements = transactionSql.unsafe.mock.calls.map(
+      ([statement]) => String(statement),
+    );
+    expect(statements).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("pg_advisory_xact_lock"),
+        expect.stringContaining("WHERE quarantine_id = $1"),
+        expect.stringContaining("VALUES ($1, $2, $3"),
+      ]),
+    );
+    expect(statements.join("\n")).not.toContain("?");
     expect(rootSql.end).toHaveBeenCalledOnce();
   });
 });
