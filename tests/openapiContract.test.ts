@@ -20,12 +20,19 @@ type Operation = {
   };
 };
 
+type Schema = {
+  minLength?: number;
+  minItems?: number;
+  properties?: Record<string, Schema>;
+};
+
 type OpenApiDocument = {
   openapi: string;
   info: { version: string };
   paths: Record<string, Record<string, Operation>>;
   components: {
     securitySchemes: Record<string, unknown>;
+    schemas: Record<string, Schema>;
   };
 };
 
@@ -97,6 +104,17 @@ async function withServer<T>(run: (baseUrl: string) => Promise<T>): Promise<T> {
   }
 }
 
+async function postJson(baseUrl: string, path: string, body: unknown) {
+  return fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      authorization: "Bearer router-token",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 describe("OpenAPI contract", () => {
   it("documents exactly the implemented public operations", () => {
     const actual = operations();
@@ -149,6 +167,40 @@ describe("OpenAPI contract", () => {
     ).toBe("#/components/schemas/ApproveRequest");
     expect(approve?.description).toContain("complete object unchanged");
     expect(approve?.description).toContain("SHA-256");
+  });
+
+  it("keeps documented request constraints aligned with live 400 responses", async () => {
+    expect(
+      document.components.schemas.MemoryItem?.properties?.content?.minLength,
+    ).toBe(1);
+    expect(
+      document.components.schemas.RetainRequest?.properties?.items?.minItems,
+    ).toBe(1);
+    expect(
+      document.components.schemas.RecallRequest?.properties?.query?.minLength,
+    ).toBe(1);
+
+    await withServer(async (baseUrl) => {
+      const retain = await postJson(
+        baseUrl,
+        "/v1/default/banks/ops/memories",
+        {},
+      );
+      expect(retain.status).toBe(400);
+      await expect(retain.json()).resolves.toMatchObject({
+        error: "invalid_retain_body",
+      });
+
+      const recall = await postJson(
+        baseUrl,
+        "/v1/default/banks/ops/memories/recall",
+        {},
+      );
+      expect(recall.status).toBe(400);
+      await expect(recall.json()).resolves.toMatchObject({
+        error: "invalid_recall_body",
+      });
+    });
   });
 
   it("keeps the documented version aligned with the running router", async () => {
