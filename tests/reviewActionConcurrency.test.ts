@@ -49,9 +49,9 @@ describe("quarantine review action locking", () => {
     ]);
 
     expect(hindsight.retained).toHaveLength(1);
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
-      1,
-    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(1);
     const rejected = results.find((result) => result.status === "rejected");
     expect(rejected).toMatchObject({
       status: "rejected",
