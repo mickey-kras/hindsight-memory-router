@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { toPostgresPlaceholders } from "../src/quarantine/postgresRepository.js";
 import {
   repositoryFromConnectionString,
   sqlitePath,
@@ -131,7 +130,7 @@ describe("SQL quarantine repository", () => {
     });
   });
 
-  it("parses database connection strings and PostgreSQL placeholders", async () => {
+  it("parses supported database connection strings", async () => {
     expect(sqlitePath("sqlite::memory:")).toBe(":memory:");
     expect(sqlitePath("sqlite:///tmp/quarantine.db")).toBe(
       "/tmp/quarantine.db",
@@ -143,8 +142,5 @@ describe("SQL quarantine repository", () => {
       repositoryFromConnectionString("mysql://localhost/db"),
     ).toThrow("QUARANTINE_DATABASE_URL");
     expect(() => sqlitePath("sqlite:")).toThrow("path is required");
-    expect(toPostgresPlaceholders("a = ? AND b = ?", 2)).toBe(
-      "a = $1 AND b = $2",
-    );
   });
 });

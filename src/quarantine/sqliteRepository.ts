@@ -16,6 +16,12 @@ class SqliteDatabase implements SqlDatabase {
 
   constructor(private readonly database: DatabaseSync) {}
 
+  placeholder(_index: number): string {
+    return "?";
+  }
+
+  async acquireCapacityLock(): Promise<void> {}
+
   executeScript(script: string): Promise<void> {
     return this.enqueue(() => {
       this.database.exec(
@@ -76,6 +82,12 @@ class SqliteTransactionDatabase implements SqlDatabase {
   readonly rowLockClause = "";
 
   constructor(private readonly database: DatabaseSync) {}
+
+  placeholder(_index: number): string {
+    return "?";
+  }
+
+  async acquireCapacityLock(): Promise<void> {}
 
   async executeScript(script: string): Promise<void> {
     this.database.exec(script);

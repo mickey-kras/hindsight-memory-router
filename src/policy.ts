@@ -58,7 +58,7 @@ export class RouterPolicy {
       items: body.items.map((item) => ({
         ...item,
         metadata: {
-          ...(item.metadata ?? {}),
+          ...item.metadata,
           router_writer_id: writerId,
           router_source: source,
           router_decision: "allowed",
@@ -142,22 +142,52 @@ export class RouterPolicy {
       bankId,
       result.id,
     );
+    const sourceContentSha256 = sha256Hex(result.text ?? "");
+
     if (state?.status === "reviewed_blocked") return false;
+    if (state?.status === "reviewed_allowed") {
+      if (state.source_content_sha256 === sourceContentSha256) return true;
+      await this.quarantineRecalledResult(
+        writerId,
+        source,
+        bankId,
+        result,
+        sourceContentSha256,
+      );
+      return false;
+    }
+    if (state?.status === "pending" || state?.status === "postponed") {
+      if (state.source_content_sha256 === sourceContentSha256) return false;
+      await this.quarantineRecalledResult(
+        writerId,
+        source,
+        bankId,
+        result,
+        sourceContentSha256,
+      );
+      return false;
+    }
 
     const resultScan = scanContent(result.text ?? "");
     if (resultScan.safe) return true;
 
-    const sourceContentSha256 = sha256Hex(result.text ?? "");
-    if (
-      state?.status === "reviewed_allowed" &&
-      state.source_content_sha256 === sourceContentSha256
-    ) {
-      return true;
-    }
-    if (state?.status === "pending" || state?.status === "postponed") {
-      return false;
-    }
+    await this.quarantineRecalledResult(
+      writerId,
+      source,
+      bankId,
+      result,
+      sourceContentSha256,
+    );
+    return false;
+  }
 
+  private async quarantineRecalledResult(
+    writerId: string,
+    source: string,
+    bankId: BankId,
+    result: RecallResult,
+    sourceContentSha256: string,
+  ): Promise<void> {
     await this.quarantine({
       writerId,
       source,
@@ -172,7 +202,6 @@ export class RouterPolicy {
         result,
       },
     });
-    return false;
   }
 
   private async quarantineRetain(input: {

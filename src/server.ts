@@ -4,7 +4,8 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
-import { URL } from "node:url";
+import type { ParsedUrlQuery } from "node:querystring";
+import { parse as parseUrl } from "node:url";
 import {
   FetchHindsightGateway,
   type HindsightGateway,
@@ -136,35 +137,42 @@ export function createMemoryRouterServer(
   return createServer(async (req, res) => {
     try {
       const method = req.method ?? "GET";
-      const url = new URL(req.url ?? "/", "http://memory-router.local");
+      const requestUrl = parseUrl(req.url ?? "/", true);
+      const pathname = requestUrl.pathname ?? "/";
 
-      if (method === "GET" && url.pathname === "/health") {
+      if (method === "GET" && pathname === "/health") {
         return send(res, 200, { status: "healthy", service: "memory-router" });
       }
 
-      if (url.pathname.startsWith("/admin/")) {
+      if (pathname.startsWith("/admin/")) {
         if (!isAdminAuthorized(req, options.adminToken)) {
           return send(res, 401, { error: "unauthorized" });
         }
-        if (method === "GET" && url.pathname === "/admin/quarantine/queue") {
+        if (method === "GET" && pathname === "/admin/quarantine/queue") {
           return send(
             res,
             200,
             await admin.listQueue(
-              integerQuery(url, "limit", 100, 1, 500),
-              integerQuery(url, "offset", 0, 0, Number.MAX_SAFE_INTEGER),
+              integerQuery(requestUrl.query, "limit", 100, 1, 500),
+              integerQuery(
+                requestUrl.query,
+                "offset",
+                0,
+                0,
+                Number.MAX_SAFE_INTEGER,
+              ),
             ),
           );
         }
-        if (method === "GET" && url.pathname === "/admin/quarantine/stats") {
+        if (method === "GET" && pathname === "/admin/quarantine/stats") {
           return send(res, 200, await admin.stats());
         }
-        if (method === "POST" && url.pathname === "/admin/quarantine/cleanup") {
+        if (method === "POST" && pathname === "/admin/quarantine/cleanup") {
           const body = await readJson<CleanupBody>(req, maxBodyBytes);
           return send(res, 200, await admin.cleanup(body));
         }
 
-        const itemPath = parseAdminItemPath(url.pathname);
+        const itemPath = parseAdminItemPath(pathname);
         if (itemPath?.action === "read" && method === "GET") {
           return send(res, 200, await admin.readItem(itemPath.quarantineId));
         }
@@ -189,7 +197,7 @@ export function createMemoryRouterServer(
         return send(res, 401, { error: "unauthorized" });
       }
 
-      if (method === "GET" && url.pathname === "/version") {
+      if (method === "GET" && pathname === "/version") {
         return send(res, 200, {
           api_version: "0.9.0",
           router: "memory-router",
@@ -202,7 +210,7 @@ export function createMemoryRouterServer(
         });
       }
 
-      const memoryPath = parseMemoryPath(url.pathname);
+      const memoryPath = parseMemoryPath(pathname);
       if (method === "POST" && memoryPath?.action === "retain") {
         const body = await readJson<RetainBody>(req, maxBodyBytes);
         const result = await policy.retain(memoryPath.writerId, body);
@@ -215,7 +223,7 @@ export function createMemoryRouterServer(
         return send(res, 200, result);
       }
 
-      const denied = await policy.denyEndpoint(method, url.pathname);
+      const denied = await policy.denyEndpoint(method, pathname);
       return send(res, 404, denied);
     } catch (error) {
       const response = safeErrorBody(error);
@@ -322,14 +330,17 @@ function parseAdminItemPath(pathname: string): {
 }
 
 function integerQuery(
-  url: URL,
+  query: ParsedUrlQuery,
   name: string,
   fallback: number,
   min: number,
   max: number,
 ): number {
-  const raw = url.searchParams.get(name);
-  if (raw === null) return fallback;
+  const raw = query[name];
+  if (raw === undefined) return fallback;
+  if (Array.isArray(raw)) {
+    throw new HttpError(400, "invalid_query", `${name} is invalid`);
+  }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < min || value > max) {
     throw new HttpError(400, "invalid_query", `${name} is invalid`);

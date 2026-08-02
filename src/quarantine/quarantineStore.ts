@@ -7,7 +7,11 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
-import type { NewQuarantineItem, QuarantineRepository } from "./repository.js";
+import type {
+  NewQuarantineItem,
+  QuarantineCapacityLimits,
+  QuarantineRepository,
+} from "./repository.js";
 
 export interface QuarantineInput {
   timestamp: string;
@@ -48,8 +52,9 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
 };
 
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
-  private readonly limiter: FixedWindowLimiter;
+  private readonly limiter: PerProcessFixedWindowLimiter;
   private readonly publicKey: string;
+  private readonly capacity: QuarantineCapacityLimits;
 
   constructor(
     publicKey: string,
@@ -57,7 +62,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
   ) {
     this.publicKey = decodePublicKey(publicKey);
-    this.limiter = new FixedWindowLimiter(
+    this.capacity = {
+      maxPendingItems: limits.maxPendingItems,
+      maxEncryptedBytes: limits.maxEncryptedBytes,
+    };
+    this.limiter = new PerProcessFixedWindowLimiter(
       limits.rateLimitMax,
       limits.rateLimitWindowMs,
     );
@@ -90,32 +99,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    const [stats, existing] = await Promise.all([
-      this.repository.stats(),
-      this.repository.get(quarantineId),
-    ]);
-    const existingReviewable =
-      existing?.status === "pending" || existing?.status === "postponed"
-        ? 1
-        : 0;
-    const existingEncryptedBytes = existing?.encrypted
-      ? Buffer.byteLength(JSON.stringify(existing.encrypted))
-      : 0;
-    const nextPendingItems =
-      stats.pending_items + stats.postponed_items - existingReviewable + 1;
-    const nextEncryptedBytes =
-      stats.encrypted_bytes - existingEncryptedBytes + encryptedBytes;
-    if (
-      nextPendingItems > this.limits.maxPendingItems ||
-      nextEncryptedBytes > this.limits.maxEncryptedBytes
-    ) {
-      throw new HttpError(
-        507,
-        "quarantine_capacity_exceeded",
-        "quarantine capacity is exhausted",
-      );
-    }
-
     const item: NewQuarantineItem = {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
@@ -140,11 +123,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     };
 
     if (input.kind === "recalled_memory") {
-      await this.repository.upsertRecalledMemory(item);
+      await this.repository.upsertRecalledMemory(item, this.capacity);
     } else if (input.kind === "security_event") {
-      await this.repository.upsertSecurityEvent(item);
+      await this.repository.upsertSecurityEvent(item, this.capacity);
     } else {
-      await this.repository.insert(item);
+      await this.repository.insert(item, this.capacity);
     }
     return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
   }
@@ -159,17 +142,15 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       input.sourceBank !== undefined &&
       input.sourceMemoryId !== undefined
     ) {
-      const existing = await this.repository.findMemoryState(
-        input.sourceBank,
-        input.sourceMemoryId,
-      );
-      if (existing) return existing.quarantine_id;
+      const digest = sha256Hex(`${input.sourceBank}:${input.sourceMemoryId}`);
+      return `q_memory${digest.slice(0, 48)}_${digest.slice(48)}`;
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
 }
 
-class FixedWindowLimiter {
+// This protects one router process. Multi-instance deployments need a shared edge limit.
+class PerProcessFixedWindowLimiter {
   private readonly windows = new Map<
     string,
     { startedAt: number; count: number }
