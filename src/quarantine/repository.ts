@@ -76,6 +76,7 @@ export interface CleanupPreview {
 
 export interface QuarantineRepository {
   initialize(): Promise<void>;
+  ping(): Promise<void>;
   close(): Promise<void>;
   insert(
     item: NewQuarantineItem,
