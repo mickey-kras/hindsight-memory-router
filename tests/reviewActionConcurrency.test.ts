@@ -64,7 +64,10 @@ describe("quarantine review action locking", () => {
     ).rejects.toThrow("upstream unavailable");
     await expect(
       quarantine.repository.get(stored.quarantine_id),
-    ).resolves.toMatchObject({ status: "pending", encrypted: expect.any(Object) });
+    ).resolves.toMatchObject({
+      status: "pending",
+      encrypted: expect.any(Object),
+    });
     expect(quarantine.repository.events).toHaveLength(1);
     expect(quarantine.repository.events[0]?.event_type).toBe("quarantined");
   });
