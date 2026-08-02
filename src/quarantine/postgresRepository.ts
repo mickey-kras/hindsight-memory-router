@@ -30,9 +30,7 @@ class PostgresDatabase implements SqlDatabase {
     if (this.root) {
       throw new Error("PostgreSQL capacity lock requires a transaction");
     }
-    await this.sql.unsafe(
-      `SELECT pg_advisory_xact_lock(${CAPACITY_LOCK_ID})`,
-    );
+    await this.sql.unsafe(`SELECT pg_advisory_xact_lock(${CAPACITY_LOCK_ID})`);
   }
 
   async executeScript(script: string): Promise<void> {

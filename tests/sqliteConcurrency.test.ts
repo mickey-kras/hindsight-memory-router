@@ -56,9 +56,9 @@ describe("SQLite quarantine concurrency", () => {
           put(store, 2, "writer-b"),
         ]);
 
-        expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
-          1,
-        );
+        expect(
+          results.filter((result) => result.status === "fulfilled"),
+        ).toHaveLength(1);
         const rejected = results.find(
           (result): result is PromiseRejectedResult =>
             result.status === "rejected",

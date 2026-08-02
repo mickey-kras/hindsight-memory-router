@@ -65,8 +65,8 @@ describe("PostgresQuarantineRepository", () => {
     expect(rootSql.unsafe).toHaveBeenCalledOnce();
     expect(rootSql.begin).toHaveBeenCalledOnce();
 
-    const statements = transactionSql.unsafe.mock.calls.map(
-      ([statement]) => String(statement),
+    const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>
+      String(statement),
     );
     expect(statements).toEqual(
       expect.arrayContaining([
