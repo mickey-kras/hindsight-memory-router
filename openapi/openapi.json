@@ -35,9 +35,7 @@
         "operationId": "getHealth",
         "summary": "Check router health",
         "description": "Returns process-level health without requiring authentication.",
-        "tags": [
-          "Service"
-        ],
+        "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
@@ -60,9 +58,7 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Get router API version and features",
-        "tags": [
-          "Service"
-        ],
+        "tags": ["Service"],
         "security": [
           {
             "RouterToken": []
@@ -90,9 +86,7 @@
         "operationId": "retainMemory",
         "summary": "Retain memory through writer policy",
         "description": "Routes a clean request to the writer's configured Hindsight bank. Unknown writers or suspicious fields are encrypted into quarantine and are not written to Hindsight.",
-        "tags": [
-          "Memory"
-        ],
+        "tags": ["Memory"],
         "security": [
           {
             "RouterToken": []
@@ -154,9 +148,7 @@
         "operationId": "recallMemory",
         "summary": "Recall memory through writer policy",
         "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed.",
-        "tags": [
-          "Memory"
-        ],
+        "tags": ["Memory"],
         "security": [
           {
             "RouterToken": []
@@ -211,9 +203,7 @@
         "operationId": "listQuarantineQueue",
         "summary": "List items awaiting review",
         "description": "Returns metadata only. Encrypted payloads are fetched one item at a time.",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -266,9 +256,7 @@
       "get": {
         "operationId": "getQuarantineStats",
         "summary": "Get quarantine storage statistics",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -296,9 +284,7 @@
         "operationId": "cleanupQuarantine",
         "summary": "Preview or execute bulk quarantine cleanup",
         "description": "Cleanup defaults to a dry run. Execution requires the exact count returned by a prior preview; a changed selection returns 409.",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -342,9 +328,7 @@
         "operationId": "getQuarantineItem",
         "summary": "Fetch an encrypted quarantine item",
         "description": "Returns current metadata and an encrypted envelope for local decryption. It never returns plaintext.",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -386,9 +370,7 @@
         "operationId": "approveQuarantineItem",
         "summary": "Approve the exact original quarantined object",
         "description": "The caller decrypts locally and submits the complete object unchanged. The router canonicalizes it and compares its SHA-256 with the original digest. A changed field is rejected. Retain requests are written to the writer's current configured bank; recalled memories are marked reviewed and allowed only for their unchanged digest.",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -440,9 +422,7 @@
         "operationId": "rejectQuarantineItem",
         "summary": "Reject a quarantine item",
         "description": "Removes an unapproved request from current quarantine state. For a recalled memory, invalidates the Hindsight memory and stores a reviewed-blocked audit state.",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -483,9 +463,7 @@
       "post": {
         "operationId": "postponeQuarantineItem",
         "summary": "Postpone a quarantine review",
-        "tags": [
-          "Quarantine administration"
-        ],
+        "tags": ["Quarantine administration"],
         "security": [
           {
             "AdminToken": []
@@ -646,10 +624,7 @@
       "HealthResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "status",
-          "service"
-        ],
+        "required": ["status", "service"],
         "properties": {
           "status": {
             "type": "string",
@@ -664,11 +639,7 @@
       "VersionResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "api_version",
-          "router",
-          "features"
-        ],
+        "required": ["api_version", "router", "features"],
         "properties": {
           "api_version": {
             "type": "string",
@@ -710,70 +681,44 @@
       },
       "MemoryItem": {
         "type": "object",
-        "required": [
-          "content"
-        ],
+        "required": ["content"],
         "properties": {
           "content": {
             "type": "string",
             "minLength": 1
           },
           "context": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "document_id": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "metadata": {
-            "type": [
-              "object",
-              "null"
-            ],
+            "type": ["object", "null"],
             "additionalProperties": {
               "type": "string"
             }
           },
           "tags": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": ["array", "null"],
             "items": {
               "type": "string"
             }
           },
           "timestamp": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": ["string", "null"],
             "format": "date-time"
           },
           "update_mode": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "enum": [
-              "replace",
-              "append",
-              null
-            ]
+            "type": ["string", "null"],
+            "enum": ["replace", "append", null]
           }
         },
         "additionalProperties": true
       },
       "RetainRequest": {
         "type": "object",
-        "required": [
-          "items"
-        ],
+        "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
@@ -796,9 +741,7 @@
       },
       "RecallRequest": {
         "type": "object",
-        "required": [
-          "query"
-        ],
+        "required": ["query"],
         "properties": {
           "query": {
             "type": "string",
@@ -810,26 +753,16 @@
           },
           "budget": {
             "type": "string",
-            "enum": [
-              "low",
-              "mid",
-              "high"
-            ]
+            "enum": ["low", "mid", "high"]
           },
           "types": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": ["array", "null"],
             "items": {
               "type": "string"
             }
           },
           "tags": {
-            "type": [
-              "array",
-              "null"
-            ],
+            "type": ["array", "null"],
             "items": {
               "type": "string"
             }
@@ -845,10 +778,7 @@
       },
       "RecallResult": {
         "type": "object",
-        "required": [
-          "id",
-          "text"
-        ],
+        "required": ["id", "text"],
         "properties": {
           "id": {
             "type": "string"
@@ -857,16 +787,10 @@
             "type": "string"
           },
           "type": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": ["string", "null"]
           },
           "metadata": {
-            "type": [
-              "object",
-              "null"
-            ],
+            "type": ["object", "null"],
             "additionalProperties": {
               "type": "string"
             }
@@ -876,9 +800,7 @@
       },
       "RecallResponse": {
         "type": "object",
-        "required": [
-          "results"
-        ],
+        "required": ["results"],
         "properties": {
           "results": {
             "type": "array",
@@ -892,11 +814,7 @@
       "QuarantinedResponse": {
         "type": "object",
         "additionalProperties": true,
-        "required": [
-          "queued",
-          "reason",
-          "quarantine_id"
-        ],
+        "required": ["queued", "reason", "quarantine_id"],
         "properties": {
           "queued": {
             "type": "boolean",
@@ -947,12 +865,7 @@
       },
       "QuarantineStatus": {
         "type": "string",
-        "enum": [
-          "pending",
-          "postponed",
-          "reviewed_allowed",
-          "reviewed_blocked"
-        ]
+        "enum": ["pending", "postponed", "reviewed_allowed", "reviewed_blocked"]
       },
       "QuarantineItemSummary": {
         "type": "object",
@@ -1013,9 +926,7 @@
       "QuarantineQueueResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "items"
-        ],
+        "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
@@ -1107,10 +1018,7 @@
       "QuarantineItemResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "record",
-          "encrypted"
-        ],
+        "required": ["record", "encrypted"],
         "properties": {
           "record": {
             "$ref": "#/components/schemas/QuarantineItemSummary"
@@ -1123,12 +1031,7 @@
       "DecryptedQuarantineObject": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "quarantine_id",
-          "created_at",
-          "reason",
-          "payload"
-        ],
+        "required": ["quarantine_id", "created_at", "reason", "payload"],
         "properties": {
           "quarantine_id": {
             "$ref": "#/components/schemas/QuarantineId"
@@ -1154,9 +1057,7 @@
       "ApproveRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "decrypted"
-        ],
+        "required": ["decrypted"],
         "properties": {
           "decrypted": {
             "$ref": "#/components/schemas/DecryptedQuarantineObject"
@@ -1168,11 +1069,7 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "approved",
-              "quarantine_id",
-              "target_bank"
-            ],
+            "required": ["approved", "quarantine_id", "target_bank"],
             "properties": {
               "approved": {
                 "type": "boolean",
@@ -1196,10 +1093,7 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": [
-              "rejected",
-              "quarantine_id"
-            ],
+            "required": ["rejected", "quarantine_id"],
             "properties": {
               "rejected": {
                 "type": "boolean",
@@ -1247,11 +1141,7 @@
       "PostponeResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "postponed",
-          "quarantine_id",
-          "count"
-        ],
+        "required": ["postponed", "quarantine_id", "count"],
         "properties": {
           "postponed": {
             "type": "boolean",
@@ -1315,10 +1205,7 @@
         "properties": {
           "scope": {
             "type": "string",
-            "enum": [
-              "pending",
-              "all"
-            ],
+            "enum": ["pending", "all"],
             "default": "pending"
           },
           "reasons": {
@@ -1346,11 +1233,7 @@
       "CleanupResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": [
-          "dry_run",
-          "count",
-          "encrypted_bytes"
-        ],
+        "required": ["dry_run", "count", "encrypted_bytes"],
         "properties": {
           "dry_run": {
             "type": "boolean"
@@ -1367,9 +1250,7 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "required": [
-          "error"
-        ],
+        "required": ["error"],
         "properties": {
           "error": {
             "type": "string"
