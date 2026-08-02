@@ -152,6 +152,8 @@ raw JSON payload
 
 Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
 
+The built-in fixed-window write limiter applies per router process. Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
+
 ## Manual review
 
 1. List pending items using the admin token.
