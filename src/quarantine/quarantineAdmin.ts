@@ -2,12 +2,11 @@ import { timingSafeEqual } from "node:crypto";
 import type { HindsightGateway } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import { getWriter } from "../registry.js";
+import { parseRetainBody } from "../requestValidation.js";
 import {
   BANK_IDS,
   type BankId,
-  type MemoryItem,
   type RecallResult,
-  type RetainBody,
   type ReviewReason,
   type WriterRegistry,
 } from "../types.js";
@@ -302,32 +301,6 @@ export class QuarantineAdminService {
   private nowIso(): string {
     return (this.options.now?.() ?? new Date()).toISOString();
   }
-}
-
-function parseRetainBody(value: unknown): RetainBody {
-  const object = requireObject(value, "retain body");
-  if (!isRetainBody(object)) {
-    throw new HttpError(
-      400,
-      "invalid_retain_body",
-      "retain body items with string content are required",
-    );
-  }
-  return object;
-}
-
-function isRetainBody(value: Record<string, unknown>): value is RetainBody {
-  return Array.isArray(value.items) && value.items.every(isMemoryItem);
-}
-
-function isMemoryItem(value: unknown): value is MemoryItem {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    "content" in value &&
-    typeof value.content === "string"
-  );
 }
 
 function parseRecalledMemoryPayload(value: unknown): {
