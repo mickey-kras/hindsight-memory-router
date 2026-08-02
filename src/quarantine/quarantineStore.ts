@@ -73,9 +73,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    this.limiter.consume(
-      `${input.source ?? "unknown"}:${input.writerId ?? "unknown"}`,
-    );
+    this.limiter.consume("quarantine-writes");
 
     const quarantineId = await this.resolveQuarantineId(input);
     const decrypted: DecryptedQuarantineObject = {
