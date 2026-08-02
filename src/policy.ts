@@ -58,7 +58,7 @@ export class RouterPolicy {
       items: body.items.map((item) => ({
         ...item,
         metadata: {
-          ...(item.metadata ?? {}),
+          ...item.metadata,
           router_writer_id: writerId,
           router_source: source,
           router_decision: "allowed",
