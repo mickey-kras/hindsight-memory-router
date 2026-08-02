@@ -17,7 +17,10 @@ import {
   type ApproveBody,
   type CleanupBody,
 } from "./quarantine/quarantineAdmin.js";
-import type { QuarantineRepository } from "./quarantine/repository.js";
+import {
+  pingQuarantineRepository,
+  type QuarantineRepository,
+} from "./quarantine/repository.js";
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
@@ -141,6 +144,18 @@ export function createMemoryRouterServer(
 
       if (method === "GET" && pathname === "/health") {
         return send(res, 200, { status: "healthy", service: "memory-router" });
+      }
+
+      if (method === "GET" && pathname === "/ready") {
+        try {
+          await pingQuarantineRepository(quarantineRepository);
+          return send(res, 200, { status: "ready", service: "memory-router" });
+        } catch {
+          return send(res, 503, {
+            status: "not_ready",
+            service: "memory-router",
+          });
+        }
       }
 
       if (pathname.startsWith("/admin/")) {
