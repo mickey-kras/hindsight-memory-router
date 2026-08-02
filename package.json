@@ -12,6 +12,7 @@
     "migrate:legacy-quarantine": "node dist/src/cli/migrateLegacyQuarantine.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
+    "openapi:sync": "node scripts/sync-openapi-readiness.mjs",
     "openapi:lint": "redocly lint openapi/openapi.json --config redocly.yaml",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "format": "prettier --write .",
@@ -22,7 +23,7 @@
     "aislop:ci": "npx --yes aislop@latest ci --changes --base origin/main",
     "aislop:fix:safe": "npx --yes aislop@latest fix --safe",
     "check": "npm run format:check && npm run lint && npm run openapi:lint && npm run test:coverage && npm run typecheck && npm run security:audit && npm run aislop:ci",
-    "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
+    "fix": "npm run openapi:sync && npm run format && npm run lint:fix && npm run aislop:fix:safe",
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "dependencies": {
