@@ -11,9 +11,9 @@ const directories: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    directories.splice(0).map((path) =>
-      rm(path, { recursive: true, force: true }),
-    ),
+    directories
+      .splice(0)
+      .map((path) => rm(path, { recursive: true, force: true })),
   );
 });
 

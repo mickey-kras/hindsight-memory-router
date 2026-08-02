@@ -7,10 +7,7 @@ import {
   decodePrivateKey,
   decryptQuarantineEnvelope,
 } from "./envelopeCrypto.js";
-import type {
-  NewQuarantineItem,
-  QuarantineRepository,
-} from "./repository.js";
+import type { NewQuarantineItem, QuarantineRepository } from "./repository.js";
 import { createQuarantineRepository } from "./repositoryFactory.js";
 
 interface LegacyReviewRecord {

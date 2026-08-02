@@ -1,10 +1,7 @@
 import type { Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
-import {
-  parseRecallBody,
-  parseRetainBody,
-} from "../src/requestValidation.js";
+import { parseRecallBody, parseRetainBody } from "../src/requestValidation.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
 import { createMemoryRouterServer } from "../src/server.js";
 import { memoryQuarantine } from "./quarantineTestUtils.js";
@@ -13,27 +10,29 @@ const servers: Server[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    servers.splice(0).map(
-      (server) =>
-        new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        ),
-    ),
+    servers
+      .splice(0)
+      .map(
+        (server) =>
+          new Promise<void>((resolve, reject) =>
+            server.close((error) => (error ? reject(error) : resolve())),
+          ),
+      ),
   );
 });
 
 describe("router request validation", () => {
   it("validates retain and recall structures", () => {
     expect(() => parseRetainBody({})).toThrow("at least one memory item");
-    expect(() =>
-      parseRetainBody({ items: [{ content: "   " }] }),
-    ).toThrow("non-empty string");
+    expect(() => parseRetainBody({ items: [{ content: "   " }] })).toThrow(
+      "non-empty string",
+    );
     expect(() =>
       parseRetainBody({ items: [{ content: "ok", tags: [1] }] }),
     ).toThrow("tags must contain strings");
-    expect(parseRetainBody({ items: [{ content: "ok" }], async: true })).toEqual(
-      { items: [{ content: "ok" }], async: true },
-    );
+    expect(
+      parseRetainBody({ items: [{ content: "ok" }], async: true }),
+    ).toEqual({ items: [{ content: "ok" }], async: true });
 
     expect(() => parseRecallBody({})).toThrow("non-empty string");
     expect(() => parseRecallBody({ query: "ok", max_tokens: 0 })).toThrow(
@@ -59,7 +58,9 @@ describe("router request validation", () => {
       quarantineStore: quarantine.store,
     });
     servers.push(server);
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("unexpected server address");
@@ -70,10 +71,11 @@ describe("router request validation", () => {
       "content-type": "application/json",
     };
 
-    const retain = await fetch(
-      `${baseUrl}/v1/default/banks/ops/memories`,
-      { method: "POST", headers, body: "{}" },
-    );
+    const retain = await fetch(`${baseUrl}/v1/default/banks/ops/memories`, {
+      method: "POST",
+      headers,
+      body: "{}",
+    });
     expect(retain.status).toBe(400);
     await expect(retain.json()).resolves.toMatchObject({
       error: "invalid_retain_body",
