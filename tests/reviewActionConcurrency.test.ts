@@ -15,28 +15,18 @@ class SlowHindsightGateway extends FakeHindsightGateway {
   }
 }
 
+class FailingHindsightGateway extends FakeHindsightGateway {
+  override async retain(): Promise<unknown> {
+    throw new Error("upstream unavailable");
+  }
+}
+
 describe("quarantine review action locking", () => {
   it("issues one Hindsight write for concurrent approvals", async () => {
     const quarantine = memoryQuarantine({ rateLimitMax: 0 });
     const hindsight = new SlowHindsightGateway();
-    const stored = await quarantine.store.put({
-      timestamp: "2026-08-02T00:00:00.000Z",
-      kind: "retain_request",
-      reason: "unknown_writer",
-      writerId: "ops",
-      source: "openclaw",
-      payload: {
-        action: "retain",
-        writer_id: "ops",
-        body: { items: [{ content: "approved once" }] },
-      },
-    });
-    const item = await quarantine.repository.get(stored.quarantine_id);
-    if (!item?.encrypted) throw new Error("missing encrypted test item");
-    const decrypted = decryptQuarantineEnvelope(
-      item.encrypted,
-      quarantine.keys.privateKey,
-    );
+    const stored = await putRetain(quarantine, "approved once");
+    const decrypted = await decryptStored(quarantine, stored.quarantine_id);
     const admin = new QuarantineAdminService({
       repository: quarantine.repository,
       hindsight,
@@ -58,4 +48,51 @@ describe("quarantine review action locking", () => {
       reason: { status: 404, code: "quarantine_not_found" },
     });
   });
+
+  it("keeps the item pending when Hindsight rejects approval", async () => {
+    const quarantine = memoryQuarantine({ rateLimitMax: 0 });
+    const stored = await putRetain(quarantine, "retry later");
+    const decrypted = await decryptStored(quarantine, stored.quarantine_id);
+    const admin = new QuarantineAdminService({
+      repository: quarantine.repository,
+      hindsight: new FailingHindsightGateway(),
+      registry: DEFAULT_REGISTRY,
+    });
+
+    await expect(
+      admin.approve(stored.quarantine_id, { decrypted }),
+    ).rejects.toThrow("upstream unavailable");
+    await expect(
+      quarantine.repository.get(stored.quarantine_id),
+    ).resolves.toMatchObject({ status: "pending", encrypted: expect.any(Object) });
+    expect(quarantine.repository.events).toHaveLength(1);
+    expect(quarantine.repository.events[0]?.event_type).toBe("quarantined");
+  });
 });
+
+async function putRetain(
+  quarantine: ReturnType<typeof memoryQuarantine>,
+  content: string,
+) {
+  return quarantine.store.put({
+    timestamp: "2026-08-02T00:00:00.000Z",
+    kind: "retain_request",
+    reason: "unknown_writer",
+    writerId: "ops",
+    source: "openclaw",
+    payload: {
+      action: "retain",
+      writer_id: "ops",
+      body: { items: [{ content }] },
+    },
+  });
+}
+
+async function decryptStored(
+  quarantine: ReturnType<typeof memoryQuarantine>,
+  quarantineId: string,
+) {
+  const item = await quarantine.repository.get(quarantineId);
+  if (!item?.encrypted) throw new Error("missing encrypted test item");
+  return decryptQuarantineEnvelope(item.encrypted, quarantine.keys.privateKey);
+}
