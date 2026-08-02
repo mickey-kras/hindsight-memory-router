@@ -86,28 +86,22 @@ describe("legacy quarantine migration CLI", () => {
 
     const keyError = capture();
     await expect(
-      runMigrateLegacyQuarantineCli(
-        ["--queue", "q", "--objects", "o"],
-        {
-          readPrivateKey: async () => "   ",
-          stderr: keyError.stream,
-        },
-      ),
+      runMigrateLegacyQuarantineCli(["--queue", "q", "--objects", "o"], {
+        readPrivateKey: async () => "   ",
+        stderr: keyError.stream,
+      }),
     ).resolves.toBe(1);
     expect(keyError.value()).toContain("private key is required on stdin");
 
     const migrationError = capture();
     await expect(
-      runMigrateLegacyQuarantineCli(
-        ["--queue", "q", "--objects", "o"],
-        {
-          readPrivateKey: async () => "private-key",
-          migrate: async () => {
-            throw new Error("database unavailable");
-          },
-          stderr: migrationError.stream,
+      runMigrateLegacyQuarantineCli(["--queue", "q", "--objects", "o"], {
+        readPrivateKey: async () => "private-key",
+        migrate: async () => {
+          throw new Error("database unavailable");
         },
-      ),
+        stderr: migrationError.stream,
+      }),
     ).resolves.toBe(1);
     expect(migrationError.value()).toContain("database unavailable");
   });
