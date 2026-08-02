@@ -166,13 +166,7 @@ export class SqlQuarantineRepository implements QuarantineRepository {
         "only retain requests can be approved into Hindsight",
       );
       await operation();
-      await deleteWithEvent(
-        database,
-        quarantineId,
-        "approved",
-        at,
-        details,
-      );
+      await deleteWithEvent(database, quarantineId, "approved", at, details);
     });
   }
 
