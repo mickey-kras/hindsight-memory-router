@@ -37,10 +37,13 @@ Normal facade:
 
 ```text
 GET  /health                                      anonymous
+GET  /ready                                       anonymous
 GET  /version                                     router token
 POST /v1/default/banks/{writer}/memories          router token
 POST /v1/default/banks/{writer}/memories/recall   router token
 ```
+
+Router authentication fails closed. When `MEMORY_ROUTER_TOKEN` is not set, retain/recall/version reject every request with `401`. The only exception is the explicit development-only opt-in `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`, which restores anonymous access and prints a loud startup warning. Never enable it outside local development.
 
 Quarantine administration:
 
@@ -54,7 +57,9 @@ POST /admin/quarantine/items/{quarantine_id}/reject
 POST /admin/quarantine/items/{quarantine_id}/postpone
 ```
 
-Admin endpoints require `MEMORY_ROUTER_ADMIN_TOKEN`. The item endpoint returns metadata and the encrypted envelope; it never decrypts the payload.
+Admin endpoints require `MEMORY_ROUTER_ADMIN_TOKEN` and fail closed when it is unset. The item endpoint returns metadata and the encrypted envelope; it never decrypts the payload.
+
+Admin endpoints are throttled per router process with a sliding window: reads (`GET`) and mutations (`POST`) have separate budgets. Exceeding a budget returns `429` with `admin_rate_limited`. Failed authentication does not consume quota. Multi-instance deployments need a shared edge limit for a cluster-wide quota.
 
 Retain and recall bodies are validated before policy execution. Structurally invalid or empty requests return `400` rather than reaching Hindsight or failing as an internal error.
 
@@ -79,6 +84,10 @@ The container runs as the non-root `node` user.
 MEMORY_ROUTER_PORT=8890
 MEMORY_ROUTER_TOKEN=change-me
 MEMORY_ROUTER_ADMIN_TOKEN=change-me-admin-token
+MEMORY_ROUTER_ALLOW_ANONYMOUS=unset (dev-only escape hatch, see Token security)
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX=120
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX=30
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS=60000
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
@@ -104,7 +113,26 @@ SQLite is the default and enables WAL mode. PostgreSQL is intended for deploymen
 
 `QUARANTINE_PUBLIC_KEY` is validated when the router starts. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail. Keep the private key outside the router runtime and supply it only to an authorized local review or migration client.
 
-`QUARANTINE_MAX_POSTPONES` and the other numeric quarantine limits must be non-negative integers; malformed values fail startup.
+`QUARANTINE_MAX_POSTPONES` and the other numeric quarantine limits must be non-negative integers; malformed values fail startup. The same applies to the `MEMORY_ROUTER_ADMIN_RATE_LIMIT_*` values.
+
+## Token security
+
+Both bearer tokens are compared in constant time (SHA-256 pre-hashed, `crypto.timingSafeEqual`), so probing cannot learn the token length or content byte by byte.
+
+Failed authentication is audited. Every rejected router or admin request emits a structured stderr line (`{"event":"auth_failed","route_group":"router|admin"}`) and records one deduplicated `security_event` quarantine item per route group with reason `auth_failed`, visible in the admin queue and stats. Token material is never logged or stored, and the router never logs `Authorization` headers.
+
+Blast radius of a leaked token:
+
+- A leaked `MEMORY_ROUTER_TOKEN` can retain and recall through the facade, subject to writer policy, content scanning, and recall ACLs. It cannot read, decrypt, approve, reject, or clean up quarantine.
+- A leaked `MEMORY_ROUTER_ADMIN_TOKEN` can list queue metadata, read encrypted envelopes, and run destructive review actions (reject, postpone, cleanup). It cannot decrypt envelopes: the private key is enforced outside the router process. It cannot approve forged or altered content: approval requires the exact decrypted object whose canonical SHA-256 matches the stored digest, which only a holder of the private key can produce.
+
+Token handling rules:
+
+- Keep tokens out of agent configuration files, prompts, logs, and shell history. Inject them as environment variables or secrets at deploy time.
+- Rotate tokens on suspicion of exposure: generate new random values, update the router environment and restart it, then update the OpenClaw plugin config (`hindsightApiToken`) and any admin clients. Old tokens stop working as soon as the router restarts. Rotate `MEMORY_ROUTER_ADMIN_TOKEN` immediately if admin queue contents or review actions may have been observed.
+- After a suspected leak, review `auth_failed` and other `security_event` quarantine items and the append-only `quarantine_events` table for probing or misuse.
+
+`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` disables router authentication entirely and exists only so local development stacks can run without token plumbing. It has no effect on `/admin/*`, which always requires the admin token. Do not set it in any shared or production environment.
 
 OpenClaw plugin config:
 
