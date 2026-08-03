@@ -1,4 +1,5 @@
 import { HttpError } from "./httpError.js";
+import { InMemorySlidingWindowRateLimiter } from "./quarantine/rateLimiter.js";
 
 export type AdminRequestClass = "read" | "write";
 
@@ -40,36 +41,33 @@ export function classifyAdminRequest(method: string): AdminRequestClass {
   return method === "GET" || method === "HEAD" ? "read" : "write";
 }
 
-// This protects one router process. Multi-instance deployments need a shared edge limit.
 export class AdminRateLimiter {
-  private readonly windows: Record<AdminRequestClass, number[]> = {
-    read: [],
-    write: [],
-  };
+  private readonly limiter = new InMemorySlidingWindowRateLimiter();
 
   constructor(
     private readonly config: AdminRateLimitConfig = DEFAULT_ADMIN_RATE_LIMIT,
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  consume(requestClass: AdminRequestClass): void {
+  async consume(requestClass: AdminRequestClass): Promise<void> {
     const max =
       requestClass === "read" ? this.config.readMax : this.config.writeMax;
-    if (max <= 0 || this.config.windowMs <= 0) return;
-    const now = this.now();
-    const windowStart = now - this.config.windowMs;
-    const hits = this.windows[requestClass].filter(
-      (timestamp) => timestamp > windowStart,
-    );
-    if (hits.length >= max) {
-      throw new HttpError(
-        429,
-        "admin_rate_limited",
-        `too many admin ${requestClass} requests`,
+    try {
+      await this.limiter.consume(
+        `admin:${requestClass}`,
+        { max, windowMs: this.config.windowMs },
+        new Date(this.now()),
       );
+    } catch (error) {
+      if (error instanceof HttpError && error.status === 429) {
+        throw new HttpError(
+          429,
+          "admin_rate_limited",
+          `too many admin ${requestClass} requests`,
+        );
+      }
+      throw error;
     }
-    hits.push(now);
-    this.windows[requestClass] = hits;
   }
 }
 
