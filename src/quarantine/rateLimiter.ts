@@ -1,4 +1,4 @@
-import postgres, { type Sql } from "postgres";
+import postgres, { type Sql, type TransactionSql } from "postgres";
 import { HttpError } from "../httpError.js";
 
 export interface RateLimitRule {
@@ -53,7 +53,10 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
+  consumeMany(
+    buckets: readonly RateLimitBucket[],
+    at?: Date,
+  ): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
@@ -167,7 +170,7 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     if (enabled.length === 0) return;
 
     const cutoff = await this.sql.begin((transaction) =>
-      this.consumeManyInTransaction(transaction as Sql, enabled, at),
+      this.consumeManyInTransaction(transaction, enabled, at),
     );
     await this.recordConsume(cutoff);
   }
@@ -177,27 +180,26 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T> {
     let cutoff = 0;
-    const result = await this.sql.begin(async (transaction) => {
-      const sql = transaction as Sql;
-      await advisoryLock(sql, `quarantine-identity:${identityKey}`);
+    const result = (await this.sql.begin(async (transaction) => {
+      await advisoryLock(transaction, `quarantine-identity:${identityKey}`);
       const session: RateLimitSession = {
         consume: async (key, rule, at) => {
           cutoff = await this.consumeManyInTransaction(
-            sql,
+            transaction,
             normalizeBuckets([{ key, rule }]),
             at,
           );
         },
         consumeMany: async (buckets, at) => {
           cutoff = await this.consumeManyInTransaction(
-            sql,
+            transaction,
             normalizeBuckets(buckets),
             at,
           );
         },
       };
       return operation(session);
-    });
+    })) as unknown as T;
     if (cutoff !== 0) await this.recordConsume(cutoff);
     return result;
   }
@@ -207,7 +209,7 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
   }
 
   private async consumeManyInTransaction(
-    sql: Sql,
+    sql: TransactionSql,
     buckets: readonly RateLimitBucket[],
     at?: Date,
   ): Promise<number> {
@@ -273,13 +275,13 @@ function isEnabled(rule: RateLimitRule): boolean {
   return rule.max > 0 && rule.windowMs > 0;
 }
 
-async function advisoryLock(sql: Sql, key: string): Promise<void> {
+async function advisoryLock(sql: TransactionSql, key: string): Promise<void> {
   await sql.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
     key,
   ]);
 }
 
-async function databaseNowMs(sql: Sql): Promise<number> {
+async function databaseNowMs(sql: TransactionSql): Promise<number> {
   const rows = await sql.unsafe<Record<string, unknown>[]>(
     "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms",
   );
