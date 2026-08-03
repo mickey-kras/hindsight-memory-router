@@ -62,16 +62,48 @@ All other Hindsight endpoints are denied by default. The Hindsight `bank_id` pat
 
 ## Docker
 
-Published images:
+Published images (GHCR is canonical; Docker Hub is a mirror):
 
 ```text
-docker.io/mickeykrasilnikov/hindsight-memory-router:latest
-docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
-ghcr.io/mickey-kras/hindsight-memory-router:latest
 ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
+ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
+docker.io/mickeykrasilnikov/hindsight-memory-router@sha256:<digest>
 ```
 
+Pin deployments by digest (or by immutable `<git-sha>` tag) so every pull and redeploy runs the exact same build:
+
+```yaml
+services:
+  memory-router:
+    image: ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
+
+`:latest` is a convenience tag for quick evaluation only. It is pushed only on tagged `v*` releases and it moves, so pulling it at different times yields different router versions. Do not use it for deployments.
+
+The publish workflow records the exact digest of every build it pushes, both in the job summary and as an `image-digests` workflow artifact on the run. Use that digest when pinning.
+
 The container runs as the non-root `node` user.
+
+### Deployment runbook
+
+After every deploy or update, record what is actually running into the ops log:
+
+```bash
+# running digest (compare with the pinned digest from the workflow summary/artifact)
+docker inspect --format='{{index .RepoDigests 0}}' <container>
+# or list digests for all running containers
+docker ps --digests
+```
+
+Verify the pinned digest against the keyless signature before trusting it:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
 
 ## Configuration
 
