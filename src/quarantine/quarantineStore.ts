@@ -43,7 +43,7 @@ export interface QuarantineStoreLimits {
   maxItemBytes: number;
   maxPendingItems: number;
   maxEncryptedBytes: number;
-  /** Maximum new quarantine identities per writer per window. */
+  /** Maximum new quarantine identities per writer per window; 0 disables new-identity rate limiting (per-writer and global backstop). */
   rateLimitMax: number;
   rateLimitWindowMs: number;
   /** Global backstop: maximum new quarantine identities across all writers per window. */
@@ -162,7 +162,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       });
       return;
     }
-    if (this.limits.rateLimitMax <= 0 && this.limits.rateLimitGlobalMax <= 0) {
+    if (this.limits.rateLimitMax <= 0) {
+      // Legacy semantics: a zero per-writer limit disables new-identity rate
+      // limiting entirely, including the global backstop. The requarantine
+      // ops ceiling above is controlled separately.
       return;
     }
     if (await this.capacityExhausted()) {
