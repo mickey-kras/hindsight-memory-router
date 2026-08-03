@@ -15,6 +15,7 @@ async function withServer<T>(
   const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
+    routerToken: "router-token",
     hindsight,
     quarantineRepository: quarantine.repository,
     quarantineStore: quarantine.store,
@@ -44,7 +45,10 @@ describe("OpenClaw Hindsight plugin contract", () => {
         `${baseUrl}/v1/default/banks/main/memories`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            authorization: "Bearer router-token",
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
             items: [
               {
@@ -72,7 +76,10 @@ describe("OpenClaw Hindsight plugin contract", () => {
         `${baseUrl}/v1/default/banks/dev/memories/recall`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            authorization: "Bearer router-token",
+            "content-type": "application/json",
+          },
           body: JSON.stringify({
             query: "What changed in the memory router?",
             max_tokens: 1024,
@@ -94,7 +101,9 @@ describe("OpenClaw Hindsight plugin contract", () => {
 
   it("records unknown Hindsight endpoints instead of proxying them", async () => {
     await withServer(async ({ baseUrl, hindsight, repository }) => {
-      const response = await fetch(`${baseUrl}/v1/default/banks/main/config`);
+      const response = await fetch(`${baseUrl}/v1/default/banks/main/config`, {
+        headers: { authorization: "Bearer router-token" },
+      });
       expect(response.status).toBe(404);
       expect(hindsight.retained).toHaveLength(0);
       expect(hindsight.recalled).toHaveLength(0);
