@@ -17,6 +17,7 @@ import {
   assertCapacity,
   cleanupWhere,
   createStoredItem,
+  findItemByDedupeKey,
   findItemById,
   findItemBySource,
   initializeSchema,
@@ -94,6 +95,22 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     }
     await this.store(item, capacity, (database) =>
       findItemById(database, item.quarantine_id, true),
+    );
+  }
+
+  async upsertRequestItem(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (
+      (item.kind !== "retain_request" && item.kind !== "recall_request") ||
+      !item.dedupe_key
+    ) {
+      throw new Error("request item dedupe identity is required");
+    }
+    const dedupeKey = item.dedupe_key;
+    await this.store(item, capacity, (database) =>
+      findItemByDedupeKey(database, dedupeKey, true),
     );
   }
 
@@ -266,7 +283,12 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       const existing = await findExisting(database);
       await assertCapacity(database, item, existing, capacity);
       if (existing) {
-        await refreshStoredItem(database, existing.quarantine_id, item);
+        await refreshStoredItem(
+          database,
+          existing.quarantine_id,
+          item,
+          existing.requarantine_count + 1,
+        );
       } else {
         await createStoredItem(database, item);
       }
