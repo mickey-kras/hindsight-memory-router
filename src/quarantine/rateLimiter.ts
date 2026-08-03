@@ -53,7 +53,10 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
+  consumeMany(
+    buckets: readonly RateLimitBucket[],
+    at?: Date,
+  ): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
@@ -169,30 +172,37 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     const cutoff = await this.sql.begin((transaction) =>
       this.consumeManyInTransaction(transaction as Sql, enabled, at),
     );
-    await this.maybePrune(cutoff);
+    await this.recordConsume(cutoff);
   }
 
   async withIdentityLock<T>(
     identityKey: string,
     operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T> {
-    return this.sql.begin(async (transaction) => {
+    let cutoff = 0;
+    const result = await this.sql.begin(async (transaction) => {
       const sql = transaction as Sql;
       await advisoryLock(sql, `quarantine-identity:${identityKey}`);
       const session: RateLimitSession = {
-        consume: (key, rule, at) =>
-          this.consumeManyInTransaction(sql, [{ key, rule }], at).then(
-            () => undefined,
-          ),
-        consumeMany: (buckets, at) =>
-          this.consumeManyInTransaction(
+        consume: async (key, rule, at) => {
+          cutoff = await this.consumeManyInTransaction(
+            sql,
+            normalizeBuckets([{ key, rule }]),
+            at,
+          );
+        },
+        consumeMany: async (buckets, at) => {
+          cutoff = await this.consumeManyInTransaction(
             sql,
             normalizeBuckets(buckets),
             at,
-          ).then(() => undefined),
+          );
+        },
       };
       return operation(session);
     });
+    if (cutoff !== 0) await this.recordConsume(cutoff);
+    return result;
   }
 
   async close(): Promise<void> {
@@ -237,14 +247,12 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
       );
     }
 
-    this.consumes += 1;
     return Math.min(...buckets.map(({ rule }) => now - rule.windowMs));
   }
 
-  private async maybePrune(cutoff: number): Promise<void> {
-    if (cutoff === 0 || this.consumes % this.pruneIntervalConsumes !== 0) {
-      return;
-    }
+  private async recordConsume(cutoff: number): Promise<void> {
+    this.consumes += 1;
+    if (this.consumes % this.pruneIntervalConsumes !== 0) return;
     await this.sql.unsafe(
       "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms <= $1",
       [cutoff],
