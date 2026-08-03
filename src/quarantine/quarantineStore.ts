@@ -10,6 +10,7 @@ import {
 import {
   InMemorySlidingWindowRateLimiter,
   type QuarantineRateLimiter,
+  type RateLimitSession,
 } from "./rateLimiter.js";
 import type {
   NewQuarantineItem,
@@ -94,21 +95,24 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    return this.rateLimiter.withIdentityLock(quarantineId, async () => {
-      const knownIdentity = await this.isKnownIdentity(input, quarantineId);
-      await this.chargeRateQuota(input, knownIdentity);
+    return this.rateLimiter.withIdentityLock(
+      quarantineId,
+      async (rateLimitSession) => {
+        const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+        await this.chargeRateQuota(input, knownIdentity, rateLimitSession);
 
-      const item = this.buildItem(input, quarantineId, encrypted);
-      if (input.kind === "recalled_memory") {
-        await this.repository.upsertRecalledMemory(item, this.capacity);
-      } else if (input.kind === "security_event") {
-        await this.repository.upsertSecurityEvent(item, this.capacity);
-      } else {
-        await this.repository.insert(item, this.capacity);
-      }
+        const item = this.buildItem(input, quarantineId, encrypted);
+        if (input.kind === "recalled_memory") {
+          await this.repository.upsertRecalledMemory(item, this.capacity);
+        } else if (input.kind === "security_event") {
+          await this.repository.upsertSecurityEvent(item, this.capacity);
+        } else {
+          await this.repository.insert(item, this.capacity);
+        }
 
-      return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
-    });
+        return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+      },
+    );
   }
 
   private encrypt(input: QuarantineInput, quarantineId: string) {
@@ -155,10 +159,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private async chargeRateQuota(
     input: QuarantineInput,
     knownIdentity: boolean,
+    rateLimitSession: RateLimitSession,
   ): Promise<void> {
     const windowMs = this.limits.rateLimitWindowMs;
     if (knownIdentity) {
-      await this.rateLimiter.consume(REQUARANTINE_OPS_BUCKET, {
+      await rateLimitSession.consume(REQUARANTINE_OPS_BUCKET, {
         max: this.limits.requarantineOpsMax,
         windowMs,
       });
@@ -169,7 +174,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     }
 
     const writer = input.writerId ?? UNKNOWN_WRITER_BUCKET;
-    await this.rateLimiter.consumeMany([
+    await rateLimitSession.consumeMany([
       {
         key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
         rule: { max: this.limits.rateLimitMax, windowMs },
