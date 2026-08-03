@@ -76,7 +76,8 @@ export type ReviewReason =
   | "suspicious_content"
   | "suspicious_query"
   | "recalled_suspicious_memory"
-  | "denied_endpoint";
+  | "denied_endpoint"
+  | "auth_failed";
 
 export type QuarantineKind =
   "retain_request" | "recall_request" | "recalled_memory" | "security_event";

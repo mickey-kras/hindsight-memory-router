@@ -79,12 +79,15 @@ describe("server request branches", () => {
   });
 
   it("rejects malformed JSON request bodies", async () => {
-    await withServer({}, async (baseUrl) => {
+    await withServer({ routerToken: "router-token" }, async (baseUrl) => {
       const response = await fetch(
         `${baseUrl}/v1/default/banks/main/memories`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            authorization: "Bearer router-token",
+            "content-type": "application/json",
+          },
           body: "{not-json",
         },
       );
@@ -94,25 +97,33 @@ describe("server request branches", () => {
   });
 
   it("rejects request bodies above the configured limit", async () => {
-    await withServer({ maxBodyBytes: 8 }, async (baseUrl) => {
-      const response = await fetch(
-        `${baseUrl}/v1/default/banks/main/memories`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ items: [] }),
-        },
-      );
-      expect(response.status).toBe(413);
-      expect(await response.json()).toMatchObject({
-        error: "payload_too_large",
-      });
-    });
+    await withServer(
+      { routerToken: "router-token", maxBodyBytes: 8 },
+      async (baseUrl) => {
+        const response = await fetch(
+          `${baseUrl}/v1/default/banks/main/memories`,
+          {
+            method: "POST",
+            headers: {
+              authorization: "Bearer router-token",
+              "content-type": "application/json",
+            },
+            body: JSON.stringify({ items: [] }),
+          },
+        );
+        expect(response.status).toBe(413);
+        expect(await response.json()).toMatchObject({
+          error: "payload_too_large",
+        });
+      },
+    );
   });
 
   it("encrypts denied endpoint security events", async () => {
-    await withServer({}, async (baseUrl) => {
-      const response = await fetch(`${baseUrl}/unknown`);
+    await withServer({ routerToken: "router-token" }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/unknown`, {
+        headers: { authorization: "Bearer router-token" },
+      });
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({
         error: "endpoint denied by memory-router policy",

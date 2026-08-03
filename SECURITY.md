@@ -2,45 +2,37 @@
 
 ## Reporting
 
-Please open a private security advisory in GitHub if possible.
-
-Do not publish exploit details publicly before there is a fix or mitigation.
-
-## Scope
-
-Security-sensitive areas:
-
-```text
-writer identity
-bank routing
-recall ACL
-router/admin token separation
-encrypted quarantine object storage
-private-key-only admin decrypt flow
-safe review queue records
-Hindsight API forwarding
-non-root container runtime
-container image publishing
-```
+Report vulnerabilities with a private GitHub security advisory. Do not publish exploit details before a fix or mitigation is available.
 
 ## Boundaries
 
-```text
-MEMORY_ROUTER_TOKEN can retain/recall through the facade
-MEMORY_ROUTER_TOKEN cannot read/decrypt/approve quarantine
-MEMORY_ROUTER_ADMIN_TOKEN is required for admin quarantine routes
-QUARANTINE_PRIVATE_KEY is required only for admin read/promote review flow
-raw quarantine payloads must not be written to review queue or searchable memory
-```
+- `MEMORY_ROUTER_TOKEN` permits retain and recall only.
+- `MEMORY_ROUTER_ADMIN_TOKEN` permits quarantine administration.
+- Router and admin authentication fail closed when their token is unset.
+- `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` is for local development only.
+- Tokens are compared in constant time and are never logged.
+- Failed authentication is recorded as a bounded `auth_failed` security event.
+- Admin requests are rate-limited per process.
+- The router stores only `QUARANTINE_PUBLIC_KEY`.
+- `QUARANTINE_PRIVATE_KEY` must stay outside the router runtime.
+- Admin approval requires the exact decrypted object and stored SHA-256.
 
-## Runtime expectations
+A leaked admin token can read encrypted envelopes and run review actions. It cannot decrypt envelopes or approve modified content.
 
-Run the router only on a private network.
+## Rotation
 
-Keep the real Hindsight API unavailable to untrusted clients.
+1. Generate new router and admin tokens.
+2. Update the deployment and restart the router.
+3. Update OpenClaw and admin clients.
+4. Review quarantine events if compromise is suspected.
 
-Mount quarantine/review storage so the non-root `node` user can write to it. The router validates storage writability on startup and fails fast if permissions are wrong.
+## Runtime
 
-## Non-goals
+- Run the router on a private network.
+- Do not expose Hindsight directly to untrusted clients.
+- Run the container as a non-root user.
+- Keep quarantine storage separate from Hindsight application data.
 
-This project does not make Hindsight itself secure. It is a policy facade in front of Hindsight.
+## Non-goal
+
+The router is a policy boundary in front of Hindsight; it does not secure Hindsight itself.

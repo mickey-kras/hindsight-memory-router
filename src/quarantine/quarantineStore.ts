@@ -62,6 +62,9 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
 
 const GLOBAL_WRITES_BUCKET = "quarantine-writes";
 const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
+const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
+const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
+  "quarantine-requarantine-ops:auth-audit";
 const UNKNOWN_WRITER_BUCKET = "unknown-writer";
 
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
@@ -162,14 +165,26 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     rateLimitSession: RateLimitSession,
   ): Promise<void> {
     const windowMs = this.limits.rateLimitWindowMs;
+    // Auth-failure audits use dedicated buckets so unauthenticated probing
+    // can never share budget with security quarantines or their refreshes.
+    const authAudit = input.reason === "auth_failed";
     if (knownIdentity) {
-      await rateLimitSession.consume(REQUARANTINE_OPS_BUCKET, {
-        max: this.limits.requarantineOpsMax,
-        windowMs,
-      });
+      await rateLimitSession.consume(
+        authAudit
+          ? AUTH_AUDIT_REQUARANTINE_OPS_BUCKET
+          : REQUARANTINE_OPS_BUCKET,
+        { max: this.limits.requarantineOpsMax, windowMs },
+      );
       return;
     }
     if (this.limits.rateLimitMax <= 0 || (await this.capacityExhausted())) {
+      return;
+    }
+    if (authAudit) {
+      await rateLimitSession.consume(AUTH_AUDIT_WRITES_BUCKET, {
+        max: this.limits.rateLimitGlobalMax,
+        windowMs,
+      });
       return;
     }
 
