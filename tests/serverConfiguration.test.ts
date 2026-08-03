@@ -47,27 +47,29 @@ describe("router authentication startup validation", () => {
     stderrSpy.mockRestore();
   });
 
-  it("stays quiet when a router token is configured", () => {
-    assertRouterAuthEnvironment({ MEMORY_ROUTER_TOKEN: "router-token" });
+  it("stays quiet when both tokens are configured", () => {
+    assertRouterAuthEnvironment({
+      MEMORY_ROUTER_TOKEN: "router-token",
+      MEMORY_ROUTER_ADMIN_TOKEN: "admin-token",
+    });
     expect(stderrOutput).toEqual([]);
   });
 
-  it("warns that authentication fails closed when no token is configured", () => {
+  it("warns that router authentication fails closed when unset", () => {
     assertRouterAuthEnvironment({
       MEMORY_ROUTER_ADMIN_TOKEN: "admin-token",
     });
-    expect(stderrOutput.join("")).toContain("MEMORY_ROUTER_TOKEN is not set");
-    expect(stderrOutput.join("")).toContain("fail-closed");
-    expect(stderrOutput.join("")).not.toContain(
-      "MEMORY_ROUTER_ADMIN_TOKEN is not set",
-    );
+    const output = stderrOutput.join("");
+    expect(output).toContain("MEMORY_ROUTER_TOKEN is not set");
+    expect(output).toContain("fail-closed");
+    expect(output).not.toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
   });
 
-  it("also warns when the admin token is missing", () => {
-    assertRouterAuthEnvironment({});
-    expect(stderrOutput.join("")).toContain(
-      "MEMORY_ROUTER_ADMIN_TOKEN is not set",
-    );
+  it("warns when the admin token is missing even if router auth is configured", () => {
+    assertRouterAuthEnvironment({ MEMORY_ROUTER_TOKEN: "router-token" });
+    const output = stderrOutput.join("");
+    expect(output).toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
+    expect(output).not.toContain("MEMORY_ROUTER_TOKEN is not set");
   });
 
   it("warns loudly that anonymous access is development-only", () => {
