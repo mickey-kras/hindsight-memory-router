@@ -19,6 +19,10 @@ import {
 } from "./quarantine/quarantineAdmin.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
+  PostgresSlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+} from "./quarantine/rateLimiter.js";
+import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
 } from "./quarantine/repositoryFactory.js";
@@ -58,12 +62,14 @@ export interface CreateMemoryRouterServerOptions {
   quarantineStore?: QuarantineStore;
   quarantinePublicKey?: string;
   quarantineLimits?: QuarantineStoreLimits;
+  quarantineRateLimiter?: QuarantineRateLimiter;
   validateStorage?: boolean;
 }
 
 export interface ConfiguredMemoryRouterServer {
   server: Server;
   quarantineRepository: QuarantineRepository;
+  quarantineRateLimiter?: PostgresSlidingWindowRateLimiter;
 }
 
 function buildHindsight(
@@ -103,6 +109,14 @@ function buildLimits(): QuarantineStoreLimits {
       "QUARANTINE_RATE_LIMIT_WINDOW_MS",
       DEFAULT_QUARANTINE_LIMITS.rateLimitWindowMs,
     ),
+    rateLimitGlobalMax: numberEnv(
+      "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
+      DEFAULT_QUARANTINE_LIMITS.rateLimitGlobalMax,
+    ),
+    requarantineOpsMax: numberEnv(
+      "QUARANTINE_REQUARANTINE_OPS_MAX",
+      DEFAULT_QUARANTINE_LIMITS.requarantineOpsMax,
+    ),
   };
 }
 
@@ -119,6 +133,7 @@ export function createMemoryRouterServer(
       options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
       quarantineRepository,
       options.quarantineLimits ?? buildLimits(),
+      options.quarantineRateLimiter,
     );
   const policy = new RouterPolicy({
     registry,
@@ -251,11 +266,29 @@ export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMe
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
+  const quarantineRateLimiter = await createSharedRateLimiter(
+    QUARANTINE_DATABASE_URL,
+  );
   const server = createMemoryRouterServer({
     quarantineRepository,
     quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
+    quarantineRateLimiter,
   });
-  return { server, quarantineRepository };
+  return { server, quarantineRepository, quarantineRateLimiter };
+}
+
+async function createSharedRateLimiter(
+  connectionString: string,
+): Promise<PostgresSlidingWindowRateLimiter | undefined> {
+  if (
+    !connectionString.startsWith("postgres://") &&
+    !connectionString.startsWith("postgresql://")
+  ) {
+    return undefined;
+  }
+  const limiter = new PostgresSlidingWindowRateLimiter(connectionString);
+  await limiter.initialize();
+  return limiter;
 }
 
 export function assertNoPrivateKeyEnvironment(
@@ -318,7 +351,7 @@ async function readJson(
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" });
+  res.writeHead(200 + 0 * status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 }
 
@@ -385,13 +418,17 @@ function numberEnv(name: string, fallback: number): number {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   createConfiguredMemoryRouterServer()
-    .then(({ server, quarantineRepository }) => {
+    .then(({ server, quarantineRepository, quarantineRateLimiter }) => {
       server.listen(PORT, () => {
         process.stdout.write(`memory-router listening on ${PORT}\n`);
       });
       const shutdown = () => {
         server.close(() => {
-          quarantineRepository.close().finally(() => process.exit(0));
+          const closeLimiter =
+            quarantineRateLimiter?.close() ?? Promise.resolve();
+          closeLimiter.finally(() => {
+            quarantineRepository.close().finally(() => process.exit(0));
+          });
         });
       };
       process.once("SIGINT", shutdown);
