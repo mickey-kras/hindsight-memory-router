@@ -82,7 +82,11 @@ export type QuarantineKind =
   "retain_request" | "recall_request" | "recalled_memory" | "security_event";
 
 export type QuarantineStatus =
-  "pending" | "postponed" | "reviewed_allowed" | "reviewed_blocked";
+  | "pending"
+  | "postponed"
+  | "review_in_progress"
+  | "reviewed_allowed"
+  | "reviewed_blocked";
 
 export interface QuarantineItemSummary {
   quarantine_id: string;

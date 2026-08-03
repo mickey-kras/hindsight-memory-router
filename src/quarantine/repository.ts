@@ -42,6 +42,7 @@ export type QuarantineEventType =
   | "approved"
   | "reviewed_allowed"
   | "reviewed_blocked"
+  | "review_interrupted"
   | "rejected"
   | "cleanup";
 

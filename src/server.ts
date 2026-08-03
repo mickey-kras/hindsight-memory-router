@@ -7,6 +7,7 @@ import {
 import type { ParsedUrlQuery } from "node:querystring";
 import { parse as parseUrl } from "node:url";
 import {
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
@@ -38,6 +39,10 @@ const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
+const HINDSIGHT_TIMEOUT_MS = numberEnv(
+  "HINDSIGHT_TIMEOUT_MS",
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
+);
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
 const QUARANTINE_DATABASE_URL =
@@ -71,7 +76,11 @@ function buildHindsight(
 ): HindsightGateway {
   return (
     options.hindsight ??
-    new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
+    new FetchHindsightGateway(
+      HINDSIGHT_BASE_URL,
+      HINDSIGHT_API_KEY,
+      HINDSIGHT_TIMEOUT_MS,
+    )
   );
 }
 
