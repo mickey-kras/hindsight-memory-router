@@ -59,6 +59,23 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     this.store(item, existing, capacity);
   }
 
+  async upsertRequestItem(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (
+      (item.kind !== "retain_request" && item.kind !== "recall_request") ||
+      !item.dedupe_key
+    ) {
+      throw new Error("request item dedupe identity is required");
+    }
+    const existing =
+      [...this.items.values()].find(
+        (entry) => entry.dedupe_key === item.dedupe_key,
+      ) ?? null;
+    this.store(item, existing, capacity);
+  }
+
   async get(quarantineId: string): Promise<StoredQuarantineItem | null> {
     return this.items.get(quarantineId) ?? null;
   }
@@ -216,7 +233,14 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   ): void {
     this.assertCapacity(item, existing, capacity);
     const quarantineId = existing?.quarantine_id ?? item.quarantine_id;
-    this.items.set(quarantineId, { ...item, quarantine_id: quarantineId });
+    const requarantineCount = existing
+      ? existing.requarantine_count + 1
+      : (item.requarantine_count ?? 0);
+    this.items.set(quarantineId, {
+      ...item,
+      quarantine_id: quarantineId,
+      requarantine_count: requarantineCount,
+    });
     this.events.push(
       quarantineEvent(
         quarantineId,
@@ -226,6 +250,7 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
           kind: item.kind,
           reason: item.reason,
           sha256: item.sha256,
+          ...(existing ? { requarantine_count: requarantineCount } : {}),
         },
       ),
     );
