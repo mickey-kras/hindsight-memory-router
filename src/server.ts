@@ -1,11 +1,4 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { ParsedUrlQuery } from "node:querystring";
+import { createServer, type Server } from "node:http";
 import { parse as parseUrl } from "node:url";
 import {
   AdminRateLimiter,
@@ -16,13 +9,24 @@ import {
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
-import { HttpError, safeErrorBody } from "./httpError.js";
+import { safeErrorBody } from "./httpError.js";
+import {
+  integerQuery,
+  parseAdminItemPath,
+  parseMemoryPath,
+  readJson,
+  send,
+} from "./httpHelpers.js";
 import { RouterPolicy } from "./policy.js";
 import {
   QuarantineAdminService,
   type ApproveBody,
   type CleanupBody,
 } from "./quarantine/quarantineAdmin.js";
+import {
+  PostgresSlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+} from "./quarantine/rateLimiter.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
   createQuarantineRepository,
@@ -36,11 +40,18 @@ import {
 } from "./quarantine/quarantineStore.js";
 import { loadRegistry } from "./registry.js";
 import { parseRecallBody, parseRetainBody } from "./requestValidation.js";
+import {
+  assertNoPrivateKeyEnvironment,
+  assertRouterAuthEnvironment,
+  createAuthFailureAuditor,
+  isAdminAuthorized,
+  isAuthorized,
+} from "./routerAuth.js";
 import type { WriterRegistry } from "./types.js";
 
+export { assertNoPrivateKeyEnvironment, assertRouterAuthEnvironment };
+
 const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
-const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
-const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
 const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
@@ -67,6 +78,7 @@ export interface CreateMemoryRouterServerOptions {
   quarantineStore?: QuarantineStore;
   quarantinePublicKey?: string;
   quarantineLimits?: QuarantineStoreLimits;
+  quarantineRateLimiter?: QuarantineRateLimiter;
   validateStorage?: boolean;
 }
 
@@ -108,6 +120,14 @@ function buildLimits(): QuarantineStoreLimits {
       "QUARANTINE_RATE_LIMIT_MAX",
       DEFAULT_QUARANTINE_LIMITS.rateLimitMax,
     ),
+    rateLimitGlobalMax: numberEnv(
+      "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
+      DEFAULT_QUARANTINE_LIMITS.rateLimitGlobalMax,
+    ),
+    requarantineOpsMax: numberEnv(
+      "QUARANTINE_REQUARANTINE_OPS_MAX",
+      DEFAULT_QUARANTINE_LIMITS.requarantineOpsMax,
+    ),
     rateLimitWindowMs: numberEnv(
       "QUARANTINE_RATE_LIMIT_WINDOW_MS",
       DEFAULT_QUARANTINE_LIMITS.rateLimitWindowMs,
@@ -128,6 +148,7 @@ export function createMemoryRouterServer(
       options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
       quarantineRepository,
       options.quarantineLimits ?? buildLimits(),
+      options.quarantineRateLimiter,
     );
   const allowAnonymous = options.allowAnonymous ?? ALLOW_ANONYMOUS;
   const adminRateLimiter =
@@ -276,41 +297,12 @@ export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMe
   return { server, quarantineRepository };
 }
 
-export function assertNoPrivateKeyEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-): void {
-  const injected = Object.keys(environment).find((name) =>
-    name.startsWith("QUARANTINE_PRIVATE_KEY"),
-  );
-  if (injected) {
-    throw new Error(
-      `${injected} must not be available to the memory-router process`,
-    );
-  }
-}
-
-// Router authentication fails closed: without MEMORY_ROUTER_TOKEN every
-// retain/recall/version request is rejected unless the explicit dev-only
-// opt-in MEMORY_ROUTER_ALLOW_ANONYMOUS=true is set. Both states are
-// surfaced loudly at startup instead of silently changing the trust model.
-export function assertRouterAuthEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-): void {
-  if (environment.MEMORY_ROUTER_TOKEN) return;
-  if (environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true") {
-    process.stderr.write(
-      "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true with no MEMORY_ROUTER_TOKEN; retain/recall/version are anonymously accessible. Development only, never use in production.\n",
-    );
-    return;
-  }
-  process.stderr.write(
-    "memory-router WARNING: MEMORY_ROUTER_TOKEN is not set; retain/recall/version reject all requests (fail-closed). Set MEMORY_ROUTER_TOKEN, or set MEMORY_ROUTER_ALLOW_ANONYMOUS=true for local development only.\n",
-  );
-  if (!environment.MEMORY_ROUTER_ADMIN_TOKEN) {
-    process.stderr.write(
-      "memory-router WARNING: MEMORY_ROUTER_ADMIN_TOKEN is not set; /admin/* routes reject all requests (fail-closed).\n",
-    );
-  }
+export async function createPostgresRateLimiter(
+  connectionString: string,
+): Promise<PostgresSlidingWindowRateLimiter> {
+  const limiter = new PostgresSlidingWindowRateLimiter(connectionString);
+  await limiter.initialize();
+  return limiter;
 }
 
 function requireQuarantineRepository(
@@ -322,167 +314,6 @@ function requireQuarantineRepository(
     );
   }
   return options.quarantineRepository;
-}
-
-function isAuthorized(
-  req: IncomingMessage,
-  routerToken: string | undefined,
-  allowAnonymous: boolean,
-): boolean {
-  const token = routerToken ?? ROUTER_TOKEN;
-  if (!token) return allowAnonymous;
-  return bearerTokenMatches(req.headers.authorization, token);
-}
-
-function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
-  const token = adminToken ?? ADMIN_TOKEN;
-  if (!token) return false;
-  return bearerTokenMatches(req.headers.authorization, token);
-}
-
-// Both sides are hashed to a fixed length first so the comparison is
-// constant-time and does not leak the expected token length.
-function bearerTokenMatches(
-  authorization: string | undefined,
-  token: string,
-): boolean {
-  if (!authorization) return false;
-  const presented = createHash("sha256").update(authorization, "utf8").digest();
-  const expected = createHash("sha256")
-    .update(`Bearer ${token}`, "utf8")
-    .digest();
-  return timingSafeEqual(presented, expected);
-}
-
-type AuthRouteGroup = "router" | "admin";
-
-const AUTH_FAILURE_LOG_WINDOW_MS = 60_000;
-
-// Failed authentication is audited with a bounded identity space: one
-// deduplicated security_event per route group, plus a structured stderr
-// line. Stderr is throttled to one line per kind per route group per
-// window so probing cannot flood logs. Token material is never logged
-// or stored.
-function createAuthFailureAuditor(
-  quarantineStore: QuarantineStore,
-  now: () => number = () => Date.now(),
-): (routeGroup: AuthRouteGroup) => Promise<void> {
-  const lastLoggedAt = new Map<string, number>();
-  const logThrottled = (
-    channel: "event" | "error",
-    routeGroup: AuthRouteGroup,
-    line: string,
-  ): void => {
-    const key = `${channel}:${routeGroup}`;
-    const at = now();
-    const last = lastLoggedAt.get(key);
-    if (last !== undefined && at - last < AUTH_FAILURE_LOG_WINDOW_MS) return;
-    lastLoggedAt.set(key, at);
-    process.stderr.write(line);
-  };
-  return async (routeGroup: AuthRouteGroup): Promise<void> => {
-    logThrottled(
-      "event",
-      routeGroup,
-      `${JSON.stringify({ event: "auth_failed", route_group: routeGroup })}\n`,
-    );
-    try {
-      await quarantineStore.put({
-        timestamp: new Date().toISOString(),
-        kind: "security_event",
-        reason: "auth_failed",
-        source: "http",
-        dedupeKey: `auth_failed:${routeGroup}`,
-        payload: { action: "auth_failed", route_group: routeGroup },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown error";
-      logThrottled(
-        "error",
-        routeGroup,
-        `memory-router could not record an auth_failed security event: ${message}\n`,
-      );
-    }
-  };
-}
-
-async function readJson(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-    if (totalBytes > maxBodyBytes) {
-      throw new HttpError(413, "payload_too_large", "payload too large");
-    }
-    chunks.push(buffer);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new HttpError(400, "invalid_json", "invalid JSON body");
-  }
-}
-
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-function parseMemoryPath(
-  pathname: string,
-): { writerId: string; action: "retain" | "recall" } | null {
-  const retain = pathname.match(/^\/v1\/default\/banks\/([^/]+)\/memories$/);
-  if (retain) {
-    return { writerId: decodeURIComponent(retain[1]), action: "retain" };
-  }
-
-  const recall = pathname.match(
-    /^\/v1\/default\/banks\/([^/]+)\/memories\/recall$/,
-  );
-  if (recall) {
-    return { writerId: decodeURIComponent(recall[1]), action: "recall" };
-  }
-
-  return null;
-}
-
-function parseAdminItemPath(pathname: string): {
-  quarantineId: string;
-  action: "read" | "approve" | "reject" | "postpone";
-} | null {
-  const match = pathname.match(
-    /^\/admin\/quarantine\/items\/([^/]+)(?:\/(approve|reject|postpone))?$/,
-  );
-  if (!match) return null;
-  return {
-    quarantineId: decodeURIComponent(match[1]),
-    action: (match[2] ?? "read") as "read" | "approve" | "reject" | "postpone",
-  };
-}
-
-function integerQuery(
-  query: ParsedUrlQuery,
-  name: string,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const raw = query[name];
-  if (raw === undefined) return fallback;
-  if (Array.isArray(raw)) {
-    throw new HttpError(400, "invalid_query", `${name} is invalid`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new HttpError(400, "invalid_query", `${name} is invalid`);
-  }
-  return value;
 }
 
 function numberEnv(name: string, fallback: number): number {
