@@ -39,6 +39,32 @@ describe("InMemorySlidingWindowRateLimiter", () => {
     await limiter.consume("k", { max: 0, windowMs: 1_000 }, new Date(0));
     await limiter.consume("k", { max: 2, windowMs: 0 }, new Date(0));
   });
+
+  it("evicts stale bucket keys on the periodic sweep", async () => {
+    const limiter = new InMemorySlidingWindowRateLimiter({
+      sweepIntervalConsumes: 4,
+    });
+
+    // Attacker rotates through many writer IDs, creating one bucket each.
+    for (let i = 0; i < 100; i += 1) {
+      await limiter.consume(`attacker-${i}`, RULE, new Date(0));
+    }
+    expect(limiter.bucketCount()).toBe(100);
+
+    // Once those events leave the window, the next sweep drops the stale
+    // keys instead of growing the map forever.
+    for (let i = 0; i < 4; i += 1) {
+      await limiter.consume(`recent-${i % 2}`, RULE, new Date(10_000));
+    }
+    expect(limiter.bucketCount()).toBe(2);
+
+    // Evicted buckets start with a fresh quota when the writer returns.
+    await limiter.consume("attacker-0", RULE, new Date(10_001));
+    await limiter.consume("attacker-0", RULE, new Date(10_002));
+    await expect(
+      limiter.consume("attacker-0", RULE, new Date(10_003)),
+    ).rejects.toMatchObject({ status: 429 });
+  });
 });
 
 describe("quarantine store rate limiting", () => {
@@ -142,6 +168,20 @@ describe("quarantine store rate limiting", () => {
     await expect(
       store.put(newWriterPut("writer-a", "overflow-2")),
     ).rejects.toMatchObject({ status: 507 });
+  });
+
+  it("keeps legacy semantics: rateLimitMax 0 disables new-identity limiting", async () => {
+    const { store } = memoryQuarantine({
+      rateLimitMax: 0,
+      rateLimitGlobalMax: 1,
+      rateLimitWindowMs: 60_000,
+    });
+
+    // A zero per-writer limit turns the whole new-identity limiter off,
+    // including the global backstop, as before the overhaul.
+    await store.put(newWriterPut("writer-a", "one"));
+    await store.put(newWriterPut("writer-b", "two"));
+    await store.put(newWriterPut("writer-c", "three"));
   });
 
   it("does not consume request quota for oversized items", async () => {
