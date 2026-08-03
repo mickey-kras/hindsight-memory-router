@@ -156,13 +156,19 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
+Rate and capacity limits fail closed with `429`, `413`, or `507`. They never fall back to Hindsight.
 
-Write-rate limiting uses sliding-window counters, not fixed windows, so quota refills continuously and cannot be burst around window boundaries. Quota is charged per unique quarantine identity and is bucketed per writer ID (`QUARANTINE_RATE_LIMIT_MAX` per writer per `QUARANTINE_RATE_LIMIT_WINDOW_MS`, with a shared `unknown-writer` bucket when no writer is identified), so one noisy writer cannot starve the others. A global backstop (`QUARANTINE_RATE_LIMIT_GLOBAL_MAX`) still bounds total new identities per window across all writers. Setting `QUARANTINE_RATE_LIMIT_MAX=0` disables new-identity rate limiting entirely (per-writer buckets and the global backstop); the requarantine ops ceiling is controlled separately by `QUARANTINE_REQUARANTINE_OPS_MAX`.
+Rate-limit behavior:
 
-Quota is charged only for new quarantine identities. Requarantines of an already-tracked identity (repeated denied endpoints, repeated suspicious recalls of the same memory), requests rejected as oversized (`413`), and new identities that cannot be stored because capacity is exhausted (`507`) do not consume request quota. Requarantines are instead bounded by a separate, much higher global operations ceiling (`QUARANTINE_REQUARANTINE_OPS_MAX`) so a replay loop cannot flood the database with writes; the ceiling is global rather than per-writer because requarantines of legitimate traffic are common and the ceiling exists only to catch abuse.
+- sliding window, not fixed window;
+- `QUARANTINE_RATE_LIMIT_MAX`: new identities per writer;
+- `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`: all new identities;
+- `QUARANTINE_REQUARANTINE_OPS_MAX`: repeated writes to known identities;
+- writer and global buckets are charged atomically;
+- oversized and capacity-rejected items do not consume quota;
+- duplicate identities are serialized before classification and charging.
 
-When `QUARANTINE_DATABASE_URL` is a `postgres://` or `postgresql://` URL, the router wires in a PostgreSQL-backed sliding-window limiter (`PostgresSlidingWindowRateLimiter`), so all router replicas share one cluster-wide quota. It stores one row per consume in `quarantine_rate_limit_events` and serializes the check-and-insert per bucket inside a transaction with `pg_advisory_xact_lock`; it fails closed if the database is unreachable. SQLite and in-memory deployments keep the per-process in-memory limiter, in which case each replica gets its own bucket and a restart resets quota; single-process deployments should keep that in mind when sizing limits. The in-memory limiter evicts bucket keys whose newest event has left the longest configured window via a periodic sweep, so attacker-rotated writer IDs cannot grow its memory unboundedly. Custom quota backends can implement the `QuarantineRateLimiter` interface and be passed as `quarantineRateLimiter` to `createMemoryRouterServer`.
+PostgreSQL deployments share limits across router replicas and use PostgreSQL time. SQLite and in-memory deployments keep process-local limits that reset on restart.
 
 ## Upgrade from JSONL/file quarantine
 
