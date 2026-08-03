@@ -13,6 +13,7 @@ async function withServer<T>(
   const quarantine = memoryQuarantine();
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
+    routerToken: "router-token",
     hindsight: new FakeHindsightGateway(),
     quarantineRepository: quarantine.repository,
     quarantineStore: quarantine.store,
@@ -76,7 +77,9 @@ describe("memory-router API surface", () => {
 
   it("serves version", async () => {
     await withServer(async ({ baseUrl }) => {
-      const response = await fetch(`${baseUrl}/version`);
+      const response = await fetch(`${baseUrl}/version`, {
+        headers: { authorization: "Bearer router-token" },
+      });
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ api_version: "0.9.0" });
     });
@@ -84,7 +87,9 @@ describe("memory-router API surface", () => {
 
   it("denies and records unknown endpoints as encrypted events", async () => {
     await withServer(async ({ baseUrl, repository }) => {
-      const response = await fetch(`${baseUrl}/v1/default/banks`);
+      const response = await fetch(`${baseUrl}/v1/default/banks`, {
+        headers: { authorization: "Bearer router-token" },
+      });
       expect(response.status).toBe(404);
       expect(await response.json()).toMatchObject({
         error: "endpoint denied by memory-router policy",
