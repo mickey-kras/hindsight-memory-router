@@ -106,7 +106,7 @@ describe("router authentication hardening", () => {
   });
 
   it("rejects wrong tokens of any length and accepts the exact bearer token", async () => {
-    await withServer({ routerToken: "router-token" }, async (baseUrl) => {
+    await withServer({ routerToken: "router-token" }, async ({ baseUrl }) => {
       for (const header of [
         "Bearer x",
         "Bearer router-tokem",
