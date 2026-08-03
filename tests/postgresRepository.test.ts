@@ -62,7 +62,10 @@ describe("PostgresQuarantineRepository", () => {
       "postgresql://router:test@database/router",
       { max: 5 },
     );
-    expect(rootSql.unsafe).toHaveBeenCalledOnce();
+    expect(rootSql.unsafe).toHaveBeenCalledTimes(2);
+    expect(String(rootSql.unsafe.mock.calls[1]?.[0])).toContain(
+      "review_in_progress",
+    );
     expect(rootSql.begin).toHaveBeenCalledOnce();
 
     const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>

@@ -3,10 +3,10 @@
 [![ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml)
 [![codeql](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml)
 [![aislop ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml/badge.svg?branch=main)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml)
-[![aislop score](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router.svg)](https://scanaislop.com/mickey-kras/hindsight-memory-router)
+[![aislop score](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router.svg)](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router)
 [![docker hub](https://img.shields.io/docker/v/mickeykrasilnikov/hindsight-memory-router?label=docker%20hub)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
 [![docker pulls](https://img.shields.io/docker/pulls/mickeykrasilnikov/hindsight-memory-router)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
-[![ghcr](https://img.shields.io/badge/ghcr.io-mickey--kras%2Fhindsight--memory--router-blue)](https://github.com/mickey-kras/hindsight-memory-router/pkgs/container/hindsight-memory-router)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-mickey--kras%2Fhindsight--memory--router-blue)](https://github.com/mickey-kras/hindsight-memory-router/pkgs/container/hindsight-memory-router)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![node >=22.13](https://img.shields.io/badge/node-%3E%3D22.13-brightgreen.svg)](https://nodejs.org)
 
@@ -81,6 +81,7 @@ MEMORY_ROUTER_TOKEN=change-me
 MEMORY_ROUTER_ADMIN_TOKEN=change-me-admin-token
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
+HINDSIGHT_TIMEOUT_MS=10000
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
 QUARANTINE_DATABASE_URL=sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
@@ -105,6 +106,8 @@ SQLite is the default and enables WAL mode. PostgreSQL is intended for deploymen
 `QUARANTINE_PUBLIC_KEY` is validated when the router starts. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail. Keep the private key outside the router runtime and supply it only to an authorized local review or migration client.
 
 `QUARANTINE_MAX_POSTPONES` and the other numeric quarantine limits must be non-negative integers; malformed values fail startup.
+
+`HINDSIGHT_TIMEOUT_MS` bounds every Hindsight API call (default 10 seconds). A hung Hindsight bank therefore stalls a request for at most this interval instead of holding a socket and, during review actions, a review claim indefinitely. Upstream failures surface as structured errors: `hindsight_timeout` (`504`), `hindsight_http_error`, `hindsight_invalid_response`, or `hindsight_unavailable` (`502`). Upstream error bodies are truncated and response bodies that are not valid JSON are rejected rather than reported as internal errors.
 
 OpenClaw plugin config:
 
@@ -202,7 +205,11 @@ Approval is exact-object only. Any change to content, context, tags, metadata, d
 
 For an approved retain request, the target bank comes from the current writer registry. The router writes the exact original body to Hindsight, removes the quarantine row, and keeps the approval event. For an approved recalled memory, the router removes ciphertext and records the SHA-256 of the safety-evaluated text as reviewed and allowed. Metadata-only changes do not force another review; changed text does.
 
-Approval writes and recalled-memory invalidations hold the database review lock until the Hindsight action and local state transition complete. This prevents concurrent admin requests or multiple PostgreSQL-backed router instances from issuing the same action twice. Hindsight and the quarantine database are still separate systems, so a process crash or ambiguous network failure after Hindsight applies an action but before the database commit cannot be rolled back atomically. In that rare case, inspect Hindsight's audit/state before retrying; do not blindly repeat the admin action.
+Approval writes and recalled-memory invalidations run in two phases so the Hindsight call never happens inside a database transaction. First, a short transaction claims the item by moving it to the internal `review_in_progress` state, which removes it from the review queue and blocks competing review actions. The Hindsight operation then runs without any row lock or review serialization held. Finally, a second short transaction applies the outcome, guarded by the claimed state: if the item changed while the Hindsight call was in flight, finalization fails with `409 quarantine_review_changed` instead of overwriting newer state. In-memory deployments keep the same per-item serialization, also with the network call outside the exclusive section, so one slow Hindsight bank cannot serialize all reviews.
+
+If the Hindsight operation fails (including a `HINDSIGHT_TIMEOUT_MS` timeout), the claim is rolled back: the item returns to its pre-review state (`pending` or `postponed`) and a `review_interrupted` audit event records the failure kind. The admin action can simply be retried.
+
+If the process crashes while a review is in progress, the item is left in `review_in_progress`. On the next repository initialization the router resets every such item to `postponed` (without consuming a postpone) and appends a `review_interrupted` audit event with `recovered: true`. Hindsight and the quarantine database are still separate systems, so a crash after Hindsight applied an action but before the local state transition cannot be rolled back atomically. In that rare case the recovered item returns to the queue for a fresh decision; inspect Hindsight's audit/state before re-approving rather than blindly repeating the admin action.
 
 ## Cleanup
 
