@@ -7,9 +7,9 @@ import {
 } from "../src/adminRateLimit.js";
 import { HttpError } from "../src/httpError.js";
 
-function rateLimited(consume: () => void): HttpError {
+async function rateLimited(consume: () => Promise<void>): Promise<HttpError> {
   try {
-    consume();
+    await consume();
   } catch (error) {
     expect(error).toBeInstanceOf(HttpError);
     return error as HttpError;
@@ -18,43 +18,41 @@ function rateLimited(consume: () => void): HttpError {
 }
 
 describe("AdminRateLimiter", () => {
-  it("applies a sliding window per request class", () => {
+  it("applies a sliding window per request class", async () => {
     let now = 1_000;
     const limiter = new AdminRateLimiter(
       { readMax: 2, writeMax: 1, windowMs: 1_000 },
       () => now,
     );
 
-    limiter.consume("read");
-    limiter.consume("read");
-    expect(rateLimited(() => limiter.consume("read"))).toMatchObject({
+    await limiter.consume("read");
+    await limiter.consume("read");
+    await expect(rateLimited(() => limiter.consume("read"))).resolves.toMatchObject({
       status: 429,
       code: "admin_rate_limited",
     });
 
-    // Writes have an independent budget.
-    limiter.consume("write");
-    expect(rateLimited(() => limiter.consume("write"))).toMatchObject({
+    await limiter.consume("write");
+    await expect(rateLimited(() => limiter.consume("write"))).resolves.toMatchObject({
       status: 429,
     });
 
-    // The oldest read ages out of the sliding window.
     now = 1_500;
-    expect(rateLimited(() => limiter.consume("read"))).toMatchObject({
+    await expect(rateLimited(() => limiter.consume("read"))).resolves.toMatchObject({
       status: 429,
     });
     now = 2_001;
-    limiter.consume("read");
+    await limiter.consume("read");
   });
 
-  it("is disabled by non-positive limits", () => {
+  it("is disabled by non-positive limits", async () => {
     const limiter = new AdminRateLimiter(
       { readMax: 0, writeMax: 0, windowMs: 60_000 },
       () => 0,
     );
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      limiter.consume("read");
-      limiter.consume("write");
+      await limiter.consume("read");
+      await limiter.consume("write");
     }
   });
 
