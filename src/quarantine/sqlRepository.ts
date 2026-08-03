@@ -1,3 +1,4 @@
+import { gatewayErrorKind } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import type { BankId } from "../types.js";
 import {
@@ -50,6 +51,7 @@ export class SqlQuarantineRepository implements QuarantineRepository {
 
   async initialize(): Promise<void> {
     await initializeSchema(this.database);
+    await recoverInterruptedReviews(this.database, new Date().toISOString());
   }
 
   async ping(): Promise<void> {
@@ -162,14 +164,24 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     details: Record<string, unknown>,
     operation: () => Promise<void>,
   ): Promise<void> {
-    await this.database.transaction(async (database) => {
-      await requireReviewableKind(
+    const claimed = await this.database.transaction(async (database) => {
+      const current = await requireReviewableKind(
         database,
         quarantineId,
         "retain_request",
         "only retain requests can be approved into Hindsight",
       );
+      await beginReview(database, current, at);
+      return current;
+    });
+    try {
       await operation();
+    } catch (error) {
+      await this.interruptReview(claimed, at, error);
+      throw error;
+    }
+    await this.database.transaction(async (database) => {
+      await requireReviewInProgress(database, quarantineId, at);
       await deleteWithEvent(database, quarantineId, "approved", at, details);
     });
   }
@@ -179,15 +191,57 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     at: string,
     operation: () => Promise<void>,
   ): Promise<void> {
-    await this.database.transaction(async (database) => {
+    const claimed = await this.database.transaction(async (database) => {
       const current = await requireReviewableKind(
         database,
         quarantineId,
         "recalled_memory",
         "only recalled memories can be invalidated",
       );
+      await beginReview(database, current, at);
+      return current;
+    });
+    try {
       await operation();
+    } catch (error) {
+      await this.interruptReview(claimed, at, error);
+      throw error;
+    }
+    await this.database.transaction(async (database) => {
+      const current = await requireReviewInProgress(database, quarantineId, at);
       await markRecalledReviewed(database, current, "reviewed_blocked", at);
+    });
+  }
+
+  private async interruptReview(
+    claimed: StoredQuarantineItem,
+    at: string,
+    error: unknown,
+  ): Promise<void> {
+    await this.database.transaction(async (database) => {
+      const current = await findItemById(database, claimed.quarantine_id, true);
+      if (
+        !current ||
+        current.status !== "review_in_progress" ||
+        current.updated_at !== at
+      ) {
+        return;
+      }
+      const p = (index: number) => database.placeholder(index);
+      await database.run(
+        `UPDATE quarantine_items
+         SET status = ${p(1)}, updated_at = ${p(2)}
+         WHERE quarantine_id = ${p(3)}`,
+        [claimed.status, at, claimed.quarantine_id],
+      );
+      await insertEvent(
+        database,
+        quarantineEvent(claimed.quarantine_id, "review_interrupted", at, {
+          outcome: "restored",
+          status: claimed.status,
+          error_kind: gatewayErrorKind(error),
+        }),
+      );
     });
   }
 
@@ -272,6 +326,64 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       }
     });
   }
+}
+
+async function beginReview(
+  database: SqlDatabase,
+  current: StoredQuarantineItem,
+  at: string,
+): Promise<void> {
+  const p = (index: number) => database.placeholder(index);
+  await database.run(
+    `UPDATE quarantine_items
+     SET status = 'review_in_progress', updated_at = ${p(1)}
+     WHERE quarantine_id = ${p(2)}`,
+    [at, current.quarantine_id],
+  );
+}
+
+async function requireReviewInProgress(
+  database: SqlDatabase,
+  quarantineId: string,
+  at: string,
+): Promise<StoredQuarantineItem> {
+  const item = await requireItem(database, quarantineId);
+  if (item.status !== "review_in_progress" || item.updated_at !== at) {
+    throw new HttpError(
+      409,
+      "quarantine_review_changed",
+      "quarantine item changed while the review action was in progress",
+    );
+  }
+  return item;
+}
+
+async function recoverInterruptedReviews(
+  database: SqlDatabase,
+  at: string,
+): Promise<void> {
+  const interrupted = await database.all<{ quarantine_id: string }>(
+    "SELECT quarantine_id FROM quarantine_items WHERE status = 'review_in_progress'",
+  );
+  if (interrupted.length === 0) return;
+  await database.transaction(async (transaction) => {
+    const p = (index: number) => transaction.placeholder(index);
+    for (const row of interrupted) {
+      await transaction.run(
+        `UPDATE quarantine_items
+         SET status = 'postponed', updated_at = ${p(1)}
+         WHERE quarantine_id = ${p(2)} AND status = 'review_in_progress'`,
+        [at, row.quarantine_id],
+      );
+      await insertEvent(
+        transaction,
+        quarantineEvent(row.quarantine_id, "review_interrupted", at, {
+          outcome: "postponed",
+          recovered: true,
+        }),
+      );
+    }
+  });
 }
 
 async function requireReviewableKind(

@@ -1,3 +1,4 @@
+import { gatewayErrorKind } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import type { BankId } from "../types.js";
 import {
@@ -18,7 +19,24 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   readonly events: QuarantineEvent[] = [];
   private reviewTail: Promise<void> = Promise.resolve();
 
-  async initialize(): Promise<void> {}
+  async initialize(): Promise<void> {
+    const at = new Date().toISOString();
+    for (const item of this.items.values()) {
+      if (item.status !== "review_in_progress") continue;
+      this.items.set(item.quarantine_id, {
+        ...item,
+        status: "postponed",
+        updated_at: at,
+      });
+      this.events.push(
+        quarantineEvent(item.quarantine_id, "review_interrupted", at, {
+          outcome: "postponed",
+          recovered: true,
+        }),
+      );
+    }
+  }
+
   async ping(): Promise<void> {}
   async close(): Promise<void> {}
 
@@ -115,36 +133,58 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     this.setReviewed(item, status, at);
   }
 
-  approveRetain(
+  async approveRetain(
     quarantineId: string,
     at: string,
     details: Record<string, unknown>,
     operation: () => Promise<void>,
   ): Promise<void> {
-    return this.exclusiveReview(async () => {
-      this.requireReviewableKind(
+    const claimed = await this.exclusiveReview(async () =>
+      this.beginReview(
         quarantineId,
         "retain_request",
         "only retain requests can be approved into Hindsight",
-      );
+        at,
+      ),
+    );
+    try {
       await operation();
+    } catch (error) {
+      await this.exclusiveReview(async () =>
+        this.interruptReview(claimed, at, error),
+      );
+      throw error;
+    }
+    await this.exclusiveReview(async () => {
+      this.requireReviewInProgress(quarantineId, at);
       this.removeCurrent(quarantineId, "approved", at, details);
     });
   }
 
-  rejectRecalledMemory(
+  async rejectRecalledMemory(
     quarantineId: string,
     at: string,
     operation: () => Promise<void>,
   ): Promise<void> {
-    return this.exclusiveReview(async () => {
-      const item = this.requireReviewableKind(
+    const claimed = await this.exclusiveReview(async () =>
+      this.beginReview(
         quarantineId,
         "recalled_memory",
         "only recalled memories can be invalidated",
-      );
+        at,
+      ),
+    );
+    try {
       await operation();
-      this.setReviewed(item, "reviewed_blocked", at);
+    } catch (error) {
+      await this.exclusiveReview(async () =>
+        this.interruptReview(claimed, at, error),
+      );
+      throw error;
+    }
+    await this.exclusiveReview(async () => {
+      const current = this.requireReviewInProgress(quarantineId, at);
+      this.setReviewed(current, "reviewed_blocked", at);
     });
   }
 
@@ -266,6 +306,9 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
 
   private filtered(filter: CleanupFilter): StoredQuarantineItem[] {
     return [...this.items.values()].filter((item) => {
+      if (item.status === "review_in_progress") {
+        return false;
+      }
       if (
         (filter.scope ?? "pending") === "pending" &&
         item.status !== "pending" &&
@@ -312,6 +355,63 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     const item = this.requireReviewable(quarantineId);
     if (item.kind !== kind) {
       throw new HttpError(409, "invalid_review_action", message);
+    }
+    return item;
+  }
+
+  private beginReview(
+    quarantineId: string,
+    kind: StoredQuarantineItem["kind"],
+    message: string,
+    at: string,
+  ): StoredQuarantineItem {
+    const item = this.requireReviewableKind(quarantineId, kind, message);
+    this.items.set(quarantineId, {
+      ...item,
+      status: "review_in_progress",
+      updated_at: at,
+    });
+    return item;
+  }
+
+  private interruptReview(
+    claimed: StoredQuarantineItem,
+    at: string,
+    error: unknown,
+  ): void {
+    const current = this.items.get(claimed.quarantine_id);
+    if (
+      !current ||
+      current.status !== "review_in_progress" ||
+      current.updated_at !== at
+    ) {
+      return;
+    }
+    this.items.set(claimed.quarantine_id, {
+      ...current,
+      status: claimed.status,
+      updated_at: at,
+    });
+    this.events.push(
+      quarantineEvent(claimed.quarantine_id, "review_interrupted", at, {
+        outcome: "restored",
+        status: claimed.status,
+        error_kind: gatewayErrorKind(error),
+      }),
+    );
+  }
+
+  private requireReviewInProgress(
+    quarantineId: string,
+    at: string,
+  ): StoredQuarantineItem {
+    const item = this.requireItem(quarantineId);
+    if (item.status !== "review_in_progress" || item.updated_at !== at) {
+      throw new HttpError(
+        409,
+        "quarantine_review_changed",
+        "quarantine item changed while the review action was in progress",
+      );
     }
     return item;
   }
