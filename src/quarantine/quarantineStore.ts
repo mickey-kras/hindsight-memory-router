@@ -43,12 +43,9 @@ export interface QuarantineStoreLimits {
   maxItemBytes: number;
   maxPendingItems: number;
   maxEncryptedBytes: number;
-  /** Maximum new quarantine identities per writer per window; 0 disables new-identity rate limiting (per-writer and global backstop). */
   rateLimitMax: number;
   rateLimitWindowMs: number;
-  /** Global backstop: maximum new quarantine identities across all writers per window. */
   rateLimitGlobalMax: number;
-  /** Safety ceiling on requarantine operations (already-tracked identities) per window. */
   requarantineOpsMax: number;
 }
 
@@ -86,23 +83,8 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    // Resolve the dedupe identity first so quota is charged per unique
-    // identity event, not per raw request.
     const quarantineId = await this.resolveQuarantineId(input);
-    const knownIdentity = await this.isKnownIdentity(input, quarantineId);
-
-    const decrypted: DecryptedQuarantineObject = {
-      quarantine_id: quarantineId,
-      created_at: input.timestamp,
-      reason: input.reason,
-      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
-      ...(input.source === undefined ? {} : { source: input.source }),
-      payload: input.payload,
-    };
-    const encrypted = createEncryptedQuarantineEnvelope(
-      decrypted,
-      this.publicKey,
-    );
+    const encrypted = this.encrypt(input, quarantineId);
     const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
     if (encryptedBytes > this.limits.maxItemBytes) {
       throw new HttpError(
@@ -112,9 +94,41 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    await this.chargeRateQuota(input, knownIdentity);
+    return this.rateLimiter.withIdentityLock(quarantineId, async () => {
+      const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+      await this.chargeRateQuota(input, knownIdentity);
 
-    const item: NewQuarantineItem = {
+      const item = this.buildItem(input, quarantineId, encrypted);
+      if (input.kind === "recalled_memory") {
+        await this.repository.upsertRecalledMemory(item, this.capacity);
+      } else if (input.kind === "security_event") {
+        await this.repository.upsertSecurityEvent(item, this.capacity);
+      } else {
+        await this.repository.insert(item, this.capacity);
+      }
+
+      return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+    });
+  }
+
+  private encrypt(input: QuarantineInput, quarantineId: string) {
+    const decrypted: DecryptedQuarantineObject = {
+      quarantine_id: quarantineId,
+      created_at: input.timestamp,
+      reason: input.reason,
+      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
+      ...(input.source === undefined ? {} : { source: input.source }),
+      payload: input.payload,
+    };
+    return createEncryptedQuarantineEnvelope(decrypted, this.publicKey);
+  }
+
+  private buildItem(
+    input: QuarantineInput,
+    quarantineId: string,
+    encrypted: ReturnType<typeof createEncryptedQuarantineEnvelope>,
+  ): NewQuarantineItem {
+    return {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
       updated_at: input.timestamp,
@@ -136,15 +150,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       status: "pending",
       postpone_count: 0,
     };
-
-    if (input.kind === "recalled_memory") {
-      await this.repository.upsertRecalledMemory(item, this.capacity);
-    } else if (input.kind === "security_event") {
-      await this.repository.upsertSecurityEvent(item, this.capacity);
-    } else {
-      await this.repository.insert(item, this.capacity);
-    }
-    return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
   }
 
   private async chargeRateQuota(
@@ -153,37 +158,27 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   ): Promise<void> {
     const windowMs = this.limits.rateLimitWindowMs;
     if (knownIdentity) {
-      // Requarantines of an already-tracked identity never burn request
-      // quota. They are still bounded by a much higher global ops ceiling so
-      // a replay loop cannot flood the database with writes.
       await this.rateLimiter.consume(REQUARANTINE_OPS_BUCKET, {
         max: this.limits.requarantineOpsMax,
         windowMs,
       });
       return;
     }
-    if (this.limits.rateLimitMax <= 0) {
-      // Legacy semantics: a zero per-writer limit disables new-identity rate
-      // limiting entirely, including the global backstop. The requarantine
-      // ops ceiling above is controlled separately.
+    if (this.limits.rateLimitMax <= 0 || (await this.capacityExhausted())) {
       return;
     }
-    if (await this.capacityExhausted()) {
-      // New identities that cannot be stored (507) do not consume quota
-      // either; the repository enforces capacity precisely inside its
-      // transaction. The stats read is an approximation used only to decide
-      // whether charging quota is worthwhile.
-      return;
-    }
-    const writerBucket = `${GLOBAL_WRITES_BUCKET}:writer:${input.writerId ?? UNKNOWN_WRITER_BUCKET}`;
-    await this.rateLimiter.consume(writerBucket, {
-      max: this.limits.rateLimitMax,
-      windowMs,
-    });
-    await this.rateLimiter.consume(GLOBAL_WRITES_BUCKET, {
-      max: this.limits.rateLimitGlobalMax,
-      windowMs,
-    });
+
+    const writer = input.writerId ?? UNKNOWN_WRITER_BUCKET;
+    await this.rateLimiter.consumeMany([
+      {
+        key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
+        rule: { max: this.limits.rateLimitMax, windowMs },
+      },
+      {
+        key: GLOBAL_WRITES_BUCKET,
+        rule: { max: this.limits.rateLimitGlobalMax, windowMs },
+      },
+    ]);
   }
 
   private async isKnownIdentity(
