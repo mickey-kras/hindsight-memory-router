@@ -912,7 +912,8 @@
           "reason",
           "sha256",
           "status",
-          "postpone_count"
+          "postpone_count",
+          "requarantine_count"
         ],
         "properties": {
           "quarantine_id": {
@@ -944,6 +945,10 @@
           "source_memory_id": {
             "type": "string"
           },
+          "dedupe_key": {
+            "type": "string",
+            "description": "Deterministic deduplication identity. Present on items created after request-item deduplication was introduced; repeated submissions with the same identity refresh this item instead of creating a new one."
+          },
           "sha256": {
             "type": "string",
             "pattern": "^[0-9a-f]{64}$"
@@ -954,6 +959,11 @@
           "postpone_count": {
             "type": "integer",
             "minimum": 0
+          },
+          "requarantine_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many times a repeated submission refreshed this item via its dedupe identity."
           }
         }
       },
