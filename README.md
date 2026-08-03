@@ -99,6 +99,8 @@ QUARANTINE_MAX_PENDING_ITEMS=1000
 QUARANTINE_MAX_ENCRYPTED_BYTES=104857600
 QUARANTINE_RATE_LIMIT_MAX=30
 QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
+QUARANTINE_RATE_LIMIT_GLOBAL_MAX=300
+QUARANTINE_REQUARANTINE_OPS_MAX=1000
 ```
 
 `QUARANTINE_DATABASE_URL` supports:
@@ -117,22 +119,29 @@ SQLite is the default and enables WAL mode. PostgreSQL is intended for deploymen
 
 ## Token security
 
-Both bearer tokens are compared in constant time (SHA-256 pre-hashed, `crypto.timingSafeEqual`), so probing cannot learn the token length or content byte by byte.
+Tokens are compared in constant time and are never logged. Failed logins are audited as deduplicated `auth_failed` security events (dedicated rate-limit budget) plus a stderr line throttled to one per route group per minute.
 
-Failed authentication is audited. Every rejected router or admin request records one deduplicated `security_event` quarantine item per route group with reason `auth_failed`, visible in the admin queue and stats, and emits a structured stderr line (`{"event":"auth_failed","route_group":"router|admin"}`) throttled to one line per route group per minute. Auth-failure audit writes use a dedicated rate-limit budget, so unauthenticated probing cannot starve the budget that records security quarantines. Token material is never logged or stored, and the router never logs `Authorization` headers.
+Environment variables:
 
-Blast radius of a leaked token:
+- `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`: dev-only anonymous retain/recall/version when `MEMORY_ROUTER_TOKEN` is unset; inert when a token is set; never affects `/admin/*`. Never use in production.
+- `MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX`: admin GET budget per window (default 120).
+- `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX`: admin mutation budget per window (default 30).
+- `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS`: admin throttle window in ms (default 60000).
 
-- A leaked `MEMORY_ROUTER_TOKEN` can retain and recall through the facade, subject to writer policy, content scanning, and recall ACLs. It cannot read, decrypt, approve, reject, or clean up quarantine.
-- A leaked `MEMORY_ROUTER_ADMIN_TOKEN` can list queue metadata, read encrypted envelopes, and run destructive review actions (reject, postpone, cleanup). It cannot decrypt envelopes: the private key is enforced outside the router process. It cannot approve forged or altered content: approval requires the exact decrypted object whose canonical SHA-256 matches the stored digest, which only a holder of the private key can produce.
+A leaked admin token:
 
-Token handling rules:
+- CAN list queue metadata, read encrypted envelopes, and run destructive review actions (reject, postpone, cleanup).
+- CANNOT decrypt envelopes (the private key is enforced outside the router process).
+- CANNOT approve forged or altered content (approval requires the exact decrypted object matching the stored SHA-256).
 
-- Keep tokens out of agent configuration files, prompts, logs, and shell history. Inject them as environment variables or secrets at deploy time.
-- Rotate tokens on suspicion of exposure: generate new random values, update the router environment and restart it, then update the OpenClaw plugin config (`hindsightApiToken`) and any admin clients. Old tokens stop working as soon as the router restarts. Rotate `MEMORY_ROUTER_ADMIN_TOKEN` immediately if admin queue contents or review actions may have been observed.
-- After a suspected leak, review `auth_failed` and other `security_event` quarantine items and the append-only `quarantine_events` table for probing or misuse.
+Rotation:
 
-`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` allows anonymous retain/recall/version access only when `MEMORY_ROUTER_TOKEN` is not set; when a router token is configured, bearer authentication is always required and the opt-in is inert. It exists only so local development stacks can run without token plumbing. It has no effect on `/admin/*`, which always requires the admin token. Do not set it in any shared or production environment.
+1. Generate new random `MEMORY_ROUTER_TOKEN`/`MEMORY_ROUTER_ADMIN_TOKEN` values.
+2. Update the router environment and restart it; old tokens stop working at restart.
+3. Update the OpenClaw plugin config (`hindsightApiToken`) and any admin clients.
+4. If the admin token may have leaked, review `auth_failed` and other `security_event` items plus the `quarantine_events` table for misuse.
+
+Keep tokens out of agent configuration files, prompts, logs, and shell history; inject them as environment variables or secrets at deploy time.
 
 OpenClaw plugin config:
 
@@ -182,9 +191,19 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
+Rate and capacity limits fail closed with `429`, `413`, or `507`. They never fall back to Hindsight.
 
-Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
+Rate-limit behavior:
+
+- sliding window, not fixed window;
+- `QUARANTINE_RATE_LIMIT_MAX`: new identities per writer;
+- `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`: all new identities;
+- `QUARANTINE_REQUARANTINE_OPS_MAX`: repeated writes to known identities;
+- writer and global buckets are charged atomically;
+- oversized and capacity-rejected items do not consume quota;
+- duplicate identities are serialized before classification and charging.
+
+PostgreSQL deployments share limits across router replicas and use PostgreSQL time. SQLite and in-memory deployments keep process-local limits that reset on restart.
 
 ## Upgrade from JSONL/file quarantine
 
