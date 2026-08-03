@@ -88,11 +88,12 @@ MEMORY_ROUTER_ALLOW_ANONYMOUS=unset (dev-only escape hatch, see Token security)
 MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX=120
 MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX=30
 MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS=60000
+MEMORY_ROUTER_MAX_BODY_BYTES=1048576
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
-QUARANTINE_DATABASE_URL=sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
+QUARANTINE_DATABASE_URL=sqlite:./data/quarantine.db
 QUARANTINE_MAX_POSTPONES=3
 QUARANTINE_MAX_ITEM_BYTES=1048576
 QUARANTINE_MAX_PENDING_ITEMS=1000
@@ -110,6 +111,10 @@ postgresql://user:password@database:5432/router
 ```
 
 SQLite is the default and enables WAL mode. PostgreSQL is intended for deployments that need shared or remote quarantine state. Both backends create indexed `quarantine_items` and append-only `quarantine_events` tables. In PostgreSQL deployments, use a separate database or schema from Hindsight's application data so the security control plane is independently scoped and backed up.
+
+Breaking change: the built-in default database URL is now `sqlite:./data/quarantine.db` (resolved against the router working directory). It previously defaulted to the host-specific path `sqlite:/volume1/reports/hindsight-quarantine/quarantine.db`. Deployments that relied on the old default must set `QUARANTINE_DATABASE_URL` explicitly (or move the existing database to `./data/quarantine.db`) before upgrading.
+
+At startup the configured router validates quarantine storage and fails fast with a clear error when it is unreachable or not writable (SQLite database file and directory permissions, PostgreSQL connectivity and schema privileges), instead of failing on the first quarantined write. Embedded deployments that construct the server programmatically can opt out with `validateStorage: false`.
 
 `QUARANTINE_PUBLIC_KEY` is validated when the router starts. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail. Keep the private key outside the router runtime and supply it only to an authorized local review or migration client.
 
