@@ -114,6 +114,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       ...(input.sourceContentSha256 === undefined
         ? {}
         : { source_content_sha256: input.sourceContentSha256 }),
+      ...(input.dedupeKey === undefined ? {} : { dedupe_key: input.dedupeKey }),
       sha256: encrypted.sha256,
       encrypted,
       status: "pending",
@@ -124,6 +125,8 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       await this.repository.upsertRecalledMemory(item, this.capacity);
     } else if (input.kind === "security_event") {
       await this.repository.upsertSecurityEvent(item, this.capacity);
+    } else if (item.dedupe_key) {
+      await this.repository.upsertRequestItem(item, this.capacity);
     } else {
       await this.repository.insert(item, this.capacity);
     }
@@ -134,6 +137,13 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     if (input.kind === "security_event" && input.dedupeKey) {
       const digest = sha256Hex(input.dedupeKey);
       return `q_security${digest.slice(0, 48)}_${digest.slice(48)}`;
+    }
+    if (
+      (input.kind === "retain_request" || input.kind === "recall_request") &&
+      input.dedupeKey
+    ) {
+      const digest = sha256Hex(input.dedupeKey);
+      return `q_request${digest.slice(0, 48)}_${digest.slice(48)}`;
     }
     if (
       input.kind === "recalled_memory" &&
