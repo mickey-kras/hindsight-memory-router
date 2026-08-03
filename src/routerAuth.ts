@@ -75,7 +75,7 @@ export function createAuthFailureAuditor(
       logThrottled(
         "error",
         routeGroup,
-        `memory-router could not record auth_failed: ${message}\n`,
+        `memory-router could not record an auth_failed security event: ${message}\n`,
       );
     }
   };
@@ -98,16 +98,19 @@ export function assertRouterAuthEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): void {
   if (!environment.MEMORY_ROUTER_TOKEN) {
-    const anonymous = environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
-    process.stderr.write(
-      anonymous
-        ? "memory-router WARNING: anonymous router access enabled for development\n"
-        : "memory-router WARNING: MEMORY_ROUTER_TOKEN is unset; router endpoints fail closed\n",
-    );
+    if (environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true") {
+      process.stderr.write(
+        "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only\n",
+      );
+    } else {
+      process.stderr.write(
+        "memory-router WARNING: MEMORY_ROUTER_TOKEN is not set; router endpoints fail-closed\n",
+      );
+    }
   }
   if (!environment.MEMORY_ROUTER_ADMIN_TOKEN) {
     process.stderr.write(
-      "memory-router WARNING: MEMORY_ROUTER_ADMIN_TOKEN is unset; admin endpoints fail closed\n",
+      "memory-router WARNING: MEMORY_ROUTER_ADMIN_TOKEN is not set; admin endpoints fail-closed\n",
     );
   }
 }
