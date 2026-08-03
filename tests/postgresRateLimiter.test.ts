@@ -6,15 +6,18 @@ interface MockCall {
 }
 
 const state = {
-  eventCount: 0,
+  counts: new Map<string, number>(),
   calls: [] as MockCall[],
+  nowMs: 123_456,
 };
 
 const transactionSql = {
   unsafe: vi.fn(async (statement: string, params: readonly unknown[] = []) => {
-    state.calls.push({ statement: String(statement), params });
-    if (String(statement).includes("COUNT(*)")) {
-      return [{ count: state.eventCount }];
+    const sql = String(statement);
+    state.calls.push({ statement: sql, params });
+    if (sql.includes("clock_timestamp")) return [{ now_ms: state.nowMs }];
+    if (sql.includes("COUNT(*)")) {
+      return [{ count: state.counts.get(String(params[0])) ?? 0 }];
     }
     return [];
   }),
@@ -34,8 +37,9 @@ const postgres = vi.fn(() => rootSql);
 vi.mock("postgres", () => ({ default: postgres }));
 
 beforeEach(() => {
-  state.eventCount = 0;
+  state.counts.clear();
   state.calls = [];
+  state.nowMs = 123_456;
   postgres.mockClear();
   rootSql.unsafe.mockClear();
   rootSql.begin.mockClear();
@@ -62,58 +66,86 @@ describe("PostgresSlidingWindowRateLimiter", () => {
     expect(schema).toContain("occurred_at_ms BIGINT");
   });
 
-  it("counts and records consumes inside a per-bucket locked transaction", async () => {
+  it("checks and records one bucket inside a locked transaction", async () => {
     const { PostgresSlidingWindowRateLimiter } =
       await import("../src/quarantine/rateLimiter.js");
     const limiter = new PostgresSlidingWindowRateLimiter(CONNECTION);
 
-    await limiter.consume("quarantine-writes:writer:a", RULE, new Date(1_000));
+    await limiter.consume("writer:a", RULE, new Date(1_000));
 
     expect(rootSql.begin).toHaveBeenCalledOnce();
-    const statements = state.calls.map((call) => call.statement);
-    expect(statements).toEqual(
+    expect(statements()).toEqual(
       expect.arrayContaining([
-        expect.stringContaining("pg_advisory_xact_lock(hashtext($1))"),
+        expect.stringContaining("pg_advisory_xact_lock"),
         expect.stringContaining("DELETE FROM quarantine_rate_limit_events"),
         expect.stringContaining("COUNT(*)"),
         expect.stringContaining("INSERT INTO quarantine_rate_limit_events"),
       ]),
     );
-    const insert = state.calls.find((call) =>
-      call.statement.includes("INSERT INTO quarantine_rate_limit_events"),
-    );
-    expect(insert?.params).toEqual(["quarantine-writes:writer:a", 1_000]);
-    // Sliding window: expired events are pruned relative to `at`.
-    const prune = state.calls.find(
-      (call) =>
-        call.statement.includes("DELETE FROM quarantine_rate_limit_events") &&
-        call.statement.includes("bucket = $1"),
-    );
-    expect(prune?.params).toEqual([
-      "quarantine-writes:writer:a",
+    expect(findCall("INSERT INTO quarantine_rate_limit_events")?.params).toEqual([
+      "writer:a",
+      1_000,
+    ]);
+    expect(findCall("bucket = $1 AND occurred_at_ms <= $2")?.params).toEqual([
+      "writer:a",
       1_000 - 60_000,
     ]);
   });
 
-  it("rejects with 429 when the shared bucket is exhausted", async () => {
+  it("charges multiple buckets atomically", async () => {
     const { PostgresSlidingWindowRateLimiter } =
       await import("../src/quarantine/rateLimiter.js");
     const limiter = new PostgresSlidingWindowRateLimiter(CONNECTION);
-    state.eventCount = 30;
+    state.counts.set("global", 1);
 
     await expect(
-      limiter.consume("quarantine-writes", RULE, new Date(1_000)),
-    ).rejects.toMatchObject({
-      status: 429,
-      code: "quarantine_rate_limited",
-    });
+      limiter.consumeMany(
+        [
+          { key: "writer:a", rule: { max: 1, windowMs: 60_000 } },
+          { key: "global", rule: { max: 1, windowMs: 60_000 } },
+        ],
+        new Date(1_000),
+      ),
+    ).rejects.toMatchObject({ status: 429, code: "quarantine_rate_limited" });
 
-    const statements = state.calls.map((call) => call.statement);
     expect(
-      statements.some((statement) =>
+      statements().some((statement) =>
         statement.includes("INSERT INTO quarantine_rate_limit_events"),
       ),
     ).toBe(false);
+  });
+
+  it("uses PostgreSQL time when no test clock is supplied", async () => {
+    const { PostgresSlidingWindowRateLimiter } =
+      await import("../src/quarantine/rateLimiter.js");
+    const limiter = new PostgresSlidingWindowRateLimiter(CONNECTION);
+
+    await limiter.consume("writer:a", RULE);
+
+    expect(findCall("clock_timestamp")).toBeDefined();
+    expect(findCall("INSERT INTO quarantine_rate_limit_events")?.params).toEqual([
+      "writer:a",
+      state.nowMs,
+    ]);
+  });
+
+  it("holds the identity lock while the supplied session consumes quota", async () => {
+    const { PostgresSlidingWindowRateLimiter } =
+      await import("../src/quarantine/rateLimiter.js");
+    const limiter = new PostgresSlidingWindowRateLimiter(CONNECTION);
+
+    await limiter.withIdentityLock("q_1", async (session) => {
+      await session.consume("writer:a", RULE, new Date(1_000));
+    });
+
+    expect(rootSql.begin).toHaveBeenCalledOnce();
+    const locks = state.calls.filter((call) =>
+      call.statement.includes("pg_advisory_xact_lock"),
+    );
+    expect(locks.map((call) => call.params[0])).toEqual([
+      "quarantine-identity:q_1",
+      "rate-limit:writer:a",
+    ]);
   });
 
   it("does nothing for disabled rules", async () => {
@@ -140,7 +172,7 @@ describe("PostgresSlidingWindowRateLimiter", () => {
     const globalPrune = state.calls.find(
       (call) =>
         call.statement ===
-        "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms < $1",
+        "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms <= $1",
     );
     expect(globalPrune?.params).toEqual([2_000 - 60_000]);
   });
@@ -155,3 +187,11 @@ describe("PostgresSlidingWindowRateLimiter", () => {
     expect(rootSql.end).toHaveBeenCalledOnce();
   });
 });
+
+function statements(): string[] {
+  return state.calls.map((call) => call.statement);
+}
+
+function findCall(fragment: string): MockCall | undefined {
+  return state.calls.find((call) => call.statement.includes(fragment));
+}
