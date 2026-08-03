@@ -27,18 +27,24 @@ describe("AdminRateLimiter", () => {
 
     await limiter.consume("read");
     await limiter.consume("read");
-    await expect(rateLimited(() => limiter.consume("read"))).resolves.toMatchObject({
+    await expect(
+      rateLimited(() => limiter.consume("read")),
+    ).resolves.toMatchObject({
       status: 429,
       code: "admin_rate_limited",
     });
 
     await limiter.consume("write");
-    await expect(rateLimited(() => limiter.consume("write"))).resolves.toMatchObject({
+    await expect(
+      rateLimited(() => limiter.consume("write")),
+    ).resolves.toMatchObject({
       status: 429,
     });
 
     now = 1_500;
-    await expect(rateLimited(() => limiter.consume("read"))).resolves.toMatchObject({
+    await expect(
+      rateLimited(() => limiter.consume("read")),
+    ).resolves.toMatchObject({
       status: 429,
     });
     now = 2_001;
