@@ -45,9 +45,9 @@ export interface QuarantineStoreLimits {
   maxPendingItems: number;
   maxEncryptedBytes: number;
   rateLimitMax: number;
+  rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
   requarantineOpsMax: number;
-  rateLimitWindowMs: number;
 }
 
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
@@ -55,15 +55,22 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxPendingItems: 1_000,
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
+  rateLimitWindowMs: 60_000,
   rateLimitGlobalMax: 300,
   requarantineOpsMax: 1_000,
-  rateLimitWindowMs: 60_000,
 };
 
+const GLOBAL_WRITES_BUCKET = "quarantine-writes";
+const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
+const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
+const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
+  "quarantine-requarantine-ops:auth-audit";
+const UNKNOWN_WRITER_BUCKET = "unknown-writer";
+
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
-  private readonly limiter: QuarantineRateLimiter;
   private readonly publicKey: string;
   private readonly capacity: QuarantineCapacityLimits;
+  private readonly rateLimiter: QuarantineRateLimiter;
 
   constructor(
     publicKey: string,
@@ -76,34 +83,12 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       maxPendingItems: limits.maxPendingItems,
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
-    this.limiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
+    this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
     const quarantineId = await this.resolveQuarantineId(input);
-    return this.limiter.withIdentityLock(quarantineId, async (session) => {
-      const knownIdentity = await this.isKnownIdentity(input, quarantineId);
-      await this.chargeRateQuota(input, knownIdentity, session);
-      return this.storeEncrypted(input, quarantineId);
-    });
-  }
-
-  private async storeEncrypted(
-    input: QuarantineInput,
-    quarantineId: string,
-  ): Promise<QuarantineResult> {
-    const decrypted: DecryptedQuarantineObject = {
-      quarantine_id: quarantineId,
-      created_at: input.timestamp,
-      reason: input.reason,
-      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
-      ...(input.source === undefined ? {} : { source: input.source }),
-      payload: input.payload,
-    };
-    const encrypted = createEncryptedQuarantineEnvelope(
-      decrypted,
-      this.publicKey,
-    );
+    const encrypted = this.encrypt(input, quarantineId);
     const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
     if (encryptedBytes > this.limits.maxItemBytes) {
       throw new HttpError(
@@ -113,7 +98,44 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    const item: NewQuarantineItem = {
+    return this.rateLimiter.withIdentityLock(
+      quarantineId,
+      async (rateLimitSession) => {
+        const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+        await this.chargeRateQuota(input, knownIdentity, rateLimitSession);
+
+        const item = this.buildItem(input, quarantineId, encrypted);
+        if (input.kind === "recalled_memory") {
+          await this.repository.upsertRecalledMemory(item, this.capacity);
+        } else if (input.kind === "security_event") {
+          await this.repository.upsertSecurityEvent(item, this.capacity);
+        } else {
+          await this.repository.insert(item, this.capacity);
+        }
+
+        return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+      },
+    );
+  }
+
+  private encrypt(input: QuarantineInput, quarantineId: string) {
+    const decrypted: DecryptedQuarantineObject = {
+      quarantine_id: quarantineId,
+      created_at: input.timestamp,
+      reason: input.reason,
+      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
+      ...(input.source === undefined ? {} : { source: input.source }),
+      payload: input.payload,
+    };
+    return createEncryptedQuarantineEnvelope(decrypted, this.publicKey);
+  }
+
+  private buildItem(
+    input: QuarantineInput,
+    quarantineId: string,
+    encrypted: ReturnType<typeof createEncryptedQuarantineEnvelope>,
+  ): NewQuarantineItem {
+    return {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
       updated_at: input.timestamp,
@@ -135,15 +157,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       status: "pending",
       postpone_count: 0,
     };
-
-    if (input.kind === "recalled_memory") {
-      await this.repository.upsertRecalledMemory(item, this.capacity);
-    } else if (input.kind === "security_event") {
-      await this.repository.upsertSecurityEvent(item, this.capacity);
-    } else {
-      await this.repository.insert(item, this.capacity);
-    }
-    return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
   }
 
   private async chargeRateQuota(
@@ -235,10 +248,3 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
 }
-
-const GLOBAL_WRITES_BUCKET = "quarantine-writes";
-const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
-const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
-const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
-  "quarantine-requarantine-ops:auth-audit";
-const UNKNOWN_WRITER_BUCKET = "unknown-writer";
