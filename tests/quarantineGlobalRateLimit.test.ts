@@ -48,7 +48,7 @@ describe("quarantine write rate limit", () => {
 
   it("global backstop cannot be bypassed by changing writer IDs", async () => {
     const { store } = memoryQuarantine({
-      rateLimitMax: 2,
+      rateLimitMax: 10,
       rateLimitGlobalMax: 2,
       rateLimitWindowMs: 60_000,
     });
