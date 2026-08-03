@@ -7,6 +7,10 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
+import {
+  InMemorySlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+} from "./rateLimiter.js";
 import type {
   NewQuarantineItem,
   QuarantineCapacityLimits,
@@ -39,8 +43,13 @@ export interface QuarantineStoreLimits {
   maxItemBytes: number;
   maxPendingItems: number;
   maxEncryptedBytes: number;
+  /** Maximum new quarantine identities per writer per window. */
   rateLimitMax: number;
   rateLimitWindowMs: number;
+  /** Global backstop: maximum new quarantine identities across all writers per window. */
+  rateLimitGlobalMax: number;
+  /** Safety ceiling on requarantine operations (already-tracked identities) per window. */
+  requarantineOpsMax: number;
 }
 
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
@@ -49,33 +58,39 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
+  rateLimitGlobalMax: 300,
+  requarantineOpsMax: 1_000,
 };
 
+const GLOBAL_WRITES_BUCKET = "quarantine-writes";
+const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
+const UNKNOWN_WRITER_BUCKET = "unknown-writer";
+
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
-  private readonly limiter: PerProcessFixedWindowLimiter;
   private readonly publicKey: string;
   private readonly capacity: QuarantineCapacityLimits;
+  private readonly rateLimiter: QuarantineRateLimiter;
 
   constructor(
     publicKey: string,
     readonly repository: QuarantineRepository,
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
+    rateLimiter?: QuarantineRateLimiter,
   ) {
     this.publicKey = decodePublicKey(publicKey);
     this.capacity = {
       maxPendingItems: limits.maxPendingItems,
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
-    this.limiter = new PerProcessFixedWindowLimiter(
-      limits.rateLimitMax,
-      limits.rateLimitWindowMs,
-    );
+    this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    this.limiter.consume("quarantine-writes");
-
+    // Resolve the dedupe identity first so quota is charged per unique
+    // identity event, not per raw request.
     const quarantineId = await this.resolveQuarantineId(input);
+    const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+
     const decrypted: DecryptedQuarantineObject = {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
@@ -96,6 +111,8 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         "encrypted quarantine item exceeds configured size limit",
       );
     }
+
+    await this.chargeRateQuota(input, knownIdentity);
 
     const item: NewQuarantineItem = {
       quarantine_id: quarantineId,
@@ -130,6 +147,73 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
   }
 
+  private async chargeRateQuota(
+    input: QuarantineInput,
+    knownIdentity: boolean,
+  ): Promise<void> {
+    const windowMs = this.limits.rateLimitWindowMs;
+    if (knownIdentity) {
+      // Requarantines of an already-tracked identity never burn request
+      // quota. They are still bounded by a much higher global ops ceiling so
+      // a replay loop cannot flood the database with writes.
+      await this.rateLimiter.consume(REQUARANTINE_OPS_BUCKET, {
+        max: this.limits.requarantineOpsMax,
+        windowMs,
+      });
+      return;
+    }
+    if (this.limits.rateLimitMax <= 0 && this.limits.rateLimitGlobalMax <= 0) {
+      return;
+    }
+    if (await this.capacityExhausted()) {
+      // New identities that cannot be stored (507) do not consume quota
+      // either; the repository enforces capacity precisely inside its
+      // transaction. The stats read is an approximation used only to decide
+      // whether charging quota is worthwhile.
+      return;
+    }
+    const writerBucket = `${GLOBAL_WRITES_BUCKET}:writer:${input.writerId ?? UNKNOWN_WRITER_BUCKET}`;
+    await this.rateLimiter.consume(writerBucket, {
+      max: this.limits.rateLimitMax,
+      windowMs,
+    });
+    await this.rateLimiter.consume(GLOBAL_WRITES_BUCKET, {
+      max: this.limits.rateLimitGlobalMax,
+      windowMs,
+    });
+  }
+
+  private async isKnownIdentity(
+    input: QuarantineInput,
+    quarantineId: string,
+  ): Promise<boolean> {
+    if (input.kind === "security_event" && input.dedupeKey) {
+      return (await this.repository.get(quarantineId)) !== null;
+    }
+    if (
+      input.kind === "recalled_memory" &&
+      input.sourceBank !== undefined &&
+      input.sourceMemoryId !== undefined
+    ) {
+      return (
+        (await this.repository.findMemoryState(
+          input.sourceBank,
+          input.sourceMemoryId,
+        )) !== null
+      );
+    }
+    return false;
+  }
+
+  private async capacityExhausted(): Promise<boolean> {
+    const stats = await this.repository.stats();
+    return (
+      stats.pending_items + stats.postponed_items >=
+        this.capacity.maxPendingItems ||
+      stats.encrypted_bytes >= this.capacity.maxEncryptedBytes
+    );
+  }
+
   private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
     if (input.kind === "security_event" && input.dedupeKey) {
       const digest = sha256Hex(input.dedupeKey);
@@ -144,35 +228,5 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       return `q_memory${digest.slice(0, 48)}_${digest.slice(48)}`;
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
-  }
-}
-
-// This protects one router process. Multi-instance deployments need a shared edge limit.
-class PerProcessFixedWindowLimiter {
-  private readonly windows = new Map<
-    string,
-    { startedAt: number; count: number }
-  >();
-
-  constructor(
-    private readonly max: number,
-    private readonly windowMs: number,
-  ) {}
-
-  consume(key: string, now = Date.now()): void {
-    if (this.max <= 0 || this.windowMs <= 0) return;
-    const current = this.windows.get(key);
-    if (!current || now - current.startedAt >= this.windowMs) {
-      this.windows.set(key, { startedAt: now, count: 1 });
-      return;
-    }
-    if (current.count >= this.max) {
-      throw new HttpError(
-        429,
-        "quarantine_rate_limited",
-        "too many quarantine writes",
-      );
-    }
-    current.count += 1;
   }
 }
