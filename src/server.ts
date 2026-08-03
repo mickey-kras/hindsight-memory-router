@@ -27,6 +27,7 @@ import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
+  validateQuarantineStorage,
 } from "./quarantine/repositoryFactory.js";
 import {
   DEFAULT_QUARANTINE_LIMITS,
@@ -67,6 +68,12 @@ export interface CreateMemoryRouterServerOptions {
   quarantineStore?: QuarantineStore;
   quarantinePublicKey?: string;
   quarantineLimits?: QuarantineStoreLimits;
+}
+
+export interface CreateConfiguredMemoryRouterServerOptions extends CreateMemoryRouterServerOptions {
+  // Validates quarantine storage reachability and writability at startup,
+  // failing fast with a clear error. Defaults to true; only disable for
+  // embedded deployments that validate storage themselves.
   validateStorage?: boolean;
 }
 
@@ -263,15 +270,24 @@ export function createMemoryRouterServer(
   });
 }
 
-export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
+export async function createConfiguredMemoryRouterServer(
+  options: CreateConfiguredMemoryRouterServerOptions = {},
+): Promise<ConfiguredMemoryRouterServer> {
   assertNoPrivateKeyEnvironment();
   assertRouterAuthEnvironment();
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
+  if (options.validateStorage ?? true) {
+    await validateQuarantineStorage(
+      quarantineRepository,
+      QUARANTINE_DATABASE_URL,
+    );
+  }
   const server = createMemoryRouterServer({
+    ...options,
     quarantineRepository,
-    quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
+    quarantinePublicKey: options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
   });
   return { server, quarantineRepository };
 }
@@ -434,19 +450,33 @@ function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+// decodeURIComponent throws a URIError on malformed percent-encoding;
+// convert it into a client-facing 400 instead of a generic 500.
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new HttpError(
+      400,
+      "invalid_path_encoding",
+      "path segment contains malformed percent-encoding",
+    );
+  }
+}
+
 function parseMemoryPath(
   pathname: string,
 ): { writerId: string; action: "retain" | "recall" } | null {
   const retain = pathname.match(/^\/v1\/default\/banks\/([^/]+)\/memories$/);
   if (retain) {
-    return { writerId: decodeURIComponent(retain[1]), action: "retain" };
+    return { writerId: decodePathSegment(retain[1]), action: "retain" };
   }
 
   const recall = pathname.match(
     /^\/v1\/default\/banks\/([^/]+)\/memories\/recall$/,
   );
   if (recall) {
-    return { writerId: decodeURIComponent(recall[1]), action: "recall" };
+    return { writerId: decodePathSegment(recall[1]), action: "recall" };
   }
 
   return null;
@@ -461,7 +491,7 @@ function parseAdminItemPath(pathname: string): {
   );
   if (!match) return null;
   return {
-    quarantineId: decodeURIComponent(match[1]),
+    quarantineId: decodePathSegment(match[1]),
     action: (match[2] ?? "read") as "read" | "approve" | "reject" | "postpone",
   };
 }
