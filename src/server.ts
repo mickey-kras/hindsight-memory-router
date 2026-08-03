@@ -1,17 +1,23 @@
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { ParsedUrlQuery } from "node:querystring";
+import { createServer, type Server } from "node:http";
 import { parse as parseUrl } from "node:url";
+import {
+  AdminRateLimiter,
+  adminRateLimitConfigFromEnv,
+  classifyAdminRequest,
+} from "./adminRateLimit.js";
 import {
   DEFAULT_HINDSIGHT_TIMEOUT_MS,
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
-import { HttpError, safeErrorBody } from "./httpError.js";
+import { safeErrorBody } from "./httpError.js";
+import {
+  integerQuery,
+  parseAdminItemPath,
+  parseMemoryPath,
+  readJson,
+  send,
+} from "./httpHelpers.js";
 import { RouterPolicy } from "./policy.js";
 import {
   QuarantineAdminService,
@@ -19,6 +25,10 @@ import {
   type CleanupBody,
 } from "./quarantine/quarantineAdmin.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
+import {
+  PostgresSlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+} from "./quarantine/rateLimiter.js";
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
@@ -31,15 +41,23 @@ import {
 } from "./quarantine/quarantineStore.js";
 import { loadRegistry } from "./registry.js";
 import { parseRecallBody, parseRetainBody } from "./requestValidation.js";
+import {
+  assertNoPrivateKeyEnvironment,
+  assertRouterAuthEnvironment,
+  createAuthFailureAuditor,
+  isAdminAuthorized,
+  isAuthorized,
+} from "./routerAuth.js";
 import type { WriterRegistry } from "./types.js";
 
+export { assertNoPrivateKeyEnvironment, assertRouterAuthEnvironment };
+
 const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
-const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
-const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
+const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
-const HINDSIGHT_TIMEOUT_MS = numberEnv(
+const HINDSIGHT_TIMEOUT_MS = positiveNumberEnv(
   "HINDSIGHT_TIMEOUT_MS",
   DEFAULT_HINDSIGHT_TIMEOUT_MS,
 );
@@ -55,6 +73,8 @@ const MAX_BODY_BYTES = Number(
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   adminToken?: string;
+  allowAnonymous?: boolean;
+  adminRateLimiter?: AdminRateLimiter;
   maxPostpones?: number;
   maxBodyBytes?: number;
   registry?: WriterRegistry;
@@ -63,12 +83,14 @@ export interface CreateMemoryRouterServerOptions {
   quarantineStore?: QuarantineStore;
   quarantinePublicKey?: string;
   quarantineLimits?: QuarantineStoreLimits;
+  quarantineRateLimiter?: QuarantineRateLimiter;
   validateStorage?: boolean;
 }
 
 export interface ConfiguredMemoryRouterServer {
   server: Server;
   quarantineRepository: QuarantineRepository;
+  quarantineRateLimiter?: PostgresSlidingWindowRateLimiter;
 }
 
 function buildHindsight(
@@ -112,6 +134,14 @@ function buildLimits(): QuarantineStoreLimits {
       "QUARANTINE_RATE_LIMIT_WINDOW_MS",
       DEFAULT_QUARANTINE_LIMITS.rateLimitWindowMs,
     ),
+    rateLimitGlobalMax: numberEnv(
+      "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
+      DEFAULT_QUARANTINE_LIMITS.rateLimitGlobalMax,
+    ),
+    requarantineOpsMax: numberEnv(
+      "QUARANTINE_REQUARANTINE_OPS_MAX",
+      DEFAULT_QUARANTINE_LIMITS.requarantineOpsMax,
+    ),
   };
 }
 
@@ -128,7 +158,13 @@ export function createMemoryRouterServer(
       options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
       quarantineRepository,
       options.quarantineLimits ?? buildLimits(),
+      options.quarantineRateLimiter,
     );
+  const allowAnonymous = options.allowAnonymous ?? ALLOW_ANONYMOUS;
+  const adminRateLimiter =
+    options.adminRateLimiter ??
+    new AdminRateLimiter(adminRateLimitConfigFromEnv());
+  const auditAuthFailure = createAuthFailureAuditor(quarantineStore);
   const policy = new RouterPolicy({
     registry,
     hindsight,
@@ -166,8 +202,10 @@ export function createMemoryRouterServer(
 
       if (pathname.startsWith("/admin/")) {
         if (!isAdminAuthorized(req, options.adminToken)) {
+          await auditAuthFailure("admin");
           return send(res, 401, { error: "unauthorized" });
         }
+        await adminRateLimiter.consume(classifyAdminRequest(method));
         if (method === "GET" && pathname === "/admin/quarantine/queue") {
           return send(
             res,
@@ -213,7 +251,8 @@ export function createMemoryRouterServer(
         return send(res, 404, { error: "admin_endpoint_not_found" });
       }
 
-      if (!isAuthorized(req, options.routerToken)) {
+      if (!isAuthorized(req, options.routerToken, allowAnonymous)) {
+        await auditAuthFailure("router");
         return send(res, 401, { error: "unauthorized" });
       }
 
@@ -257,27 +296,33 @@ export function createMemoryRouterServer(
 
 export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
   assertNoPrivateKeyEnvironment();
+  assertRouterAuthEnvironment();
   const quarantineRepository = await createQuarantineRepository(
+    QUARANTINE_DATABASE_URL,
+  );
+  const quarantineRateLimiter = await createSharedRateLimiter(
     QUARANTINE_DATABASE_URL,
   );
   const server = createMemoryRouterServer({
     quarantineRepository,
     quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
+    quarantineRateLimiter,
   });
-  return { server, quarantineRepository };
+  return { server, quarantineRepository, quarantineRateLimiter };
 }
 
-export function assertNoPrivateKeyEnvironment(
-  environment: NodeJS.ProcessEnv = process.env,
-): void {
-  const injected = Object.keys(environment).find((name) =>
-    name.startsWith("QUARANTINE_PRIVATE_KEY"),
-  );
-  if (injected) {
-    throw new Error(
-      `${injected} must not be available to the memory-router process`,
-    );
+async function createSharedRateLimiter(
+  connectionString: string,
+): Promise<PostgresSlidingWindowRateLimiter | undefined> {
+  if (
+    !connectionString.startsWith("postgres://") &&
+    !connectionString.startsWith("postgresql://")
+  ) {
+    return undefined;
   }
+  const limiter = new PostgresSlidingWindowRateLimiter(connectionString);
+  await limiter.initialize();
+  return limiter;
 }
 
 function requireQuarantineRepository(
@@ -291,97 +336,6 @@ function requireQuarantineRepository(
   return options.quarantineRepository;
 }
 
-function isAuthorized(req: IncomingMessage, routerToken?: string): boolean {
-  const token = routerToken ?? ROUTER_TOKEN;
-  if (!token) return true;
-  return req.headers.authorization === `Bearer ${token}`;
-}
-
-function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
-  const token = adminToken ?? ADMIN_TOKEN;
-  if (!token) return false;
-  return req.headers.authorization === `Bearer ${token}`;
-}
-
-async function readJson(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  let totalBytes = 0;
-  for await (const chunk of req) {
-    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    totalBytes += buffer.length;
-    if (totalBytes > maxBodyBytes) {
-      throw new HttpError(413, "payload_too_large", "payload too large");
-    }
-    chunks.push(buffer);
-  }
-  const raw = Buffer.concat(chunks).toString("utf8");
-  if (!raw) return {};
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    throw new HttpError(400, "invalid_json", "invalid JSON body");
-  }
-}
-
-function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
-
-function parseMemoryPath(
-  pathname: string,
-): { writerId: string; action: "retain" | "recall" } | null {
-  const retain = pathname.match(/^\/v1\/default\/banks\/([^/]+)\/memories$/);
-  if (retain) {
-    return { writerId: decodeURIComponent(retain[1]), action: "retain" };
-  }
-
-  const recall = pathname.match(
-    /^\/v1\/default\/banks\/([^/]+)\/memories\/recall$/,
-  );
-  if (recall) {
-    return { writerId: decodeURIComponent(recall[1]), action: "recall" };
-  }
-
-  return null;
-}
-
-function parseAdminItemPath(pathname: string): {
-  quarantineId: string;
-  action: "read" | "approve" | "reject" | "postpone";
-} | null {
-  const match = pathname.match(
-    /^\/admin\/quarantine\/items\/([^/]+)(?:\/(approve|reject|postpone))?$/,
-  );
-  if (!match) return null;
-  return {
-    quarantineId: decodeURIComponent(match[1]),
-    action: (match[2] ?? "read") as "read" | "approve" | "reject" | "postpone",
-  };
-}
-
-function integerQuery(
-  query: ParsedUrlQuery,
-  name: string,
-  fallback: number,
-  min: number,
-  max: number,
-): number {
-  const raw = query[name];
-  if (raw === undefined) return fallback;
-  if (Array.isArray(raw)) {
-    throw new HttpError(400, "invalid_query", `${name} is invalid`);
-  }
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new HttpError(400, "invalid_query", `${name} is invalid`);
-  }
-  return value;
-}
-
 function numberEnv(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined) return fallback;
@@ -392,15 +346,27 @@ function numberEnv(name: string, fallback: number): number {
   return value;
 }
 
+function positiveNumberEnv(name: string, fallback: number): number {
+  const value = numberEnv(name, fallback);
+  if (value === 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
   createConfiguredMemoryRouterServer()
-    .then(({ server, quarantineRepository }) => {
+    .then(({ server, quarantineRepository, quarantineRateLimiter }) => {
       server.listen(PORT, () => {
         process.stdout.write(`memory-router listening on ${PORT}\n`);
       });
       const shutdown = () => {
         server.close(() => {
-          quarantineRepository.close().finally(() => process.exit(0));
+          const closeLimiter =
+            quarantineRateLimiter?.close() ?? Promise.resolve();
+          closeLimiter.finally(() => {
+            quarantineRepository.close().finally(() => process.exit(0));
+          });
         });
       };
       process.once("SIGINT", shutdown);
