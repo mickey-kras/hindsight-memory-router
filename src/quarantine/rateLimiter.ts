@@ -11,12 +11,15 @@ export interface RateLimitBucket {
   rule: RateLimitRule;
 }
 
-export interface QuarantineRateLimiter {
+export interface RateLimitSession {
   consume(key: string, rule: RateLimitRule, at?: Date): Promise<void>;
   consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void>;
+}
+
+export interface QuarantineRateLimiter extends RateLimitSession {
   withIdentityLock<T>(
     identityKey: string,
-    operation: () => Promise<T>,
+    operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T>;
 }
 
@@ -50,7 +53,10 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
+  consumeMany(
+    buckets: readonly RateLimitBucket[],
+    at?: Date,
+  ): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
@@ -77,7 +83,7 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
 
   async withIdentityLock<T>(
     identityKey: string,
-    operation: () => Promise<T>,
+    operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T> {
     const previous = this.identityLocks.get(identityKey) ?? Promise.resolve();
     let release!: () => void;
@@ -89,7 +95,7 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
 
     await previous;
     try {
-      return await operation();
+      return await operation(this);
     } finally {
       release();
       if (this.identityLocks.get(identityKey) === tail) {
@@ -160,80 +166,114 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     buckets: readonly RateLimitBucket[],
     at?: Date,
   ): Promise<void> {
-    const enabled = buckets.filter(({ rule }) => isEnabled(rule));
+    const enabled = normalizeBuckets(buckets);
     if (enabled.length === 0) return;
 
-    const unique = [
-      ...new Map(enabled.map((bucket) => [bucket.key, bucket])).values(),
-    ].sort((left, right) => left.key.localeCompare(right.key));
-
-    let pruneCutoff = 0;
-    await this.sql.begin(async (transaction) => {
-      for (const { key } of unique) {
-        await transaction.unsafe("SELECT pg_advisory_xact_lock(hashtext($1))", [
-          `rate-limit:${key}`,
-        ]);
-      }
-
-      const now = at?.getTime() ?? (await databaseNowMs(transaction));
-      pruneCutoff = Math.min(...unique.map(({ rule }) => now - rule.windowMs));
-
-      for (const { key, rule } of unique) {
-        const cutoff = now - rule.windowMs;
-        await transaction.unsafe(
-          `DELETE FROM quarantine_rate_limit_events
-           WHERE bucket = $1 AND occurred_at_ms <= $2`,
-          [key, cutoff],
-        );
-        const rows = await transaction.unsafe<Record<string, unknown>[]>(
-          `SELECT COUNT(*) AS count
-           FROM quarantine_rate_limit_events
-           WHERE bucket = $1`,
-          [key],
-        );
-        if (Number(rows[0]?.count ?? 0) >= rule.max) {
-          throw rateLimitExceededError();
-        }
-      }
-
-      for (const { key } of unique) {
-        const now = at?.getTime() ?? (await databaseNowMs(transaction));
-        await transaction.unsafe(
-          `INSERT INTO quarantine_rate_limit_events (bucket, occurred_at_ms)
-           VALUES ($1, $2)`,
-          [key, now],
-        );
-      }
-    });
-
-    this.consumes += 1;
-    if (this.consumes % this.pruneIntervalConsumes === 0) {
-      await this.sql.unsafe(
-        "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms <= $1",
-        [pruneCutoff],
-      );
-    }
+    const cutoff = await this.sql.begin((transaction) =>
+      this.consumeManyInTransaction(transaction as Sql, enabled, at),
+    );
+    await this.maybePrune(cutoff);
   }
 
   async withIdentityLock<T>(
     identityKey: string,
-    operation: () => Promise<T>,
+    operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T> {
     return this.sql.begin(async (transaction) => {
-      await transaction.unsafe("SELECT pg_advisory_xact_lock(hashtext($1))", [
-        `quarantine-identity:${identityKey}`,
-      ]);
-      return operation();
+      const sql = transaction as Sql;
+      await advisoryLock(sql, `quarantine-identity:${identityKey}`);
+      const session: RateLimitSession = {
+        consume: (key, rule, at) =>
+          this.consumeManyInTransaction(sql, [{ key, rule }], at).then(
+            () => undefined,
+          ),
+        consumeMany: (buckets, at) =>
+          this.consumeManyInTransaction(sql, normalizeBuckets(buckets), at).then(
+            () => undefined,
+          ),
+      };
+      return operation(session);
     });
   }
 
   async close(): Promise<void> {
     await this.sql.end();
   }
+
+  private async consumeManyInTransaction(
+    sql: Sql,
+    buckets: readonly RateLimitBucket[],
+    at?: Date,
+  ): Promise<number> {
+    if (buckets.length === 0) return 0;
+
+    for (const { key } of buckets) {
+      await advisoryLock(sql, `rate-limit:${key}`);
+    }
+
+    const now = at?.getTime() ?? (await databaseNowMs(sql));
+    for (const { key, rule } of buckets) {
+      const cutoff = now - rule.windowMs;
+      await sql.unsafe(
+        `DELETE FROM quarantine_rate_limit_events
+         WHERE bucket = $1 AND occurred_at_ms <= $2`,
+        [key, cutoff],
+      );
+      const rows = await sql.unsafe<Record<string, unknown>[]>(
+        `SELECT COUNT(*) AS count
+         FROM quarantine_rate_limit_events
+         WHERE bucket = $1`,
+        [key],
+      );
+      if (Number(rows[0]?.count ?? 0) >= rule.max) {
+        throw rateLimitExceededError();
+      }
+    }
+
+    for (const { key } of buckets) {
+      await sql.unsafe(
+        `INSERT INTO quarantine_rate_limit_events (bucket, occurred_at_ms)
+         VALUES ($1, $2)`,
+        [key, now],
+      );
+    }
+
+    this.consumes += 1;
+    return Math.min(...buckets.map(({ rule }) => now - rule.windowMs));
+  }
+
+  private async maybePrune(cutoff: number): Promise<void> {
+    if (cutoff === 0 || this.consumes % this.pruneIntervalConsumes !== 0) {
+      return;
+    }
+    await this.sql.unsafe(
+      "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms <= $1",
+      [cutoff],
+    );
+  }
+}
+
+function normalizeBuckets(
+  buckets: readonly RateLimitBucket[],
+): RateLimitBucket[] {
+  return [
+    ...new Map(
+      buckets
+        .filter(({ rule }) => isEnabled(rule))
+        .map((bucket) => [bucket.key, bucket]),
+    ).values(),
+  ].sort((left, right) => left.key.localeCompare(right.key));
 }
 
 function isEnabled(rule: RateLimitRule): boolean {
   return rule.max > 0 && rule.windowMs > 0;
+}
+
+async function advisoryLock(sql: Sql, key: string): Promise<void> {
+  await sql.unsafe(
+    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+    [key],
+  );
 }
 
 async function databaseNowMs(sql: Sql): Promise<number> {
