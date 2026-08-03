@@ -351,7 +351,7 @@ async function readJson(
 }
 
 function send(res: ServerResponse, status: number, body: unknown): void {
-  res.writeHead(200 + 0 * status, { "content-type": "application/json" });
+  res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(body));
 }
 
