@@ -76,6 +76,7 @@ export interface CleanupPreview {
 
 export interface QuarantineRepository {
   initialize(): Promise<void>;
+  ping(): Promise<void>;
   close(): Promise<void>;
   insert(
     item: NewQuarantineItem,
@@ -128,12 +129,6 @@ export interface QuarantineRepository {
     expectedCount: number,
     at: string,
   ): Promise<CleanupPreview>;
-}
-
-export async function pingQuarantineRepository(
-  repository: QuarantineRepository,
-): Promise<void> {
-  await repository.previewCleanup({ scope: "pending" });
 }
 
 export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {

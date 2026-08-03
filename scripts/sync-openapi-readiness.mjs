@@ -41,7 +41,7 @@ updateText("src/quarantine/sqlRepository.ts", (content) =>
   replaceOnce(
     content,
     "  async initialize(): Promise<void> {\n    await initializeSchema(this.database);\n  }\n\n  async close(): Promise<void> {",
-    "  async initialize(): Promise<void> {\n    await initializeSchema(this.database);\n  }\n\n  async ping(): Promise<void> {\n    await this.database.get(\"SELECT 1 AS ready\");\n  }\n\n  async close(): Promise<void> {",
+    '  async initialize(): Promise<void> {\n    await initializeSchema(this.database);\n  }\n\n  async ping(): Promise<void> {\n    await this.database.get("SELECT 1 AS ready");\n  }\n\n  async close(): Promise<void> {',
     "src/quarantine/sqlRepository.ts",
   ),
 );

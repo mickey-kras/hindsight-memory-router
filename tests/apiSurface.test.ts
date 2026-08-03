@@ -37,7 +37,7 @@ async function withServer<T>(
 describe("memory-router API surface", () => {
   it("serves process health without database access", async () => {
     await withServer(async ({ baseUrl, repository }) => {
-      vi.spyOn(repository, "previewCleanup").mockRejectedValue(
+      vi.spyOn(repository, "ping").mockRejectedValue(
         new Error("database unavailable"),
       );
       const response = await fetch(`${baseUrl}/health`);
@@ -62,7 +62,7 @@ describe("memory-router API surface", () => {
 
   it("returns 503 readiness when quarantine storage is unavailable", async () => {
     await withServer(async ({ baseUrl, repository }) => {
-      vi.spyOn(repository, "previewCleanup").mockRejectedValue(
+      vi.spyOn(repository, "ping").mockRejectedValue(
         new Error("database unavailable"),
       );
       const response = await fetch(`${baseUrl}/ready`);

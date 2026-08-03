@@ -17,10 +17,7 @@ import {
   type ApproveBody,
   type CleanupBody,
 } from "./quarantine/quarantineAdmin.js";
-import {
-  pingQuarantineRepository,
-  type QuarantineRepository,
-} from "./quarantine/repository.js";
+import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
@@ -148,7 +145,7 @@ export function createMemoryRouterServer(
 
       if (method === "GET" && pathname === "/ready") {
         try {
-          await pingQuarantineRepository(quarantineRepository);
+          await quarantineRepository.ping();
           return send(res, 200, { status: "ready", service: "memory-router" });
         } catch {
           return send(res, 503, {

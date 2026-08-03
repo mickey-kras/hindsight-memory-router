@@ -140,6 +140,7 @@ describe("OpenAPI contract", () => {
     const actual = operations();
     expect(actual.get("GET /health")?.security).toEqual([]);
     expect(actual.get("GET /ready")?.security).toEqual([]);
+    expect(actual.get("GET /ready")?.responses).toHaveProperty("4XX");
     expect(actual.get("GET /ready")?.responses).toHaveProperty("503");
     expect(securityScheme(actual.get("GET /version") ?? {})).toBe(
       "RouterToken",

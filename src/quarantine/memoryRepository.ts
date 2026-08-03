@@ -19,6 +19,7 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   private reviewTail: Promise<void> = Promise.resolve();
 
   async initialize(): Promise<void> {}
+  async ping(): Promise<void> {}
   async close(): Promise<void> {}
 
   async insert(

@@ -52,6 +52,10 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     await initializeSchema(this.database);
   }
 
+  async ping(): Promise<void> {
+    await this.database.get("SELECT 1 AS ready");
+  }
+
   async close(): Promise<void> {
     await this.database.close();
   }
