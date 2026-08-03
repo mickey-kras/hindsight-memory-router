@@ -11,6 +11,7 @@ type Operation = {
   operationId?: string;
   description?: string;
   security?: SecurityRequirement[];
+  responses?: Record<string, unknown>;
   requestBody?: {
     content?: {
       "application/json"?: {
@@ -42,6 +43,7 @@ const document = JSON.parse(
 
 const expectedOperations = new Map<string, string>([
   ["GET /health", "getHealth"],
+  ["GET /ready", "getReadiness"],
   ["GET /version", "getVersion"],
   ["POST /v1/default/banks/{writer_id}/memories", "retainMemory"],
   ["POST /v1/default/banks/{writer_id}/memories/recall", "recallMemory"],
@@ -137,6 +139,9 @@ describe("OpenAPI contract", () => {
 
     const actual = operations();
     expect(actual.get("GET /health")?.security).toEqual([]);
+    expect(actual.get("GET /ready")?.security).toEqual([]);
+    expect(actual.get("GET /ready")?.responses).toHaveProperty("4XX");
+    expect(actual.get("GET /ready")?.responses).toHaveProperty("503");
     expect(securityScheme(actual.get("GET /version") ?? {})).toBe(
       "RouterToken",
     );

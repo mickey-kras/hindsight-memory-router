@@ -29,6 +29,17 @@ services:
       - "127.0.0.1:8890:8890"
     volumes:
       - ./tmp/fake/quarantine:/state
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8890/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - internal
 

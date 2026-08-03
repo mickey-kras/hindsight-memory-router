@@ -143,6 +143,18 @@ export function createMemoryRouterServer(
         return send(res, 200, { status: "healthy", service: "memory-router" });
       }
 
+      if (method === "GET" && pathname === "/ready") {
+        try {
+          await quarantineRepository.ping();
+          return send(res, 200, { status: "ready", service: "memory-router" });
+        } catch {
+          return send(res, 503, {
+            status: "not_ready",
+            service: "memory-router",
+          });
+        }
+      }
+
       if (pathname.startsWith("/admin/")) {
         if (!isAdminAuthorized(req, options.adminToken)) {
           return send(res, 401, { error: "unauthorized" });
