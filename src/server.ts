@@ -196,7 +196,7 @@ export function createMemoryRouterServer(
           await auditAuthFailure("admin");
           return send(res, 401, { error: "unauthorized" });
         }
-        adminRateLimiter.consume(classifyAdminRequest(method));
+        await adminRateLimiter.consume(classifyAdminRequest(method));
         if (method === "GET" && pathname === "/admin/quarantine/queue") {
           return send(
             res,
