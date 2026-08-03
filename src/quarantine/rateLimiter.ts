@@ -53,10 +53,7 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(
-    buckets: readonly RateLimitBucket[],
-    at?: Date,
-  ): Promise<void> {
+  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
@@ -188,9 +185,11 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
             () => undefined,
           ),
         consumeMany: (buckets, at) =>
-          this.consumeManyInTransaction(sql, normalizeBuckets(buckets), at).then(
-            () => undefined,
-          ),
+          this.consumeManyInTransaction(
+            sql,
+            normalizeBuckets(buckets),
+            at,
+          ).then(() => undefined),
       };
       return operation(session);
     });
@@ -270,10 +269,9 @@ function isEnabled(rule: RateLimitRule): boolean {
 }
 
 async function advisoryLock(sql: Sql, key: string): Promise<void> {
-  await sql.unsafe(
-    "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-    [key],
-  );
+  await sql.unsafe("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    key,
+  ]);
 }
 
 async function databaseNowMs(sql: Sql): Promise<number> {

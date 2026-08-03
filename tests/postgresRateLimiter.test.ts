@@ -82,10 +82,9 @@ describe("PostgresSlidingWindowRateLimiter", () => {
         expect.stringContaining("INSERT INTO quarantine_rate_limit_events"),
       ]),
     );
-    expect(findCall("INSERT INTO quarantine_rate_limit_events")?.params).toEqual([
-      "writer:a",
-      1_000,
-    ]);
+    expect(
+      findCall("INSERT INTO quarantine_rate_limit_events")?.params,
+    ).toEqual(["writer:a", 1_000]);
     expect(findCall("bucket = $1 AND occurred_at_ms <= $2")?.params).toEqual([
       "writer:a",
       1_000 - 60_000,
@@ -123,10 +122,9 @@ describe("PostgresSlidingWindowRateLimiter", () => {
     await limiter.consume("writer:a", RULE);
 
     expect(findCall("clock_timestamp")).toBeDefined();
-    expect(findCall("INSERT INTO quarantine_rate_limit_events")?.params).toEqual([
-      "writer:a",
-      state.nowMs,
-    ]);
+    expect(
+      findCall("INSERT INTO quarantine_rate_limit_events")?.params,
+    ).toEqual(["writer:a", state.nowMs]);
   });
 
   it("holds the identity lock while the supplied session consumes quota", async () => {
