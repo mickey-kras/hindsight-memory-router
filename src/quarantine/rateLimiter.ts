@@ -14,7 +14,10 @@ export interface RateLimitBucket {
 export interface QuarantineRateLimiter {
   consume(key: string, rule: RateLimitRule, at?: Date): Promise<void>;
   consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void>;
-  withIdentityLock<T>(identityKey: string, operation: () => Promise<T>): Promise<T>;
+  withIdentityLock<T>(
+    identityKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T>;
 }
 
 export function rateLimitExceededError(): HttpError {
@@ -47,10 +50,7 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(
-    buckets: readonly RateLimitBucket[],
-    at?: Date,
-  ): Promise<void> {
+  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
@@ -163,16 +163,16 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return;
 
-    const unique = [...new Map(enabled.map((bucket) => [bucket.key, bucket])).values()]
-      .sort((left, right) => left.key.localeCompare(right.key));
+    const unique = [
+      ...new Map(enabled.map((bucket) => [bucket.key, bucket])).values(),
+    ].sort((left, right) => left.key.localeCompare(right.key));
 
     let pruneCutoff = 0;
     await this.sql.begin(async (transaction) => {
       for (const { key } of unique) {
-        await transaction.unsafe(
-          "SELECT pg_advisory_xact_lock(hashtext($1))",
-          [`rate-limit:${key}`],
-        );
+        await transaction.unsafe("SELECT pg_advisory_xact_lock(hashtext($1))", [
+          `rate-limit:${key}`,
+        ]);
       }
 
       const now = at?.getTime() ?? (await databaseNowMs(transaction));
@@ -220,10 +220,9 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     operation: () => Promise<T>,
   ): Promise<T> {
     return this.sql.begin(async (transaction) => {
-      await transaction.unsafe(
-        "SELECT pg_advisory_xact_lock(hashtext($1))",
-        [`quarantine-identity:${identityKey}`],
-      );
+      await transaction.unsafe("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        `quarantine-identity:${identityKey}`,
+      ]);
       return operation();
     });
   }
