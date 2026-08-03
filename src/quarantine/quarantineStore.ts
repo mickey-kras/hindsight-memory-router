@@ -73,7 +73,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    this.limiter.consume("quarantine-writes");
+    this.limiter.consume(writeLimiterKey(input));
 
     const quarantineId = await this.resolveQuarantineId(input);
     const decrypted: DecryptedQuarantineObject = {
@@ -145,6 +145,17 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
+}
+
+// Auth-failure audits use a dedicated limiter key so unauthenticated probing
+// cannot starve the shared budget that records security quarantines.
+const WRITE_LIMITER_KEY = "quarantine-writes";
+const AUTH_AUDIT_LIMITER_KEY = "quarantine-writes:auth-audit";
+
+function writeLimiterKey(input: QuarantineInput): string {
+  return input.reason === "auth_failed"
+    ? AUTH_AUDIT_LIMITER_KEY
+    : WRITE_LIMITER_KEY;
 }
 
 // This protects one router process. Multi-instance deployments need a shared edge limit.
