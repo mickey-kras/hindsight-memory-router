@@ -23,18 +23,37 @@ export function rateLimitExceededError(): HttpError {
   );
 }
 
+export interface InMemoryRateLimiterOptions {
+  /** Evict stale bucket keys every N successful consumes. */
+  sweepIntervalConsumes?: number;
+}
+
+const DEFAULT_SWEEP_INTERVAL_CONSUMES = 128;
+
 /**
  * Per-process sliding-window counter. Buckets hold the timestamps of recent
  * consumes, so quota refills continuously instead of resetting at fixed
- * window boundaries (no boundary bursts). Restarting the process resets the
- * buckets; multi-instance deployments need the PostgreSQL limiter below.
+ * window boundaries (no boundary bursts). Bucket keys whose newest event has
+ * left the longest observed window are evicted by a periodic sweep, because
+ * keys derive from attacker-influenced writer IDs and must not accumulate
+ * unboundedly. Restarting the process resets the buckets; multi-instance
+ * deployments need the PostgreSQL limiter below.
  */
 export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
   private readonly buckets = new Map<string, number[]>();
+  private readonly sweepIntervalConsumes: number;
+  private consumes = 0;
+  private maxWindowMs = 0;
+
+  constructor(options: InMemoryRateLimiterOptions = {}) {
+    this.sweepIntervalConsumes =
+      options.sweepIntervalConsumes ?? DEFAULT_SWEEP_INTERVAL_CONSUMES;
+  }
 
   consume(key: string, rule: RateLimitRule, at?: Date): Promise<void> {
     if (rule.max <= 0 || rule.windowMs <= 0) return Promise.resolve();
     const now = at?.getTime() ?? Date.now();
+    this.maxWindowMs = Math.max(this.maxWindowMs, rule.windowMs);
     const cutoff = now - rule.windowMs;
     const events = (this.buckets.get(key) ?? []).filter(
       (occurredAt) => occurredAt > cutoff,
@@ -44,7 +63,26 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     }
     events.push(now);
     this.buckets.set(key, events);
+    this.consumes += 1;
+    if (this.consumes % this.sweepIntervalConsumes === 0) {
+      this.sweep(now);
+    }
     return Promise.resolve();
+  }
+
+  /** Number of live bucket keys; exposed for tests and diagnostics. */
+  bucketCount(): number {
+    return this.buckets.size;
+  }
+
+  private sweep(now: number): void {
+    const staleBefore = now - this.maxWindowMs;
+    for (const [key, events] of this.buckets) {
+      const newest = events[events.length - 1];
+      if (newest === undefined || newest <= staleBefore) {
+        this.buckets.delete(key);
+      }
+    }
   }
 }
 
