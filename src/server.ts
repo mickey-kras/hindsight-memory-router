@@ -133,6 +133,7 @@ export function createMemoryRouterServer(
   const adminRateLimiter =
     options.adminRateLimiter ??
     new AdminRateLimiter(adminRateLimitConfigFromEnv());
+  const auditAuthFailure = createAuthFailureAuditor(quarantineStore);
   const policy = new RouterPolicy({
     registry,
     hindsight,
@@ -170,7 +171,7 @@ export function createMemoryRouterServer(
 
       if (pathname.startsWith("/admin/")) {
         if (!isAdminAuthorized(req, options.adminToken)) {
-          await auditAuthFailure(quarantineStore, "admin");
+          await auditAuthFailure("admin");
           return send(res, 401, { error: "unauthorized" });
         }
         adminRateLimiter.consume(classifyAdminRequest(method));
@@ -220,7 +221,7 @@ export function createMemoryRouterServer(
       }
 
       if (!isAuthorized(req, options.routerToken, allowAnonymous)) {
-        await auditAuthFailure(quarantineStore, "router");
+        await auditAuthFailure("router");
         return send(res, 401, { error: "unauthorized" });
       }
 
@@ -355,31 +356,54 @@ function bearerTokenMatches(
 
 type AuthRouteGroup = "router" | "admin";
 
+const AUTH_FAILURE_LOG_WINDOW_MS = 60_000;
+
 // Failed authentication is audited with a bounded identity space: one
 // deduplicated security_event per route group, plus a structured stderr
-// line. Token material is never logged or stored.
-async function auditAuthFailure(
+// line. Stderr is throttled to one line per kind per route group per
+// window so probing cannot flood logs. Token material is never logged
+// or stored.
+function createAuthFailureAuditor(
   quarantineStore: QuarantineStore,
-  routeGroup: AuthRouteGroup,
-): Promise<void> {
-  process.stderr.write(
-    `${JSON.stringify({ event: "auth_failed", route_group: routeGroup })}\n`,
-  );
-  try {
-    await quarantineStore.put({
-      timestamp: new Date().toISOString(),
-      kind: "security_event",
-      reason: "auth_failed",
-      source: "http",
-      dedupeKey: `auth_failed:${routeGroup}`,
-      payload: { action: "auth_failed", route_group: routeGroup },
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "unknown error";
-    process.stderr.write(
-      `memory-router could not record an auth_failed security event: ${message}\n`,
+  now: () => number = () => Date.now(),
+): (routeGroup: AuthRouteGroup) => Promise<void> {
+  const lastLoggedAt = new Map<string, number>();
+  const logThrottled = (
+    channel: "event" | "error",
+    routeGroup: AuthRouteGroup,
+    line: string,
+  ): void => {
+    const key = `${channel}:${routeGroup}`;
+    const at = now();
+    const last = lastLoggedAt.get(key);
+    if (last !== undefined && at - last < AUTH_FAILURE_LOG_WINDOW_MS) return;
+    lastLoggedAt.set(key, at);
+    process.stderr.write(line);
+  };
+  return async (routeGroup: AuthRouteGroup): Promise<void> => {
+    logThrottled(
+      "event",
+      routeGroup,
+      `${JSON.stringify({ event: "auth_failed", route_group: routeGroup })}\n`,
     );
-  }
+    try {
+      await quarantineStore.put({
+        timestamp: new Date().toISOString(),
+        kind: "security_event",
+        reason: "auth_failed",
+        source: "http",
+        dedupeKey: `auth_failed:${routeGroup}`,
+        payload: { action: "auth_failed", route_group: routeGroup },
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "unknown error";
+      logThrottled(
+        "error",
+        routeGroup,
+        `memory-router could not record an auth_failed security event: ${message}\n`,
+      );
+    }
+  };
 }
 
 async function readJson(
