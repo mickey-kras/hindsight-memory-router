@@ -53,10 +53,7 @@ export class InMemorySlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(
-    buckets: readonly RateLimitBucket[],
-    at?: Date,
-  ): Promise<void> {
+  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
     const enabled = buckets.filter(({ rule }) => isEnabled(rule));
     if (enabled.length === 0) return Promise.resolve();
 
