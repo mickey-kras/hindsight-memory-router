@@ -3,7 +3,7 @@
 [![ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml)
 [![codeql](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml)
 [![aislop ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml/badge.svg?branch=main)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/aislop.yml)
-[![aislop score](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router.svg)](https://scanaislop.com/mickey-kras/hindsight-memory-router)
+[![aislop score](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router.svg)](https://badges.scanaislop.com/score/mickey-kras/hindsight-memory-router)
 [![docker hub](https://img.shields.io/docker/v/mickeykrasilnikov/hindsight-memory-router?label=docker%20hub)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
 [![docker pulls](https://img.shields.io/docker/pulls/mickeykrasilnikov/hindsight-memory-router)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
 [![ghcr](https://img.shields.io/badge/ghcr.io-mickey--kras%2Fhindsight--memory--router-blue)](https://github.com/mickey-kras/hindsight-memory-router/pkgs/container/hindsight-memory-router)
@@ -144,7 +144,7 @@ There is no Hindsight `quarantine` bank. Quarantine is operational security stat
 
 ## Quarantine storage
 
-`quarantine_items` holds current state and encrypted envelopes. It never stores unencrypted payloads. `quarantine_events` is append-only and retains audit events after item ciphertext is removed.
+`quarantine_items` holds current state and encrypted envelopes. It never stores unencrypted payloads. `quarantine_events` is append-only and retains audit events after item ciphertext is removed. Existing databases are migrated in place at startup: the `dedupe_key` and `requarantine_count` columns are added when missing, and pre-existing rows keep a `NULL` dedupe key so they are never merged into newer items.
 
 ```text
 raw JSON payload
@@ -154,7 +154,38 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
+Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota.
+
+### Quarantine deduplication
+
+Repeated submissions reuse one quarantine item instead of consuming one capacity slot per request. A repeated submission refreshes the item's timestamps and encrypted envelope, increments its `requarantine_count`, and appends a `requarantined` audit event; the original payload is stored as-is on first sight. The dedupe identity is exposed as `dedupe_key` in admin queue/item responses (absent on items created before deduplication was introduced).
+
+Identity per kind:
+
+```text
+retain_request / recall_request
+    -> SHA-256 over the canonical JSON of
+       {kind, writer_id, target, normalized payload}
+       target = assigned write bank (retain) or sorted read banks (recall),
+       only when the writer is registered
+recalled_memory
+    -> source_bank + source_memory_id
+security_event
+    -> normalized METHOD:path, capped per writer (see below)
+```
+
+Payload normalization applies only to the hashed identity, never to the stored payload:
+
+```text
+strings: trimmed, internal whitespace runs collapse to one space
+objects: keys sorted (canonical JSON), values normalized recursively
+arrays:  order preserved, elements normalized
+numbers, booleans, null: unchanged
+```
+
+So whitespace, formatting, or metadata key-order variants of the same request share one item, while any genuine content difference (or a different writer, kind, or policy target) creates a distinct one.
+
+Security-event paths are normalized before hashing — query string and fragment stripped, casing lowered, trailing slashes collapsed — so probe variants like `/Admin/?id=1` map to one item. Each writer may hold at most 64 distinct security-event identities per router process; further probing buckets into a single aggregate identity per writer, so path fuzzing cannot exhaust the pending-item capacity. Like the write-rate limiter, this cap is per-process.
 
 Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
 
