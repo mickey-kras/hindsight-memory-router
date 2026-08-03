@@ -6,6 +6,7 @@ import { parseRetainBody } from "../requestValidation.js";
 import {
   BANK_IDS,
   type BankId,
+  type QuarantineItemSummary,
   type RecallResult,
   type ReviewReason,
   type WriterRegistry,
@@ -45,9 +46,19 @@ export interface CleanupBody {
 export class QuarantineAdminService {
   constructor(private readonly options: QuarantineAdminServiceOptions) {}
 
-  async listQueue(limit = 100, offset = 0) {
+  // total reports the full reviewable queue depth (pending + postponed)
+  // so operators can gauge backlog without a separate /stats call.
+  async listQueue(
+    limit = 100,
+    offset = 0,
+  ): Promise<{ items: QuarantineItemSummary[]; total: number }> {
+    const [items, stats] = await Promise.all([
+      this.options.repository.listReviewable(limit, offset),
+      this.options.repository.stats(),
+    ]);
     return {
-      items: await this.options.repository.listReviewable(limit, offset),
+      items,
+      total: stats.pending_items + stats.postponed_items,
     };
   }
 
