@@ -7,6 +7,11 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
+import {
+  InMemorySlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+  type RateLimitSession,
+} from "./rateLimiter.js";
 import type {
   NewQuarantineItem,
   QuarantineCapacityLimits,
@@ -41,6 +46,8 @@ export interface QuarantineStoreLimits {
   maxEncryptedBytes: number;
   rateLimitMax: number;
   rateLimitWindowMs: number;
+  rateLimitGlobalMax: number;
+  requarantineOpsMax: number;
 }
 
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
@@ -49,45 +56,36 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
+  rateLimitGlobalMax: 300,
+  requarantineOpsMax: 1_000,
 };
 
+const GLOBAL_WRITES_BUCKET = "quarantine-writes";
+const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
+const UNKNOWN_WRITER_BUCKET = "unknown-writer";
+
 export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
-  private readonly limiter: PerProcessFixedWindowLimiter;
   private readonly publicKey: string;
   private readonly capacity: QuarantineCapacityLimits;
+  private readonly rateLimiter: QuarantineRateLimiter;
 
   constructor(
     publicKey: string,
     readonly repository: QuarantineRepository,
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
+    rateLimiter?: QuarantineRateLimiter,
   ) {
     this.publicKey = decodePublicKey(publicKey);
     this.capacity = {
       maxPendingItems: limits.maxPendingItems,
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
-    this.limiter = new PerProcessFixedWindowLimiter(
-      limits.rateLimitMax,
-      limits.rateLimitWindowMs,
-    );
+    this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    this.limiter.consume("quarantine-writes");
-
     const quarantineId = await this.resolveQuarantineId(input);
-    const decrypted: DecryptedQuarantineObject = {
-      quarantine_id: quarantineId,
-      created_at: input.timestamp,
-      reason: input.reason,
-      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
-      ...(input.source === undefined ? {} : { source: input.source }),
-      payload: input.payload,
-    };
-    const encrypted = createEncryptedQuarantineEnvelope(
-      decrypted,
-      this.publicKey,
-    );
+    const encrypted = this.encrypt(input, quarantineId);
     const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
     if (encryptedBytes > this.limits.maxItemBytes) {
       throw new HttpError(
@@ -97,7 +95,44 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    const item: NewQuarantineItem = {
+    return this.rateLimiter.withIdentityLock(
+      quarantineId,
+      async (rateLimitSession) => {
+        const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+        await this.chargeRateQuota(input, knownIdentity, rateLimitSession);
+
+        const item = this.buildItem(input, quarantineId, encrypted);
+        if (input.kind === "recalled_memory") {
+          await this.repository.upsertRecalledMemory(item, this.capacity);
+        } else if (input.kind === "security_event") {
+          await this.repository.upsertSecurityEvent(item, this.capacity);
+        } else {
+          await this.repository.insert(item, this.capacity);
+        }
+
+        return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+      },
+    );
+  }
+
+  private encrypt(input: QuarantineInput, quarantineId: string) {
+    const decrypted: DecryptedQuarantineObject = {
+      quarantine_id: quarantineId,
+      created_at: input.timestamp,
+      reason: input.reason,
+      ...(input.writerId === undefined ? {} : { writer_id: input.writerId }),
+      ...(input.source === undefined ? {} : { source: input.source }),
+      payload: input.payload,
+    };
+    return createEncryptedQuarantineEnvelope(decrypted, this.publicKey);
+  }
+
+  private buildItem(
+    input: QuarantineInput,
+    quarantineId: string,
+    encrypted: ReturnType<typeof createEncryptedQuarantineEnvelope>,
+  ): NewQuarantineItem {
+    return {
       quarantine_id: quarantineId,
       created_at: input.timestamp,
       updated_at: input.timestamp,
@@ -119,15 +154,67 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       status: "pending",
       postpone_count: 0,
     };
+  }
 
-    if (input.kind === "recalled_memory") {
-      await this.repository.upsertRecalledMemory(item, this.capacity);
-    } else if (input.kind === "security_event") {
-      await this.repository.upsertSecurityEvent(item, this.capacity);
-    } else {
-      await this.repository.insert(item, this.capacity);
+  private async chargeRateQuota(
+    input: QuarantineInput,
+    knownIdentity: boolean,
+    rateLimitSession: RateLimitSession,
+  ): Promise<void> {
+    const windowMs = this.limits.rateLimitWindowMs;
+    if (knownIdentity) {
+      await rateLimitSession.consume(REQUARANTINE_OPS_BUCKET, {
+        max: this.limits.requarantineOpsMax,
+        windowMs,
+      });
+      return;
     }
-    return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
+    if (this.limits.rateLimitMax <= 0 || (await this.capacityExhausted())) {
+      return;
+    }
+
+    const writer = input.writerId ?? UNKNOWN_WRITER_BUCKET;
+    await rateLimitSession.consumeMany([
+      {
+        key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
+        rule: { max: this.limits.rateLimitMax, windowMs },
+      },
+      {
+        key: GLOBAL_WRITES_BUCKET,
+        rule: { max: this.limits.rateLimitGlobalMax, windowMs },
+      },
+    ]);
+  }
+
+  private async isKnownIdentity(
+    input: QuarantineInput,
+    quarantineId: string,
+  ): Promise<boolean> {
+    if (input.kind === "security_event" && input.dedupeKey) {
+      return (await this.repository.get(quarantineId)) !== null;
+    }
+    if (
+      input.kind === "recalled_memory" &&
+      input.sourceBank !== undefined &&
+      input.sourceMemoryId !== undefined
+    ) {
+      return (
+        (await this.repository.findMemoryState(
+          input.sourceBank,
+          input.sourceMemoryId,
+        )) !== null
+      );
+    }
+    return false;
+  }
+
+  private async capacityExhausted(): Promise<boolean> {
+    const stats = await this.repository.stats();
+    return (
+      stats.pending_items + stats.postponed_items >=
+        this.capacity.maxPendingItems ||
+      stats.encrypted_bytes >= this.capacity.maxEncryptedBytes
+    );
   }
 
   private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
@@ -144,35 +231,5 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       return `q_memory${digest.slice(0, 48)}_${digest.slice(48)}`;
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
-  }
-}
-
-// This protects one router process. Multi-instance deployments need a shared edge limit.
-class PerProcessFixedWindowLimiter {
-  private readonly windows = new Map<
-    string,
-    { startedAt: number; count: number }
-  >();
-
-  constructor(
-    private readonly max: number,
-    private readonly windowMs: number,
-  ) {}
-
-  consume(key: string, now = Date.now()): void {
-    if (this.max <= 0 || this.windowMs <= 0) return;
-    const current = this.windows.get(key);
-    if (!current || now - current.startedAt >= this.windowMs) {
-      this.windows.set(key, { startedAt: now, count: 1 });
-      return;
-    }
-    if (current.count >= this.max) {
-      throw new HttpError(
-        429,
-        "quarantine_rate_limited",
-        "too many quarantine writes",
-      );
-    }
-    current.count += 1;
   }
 }

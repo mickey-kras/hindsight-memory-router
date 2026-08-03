@@ -90,6 +90,8 @@ QUARANTINE_MAX_PENDING_ITEMS=1000
 QUARANTINE_MAX_ENCRYPTED_BYTES=104857600
 QUARANTINE_RATE_LIMIT_MAX=30
 QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
+QUARANTINE_RATE_LIMIT_GLOBAL_MAX=300
+QUARANTINE_REQUARANTINE_OPS_MAX=1000
 ```
 
 `QUARANTINE_DATABASE_URL` supports:
@@ -154,9 +156,19 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota. Repeated denied requests to the same HTTP method and path refresh one current `security_event` item while appending a new audit event, preventing repeated probes from consuming one capacity slot per request.
+Rate and capacity limits fail closed with `429`, `413`, or `507`. They never fall back to Hindsight.
 
-Multi-instance deployments must add a shared edge or distributed rate limit when they need a cluster-wide quota.
+Rate-limit behavior:
+
+- sliding window, not fixed window;
+- `QUARANTINE_RATE_LIMIT_MAX`: new identities per writer;
+- `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`: all new identities;
+- `QUARANTINE_REQUARANTINE_OPS_MAX`: repeated writes to known identities;
+- writer and global buckets are charged atomically;
+- oversized and capacity-rejected items do not consume quota;
+- duplicate identities are serialized before classification and charging.
+
+PostgreSQL deployments share limits across router replicas and use PostgreSQL time. SQLite and in-memory deployments keep process-local limits that reset on restart.
 
 ## Upgrade from JSONL/file quarantine
 
