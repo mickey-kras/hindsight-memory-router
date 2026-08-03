@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
@@ -6,6 +7,11 @@ import {
 } from "node:http";
 import type { ParsedUrlQuery } from "node:querystring";
 import { parse as parseUrl } from "node:url";
+import {
+  AdminRateLimiter,
+  adminRateLimitConfigFromEnv,
+  classifyAdminRequest,
+} from "./adminRateLimit.js";
 import {
   FetchHindsightGateway,
   type HindsightGateway,
@@ -35,6 +41,7 @@ import type { WriterRegistry } from "./types.js";
 const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
 const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
+const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
@@ -50,6 +57,8 @@ const MAX_BODY_BYTES = Number(
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   adminToken?: string;
+  allowAnonymous?: boolean;
+  adminRateLimiter?: AdminRateLimiter;
   maxPostpones?: number;
   maxBodyBytes?: number;
   registry?: WriterRegistry;
@@ -120,6 +129,10 @@ export function createMemoryRouterServer(
       quarantineRepository,
       options.quarantineLimits ?? buildLimits(),
     );
+  const allowAnonymous = options.allowAnonymous ?? ALLOW_ANONYMOUS;
+  const adminRateLimiter =
+    options.adminRateLimiter ??
+    new AdminRateLimiter(adminRateLimitConfigFromEnv());
   const policy = new RouterPolicy({
     registry,
     hindsight,
@@ -157,8 +170,10 @@ export function createMemoryRouterServer(
 
       if (pathname.startsWith("/admin/")) {
         if (!isAdminAuthorized(req, options.adminToken)) {
+          await auditAuthFailure(quarantineStore, "admin");
           return send(res, 401, { error: "unauthorized" });
         }
+        adminRateLimiter.consume(classifyAdminRequest(method));
         if (method === "GET" && pathname === "/admin/quarantine/queue") {
           return send(
             res,
@@ -204,7 +219,8 @@ export function createMemoryRouterServer(
         return send(res, 404, { error: "admin_endpoint_not_found" });
       }
 
-      if (!isAuthorized(req, options.routerToken)) {
+      if (!isAuthorized(req, options.routerToken, allowAnonymous)) {
+        await auditAuthFailure(quarantineStore, "router");
         return send(res, 401, { error: "unauthorized" });
       }
 
@@ -248,6 +264,7 @@ export function createMemoryRouterServer(
 
 export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
   assertNoPrivateKeyEnvironment();
+  assertRouterAuthEnvironment();
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
@@ -271,6 +288,30 @@ export function assertNoPrivateKeyEnvironment(
   }
 }
 
+// Router authentication fails closed: without MEMORY_ROUTER_TOKEN every
+// retain/recall/version request is rejected unless the explicit dev-only
+// opt-in MEMORY_ROUTER_ALLOW_ANONYMOUS=true is set. Both states are
+// surfaced loudly at startup instead of silently changing the trust model.
+export function assertRouterAuthEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  if (environment.MEMORY_ROUTER_TOKEN) return;
+  if (environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true") {
+    process.stderr.write(
+      "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true with no MEMORY_ROUTER_TOKEN; retain/recall/version are anonymously accessible. Development only, never use in production.\n",
+    );
+    return;
+  }
+  process.stderr.write(
+    "memory-router WARNING: MEMORY_ROUTER_TOKEN is not set; retain/recall/version reject all requests (fail-closed). Set MEMORY_ROUTER_TOKEN, or set MEMORY_ROUTER_ALLOW_ANONYMOUS=true for local development only.\n",
+  );
+  if (!environment.MEMORY_ROUTER_ADMIN_TOKEN) {
+    process.stderr.write(
+      "memory-router WARNING: MEMORY_ROUTER_ADMIN_TOKEN is not set; /admin/* routes reject all requests (fail-closed).\n",
+    );
+  }
+}
+
 function requireQuarantineRepository(
   options: CreateMemoryRouterServerOptions,
 ): QuarantineRepository {
@@ -282,16 +323,63 @@ function requireQuarantineRepository(
   return options.quarantineRepository;
 }
 
-function isAuthorized(req: IncomingMessage, routerToken?: string): boolean {
+function isAuthorized(
+  req: IncomingMessage,
+  routerToken: string | undefined,
+  allowAnonymous: boolean,
+): boolean {
   const token = routerToken ?? ROUTER_TOKEN;
-  if (!token) return true;
-  return req.headers.authorization === `Bearer ${token}`;
+  if (!token) return allowAnonymous;
+  return bearerTokenMatches(req.headers.authorization, token);
 }
 
 function isAdminAuthorized(req: IncomingMessage, adminToken?: string): boolean {
   const token = adminToken ?? ADMIN_TOKEN;
   if (!token) return false;
-  return req.headers.authorization === `Bearer ${token}`;
+  return bearerTokenMatches(req.headers.authorization, token);
+}
+
+// Both sides are hashed to a fixed length first so the comparison is
+// constant-time and does not leak the expected token length.
+function bearerTokenMatches(
+  authorization: string | undefined,
+  token: string,
+): boolean {
+  if (!authorization) return false;
+  const presented = createHash("sha256").update(authorization, "utf8").digest();
+  const expected = createHash("sha256")
+    .update(`Bearer ${token}`, "utf8")
+    .digest();
+  return timingSafeEqual(presented, expected);
+}
+
+type AuthRouteGroup = "router" | "admin";
+
+// Failed authentication is audited with a bounded identity space: one
+// deduplicated security_event per route group, plus a structured stderr
+// line. Token material is never logged or stored.
+async function auditAuthFailure(
+  quarantineStore: QuarantineStore,
+  routeGroup: AuthRouteGroup,
+): Promise<void> {
+  process.stderr.write(
+    `${JSON.stringify({ event: "auth_failed", route_group: routeGroup })}\n`,
+  );
+  try {
+    await quarantineStore.put({
+      timestamp: new Date().toISOString(),
+      kind: "security_event",
+      reason: "auth_failed",
+      source: "http",
+      dedupeKey: `auth_failed:${routeGroup}`,
+      payload: { action: "auth_failed", route_group: routeGroup },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unknown error";
+    process.stderr.write(
+      `memory-router could not record an auth_failed security event: ${message}\n`,
+    );
+  }
 }
 
 async function readJson(

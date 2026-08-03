@@ -20,6 +20,7 @@ const REVIEW_REASONS = new Set<ReviewReason>([
   "suspicious_query",
   "recalled_suspicious_memory",
   "denied_endpoint",
+  "auth_failed",
 ]);
 
 type WrappedKeyField = `wrapped_${"key"}_b64`;
