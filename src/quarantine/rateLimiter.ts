@@ -177,7 +177,7 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     operation: (session: RateLimitSession) => Promise<T>,
   ): Promise<T> {
     let cutoff = 0;
-    let result: T | undefined;
+    let outcome: { value: T } | undefined;
 
     await this.sql.begin(async (transaction) => {
       await advisoryLock(transaction, `quarantine-identity:${identityKey}`);
@@ -197,14 +197,14 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
           );
         },
       };
-      result = await operation(session);
+      outcome = { value: await operation(session) };
     });
 
     if (cutoff !== 0) await this.recordConsume(cutoff);
-    if (result === undefined) {
-      throw new Error("rate-limit identity operation returned no result");
+    if (outcome === undefined) {
+      throw new Error("rate-limit identity operation did not complete");
     }
-    return result;
+    return outcome.value;
   }
 
   async close(): Promise<void> {
