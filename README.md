@@ -119,7 +119,7 @@ SQLite is the default and enables WAL mode. PostgreSQL is intended for deploymen
 
 Both bearer tokens are compared in constant time (SHA-256 pre-hashed, `crypto.timingSafeEqual`), so probing cannot learn the token length or content byte by byte.
 
-Failed authentication is audited. Every rejected router or admin request emits a structured stderr line (`{"event":"auth_failed","route_group":"router|admin"}`) and records one deduplicated `security_event` quarantine item per route group with reason `auth_failed`, visible in the admin queue and stats. Token material is never logged or stored, and the router never logs `Authorization` headers.
+Failed authentication is audited. Every rejected router or admin request records one deduplicated `security_event` quarantine item per route group with reason `auth_failed`, visible in the admin queue and stats, and emits a structured stderr line (`{"event":"auth_failed","route_group":"router|admin"}`) throttled to one line per route group per minute. Auth-failure audit writes use a dedicated rate-limit budget, so unauthenticated probing cannot starve the budget that records security quarantines. Token material is never logged or stored, and the router never logs `Authorization` headers.
 
 Blast radius of a leaked token:
 
@@ -132,7 +132,7 @@ Token handling rules:
 - Rotate tokens on suspicion of exposure: generate new random values, update the router environment and restart it, then update the OpenClaw plugin config (`hindsightApiToken`) and any admin clients. Old tokens stop working as soon as the router restarts. Rotate `MEMORY_ROUTER_ADMIN_TOKEN` immediately if admin queue contents or review actions may have been observed.
 - After a suspected leak, review `auth_failed` and other `security_event` quarantine items and the append-only `quarantine_events` table for probing or misuse.
 
-`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` disables router authentication entirely and exists only so local development stacks can run without token plumbing. It has no effect on `/admin/*`, which always requires the admin token. Do not set it in any shared or production environment.
+`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` allows anonymous retain/recall/version access only when `MEMORY_ROUTER_TOKEN` is not set; when a router token is configured, bearer authentication is always required and the opt-in is inert. It exists only so local development stacks can run without token plumbing. It has no effect on `/admin/*`, which always requires the admin token. Do not set it in any shared or production environment.
 
 OpenClaw plugin config:
 
