@@ -140,6 +140,18 @@ reviewed allowed result -> returned only while its evaluated text is unchanged
 reviewed blocked result -> suppressed and invalidated in Hindsight
 ```
 
+Recall degrades gracefully instead of failing the whole request:
+
+```text
+one read bank errors -> that bank contributes zero results; healthy banks answer
+all read banks error -> empty results (no 5xx)
+quarantine queue full (507) or rate limited (429) at recall ->
+    suspicious content is still suppressed, and unknown writers or suspicious
+    queries still get empty results; the recall itself stays a 200
+```
+
+Every degradation is logged as a structured `memory-router recall degraded: {...}` line on stderr so suppression without a quarantine record is observable. Other error types (programming or infrastructure failures) still propagate unchanged. Retain does not degrade: a retain that cannot quarantine suspicious content still fails closed with `507`.
+
 There is no Hindsight `quarantine` bank. Quarantine is operational security state, not searchable memory.
 
 ## Quarantine storage
@@ -154,7 +166,7 @@ raw JSON payload
     -> no Hindsight write
 ```
 
-Rate and capacity limits fail closed with `429`, `413`, or `507`; they do not silently discard data or fall back to Hindsight. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota.
+Rate and capacity limits fail closed with `429`, `413`, or `507` on retain and quarantine writes; they do not silently discard data or fall back to Hindsight. Recall is the exception described above: an exhausted or rate-limited queue suppresses suspicious content and logs the degradation instead of failing the recall. The write-rate limit is global across writer IDs within each router process, so changing the URL writer does not create a fresh quota.
 
 ### Quarantine deduplication
 
