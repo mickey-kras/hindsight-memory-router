@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AdminRateLimiter } from "../src/adminRateLimit.js";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import type { QuarantineStore } from "../src/quarantine/quarantineStore.js";
+import { DEFAULT_QUARANTINE_LIMITS } from "../src/quarantine/quarantineStore.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
 import {
   createMemoryRouterServer,
@@ -16,7 +17,7 @@ async function withServer<T>(
     repository: ReturnType<typeof memoryQuarantine>["repository"];
   }) => Promise<T>,
 ): Promise<T> {
-  const quarantine = memoryQuarantine();
+  const quarantine = memoryQuarantine(options.quarantineLimits);
   const server = createMemoryRouterServer({
     registry: DEFAULT_REGISTRY,
     hindsight: new FakeHindsightGateway(),
@@ -218,10 +219,16 @@ describe("router authentication hardening", () => {
 
   it("auth-failure floods cannot starve security quarantining or flood stderr", async () => {
     await withServer(
-      { routerToken: "router-token" },
+      {
+        routerToken: "router-token",
+        quarantineLimits: {
+          ...DEFAULT_QUARANTINE_LIMITS,
+          requarantineOpsMax: 4,
+        },
+      },
       async ({ baseUrl, repository }) => {
-        // Exceeds the default 30 writes/minute auth-audit budget.
-        for (let attempt = 0; attempt < 32; attempt += 1) {
+        // Exceeds the dedicated auth-audit requarantine ceiling (4 per window).
+        for (let attempt = 0; attempt < 8; attempt += 1) {
           const response = await fetch(`${baseUrl}/version`, {
             headers: { authorization: "Bearer wrong-token" },
           });
@@ -249,11 +256,20 @@ describe("router authentication hardening", () => {
           reason: "suspicious_content",
         });
 
+        // Legitimate requarantine refreshes keep their own ops ceiling.
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const denied = await fetch(`${baseUrl}/unknown`, {
+            headers: routerHeaders,
+          });
+          expect(denied.status).toBe(404);
+        }
+
         const reviewable = await repository.listReviewable();
         expect(reviewable).toEqual(
           expect.arrayContaining([
             expect.objectContaining({ reason: "auth_failed" }),
             expect.objectContaining({ reason: "suspicious_content" }),
+            expect.objectContaining({ reason: "denied_endpoint" }),
           ]),
         );
 
@@ -261,6 +277,10 @@ describe("router authentication hardening", () => {
           line.includes('"event":"auth_failed"'),
         );
         expect(eventLines).toHaveLength(1);
+        const errorLines = stderrOutput.filter((line) =>
+          line.includes("could not record an auth_failed security event"),
+        );
+        expect(errorLines).toHaveLength(1);
       },
     );
   });
