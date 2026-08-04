@@ -139,3 +139,24 @@ jobs:
           subject-name: ${{ env.IMAGE_DOCKERHUB }}
           subject-digest: ${{ steps.build-dockerhub.outputs.digest }}
           push-to-registry: true
+
+      - name: Record image digests
+        run: |
+          {
+            echo "commit=${{ github.sha }}"
+            echo "ghcr=${{ env.IMAGE_GHCR }}@${{ steps.build-ghcr.outputs.digest }}"
+            echo "dockerhub=${{ env.IMAGE_DOCKERHUB }}@${{ steps.build-dockerhub.outputs.digest }}"
+          } | tee image-digests.txt
+          {
+            echo "## Published image digests"
+            echo
+            echo "- \`${{ env.IMAGE_GHCR }}@${{ steps.build-ghcr.outputs.digest }}\`"
+            echo "- \`${{ env.IMAGE_DOCKERHUB }}@${{ steps.build-dockerhub.outputs.digest }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image digests
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-digests-${{ github.sha }}
+          path: image-digests.txt
+          if-no-files-found: error
