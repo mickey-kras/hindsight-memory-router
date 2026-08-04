@@ -6,6 +6,7 @@ import {
   type StoredQuarantineItem,
 } from "./repository.js";
 import {
+  reviewClaimIsStale,
   reviewInterruptionDetails,
   runReviewOperation,
 } from "./reviewWorkflowSupport.js";
@@ -28,20 +29,8 @@ export async function recoverInterruptedReviews(
     );
     for (const row of rows) {
       const item = parseStoredItem(row);
-      const p = (index: number) => transaction.placeholder(index);
-      await transaction.run(
-        `UPDATE quarantine_items
-         SET status = 'postponed', updated_at = ${p(1)}
-         WHERE quarantine_id = ${p(2)} AND status = 'review_in_progress'`,
-        [at, item.quarantine_id],
-      );
-      await insertEvent(
-        transaction,
-        quarantineEvent(item.quarantine_id, "review_interrupted", at, {
-          outcome: "postponed",
-          recovered: true,
-        }),
-      );
+      if (!reviewClaimIsStale(item.updated_at, at)) continue;
+      await restoreStaleClaim(transaction, item, at);
     }
   });
 }
@@ -120,12 +109,24 @@ async function claimReview(
   at: string,
 ): Promise<StoredQuarantineItem> {
   return database.transaction(async (transaction) => {
-    const current = await requireReviewableKind(
-      transaction,
-      quarantineId,
-      kind,
-      message,
-    );
+    let current = await findItemById(transaction, quarantineId, true);
+    if (!current) {
+      throw new HttpError(
+        404,
+        "quarantine_not_found",
+        "quarantine item not found",
+      );
+    }
+    if (
+      current.status === "review_in_progress" &&
+      reviewClaimIsStale(current.updated_at, at)
+    ) {
+      current = await restoreStaleClaim(transaction, current, at);
+    }
+    assertReviewable(current);
+    if (current.kind !== kind) {
+      throw new HttpError(409, "invalid_review_action", message);
+    }
     const p = (index: number) => transaction.placeholder(index);
     await transaction.run(
       `UPDATE quarantine_items
@@ -135,6 +136,28 @@ async function claimReview(
     );
     return current;
   });
+}
+
+async function restoreStaleClaim(
+  database: SqlDatabase,
+  item: StoredQuarantineItem,
+  at: string,
+): Promise<StoredQuarantineItem> {
+  const p = (index: number) => database.placeholder(index);
+  await database.run(
+    `UPDATE quarantine_items
+     SET status = 'postponed', updated_at = ${p(1)}
+     WHERE quarantine_id = ${p(2)} AND status = 'review_in_progress'`,
+    [at, item.quarantine_id],
+  );
+  await insertEvent(
+    database,
+    quarantineEvent(item.quarantine_id, "review_interrupted", at, {
+      outcome: "postponed",
+      recovered: true,
+    }),
+  );
+  return { ...item, status: "postponed", updated_at: at };
 }
 
 async function interruptReview(
@@ -189,6 +212,16 @@ async function requireReviewInProgress(
     );
   }
   return item;
+}
+
+function assertReviewable(item: StoredQuarantineItem): void {
+  if (item.status !== "pending" && item.status !== "postponed") {
+    throw new HttpError(
+      409,
+      "quarantine_already_finalized",
+      "quarantine item is not pending review",
+    );
+  }
 }
 
 async function requireReviewableKind(
