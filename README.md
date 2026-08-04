@@ -60,6 +60,7 @@ MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
+HINDSIGHT_TIMEOUT_MS=10000
 
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
 QUARANTINE_DATABASE_URL=sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
@@ -82,6 +83,8 @@ postgresql://user:password@database:5432/quarantine
 ```
 
 Use a separate PostgreSQL database or schema from Hindsight application data.
+
+`HINDSIGHT_TIMEOUT_MS` must be a positive integer. Hindsight timeouts return `504 hindsight_timeout`; HTTP, network, and invalid JSON responses return a typed `502` error. Upstream error bodies are truncated.
 
 ## Authentication
 
@@ -171,6 +174,12 @@ private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.
 4. Approve, reject, or postpone.
 
 Approval requires the complete decrypted object unchanged. Modified content returns `quarantine_hash_mismatch`.
+
+Review actions claim the item in a short transaction, call Hindsight without holding a database lock, then finalize in a second transaction. Concurrent review changes return `409 quarantine_review_changed`.
+
+A failed Hindsight call restores the previous review state and records `review_interrupted`. For timeout or network errors, verify Hindsight state before retrying because the upstream action may have completed before the response failed.
+
+On startup, stale `review_in_progress` items are moved to `postponed` without increasing the postpone count. A crash after Hindsight applied an action cannot be rolled back; inspect Hindsight before re-approving.
 
 ## Legacy migration
 

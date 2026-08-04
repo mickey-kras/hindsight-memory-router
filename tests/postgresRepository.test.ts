@@ -63,13 +63,14 @@ describe("PostgresQuarantineRepository", () => {
       { max: 5 },
     );
     expect(rootSql.unsafe).toHaveBeenCalledOnce();
-    expect(rootSql.begin).toHaveBeenCalledOnce();
+    expect(rootSql.begin).toHaveBeenCalledTimes(2);
 
     const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>
       String(statement),
     );
     expect(statements).toEqual(
       expect.arrayContaining([
+        expect.stringContaining("review_in_progress"),
         expect.stringContaining("pg_advisory_xact_lock"),
         expect.stringContaining("WHERE quarantine_id = $1"),
         expect.stringContaining("VALUES ($1, $2, $3"),

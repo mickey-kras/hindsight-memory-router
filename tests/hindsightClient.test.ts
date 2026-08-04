@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FakeHindsightGateway,
   FetchHindsightGateway,
+  HindsightGatewayError,
 } from "../src/hindsightClient.js";
 
 function mockFetch(...responses: Response[]) {
@@ -32,6 +33,7 @@ describe("FetchHindsightGateway", () => {
         authorization: "Bearer key",
       },
       body: undefined,
+      signal: expect.any(AbortSignal),
     });
   });
 
@@ -65,6 +67,7 @@ describe("FetchHindsightGateway", () => {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(retainBody),
+        signal: expect.any(AbortSignal),
       },
     ]);
     expect(fetchMock.mock.calls[1]?.[0]).toBe(
@@ -79,6 +82,7 @@ describe("FetchHindsightGateway", () => {
           state: "invalidated",
           reason: "manual reject",
         }),
+        signal: expect.any(AbortSignal),
       },
     ]);
   });
@@ -90,6 +94,81 @@ describe("FetchHindsightGateway", () => {
     await expect(gateway.health()).rejects.toThrow(
       'Hindsight GET /health failed: HTTP 503 {"error":"down"}',
     );
+  });
+
+  it("rejects with a typed timeout error when the upstream hangs", async () => {
+    const fetchMock = vi.fn((...args: unknown[]) => {
+      const init = args[1] as { signal: AbortSignal };
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason));
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new FetchHindsightGateway(
+      "https://hindsight.test",
+      undefined,
+      10,
+    );
+
+    const failure = await gateway.health().catch((error: unknown) => error);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "timeout",
+      status: 504,
+      code: "hindsight_timeout",
+    });
+    expect((failure as Error).message).toContain("timed out after 10ms");
+  });
+
+  it("rejects with a typed invalid-response error for non-JSON upstream bodies", async () => {
+    mockFetch(new Response("<html>proxy error</html>", { status: 200 }));
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = await gateway.health().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "invalid-response",
+      status: 502,
+      code: "hindsight_invalid_response",
+      upstreamStatus: 200,
+    });
+  });
+
+  it("truncates unbounded upstream error bodies", async () => {
+    mockFetch(new Response("x".repeat(4096), { status: 500 }));
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = (await gateway
+      .health()
+      .catch((error: unknown) => error)) as HindsightGatewayError;
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure.kind).toBe("http");
+    expect(failure.upstreamStatus).toBe(500);
+    expect(failure.message).toContain(`${"x".repeat(512)}...(truncated)`);
+    expect(failure.message.length).toBeLessThan(600);
+  });
+
+  it("rejects with a typed network error when the connection fails", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = await gateway.health().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "network",
+      status: 502,
+      code: "hindsight_unavailable",
+    });
+  });
+
+  it("rejects non-positive timeouts", () => {
+    expect(
+      () => new FetchHindsightGateway("https://hindsight.test", "k", 0),
+    ).toThrow("Hindsight timeout must be a positive integer");
   });
 });
 
