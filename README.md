@@ -173,13 +173,17 @@ There is no Hindsight quarantine bank.
 
 ## Quarantine
 
-`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history.
+`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history. Existing databases are migrated in place at startup; rows created before deduplication keep a `NULL` dedupe key and are never merged.
 
 ```text
 payload -> canonical SHA-256 -> AES-256-GCM envelope -> SQLite/PostgreSQL
 ```
 
 The router stores only the public key. Any `QUARANTINE_PRIVATE_KEY*` environment variable makes startup fail.
+
+### Deduplication
+
+Repeated retain/recall submissions reuse one quarantine item instead of consuming one capacity slot per request. The identity is a SHA-256 `dedupe_key` over `{kind, writer_id, policy target, normalized payload}` (canonical JSON; strings trimmed, whitespace runs collapsed; the stored payload is never normalized). A repeat refreshes the item, increments `requarantine_count`, and appends a `requarantined` event. Recalled memories dedupe by source bank + memory id; security events by normalized `METHOD:path` (query/casing/trailing slashes collapsed), capped at 64 distinct identities per writer per process — overflow buckets into one aggregate identity so path fuzzing cannot exhaust capacity.
 
 Limits fail closed:
 
