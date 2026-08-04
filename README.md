@@ -1,83 +1,152 @@
-# Hindsight Memory Router
+# hindsight-memory-router
 
-Deterministic, fail-closed policy facade between OpenClaw (or any agent runtime) and a Hindsight-compatible memory service. The router enforces writer identity, per-writer bank ACLs, and deterministic safety filtering, and quarantines everything it cannot safely accept or return.
+[![ci](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/ci.yml)
+[![codeql](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Quickstart
+Policy router between OpenClaw and Hindsight.
 
-Requires Node.js 22.5+ (`node:sqlite` for the default quarantine store).
-
-```bash
-npm ci
-npm run dev
+```text
+OpenClaw -> memory-router -> Hindsight
 ```
 
-Configuration via environment:
+The router selects memory banks, filters recall, and sends unknown or suspicious material to encrypted quarantine.
 
-```bash
-MEMORY_ROUTER_PORT=8080
-HINDSIGHT_BASE_URL=http://localhost:7070
-HINDSIGHT_TOKEN=...
-WRITER_REGISTRY_PATH=./writers.json
-QUARANTINE_PUBLIC_KEY_PATH=./quarantine-public.pem
+## API
+
+```text
+GET  /health                                      anonymous
+GET  /ready                                       anonymous
+GET  /version                                     router token
+POST /v1/default/banks/{writer}/memories          router token
+POST /v1/default/banks/{writer}/memories/recall   router token
 ```
 
-Example `writers.json`:
+Admin API:
 
-```json
-{
-  "writers": {
-    "agent-ops": {
-      "role": "ops",
-      "source": "openclaw",
-      "write_bank": "ops",
-      "read_banks": ["ops", "core"]
-    }
-  }
-}
+```text
+GET  /admin/quarantine/queue
+GET  /admin/quarantine/stats
+POST /admin/quarantine/cleanup
+GET  /admin/quarantine/items/{id}
+POST /admin/quarantine/items/{id}/approve
+POST /admin/quarantine/items/{id}/reject
+POST /admin/quarantine/items/{id}/postpone
 ```
+
+Router and admin authentication fail closed when their token is unset. `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` enables anonymous router access for local development only.
 
 ## Images
 
 GHCR is canonical; Docker Hub is a mirror.
 
-```bash
-docker pull ghcr.io/mickey-kras/hindsight-memory-router:latest
+```text
+ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
+ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
+docker.io/mickeykrasilnikov/hindsight-memory-router@sha256:<digest>
 ```
 
 Pin deployments by digest:
 
-```bash
-docker pull ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```yaml
+services:
+  memory-router:
+    image: ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 ```
 
 `latest` remains available for convenience but is mutable. The publish workflow records both registry digests in the job summary and an `image-digests-<commit>` artifact.
 
-Images are signed with cosign keyless signing:
+Record the running digest after deployment:
 
 ```bash
-cosign verify ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest> \
-  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml.*' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+docker inspect --format='{{index .RepoDigests 0}}' <container>
 ```
 
-## API
+Verify a pinned GHCR image:
 
-OpenClaw-compatible surface:
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
 
-- `POST /v1/retain` — body `{items: [{content, metadata?}]}`
-- `POST /v1/recall` — body `{query, limit?}`
+The container runs as the non-root `node` user.
 
-Writer identity comes from the `x-memory-writer` header; unknown writers are quarantined, never silently mapped.
+## Configuration
 
-Admin review API (behind admin auth):
+```text
+MEMORY_ROUTER_PORT=8890
+MEMORY_ROUTER_TOKEN=change-me
+MEMORY_ROUTER_ADMIN_TOKEN=change-me-admin
+MEMORY_ROUTER_ALLOW_ANONYMOUS=false
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX=120
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX=30
+MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS=60000
+MEMORY_ROUTER_MAX_BODY_BYTES=1048576
+MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 
-- `GET /admin/quarantine` — list reviewable items (pending/postponed)
-- `GET /admin/quarantine/:id` — fetch one item (encrypted envelope)
-- `POST /admin/quarantine/:id/postpone` — defer an item
-- `POST /admin/quarantine/:id/approve` — approve per item kind (retain into Hindsight / allow recalled memory)
-- `POST /admin/quarantine/:id/reject` — reject (recalled memories are invalidated upstream)
+HINDSIGHT_BASE_URL=http://hindsight:8888
+HINDSIGHT_API_KEY=change-me
+HINDSIGHT_TIMEOUT_MS=10000
 
-Responses for quarantined user content are encrypted envelopes; decryption stays local (`npm run quarantine:decrypt`).
+QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
+QUARANTINE_DATABASE_URL=sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
+QUARANTINE_MAX_POSTPONES=3
+QUARANTINE_MAX_ITEM_BYTES=1048576
+QUARANTINE_MAX_PENDING_ITEMS=1000
+QUARANTINE_MAX_ENCRYPTED_BYTES=104857600
+QUARANTINE_RATE_LIMIT_MAX=30
+QUARANTINE_RATE_LIMIT_GLOBAL_MAX=300
+QUARANTINE_REQUARANTINE_OPS_MAX=1000
+QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
+```
+
+Supported database URLs:
+
+```text
+sqlite:/absolute/path/quarantine.db
+sqlite:relative/path/quarantine.db
+postgresql://user:password@database:5432/quarantine
+```
+
+Use a separate PostgreSQL database or schema from Hindsight application data.
+
+`HINDSIGHT_TIMEOUT_MS` must be a positive integer. Hindsight timeouts return `504 hindsight_timeout`; HTTP, network, and invalid JSON responses return a typed `502` error. Upstream error bodies are truncated.
+
+## Authentication
+
+- Router and admin tokens are separate.
+- Token comparison is constant-time.
+- Token values are never logged or stored in quarantine.
+- Failed authentication creates one deduplicated `auth_failed` item per route group.
+- Admin reads and writes have separate process-local sliding-window limits.
+- Failed authentication does not consume admin quota.
+
+A leaked admin token can read encrypted envelopes and run review actions. It cannot decrypt envelopes or approve modified content.
+
+Token rotation:
+
+1. Generate new router and admin tokens.
+2. Update the deployment and restart the router.
+3. Update OpenClaw and admin clients.
+4. Review quarantine events if compromise is suspected.
+
+Keep tokens out of prompts, logs, shell history, and committed configuration.
+
+## OpenClaw
+
+```text
+hindsightApiUrl = http://memory-router:8890
+hindsightApiToken = MEMORY_ROUTER_TOKEN
+dynamicBankId = false
+bankId = <writer_id>
+bankIdPrefix = unset
+autoRecall = true
+autoRetain = true
+enableKnowledgeTools = false initially
+```
 
 ## Policy behavior
 
@@ -137,10 +206,78 @@ Limits fail closed:
 
 PostgreSQL rate limits are shared across router replicas and use PostgreSQL time. SQLite and in-memory limits are process-local.
 
-## Development
+## Manual review
+
+1. List pending items with the admin token.
+2. Fetch the encrypted item.
+3. Decrypt outside the router:
 
 ```bash
-npm run check        # format, lint, openapi, tests+coverage, typecheck, audit, aislop
+npm run build
+private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.json
 ```
 
-Coverage gates: 90% lines, 85% branches.
+4. Approve, reject, or postpone.
+
+Approval requires the complete decrypted object unchanged. Modified content returns `quarantine_hash_mismatch`.
+
+Review actions claim the item in a short transaction, call Hindsight without holding a database lock, then finalize in a second transaction. Concurrent review changes return `409 quarantine_review_changed`.
+
+A failed Hindsight call restores the previous review state and records `review_interrupted`. For timeout or network errors, verify Hindsight state before retrying because the upstream action may have completed before the response failed.
+
+On startup, stale `review_in_progress` items are moved to `postponed` without increasing the postpone count. A crash after Hindsight applied an action cannot be rolled back; inspect Hindsight before re-approving.
+
+## Legacy migration
+
+```bash
+npm run build
+private-key-command | npm run migrate:legacy-quarantine -- \
+  --queue /path/to/review.jsonl \
+  --objects /path/to/quarantine-objects \
+  --database sqlite:/path/to/quarantine.db
+```
+
+The command is idempotent and leaves source files untouched. Verify the migration summary before removing legacy data.
+
+## Cleanup
+
+Preview:
+
+```json
+{
+  "scope": "pending",
+  "reasons": ["unknown_writer"],
+  "older_than": "2026-07-01T00:00:00Z",
+  "dry_run": true
+}
+```
+
+Execute with the returned count:
+
+```json
+{
+  "scope": "pending",
+  "reasons": ["unknown_writer"],
+  "older_than": "2026-07-01T00:00:00Z",
+  "dry_run": false,
+  "expected_count": 42
+}
+```
+
+Cleanup returns `409` if the selection changed after preview.
+
+## Checks
+
+```bash
+npm run format:check
+npm run lint
+npm run openapi:lint
+npm run test:coverage
+npm run typecheck
+npm run security:audit
+npm run aislop:ci
+```
+
+## License
+
+MIT
