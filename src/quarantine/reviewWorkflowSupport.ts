@@ -5,8 +5,7 @@ export const DEFAULT_REVIEW_STALE_MS = 60_000;
 
 type RestorableReviewStatus = "pending" | "postponed";
 
-export interface ReviewInterruptionDetails
-  extends Record<string, unknown> {
+export interface ReviewInterruptionDetails extends Record<string, unknown> {
   outcome: "restored";
   status: RestorableReviewStatus;
   error_kind: ReturnType<typeof gatewayErrorKind>;
