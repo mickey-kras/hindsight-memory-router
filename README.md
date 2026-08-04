@@ -183,7 +183,7 @@ The router stores only the public key. Any `QUARANTINE_PRIVATE_KEY*` environment
 
 ### Deduplication
 
-Repeated retain/recall submissions reuse one quarantine item instead of consuming one capacity slot per request. The identity is a SHA-256 `dedupe_key` over `{kind, writer_id, policy target, normalized payload}` (canonical JSON; strings trimmed, whitespace runs collapsed; the stored payload is never normalized). A repeat refreshes the item, increments `requarantine_count`, and appends a `requarantined` event. Recalled memories dedupe by source bank + memory id; security events by normalized `METHOD:path` (query/casing/trailing slashes collapsed), capped at 64 distinct identities per writer per process — overflow buckets into one aggregate identity so path fuzzing cannot exhaust capacity.
+Identical retain and recall quarantine requests reuse one pending item. The dedupe key covers request kind, writer, policy target, and canonical JSON payload. Object key order and JSON formatting do not matter; string content remains exact. A repeat refreshes the item, increments `requarantine_count`, and records `requarantined`. Repeats are rejected with `409` while the matching item is under review. Security-event identities are normalized by method and path, scoped by writer, and capped across the process.
 
 Limits fail closed:
 
