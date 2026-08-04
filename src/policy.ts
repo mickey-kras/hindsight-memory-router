@@ -1,5 +1,10 @@
 import { sha256Hex } from "./canonicalJson.js";
 import type { HindsightGateway } from "./hindsightClient.js";
+import {
+  requestDedupeKey,
+  SecurityEventIdentityCap,
+  securityEventDedupeKey,
+} from "./quarantine/dedupeKey.js";
 import { getWriter } from "./registry.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
 import type { QuarantineStore } from "./quarantine/quarantineStore.js";
@@ -23,6 +28,8 @@ export interface RouterPolicyDeps {
 }
 
 export class RouterPolicy {
+  private readonly securityEventIdentities = new SecurityEventIdentityCap();
+
   constructor(private readonly deps: RouterPolicyDeps) {}
 
   async retain(
@@ -48,6 +55,7 @@ export class RouterPolicy {
           source,
           reason: "suspicious_content",
           body,
+          targetBank: writer.write_bank,
           findings: scan.findings,
         });
       }
@@ -77,24 +85,23 @@ export class RouterPolicy {
   ): Promise<RecallResponse> {
     const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      await this.quarantine({
+      await this.quarantineRecall({
         writerId,
         source,
-        kind: "recall_request",
         reason: "unknown_writer",
-        payload: { action: "recall", writer_id: writerId, body },
+        body,
       });
       return { results: [] };
     }
 
     const scan = scanContent(body.query ?? "");
     if (!scan.safe) {
-      await this.quarantine({
+      await this.quarantineRecall({
         writerId,
         source,
-        kind: "recall_request",
         reason: "suspicious_query",
-        payload: { action: "recall", writer_id: writerId, body },
+        body,
+        targetBanks: writer.read_banks,
       });
       return { results: [] };
     }
@@ -121,12 +128,19 @@ export class RouterPolicy {
     path: string,
     writerId?: string,
   ): Promise<{ error: string }> {
+    // Normalize the dedupe identity (query string/fragment stripped, casing
+    // lowered, trailing slashes collapsed) and cap distinct identities per
+    // writer so path fuzzing cannot mint one quarantine slot per probe.
+    const dedupeKey = this.securityEventIdentities.resolve(
+      writerId,
+      securityEventDedupeKey(method, path),
+    );
     await this.quarantine({
       writerId,
       source: "http",
       kind: "security_event",
       reason: "denied_endpoint",
-      dedupeKey: `${method}:${path}`,
+      dedupeKey,
       payload: { action: "denied_endpoint", method, path },
     });
     return { error: "endpoint denied by memory-router policy" };
@@ -204,23 +218,60 @@ export class RouterPolicy {
     });
   }
 
+  private async quarantineRecall(input: {
+    writerId: string;
+    source: string;
+    reason: "unknown_writer" | "suspicious_query";
+    body: RecallBody;
+    targetBanks?: readonly BankId[];
+  }): Promise<void> {
+    const payload = {
+      action: "recall",
+      writer_id: input.writerId,
+      body: input.body,
+    };
+    await this.quarantine({
+      writerId: input.writerId,
+      source: input.source,
+      kind: "recall_request",
+      reason: input.reason,
+      dedupeKey: requestDedupeKey({
+        kind: "recall_request",
+        writerId: input.writerId,
+        target: input.targetBanks
+          ? [...input.targetBanks].sort().join(",")
+          : undefined,
+        payload,
+      }),
+      payload,
+    });
+  }
+
   private async quarantineRetain(input: {
     writerId: string;
     source: string;
     reason: "unknown_writer" | "suspicious_content";
     body: RetainBody;
+    targetBank?: BankId;
     findings?: SafetyFinding[];
   }): Promise<unknown> {
+    const payload = {
+      action: "retain",
+      writer_id: input.writerId,
+      body: input.body,
+    };
     const quarantine = await this.quarantine({
       writerId: input.writerId,
       source: input.source,
       kind: "retain_request",
       reason: input.reason,
-      payload: {
-        action: "retain",
-        writer_id: input.writerId,
-        body: input.body,
-      },
+      dedupeKey: requestDedupeKey({
+        kind: "retain_request",
+        writerId: input.writerId,
+        target: input.targetBank,
+        payload,
+      }),
+      payload,
     });
 
     return {
