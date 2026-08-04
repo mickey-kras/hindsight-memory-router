@@ -1,5 +1,7 @@
 import { gatewayErrorKind } from "../hindsightClient.js";
 
+export const DEFAULT_REVIEW_STALE_MS = 60_000;
+
 export interface ReviewInterruptionDetails {
   outcome: "restored";
   status: "pending" | "postponed";
@@ -27,4 +29,15 @@ export function reviewInterruptionDetails(
     status,
     error_kind: gatewayErrorKind(error),
   };
+}
+
+export function reviewClaimIsStale(
+  updatedAt: string,
+  at: string,
+  staleMs = DEFAULT_REVIEW_STALE_MS,
+): boolean {
+  const updated = Date.parse(updatedAt);
+  const current = Date.parse(at);
+  if (!Number.isFinite(updated) || !Number.isFinite(current)) return false;
+  return current - updated >= staleMs;
 }
