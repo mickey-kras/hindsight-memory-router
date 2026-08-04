@@ -1,10 +1,13 @@
-import { gatewayErrorKind } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import {
   quarantineEvent,
   type QuarantineEvent,
   type StoredQuarantineItem,
 } from "./repository.js";
+import {
+  reviewInterruptionDetails,
+  runReviewOperation,
+} from "./reviewWorkflowSupport.js";
 
 export class MemoryReviewWorkflow {
   private tail: Promise<void> = Promise.resolve();
@@ -58,12 +61,9 @@ export class MemoryReviewWorkflow {
         at,
       ),
     );
-    try {
-      await operation();
-    } catch (error) {
-      await this.exclusive(() => this.interruptReview(claimed, at, error));
-      throw error;
-    }
+    await runReviewOperation(operation, (error) =>
+      this.exclusive(() => this.interruptReview(claimed, at, error)),
+    );
     await this.exclusive(() => {
       this.requireReviewInProgress(quarantineId, at);
       this.items.delete(quarantineId);
@@ -84,12 +84,9 @@ export class MemoryReviewWorkflow {
         at,
       ),
     );
-    try {
-      await operation();
-    } catch (error) {
-      await this.exclusive(() => this.interruptReview(claimed, at, error));
-      throw error;
-    }
+    await runReviewOperation(operation, (error) =>
+      this.exclusive(() => this.interruptReview(claimed, at, error)),
+    );
     await this.exclusive(() => {
       const current = this.requireReviewInProgress(quarantineId, at);
       this.setReviewed(current, "reviewed_blocked", at);
@@ -166,11 +163,12 @@ export class MemoryReviewWorkflow {
       updated_at: at,
     });
     this.events.push(
-      quarantineEvent(claimed.quarantine_id, "review_interrupted", at, {
-        outcome: "restored",
-        status: claimed.status,
-        error_kind: gatewayErrorKind(error),
-      }),
+      quarantineEvent(
+        claimed.quarantine_id,
+        "review_interrupted",
+        at,
+        reviewInterruptionDetails(claimed.status, error),
+      ),
     );
   }
 
