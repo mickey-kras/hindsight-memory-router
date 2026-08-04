@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { RouterPolicy } from "../src/policy.js";
-import { MAX_SECURITY_EVENT_IDENTITIES_PER_WRITER } from "../src/quarantine/dedupeKey.js";
+import { MAX_SECURITY_EVENT_IDENTITIES } from "../src/quarantine/dedupeKey.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
 import { memoryQuarantine } from "./quarantineTestUtils.js";
 
@@ -55,37 +55,32 @@ describe("denied endpoint quarantine", () => {
     const [item] = await quarantine.repository.listReviewable();
     expect(item).toMatchObject({
       kind: "security_event",
-      dedupe_key: "GET:/admin/panel",
+      dedupe_key: "anonymous:GET:/admin/panel",
       requarantine_count: 3,
     });
   });
 
-  it("caps distinct security-event identities per writer", async () => {
+  it("bounds security-event identities across the process", async () => {
     const { quarantine, policy } = setup();
 
-    for (
-      let index = 0;
-      index < MAX_SECURITY_EVENT_IDENTITIES_PER_WRITER;
-      index += 1
-    ) {
+    for (let index = 0; index < MAX_SECURITY_EVENT_IDENTITIES; index += 1) {
       await policy.denyEndpoint("GET", `/probe-${index}`, "fuzzer");
     }
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: MAX_SECURITY_EVENT_IDENTITIES_PER_WRITER,
+      total_items: MAX_SECURITY_EVENT_IDENTITIES,
     });
 
-    // Further distinct paths from the same writer bucket into one aggregate
-    // identity instead of minting new capacity slots.
     await policy.denyEndpoint("GET", "/probe-extra-1", "fuzzer");
     await policy.denyEndpoint("POST", "/probe-extra-2", "fuzzer");
-    await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: MAX_SECURITY_EVENT_IDENTITIES_PER_WRITER + 1,
-    });
+    await policy.denyEndpoint("GET", "/other-writer", "other");
 
-    // Another writer still gets its own identities and its own cap.
-    await policy.denyEndpoint("GET", "/probe-extra-1", "other");
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: MAX_SECURITY_EVENT_IDENTITIES_PER_WRITER + 2,
+      total_items: MAX_SECURITY_EVENT_IDENTITIES + 1,
+      event_count: MAX_SECURITY_EVENT_IDENTITIES + 3,
     });
+    const aggregate = await quarantine.repository.listReviewable();
+    expect(
+      aggregate.find((item) => item.dedupe_key === "aggregate"),
+    ).toMatchObject({ requarantine_count: 2 });
   });
 });
