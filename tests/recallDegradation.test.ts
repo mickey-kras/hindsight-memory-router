@@ -83,7 +83,9 @@ class ScriptedRecallGateway extends FakeHindsightGateway {
   }
 }
 
-function unavailable(kind: "timeout" | "http" | "invalid-response" | "network") {
+function unavailable(
+  kind: "timeout" | "http" | "invalid-response" | "network",
+) {
   return new HindsightGatewayError(kind, "sanitized upstream failure", 503);
 }
 
