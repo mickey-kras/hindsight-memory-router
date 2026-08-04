@@ -173,13 +173,17 @@ There is no Hindsight quarantine bank.
 
 ## Quarantine
 
-`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history.
+`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history. Existing databases are migrated in place at startup; rows created before deduplication keep a `NULL` dedupe key and are never merged.
 
 ```text
 payload -> canonical SHA-256 -> AES-256-GCM envelope -> SQLite/PostgreSQL
 ```
 
 The router stores only the public key. Any `QUARANTINE_PRIVATE_KEY*` environment variable makes startup fail.
+
+### Deduplication
+
+Identical retain and recall quarantine requests reuse one pending item. The dedupe key covers request kind, writer, policy target, and canonical JSON payload. Object key order and JSON formatting do not matter; string content remains exact. A repeat refreshes the item, increments `requarantine_count`, and records `requarantined`. Repeats are rejected with `409` while the matching item is under review. Security-event identities are normalized by method and path, scoped by writer, and capped across the process.
 
 Limits fail closed:
 

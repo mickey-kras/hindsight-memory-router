@@ -62,7 +62,13 @@ describe("PostgresQuarantineRepository", () => {
       "postgresql://router:test@database/router",
       { max: 5 },
     );
-    expect(rootSql.unsafe).toHaveBeenCalledOnce();
+    const rootStatements = rootSql.unsafe.mock.calls.map(([statement]) =>
+      String(statement),
+    );
+    expect(rootStatements[0]).toContain("CREATE TABLE IF NOT EXISTS");
+    expect(rootStatements.join("\n")).toContain(
+      "idx_quarantine_items_dedupe_key",
+    );
     expect(rootSql.begin).toHaveBeenCalledTimes(2);
 
     const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>

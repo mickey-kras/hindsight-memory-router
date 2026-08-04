@@ -99,7 +99,9 @@ export interface QuarantineItemSummary {
   source?: string;
   source_bank?: BankId;
   source_memory_id?: string;
+  dedupe_key?: string;
   sha256: string;
   status: QuarantineStatus;
   postpone_count: number;
+  requarantine_count: number;
 }

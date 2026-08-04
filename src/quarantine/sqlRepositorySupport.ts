@@ -24,11 +24,13 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
       source_bank TEXT,
       source_memory_id TEXT,
       source_content_sha256 TEXT,
+      dedupe_key TEXT,
       sha256 TEXT NOT NULL,
       encrypted_envelope TEXT,
       encrypted_bytes INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL,
-      postpone_count INTEGER NOT NULL DEFAULT 0
+      postpone_count INTEGER NOT NULL DEFAULT 0,
+      requarantine_count INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_quarantine_items_review
       ON quarantine_items(status, created_at);
@@ -49,6 +51,41 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_quarantine_events_type
       ON quarantine_events(event_type, occurred_at);
   `);
+  // Databases created before request-item deduplication lack these columns.
+  // CREATE TABLE IF NOT EXISTS leaves them untouched, so add the columns when
+  // a probe shows they are missing, then build the partial unique index that
+  // deduplication relies on. Legacy rows keep a NULL dedupe key.
+  await ensureColumn(
+    database,
+    "dedupe_key",
+    "ALTER TABLE quarantine_items ADD COLUMN dedupe_key TEXT",
+  );
+  await ensureColumn(
+    database,
+    "requarantine_count",
+    "ALTER TABLE quarantine_items ADD COLUMN requarantine_count INTEGER NOT NULL DEFAULT 0",
+  );
+  await database.executeScript(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key
+      ON quarantine_items(dedupe_key)
+      WHERE dedupe_key IS NOT NULL;
+  `);
+}
+
+async function ensureColumn(
+  database: SqlDatabase,
+  column: "dedupe_key" | "requarantine_count",
+  alterStatement: string,
+): Promise<void> {
+  try {
+    await database.get(
+      `SELECT ${column} FROM quarantine_items WHERE 1 = 0 LIMIT 1`,
+    );
+  } catch {
+    // Both backends reject selects of unknown columns; the table itself is
+    // guaranteed to exist because CREATE TABLE IF NOT EXISTS ran above.
+    await database.run(alterStatement);
+  }
 }
 
 export async function findItemById(
@@ -79,6 +116,19 @@ export async function findItemBySource(
   return row ? parseStoredItem(row) : null;
 }
 
+export async function findItemByDedupeKey(
+  database: SqlDatabase,
+  dedupeKey: string,
+  lock = false,
+): Promise<StoredQuarantineItem | null> {
+  const row = await database.get<Record<string, unknown>>(
+    `SELECT * FROM quarantine_items
+     WHERE dedupe_key = ${database.placeholder(1)}${lock ? database.rowLockClause : ""}`,
+    [dedupeKey],
+  );
+  return row ? parseStoredItem(row) : null;
+}
+
 export async function createStoredItem(
   database: SqlDatabase,
   item: NewQuarantineItem,
@@ -91,9 +141,16 @@ export async function refreshStoredItem(
   database: SqlDatabase,
   quarantineId: string,
   item: NewQuarantineItem,
+  requarantineCount: number,
 ): Promise<void> {
   await updateItem(database, quarantineId, item);
-  await insertItemEvent(database, item, "requarantined", quarantineId);
+  await insertItemEvent(
+    database,
+    item,
+    "requarantined",
+    quarantineId,
+    requarantineCount,
+  );
 }
 
 export async function assertCapacity(
@@ -229,9 +286,10 @@ async function insertItem(
   await database.run(
     `INSERT INTO quarantine_items (
        quarantine_id, created_at, updated_at, kind, reason, writer_id, source,
-       source_bank, source_memory_id, source_content_sha256, sha256,
-       encrypted_envelope, encrypted_bytes, status, postpone_count
-     ) VALUES (${placeholders(database, 15)})`,
+       source_bank, source_memory_id, source_content_sha256, dedupe_key, sha256,
+       encrypted_envelope, encrypted_bytes, status, postpone_count,
+       requarantine_count
+     ) VALUES (${placeholders(database, 17)})`,
     itemParameters(item, envelope),
   );
 }
@@ -248,11 +306,13 @@ async function updateItem(
        created_at = ${p(1)}, updated_at = ${p(2)}, kind = ${p(3)},
        reason = ${p(4)}, writer_id = ${p(5)}, source = ${p(6)},
        source_bank = ${p(7)}, source_memory_id = ${p(8)},
-       source_content_sha256 = ${p(9)}, sha256 = ${p(10)},
-       encrypted_envelope = ${p(11)}, encrypted_bytes = ${p(12)},
-       status = 'pending', postpone_count = 0
-     WHERE quarantine_id = ${p(13)}`,
-    [...itemParameters(item, envelope).slice(1, 13), quarantineId],
+       source_content_sha256 = ${p(9)}, dedupe_key = ${p(10)},
+       sha256 = ${p(11)},
+       encrypted_envelope = ${p(12)}, encrypted_bytes = ${p(13)},
+       status = 'pending', postpone_count = 0,
+       requarantine_count = requarantine_count + 1
+     WHERE quarantine_id = ${p(14)}`,
+    [...itemParameters(item, envelope).slice(1, 14), quarantineId],
   );
 }
 
@@ -261,6 +321,7 @@ async function insertItemEvent(
   item: NewQuarantineItem,
   eventType: "quarantined" | "requarantined",
   quarantineId = item.quarantine_id,
+  requarantineCount?: number,
 ): Promise<void> {
   await insertEvent(
     database,
@@ -268,6 +329,9 @@ async function insertItemEvent(
       kind: item.kind,
       reason: item.reason,
       sha256: item.sha256,
+      ...(requarantineCount === undefined
+        ? {}
+        : { requarantine_count: requarantineCount }),
     }),
   );
 }
@@ -287,11 +351,13 @@ function itemParameters(
     item.source_bank ?? null,
     item.source_memory_id ?? null,
     item.source_content_sha256 ?? null,
+    item.dedupe_key ?? null,
     item.sha256,
     envelope,
     Buffer.byteLength(envelope),
     item.status,
     item.postpone_count,
+    item.requarantine_count ?? 0,
   ];
 }
 
