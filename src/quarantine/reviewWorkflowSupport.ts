@@ -1,10 +1,14 @@
 import { gatewayErrorKind } from "../hindsightClient.js";
+import type { QuarantineStatus } from "../types.js";
 
 export const DEFAULT_REVIEW_STALE_MS = 60_000;
 
-export interface ReviewInterruptionDetails {
+type RestorableReviewStatus = "pending" | "postponed";
+
+export interface ReviewInterruptionDetails
+  extends Record<string, unknown> {
   outcome: "restored";
-  status: "pending" | "postponed";
+  status: RestorableReviewStatus;
   error_kind: ReturnType<typeof gatewayErrorKind>;
 }
 
@@ -21,9 +25,12 @@ export async function runReviewOperation(
 }
 
 export function reviewInterruptionDetails(
-  status: "pending" | "postponed",
+  status: QuarantineStatus,
   error: unknown,
 ): ReviewInterruptionDetails {
+  if (status !== "pending" && status !== "postponed") {
+    throw new Error(`cannot restore review to ${status}`);
+  }
   return {
     outcome: "restored",
     status,
