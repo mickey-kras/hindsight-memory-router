@@ -40,14 +40,15 @@ describe("request item deduplication", () => {
       pending_items: 1,
       event_count: 2,
     });
-    await expect(quarantine.repository.get(first.quarantine_id)).resolves.toMatchObject({
+    await expect(
+      quarantine.repository.get(first.quarantine_id),
+    ).resolves.toMatchObject({
       requarantine_count: 1,
       created_at: "2026-08-01T12:00:01.000Z",
     });
-    expect(quarantine.repository.events.map((event) => event.event_type)).toEqual([
-      "quarantined",
-      "requarantined",
-    ]);
+    expect(
+      quarantine.repository.events.map((event) => event.event_type),
+    ).toEqual(["quarantined", "requarantined"]);
   });
 
   it("canonicalizes object key order without changing string semantics", async () => {
@@ -90,7 +91,14 @@ describe("request item deduplication", () => {
       quarantine_id: string;
     };
 
-    expect(new Set([ghost.quarantine_id, otherGhost.quarantine_id, ops.quarantine_id, dev.quarantine_id]).size).toBe(4);
+    expect(
+      new Set([
+        ghost.quarantine_id,
+        otherGhost.quarantine_id,
+        ops.quarantine_id,
+        dev.quarantine_id,
+      ]).size,
+    ).toBe(4);
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
       total_items: 4,
       pending_items: 4,
@@ -163,7 +171,11 @@ describe("request item deduplication", () => {
         }),
     );
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if ((await quarantine.repository.get(stored.quarantine_id))?.status === "review_in_progress") break;
+      if (
+        (await quarantine.repository.get(stored.quarantine_id))?.status ===
+        "review_in_progress"
+      )
+        break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
@@ -176,7 +188,9 @@ describe("request item deduplication", () => {
       status: 409,
       code: "quarantine_request_in_review",
     });
-    await expect(quarantine.repository.get(stored.quarantine_id)).resolves.toMatchObject({
+    await expect(
+      quarantine.repository.get(stored.quarantine_id),
+    ).resolves.toMatchObject({
       status: "review_in_progress",
       requarantine_count: 0,
     });

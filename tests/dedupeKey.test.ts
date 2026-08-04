@@ -28,7 +28,10 @@ describe("requestDedupeKey", () => {
     expect(
       requestDedupeKey({
         ...base,
-        payload: { action: "retain", body: { items: [{ content: "hello  " }] } },
+        payload: {
+          action: "retain",
+          body: { items: [{ content: "hello  " }] },
+        },
       }),
     ).not.toBe(original);
     expect(
