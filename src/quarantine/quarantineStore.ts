@@ -87,7 +87,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
-    const quarantineId = await this.resolveQuarantineId(input);
+    const quarantineId = this.resolveQuarantineId(input);
     const encrypted = this.encrypt(input, quarantineId);
     const encryptedBytes = Buffer.byteLength(JSON.stringify(encrypted));
     if (encryptedBytes > this.limits.maxItemBytes) {
@@ -101,7 +101,13 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     return this.rateLimiter.withIdentityLock(
       quarantineId,
       async (rateLimitSession) => {
-        const knownIdentity = await this.isKnownIdentity(input, quarantineId);
+        const existing = await this.repository.get(quarantineId);
+        this.assertRequestRefreshAllowed(input, existing?.status);
+        const knownIdentity = await this.isKnownIdentity(
+          input,
+          quarantineId,
+          existing !== null,
+        );
         await this.chargeRateQuota(input, knownIdentity, rateLimitSession);
 
         const item = this.buildItem(input, quarantineId, encrypted);
@@ -118,6 +124,27 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         return { quarantine_id: quarantineId, sha256: encrypted.sha256 };
       },
     );
+  }
+
+  private assertRequestRefreshAllowed(
+    input: QuarantineInput,
+    status: string | undefined,
+  ): void {
+    const requestItem =
+      input.kind === "retain_request" || input.kind === "recall_request";
+    if (
+      requestItem &&
+      input.dedupeKey &&
+      status !== undefined &&
+      status !== "pending" &&
+      status !== "postponed"
+    ) {
+      throw new HttpError(
+        409,
+        "quarantine_request_in_review",
+        "matching quarantine request is already being reviewed",
+      );
+    }
   }
 
   private encrypt(input: QuarantineInput, quarantineId: string) {
@@ -168,8 +195,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     rateLimitSession: RateLimitSession,
   ): Promise<void> {
     const windowMs = this.limits.rateLimitWindowMs;
-    // Auth-failure audits use dedicated buckets so unauthenticated probing
-    // can never share budget with security quarantines or their refreshes.
     const authAudit = input.reason === "auth_failed";
     if (knownIdentity) {
       await rateLimitSession.consume(
@@ -207,15 +232,15 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private async isKnownIdentity(
     input: QuarantineInput,
     quarantineId: string,
+    itemExists: boolean,
   ): Promise<boolean> {
-    if (input.kind === "security_event" && input.dedupeKey) {
-      return (await this.repository.get(quarantineId)) !== null;
-    }
     if (
-      (input.kind === "retain_request" || input.kind === "recall_request") &&
-      input.dedupeKey
+      input.dedupeKey &&
+      (input.kind === "security_event" ||
+        input.kind === "retain_request" ||
+        input.kind === "recall_request")
     ) {
-      return (await this.repository.get(quarantineId)) !== null;
+      return itemExists;
     }
     if (
       input.kind === "recalled_memory" &&
@@ -241,7 +266,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     );
   }
 
-  private async resolveQuarantineId(input: QuarantineInput): Promise<string> {
+  private resolveQuarantineId(input: QuarantineInput): string {
     if (input.kind === "security_event" && input.dedupeKey) {
       const digest = sha256Hex(input.dedupeKey);
       return `q_security${digest.slice(0, 48)}_${digest.slice(48)}`;
