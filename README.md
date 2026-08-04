@@ -38,9 +38,38 @@ Router and admin authentication fail closed when their token is unset. `MEMORY_R
 
 ## Images
 
+GHCR is canonical; Docker Hub is a mirror:
+
 ```text
 ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
+ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
+docker.io/mickeykrasilnikov/hindsight-memory-router@sha256:<digest>
+```
+
+Pin deployments by digest or immutable `<git-sha>` tag so every pull runs the exact same build:
+
+```yaml
+services:
+  memory-router:
+    image: ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
+
+`:latest` is pushed only on tagged `v*` releases and moves — do not use it for deployments. The publish workflow records each build's digest in the job summary and as an `image-digests` run artifact.
+
+After each deploy, record the running digest into the ops log:
+
+```bash
+docker inspect --format='{{index .RepoDigests 0}}' <container>
+```
+
+Verify the pinned digest against the keyless signature before trusting it:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 ```
 
 The container runs as the non-root `node` user.
