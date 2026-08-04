@@ -122,7 +122,6 @@ describe("SQLite request item deduplication", () => {
 
   it("migrates pre-existing databases and keeps legacy rows readable", async () => {
     await withRepository(async ({ path, repository, store }) => {
-      // Build a database with the pre-dedup schema and one legacy row.
       const legacy = new DatabaseSync(path);
       legacy.exec(`
         CREATE TABLE quarantine_items (
@@ -162,7 +161,6 @@ describe("SQLite request item deduplication", () => {
 
       await repository.initialize();
 
-      // The legacy row stays readable and has no dedupe identity.
       const legacyItem = await repository.get("q_legacy_0123456789abcdef");
       expect(legacyItem).toMatchObject({
         kind: "retain_request",
@@ -170,7 +168,6 @@ describe("SQLite request item deduplication", () => {
       });
       expect(legacyItem?.dedupe_key).toBeUndefined();
 
-      // New request items deduplicate against the migrated schema.
       const first = await store.put({
         timestamp: "2026-08-01T12:00:00.000Z",
         kind: "retain_request",
@@ -195,7 +192,6 @@ describe("SQLite request item deduplication", () => {
         event_count: 2,
       });
 
-      // Reopening an already-migrated database is a no-op.
       await repository.initialize();
       await expect(repository.stats()).resolves.toMatchObject({
         total_items: 2,
@@ -204,7 +200,7 @@ describe("SQLite request item deduplication", () => {
     });
   });
 
-  it("charges repeats to the requarantine budget and never refreshes an active review", async () => {
+  it("charges repeats to the requarantine budget and rejects active-review refreshes", async () => {
     await withRepository(
       async ({ path, repository, store }) => {
         await repository.initialize();
@@ -218,9 +214,6 @@ describe("SQLite request item deduplication", () => {
         };
         const first = await store.put(input);
 
-        // The per-writer write quota (1 per window) is exhausted by the first
-        // write, but repeats are known identities and charge the
-        // requarantine-ops budget instead.
         const repeat = await store.put({
           ...input,
           timestamp: "2026-08-01T12:05:00.000Z",
@@ -230,8 +223,6 @@ describe("SQLite request item deduplication", () => {
           repository.get(first.quarantine_id),
         ).resolves.toMatchObject({ requarantine_count: 1 });
 
-        // A review claimed by another process must survive a repeat: the
-        // refresh applies only while the item is pending or postponed.
         const claim = new DatabaseSync(path);
         claim.exec(`
           UPDATE quarantine_items
@@ -241,11 +232,15 @@ describe("SQLite request item deduplication", () => {
         `);
         claim.close();
 
-        const duringReview = await store.put({
-          ...input,
-          timestamp: "2026-08-01T12:15:00.000Z",
+        await expect(
+          store.put({
+            ...input,
+            timestamp: "2026-08-01T12:15:00.000Z",
+          }),
+        ).rejects.toMatchObject({
+          status: 409,
+          code: "quarantine_request_in_review",
         });
-        expect(duringReview.quarantine_id).toBe(first.quarantine_id);
         await expect(
           repository.get(first.quarantine_id),
         ).resolves.toMatchObject({
