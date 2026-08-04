@@ -1,5 +1,5 @@
 import { HttpError } from "../httpError.js";
-import type { BankId } from "../types.js";
+import type { BankId, QuarantineStatus } from "../types.js";
 import {
   parseStoredItem,
   quarantineEvent,
@@ -23,6 +23,7 @@ import {
   assertCapacity,
   cleanupWhere,
   createStoredItem,
+  findItemByDedupeKey,
   findItemById,
   findItemBySource,
   initializeSchema,
@@ -50,6 +51,11 @@ export interface SqlDatabase {
   transaction<T>(operation: (database: SqlDatabase) => Promise<T>): Promise<T>;
   close(): Promise<void>;
 }
+
+const REQUEST_ITEM_REFRESH_STATUSES = [
+  "pending",
+  "postponed",
+] as const satisfies readonly QuarantineStatus[];
 
 export class SqlQuarantineRepository implements QuarantineRepository {
   constructor(private readonly database: SqlDatabase) {}
@@ -101,6 +107,25 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     }
     await this.store(item, capacity, (database) =>
       findItemById(database, item.quarantine_id, true),
+    );
+  }
+
+  async upsertRequestItem(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void> {
+    if (
+      (item.kind !== "retain_request" && item.kind !== "recall_request") ||
+      !item.dedupe_key
+    ) {
+      throw new Error("request item dedupe identity is required");
+    }
+    const dedupeKey = item.dedupe_key;
+    await this.store(
+      item,
+      capacity,
+      (database) => findItemByDedupeKey(database, dedupeKey, true),
+      REQUEST_ITEM_REFRESH_STATUSES,
     );
   }
 
@@ -241,13 +266,27 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     findExisting: (
       database: SqlDatabase,
     ) => Promise<StoredQuarantineItem | null>,
+    refreshStatuses?: readonly QuarantineStatus[],
   ): Promise<void> {
     await this.database.transaction(async (database) => {
       await database.acquireCapacityLock();
       const existing = await findExisting(database);
       await assertCapacity(database, item, existing, capacity);
       if (existing) {
-        await refreshStoredItem(database, existing.quarantine_id, item);
+        // Request-item dedupe refreshes only a live queue item: refreshing an
+        // item under review (or already reviewed) would reset its status and
+        // overwrite the envelope, duplicating the Hindsight write on approve.
+        if (
+          refreshStatuses === undefined ||
+          refreshStatuses.includes(existing.status)
+        ) {
+          await refreshStoredItem(
+            database,
+            existing.quarantine_id,
+            item,
+            existing.requarantine_count + 1,
+          );
+        }
       } else {
         await createStoredItem(database, item);
       }
