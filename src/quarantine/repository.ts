@@ -24,6 +24,8 @@ export interface NewQuarantineItem {
   source_bank?: BankId;
   source_memory_id?: string;
   source_content_sha256?: string;
+  dedupe_key?: string;
+  requarantine_count?: number;
   sha256: string;
   encrypted: EncryptedQuarantineEnvelope;
   status: "pending";
@@ -91,6 +93,10 @@ export interface QuarantineRepository {
     item: NewQuarantineItem,
     capacity?: QuarantineCapacityLimits,
   ): Promise<void>;
+  upsertRequestItem(
+    item: NewQuarantineItem,
+    capacity?: QuarantineCapacityLimits,
+  ): Promise<void>;
   get(quarantineId: string): Promise<StoredQuarantineItem | null>;
   listReviewable(
     limit?: number,
@@ -147,9 +153,11 @@ export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {
     ...(item.source_memory_id === undefined
       ? {}
       : { source_memory_id: item.source_memory_id }),
+    ...(item.dedupe_key === undefined ? {} : { dedupe_key: item.dedupe_key }),
     sha256: item.sha256,
     status: item.status,
     postpone_count: item.postpone_count,
+    requarantine_count: item.requarantine_count,
   };
 }
 
@@ -188,6 +196,7 @@ export function parseStoredItem(
     ...(row.source_content_sha256 == null
       ? {}
       : { source_content_sha256: String(row.source_content_sha256) }),
+    ...(row.dedupe_key == null ? {} : { dedupe_key: String(row.dedupe_key) }),
     sha256: String(row.sha256),
     encrypted:
       row.encrypted_envelope == null
@@ -197,5 +206,6 @@ export function parseStoredItem(
           ) as EncryptedQuarantineEnvelope),
     status: row.status as QuarantineStatus,
     postpone_count: Number(row.postpone_count),
+    requarantine_count: Number(row.requarantine_count ?? 0),
   };
 }
