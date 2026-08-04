@@ -4,7 +4,6 @@ import {
   HindsightGatewayError,
   type HindsightGateway,
 } from "../src/hindsightClient.js";
-import { HttpError } from "../src/httpError.js";
 import { RouterPolicy } from "../src/policy.js";
 import type { QuarantineStore } from "../src/quarantine/quarantineStore.js";
 import type {
