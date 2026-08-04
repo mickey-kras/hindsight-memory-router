@@ -169,18 +169,14 @@ reviewed allowed result      -> returned while content is unchanged
 reviewed blocked result      -> suppressed and invalidated
 ```
 
-Recall degrades gracefully instead of failing the whole request:
+Recall availability rules:
 
-```text
-one read bank errors -> that bank contributes zero results; healthy banks answer
-all read banks error -> empty results (no 5xx)
-queue full (507) or rate limited (429) at recall ->
-    suspicious content is still suppressed, and unknown writers or suspicious
-    queries still get empty results; the recall itself stays a 200
-repeat of a suspicious request already under review (409) -> same degradation
-```
-
-Every degradation is logged as a structured `memory-router recall degraded: {...}` line on stderr so suppression without a quarantine record is observable. Other error types (programming or infrastructure failures) still propagate unchanged. Retain does not degrade: a retain that cannot quarantine suspicious content still fails closed with `507`.
+- A typed Hindsight failure affects only that read bank.
+- If all read banks fail, recall returns empty results.
+- `429`, `507`, and `quarantine_request_in_review` prevent the affected suspicious result from being returned but do not fail recall.
+- Unexpected application or database errors still propagate.
+- Degradation logs contain structured error codes, not upstream response text.
+- Retain never degrades when quarantine is unavailable.
 
 There is no Hindsight quarantine bank.
 
