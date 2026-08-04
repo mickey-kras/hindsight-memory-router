@@ -38,7 +38,7 @@ Router and admin authentication fail closed when their token is unset. `MEMORY_R
 
 ## Images
 
-GHCR is canonical; Docker Hub is a mirror:
+GHCR is canonical; Docker Hub is a mirror.
 
 ```text
 ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
@@ -47,7 +47,7 @@ docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
 docker.io/mickeykrasilnikov/hindsight-memory-router@sha256:<digest>
 ```
 
-Pin deployments by digest or immutable `<git-sha>` tag so every pull runs the exact same build:
+Pin deployments by digest:
 
 ```yaml
 services:
@@ -55,15 +55,15 @@ services:
     image: ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 ```
 
-`:latest` is pushed only on tagged `v*` releases and moves — do not use it for deployments. The publish workflow records each build's digest in the job summary and as an `image-digests` run artifact.
+`latest` remains available for convenience but is mutable. The publish workflow records both registry digests in the job summary and an `image-digests-<commit>` artifact.
 
-After each deploy, record the running digest into the ops log:
+Record the running digest after deployment:
 
 ```bash
 docker inspect --format='{{index .RepoDigests 0}}' <container>
 ```
 
-Verify the pinned digest against the keyless signature before trusting it:
+Verify a pinned GHCR image:
 
 ```bash
 cosign verify \
