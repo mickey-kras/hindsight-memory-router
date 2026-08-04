@@ -5,6 +5,7 @@ import {
   type StoredQuarantineItem,
 } from "./repository.js";
 import {
+  reviewClaimIsStale,
   reviewInterruptionDetails,
   runReviewOperation,
 } from "./reviewWorkflowSupport.js";
@@ -19,18 +20,13 @@ export class MemoryReviewWorkflow {
 
   async recover(at: string): Promise<void> {
     for (const item of this.items.values()) {
-      if (item.status !== "review_in_progress") continue;
-      this.items.set(item.quarantine_id, {
-        ...item,
-        status: "postponed",
-        updated_at: at,
-      });
-      this.events.push(
-        quarantineEvent(item.quarantine_id, "review_interrupted", at, {
-          outcome: "postponed",
-          recovered: true,
-        }),
-      );
+      if (
+        item.status !== "review_in_progress" ||
+        !reviewClaimIsStale(item.updated_at, at)
+      ) {
+        continue;
+      }
+      this.restoreStaleClaim(item, at);
     }
   }
 
@@ -107,6 +103,11 @@ export class MemoryReviewWorkflow {
 
   private requireReviewable(quarantineId: string): StoredQuarantineItem {
     const item = this.requireItem(quarantineId);
+    this.assertReviewable(item);
+    return item;
+  }
+
+  private assertReviewable(item: StoredQuarantineItem): void {
     if (item.status !== "pending" && item.status !== "postponed") {
       throw new HttpError(
         409,
@@ -114,7 +115,6 @@ export class MemoryReviewWorkflow {
         "quarantine item is not pending review",
       );
     }
-    return item;
   }
 
   private requireReviewableKind(
@@ -135,13 +135,42 @@ export class MemoryReviewWorkflow {
     message: string,
     at: string,
   ): StoredQuarantineItem {
-    const item = this.requireReviewableKind(quarantineId, kind, message);
+    let item = this.requireItem(quarantineId);
+    if (
+      item.status === "review_in_progress" &&
+      reviewClaimIsStale(item.updated_at, at)
+    ) {
+      item = this.restoreStaleClaim(item, at);
+    }
+    this.assertReviewable(item);
+    if (item.kind !== kind) {
+      throw new HttpError(409, "invalid_review_action", message);
+    }
     this.items.set(quarantineId, {
       ...item,
       status: "review_in_progress",
       updated_at: at,
     });
     return item;
+  }
+
+  private restoreStaleClaim(
+    item: StoredQuarantineItem,
+    at: string,
+  ): StoredQuarantineItem {
+    const restored: StoredQuarantineItem = {
+      ...item,
+      status: "postponed",
+      updated_at: at,
+    };
+    this.items.set(item.quarantine_id, restored);
+    this.events.push(
+      quarantineEvent(item.quarantine_id, "review_interrupted", at, {
+        outcome: "postponed",
+        recovered: true,
+      }),
+    );
+    return restored;
   }
 
   private interruptReview(
