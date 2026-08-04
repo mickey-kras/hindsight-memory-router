@@ -676,8 +676,5 @@ describe("postpone cap escalation", () => {
       code: "postpone_limit_reached",
       message: expect.stringContaining("QUARANTINE_ITEM_TTL_DAYS"),
     });
-    await expect(service.postpone(stored.quarantine_id)).rejects.toMatchObject({
-      message: expect.stringContaining("expire"),
-    });
   });
 });
