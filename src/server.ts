@@ -6,6 +6,7 @@ import {
   classifyAdminRequest,
 } from "./adminRateLimit.js";
 import {
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
@@ -56,6 +57,10 @@ const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
+const HINDSIGHT_TIMEOUT_MS = positiveNumberEnv(
+  "HINDSIGHT_TIMEOUT_MS",
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
+);
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
 const QUARANTINE_DATABASE_URL =
@@ -93,7 +98,11 @@ function buildHindsight(
 ): HindsightGateway {
   return (
     options.hindsight ??
-    new FetchHindsightGateway(HINDSIGHT_BASE_URL, HINDSIGHT_API_KEY)
+    new FetchHindsightGateway(
+      HINDSIGHT_BASE_URL,
+      HINDSIGHT_API_KEY,
+      HINDSIGHT_TIMEOUT_MS,
+    )
   );
 }
 
@@ -333,6 +342,14 @@ function numberEnv(name: string, fallback: number): number {
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function positiveNumberEnv(name: string, fallback: number): number {
+  const value = numberEnv(name, fallback);
+  if (value === 0) {
+    throw new Error(`${name} must be a positive integer`);
   }
   return value;
 }

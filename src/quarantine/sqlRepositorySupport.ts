@@ -195,6 +195,8 @@ export function cleanupWhere(
 
   if ((filter.scope ?? "pending") === "pending") {
     conditions.push("status IN ('pending', 'postponed')");
+  } else {
+    conditions.push("status <> 'review_in_progress'");
   }
   if (filter.reasons?.length) {
     const reasonPlaceholders = filter.reasons.map(() =>
