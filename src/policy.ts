@@ -1,5 +1,8 @@
 import { sha256Hex } from "./canonicalJson.js";
-import type { HindsightGateway } from "./hindsightClient.js";
+import {
+  HindsightGatewayError,
+  type HindsightGateway,
+} from "./hindsightClient.js";
 import { HttpError } from "./httpError.js";
 import {
   requestDedupeKey,
@@ -36,12 +39,7 @@ interface QuarantineRecallInput {
   targetBanks?: readonly BankId[];
 }
 
-// Recall stays fail-closed on content but fail-open on availability: an
-// exhausted (507) or rate-limited (429) quarantine queue must not turn an
-// otherwise answerable recall into an error. Neither must a 409 repeat of a
-// suspicious request that is already quarantined and under review — the
-// content is contained either way.
-function isQuarantineUnavailable(error: unknown): boolean {
+function isQuarantineUnavailable(error: unknown): error is HttpError {
   return (
     error instanceof HttpError &&
     (error.status === 507 ||
@@ -50,8 +48,20 @@ function isQuarantineUnavailable(error: unknown): boolean {
   );
 }
 
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function quarantineErrorDetails(error: HttpError): Record<string, unknown> {
+  return { status: error.status, code: error.code };
+}
+
+function gatewayErrorDetails(
+  error: HindsightGatewayError,
+): Record<string, unknown> {
+  return {
+    error_kind: error.kind,
+    status: error.status,
+    ...(error.upstreamStatus === undefined
+      ? {}
+      : { upstream_status: error.upstreamStatus }),
+  };
 }
 
 export class RouterPolicy {
@@ -161,9 +171,6 @@ export class RouterPolicy {
     path: string,
     writerId?: string,
   ): Promise<{ error: string }> {
-    // Normalize the dedupe identity (query string/fragment stripped, casing
-    // lowered, trailing slashes collapsed) and cap distinct identities per
-    // writer so path fuzzing cannot mint one quarantine slot per probe.
     const dedupeKey = this.securityEventIdentities.resolve(
       writerId,
       securityEventDedupeKey(method, path),
@@ -179,10 +186,6 @@ export class RouterPolicy {
     return { error: "endpoint denied by memory-router policy" };
   }
 
-  // Fans out to all configured read banks, but isolates failures: a bank that
-  // errors contributes zero results instead of rejecting the whole recall.
-  // After PR-6 (typed HindsightGatewayError kinds) lands, this can refine
-  // handling per error kind; today any bank error degrades the same way.
   private async recallFromBanks(
     writerId: string,
     readBanks: readonly BankId[],
@@ -195,17 +198,22 @@ export class RouterPolicy {
       })),
     );
     const responses: { bankId: BankId; response: RecallResponse }[] = [];
-    settled.forEach((outcome, index) => {
+    for (let index = 0; index < settled.length; index += 1) {
+      const outcome = settled[index];
+      if (!outcome) continue;
       if (outcome.status === "fulfilled") {
         responses.push(outcome.value);
-        return;
+        continue;
+      }
+      if (!(outcome.reason instanceof HindsightGatewayError)) {
+        throw outcome.reason;
       }
       this.logRecallDegradation("bank_unavailable", {
         writer_id: writerId,
         bank_id: readBanks[index],
-        error: describeError(outcome.reason),
+        ...gatewayErrorDetails(outcome.reason),
       });
-    });
+    }
     return responses;
   }
 
@@ -223,7 +231,7 @@ export class RouterPolicy {
         writer_id: writerId,
         bank_id: bankId,
         memory_id: result.id,
-        error: describeError(error),
+        ...quarantineErrorDetails(error),
       });
       return false;
     }
@@ -239,13 +247,13 @@ export class RouterPolicy {
       this.logRecallDegradation("quarantine_write_unavailable", {
         writer_id: input.writerId,
         reason: input.reason,
-        error: describeError(error),
+        ...quarantineErrorDetails(error),
       });
     }
   }
 
   private logRecallDegradation(
-    event: string,
+    event: "bank_unavailable" | "quarantine_write_unavailable",
     details: Record<string, unknown>,
   ): void {
     process.stderr.write(
