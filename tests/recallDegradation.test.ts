@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FakeHindsightGateway,
+  HindsightGatewayError,
   type HindsightGateway,
 } from "../src/hindsightClient.js";
 import { HttpError } from "../src/httpError.js";
@@ -83,8 +84,12 @@ class ScriptedRecallGateway extends FakeHindsightGateway {
   }
 }
 
+function unavailable(kind: "timeout" | "http" | "invalid-response" | "network") {
+  return new HindsightGatewayError(kind, "sanitized upstream failure", 503);
+}
+
 describe("recall graceful degradation", () => {
-  it("excludes a suspicious recalled result when the queue is full instead of failing the recall", async () => {
+  it("excludes a suspicious recalled result when the queue is full", async () => {
     const hindsight = new ScriptedRecallGateway((bankId) =>
       bankId === "ops"
         ? {
@@ -105,6 +110,7 @@ describe("recall graceful degradation", () => {
       expect.objectContaining({ id: "safe-1" }),
     ]);
     expect(degradationLog()).toContain("quarantine_write_unavailable");
+    expect(degradationLog()).toContain('"status":507');
     expect(degradationLog()).toContain("evil-1");
   });
 
@@ -132,11 +138,12 @@ describe("recall graceful degradation", () => {
     expect(degradationLog()).toContain("suspicious_query");
   });
 
-  it("degrades a repeat of a suspicious recall that is already under review", async () => {
+  it("degrades a suspicious recall already under review", async () => {
     const { policy, repository } = buildPolicy(new FakeHindsightGateway());
 
-    const first = await policy.recall("ops", { query: SUSPICIOUS_TEXT });
-    expect(first).toEqual({ results: [] });
+    expect(await policy.recall("ops", { query: SUSPICIOUS_TEXT })).toEqual({
+      results: [],
+    });
     const [item] = await repository.listReviewable();
     const claimed = repository.items.get(item!.quarantine_id);
     repository.items.set(item!.quarantine_id, {
@@ -144,11 +151,11 @@ describe("recall graceful degradation", () => {
       status: "review_in_progress",
     });
 
-    const repeat = await policy.recall("ops", { query: SUSPICIOUS_TEXT });
-
-    expect(repeat).toEqual({ results: [] });
+    expect(await policy.recall("ops", { query: SUSPICIOUS_TEXT })).toEqual({
+      results: [],
+    });
     expect(degradationLog()).toContain("quarantine_write_unavailable");
-    expect(degradationLog()).toContain("already being reviewed");
+    expect(degradationLog()).toContain("quarantine_request_in_review");
     expect(repository.items.get(item!.quarantine_id)?.status).toBe(
       "review_in_progress",
     );
@@ -173,13 +180,13 @@ describe("recall graceful degradation", () => {
 
     expect(response.results).toEqual([]);
     expect(await repository.listReviewable()).toHaveLength(1);
-    expect(degradationLog()).toContain("quarantine_write_unavailable");
+    expect(degradationLog()).toContain('"status":429');
   });
 
-  it("returns healthy bank results when one bank fails", async () => {
+  it("returns healthy results when one bank has a typed upstream failure", async () => {
     const hindsight = new ScriptedRecallGateway((bankId) =>
       bankId === "core"
-        ? new Error("core bank unreachable")
+        ? unavailable("network")
         : {
             results: [
               {
@@ -199,22 +206,34 @@ describe("recall graceful degradation", () => {
       expect.objectContaining({ id: "ops-result" }),
     ]);
     expect(degradationLog()).toContain("bank_unavailable");
-    expect(degradationLog()).toContain("core");
+    expect(degradationLog()).toContain('"error_kind":"network"');
+    expect(degradationLog()).not.toContain("sanitized upstream failure");
   });
 
-  it("returns empty results without an error when every bank fails", async () => {
-    const hindsight = new ScriptedRecallGateway(
-      (bankId) => new Error(`${bankId} bank unreachable`),
+  it("returns empty results when every bank has a typed upstream failure", async () => {
+    const hindsight = new ScriptedRecallGateway(() => unavailable("timeout"));
+    const { policy } = buildPolicy(hindsight);
+
+    expect(await policy.recall("ops", { query: "normal" })).toEqual({
+      results: [],
+    });
+    expect(degradationLog()).toContain('"error_kind":"timeout"');
+  });
+
+  it("propagates unexpected bank errors", async () => {
+    const defect = new Error("programming defect");
+    const hindsight = new ScriptedRecallGateway((bankId) =>
+      bankId === "core" ? defect : { results: [] },
     );
     const { policy } = buildPolicy(hindsight);
 
-    const response = await policy.recall("ops", { query: "normal" });
-
-    expect(response).toEqual({ results: [] });
-    expect(degradationLog()).toContain("bank_unavailable");
+    await expect(policy.recall("ops", { query: "normal" })).rejects.toBe(
+      defect,
+    );
+    expect(degradationLog()).toBe("");
   });
 
-  it("still surfaces non-capacity quarantine errors on recall", async () => {
+  it("surfaces non-capacity quarantine errors", async () => {
     const outage = new Error("quarantine database unavailable");
     const quarantineStore: QuarantineStore = {
       put: () => Promise.reject(outage),
@@ -231,20 +250,14 @@ describe("recall graceful degradation", () => {
     );
   });
 
-  it("still fails retain with 507 when the queue is full", async () => {
+  it("still fails retain when quarantine is unavailable", async () => {
     const { policy } = buildPolicy(new FakeHindsightGateway(), {
       limits: { maxPendingItems: 0 },
     });
 
-    const retainError = await policy
-      .retain("ops", { items: [{ content: SUSPICIOUS_TEXT }] })
-      .then(
-        () => null,
-        (error: unknown) => error,
-      );
-    expect(retainError).toBeInstanceOf(HttpError);
-    expect((retainError as HttpError).status).toBe(507);
-
+    await expect(
+      policy.retain("ops", { items: [{ content: SUSPICIOUS_TEXT }] }),
+    ).rejects.toMatchObject({ status: 507 });
     await expect(
       policy.retain("unknown-writer", { items: [{ content: "hello" }] }),
     ).rejects.toMatchObject({ status: 507 });
