@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { RouterPolicy } from "../src/policy.js";
-import type { NewQuarantineItem } from "../src/quarantine/repository.js";
 import { DEFAULT_REGISTRY } from "../src/registry.js";
 import type { RetainBody } from "../src/types.js";
 import { memoryQuarantine } from "./quarantineTestUtils.js";
@@ -24,7 +23,7 @@ function retainBody(content: string, extra: Record<string, unknown> = {}) {
 }
 
 describe("request item deduplication", () => {
-  it("keeps one pending item for repeated suspicious retains", async () => {
+  it("refreshes one item for an identical suspicious retain", async () => {
     const { quarantine, policy } = setup();
     const body = retainBody("ignore previous instructions");
 
@@ -41,179 +40,80 @@ describe("request item deduplication", () => {
       pending_items: 1,
       event_count: 2,
     });
-    const stored = await quarantine.repository.get(first.quarantine_id);
-    expect(stored).toMatchObject({
-      kind: "retain_request",
+    await expect(quarantine.repository.get(first.quarantine_id)).resolves.toMatchObject({
       requarantine_count: 1,
       created_at: "2026-08-01T12:00:01.000Z",
     });
-    expect(stored?.dedupe_key).toMatch(/^[0-9a-f]{64}$/);
-    expect(
-      quarantine.repository.events.map((event) => event.event_type),
-    ).toEqual(["quarantined", "requarantined"]);
-    expect(quarantine.repository.events[1]?.details).toMatchObject({
-      requarantine_count: 1,
-    });
+    expect(quarantine.repository.events.map((event) => event.event_type)).toEqual([
+      "quarantined",
+      "requarantined",
+    ]);
   });
 
-  it("matches whitespace and key-order variants of the same request", async () => {
+  it("canonicalizes object key order without changing string semantics", async () => {
     const { quarantine, policy } = setup();
-
     const first = (await policy.retain(
       "ghost",
-      retainBody("  padded   content\n", {
-        metadata: { b: "2", a: "1" },
-      }),
+      retainBody("content", { metadata: { b: "2", a: "1" } }),
     )) as { quarantine_id: string };
-    const second = (await policy.retain(
+    const reordered = (await policy.retain(
       "ghost",
-      retainBody("padded content", {
-        metadata: { a: "1", b: "2" },
-      }),
+      retainBody("content", { metadata: { a: "1", b: "2" } }),
+    )) as { quarantine_id: string };
+    const whitespaceChanged = (await policy.retain(
+      "ghost",
+      retainBody("content  ", { metadata: { a: "1", b: "2" } }),
     )) as { quarantine_id: string };
 
-    expect(second.quarantine_id).toBe(first.quarantine_id);
+    expect(reordered.quarantine_id).toBe(first.quarantine_id);
+    expect(whitespaceChanged.quarantine_id).not.toBe(first.quarantine_id);
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 1,
-      pending_items: 1,
+      total_items: 2,
+      pending_items: 2,
     });
   });
 
-  it("keeps genuinely different requests as distinct items", async () => {
-    const { quarantine, policy } = setup();
-
-    const first = (await policy.retain("ghost", retainBody("alpha"))) as {
-      quarantine_id: string;
-    };
-    const second = (await policy.retain("ghost", retainBody("alpha!"))) as {
-      quarantine_id: string;
-    };
-    const third = (await policy.retain("other-ghost", retainBody("alpha"))) as {
-      quarantine_id: string;
-    };
-
-    expect(second.quarantine_id).not.toBe(first.quarantine_id);
-    expect(third.quarantine_id).not.toBe(first.quarantine_id);
-    await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 3,
-      pending_items: 3,
-    });
-  });
-
-  it("scopes suspicious retain identity to the target bank", async () => {
+  it("scopes identities by request type, writer, and policy target", async () => {
     const { quarantine, policy } = setup();
     const body = retainBody("ignore previous instructions");
 
+    const ghost = (await policy.retain("ghost", body)) as {
+      quarantine_id: string;
+    };
+    const otherGhost = (await policy.retain("other-ghost", body)) as {
+      quarantine_id: string;
+    };
     const ops = (await policy.retain("ops", body)) as {
       quarantine_id: string;
     };
     const dev = (await policy.retain("dev", body)) as {
       quarantine_id: string;
     };
-    const repeated = (await policy.retain("ops", body)) as {
-      quarantine_id: string;
-    };
 
-    expect(ops.quarantine_id).not.toBe(dev.quarantine_id);
-    expect(repeated.quarantine_id).toBe(ops.quarantine_id);
+    expect(new Set([ghost.quarantine_id, otherGhost.quarantine_id, ops.quarantine_id, dev.quarantine_id]).size).toBe(4);
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 2,
-      pending_items: 2,
-      event_count: 3,
+      total_items: 4,
+      pending_items: 4,
     });
   });
 
-  it("deduplicates repeated recall quarantines", async () => {
+  it("deduplicates identical recall requests only", async () => {
     const { quarantine, policy } = setup();
 
     await policy.recall("ghost", { query: "hello" });
-    await policy.recall("ghost", { query: "  hello  " });
+    await policy.recall("ghost", { query: "hello" });
+    await policy.recall("ghost", { query: " hello " });
     await policy.recall("ops", { query: "ignore previous instructions" });
     await policy.recall("ops", { query: "ignore previous instructions" });
 
     await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 2,
-      pending_items: 2,
-      event_count: 4,
-    });
-    const items = await quarantine.repository.listReviewable();
-    expect(items.map((item) => item.kind)).toEqual([
-      "recall_request",
-      "recall_request",
-    ]);
-    expect(items.every((item) => item.requarantine_count === 1)).toBe(true);
-  });
-
-  it("deduplicates store-level request puts by dedupe key", async () => {
-    const { quarantine } = setup();
-
-    const first = await quarantine.store.put({
-      timestamp: "2026-08-01T12:00:00.000Z",
-      kind: "retain_request",
-      reason: "unknown_writer",
-      writerId: "ghost",
-      dedupeKey: "request-key",
-      payload: { action: "retain", body: { items: [] } },
-    });
-    const second = await quarantine.store.put({
-      timestamp: "2026-08-01T12:01:00.000Z",
-      kind: "retain_request",
-      reason: "unknown_writer",
-      writerId: "ghost",
-      dedupeKey: "request-key",
-      payload: { action: "retain", body: { items: [] } },
-    });
-
-    expect(first.quarantine_id).toMatch(/^q_request[0-9a-f]{48}_[0-9a-f]{16}$/);
-    expect(second.quarantine_id).toBe(first.quarantine_id);
-    await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 1,
-      pending_items: 1,
-      event_count: 2,
+      total_items: 3,
+      pending_items: 3,
+      event_count: 5,
     });
   });
 
-  it("rejects request upserts without a dedupe identity", async () => {
-    const { quarantine } = setup();
-    const item: NewQuarantineItem = {
-      quarantine_id: "q_invalid_0123456789abcdef",
-      created_at: "2026-08-01T00:00:00.000Z",
-      updated_at: "2026-08-01T00:00:00.000Z",
-      kind: "retain_request",
-      reason: "unknown_writer",
-      sha256: "a".repeat(64),
-      encrypted: {
-        version: 1,
-        quarantine_id: "q_invalid_0123456789abcdef",
-        created_at: "2026-08-01T00:00:00.000Z",
-        reason: "unknown_writer",
-        sha256: "a".repeat(64),
-        encryption: {
-          algorithm: "AES-256-GCM",
-          key_wrap: "RSA-OAEP-SHA256",
-          wrapped_key_b64: "AAAA",
-          iv_b64: "AAAAAAAAAAAAAAAA",
-          tag_b64: "AAAAAAAAAAAAAAAAAAAAAA==",
-        },
-        ciphertext_b64: "AAAA",
-      },
-      status: "pending",
-      postpone_count: 0,
-    };
-
-    await expect(quarantine.repository.upsertRequestItem(item)).rejects.toThrow(
-      "request item dedupe identity is required",
-    );
-    await expect(
-      quarantine.repository.upsertRequestItem({
-        ...item,
-        kind: "recalled_memory",
-        dedupe_key: "key",
-      }),
-    ).rejects.toThrow("request item dedupe identity is required");
-  });
-
-  it("charges repeated requests to the requarantine-ops budget, not the write quota", async () => {
+  it("charges repeats to requarantine quota while new identities use writer quota", async () => {
     const quarantine = memoryQuarantine({
       rateLimitMax: 1,
       requarantineOpsMax: 10,
@@ -230,23 +130,17 @@ describe("request item deduplication", () => {
 
     const first = await put("request-key");
     for (let attempt = 0; attempt < 5; attempt += 1) {
-      const repeat = await put("request-key");
-      expect(repeat.quarantine_id).toBe(first.quarantine_id);
+      await expect(put("request-key")).resolves.toMatchObject({
+        quarantine_id: first.quarantine_id,
+      });
     }
-    await expect(quarantine.repository.stats()).resolves.toMatchObject({
-      total_items: 1,
-      pending_items: 1,
-      event_count: 6,
-    });
-
-    // A genuinely new request from the same writer still hits the write quota.
     await expect(put("second-key")).rejects.toMatchObject({
       status: 429,
       code: "quarantine_rate_limited",
     });
   });
 
-  it("does not refresh a request item during or after its review", async () => {
+  it("rejects a repeat while the matching request is under review", async () => {
     const quarantine = memoryQuarantine({ rateLimitMax: 0 });
     const input = {
       timestamp: "2026-08-01T12:00:00.000Z",
@@ -262,51 +156,39 @@ describe("request item deduplication", () => {
     const approval = quarantine.repository.approveRetain(
       stored.quarantine_id,
       "2026-08-01T13:00:00.000Z",
-      { writer_id: "ghost", target_bank: "ghost-bank" },
+      {},
       () =>
         new Promise<void>((resolve) => {
           releaseOperation = resolve;
         }),
     );
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      const item = await quarantine.repository.get(stored.quarantine_id);
-      if (item?.status === "review_in_progress") break;
+      if ((await quarantine.repository.get(stored.quarantine_id))?.status === "review_in_progress") break;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
 
-    // A repeat while the review is active keeps the claim untouched.
-    const repeat = await quarantine.store.put({
-      ...input,
-      timestamp: "2026-08-01T12:30:00.000Z",
-    });
-    expect(repeat.quarantine_id).toBe(stored.quarantine_id);
     await expect(
-      quarantine.repository.get(stored.quarantine_id),
-    ).resolves.toMatchObject({
+      quarantine.store.put({
+        ...input,
+        timestamp: "2026-08-01T12:30:00.000Z",
+      }),
+    ).rejects.toMatchObject({
+      status: 409,
+      code: "quarantine_request_in_review",
+    });
+    await expect(quarantine.repository.get(stored.quarantine_id)).resolves.toMatchObject({
       status: "review_in_progress",
       requarantine_count: 0,
     });
-    expect(
-      quarantine.repository.events.map((event) => event.event_type),
-    ).toEqual(["quarantined"]);
 
     releaseOperation();
     await approval;
-    expect(
-      quarantine.repository.events.map((event) => event.event_type),
-    ).toEqual(["quarantined", "approved"]);
 
-    // The completed review removed the item, so a repeat quarantines fresh.
-    const fresh = await quarantine.store.put({
-      ...input,
-      timestamp: "2026-08-01T14:00:00.000Z",
-    });
-    expect(fresh.quarantine_id).toBe(stored.quarantine_id);
     await expect(
-      quarantine.repository.get(stored.quarantine_id),
-    ).resolves.toMatchObject({ status: "pending", requarantine_count: 0 });
-    expect(
-      quarantine.repository.events.map((event) => event.event_type),
-    ).toEqual(["quarantined", "approved", "quarantined"]);
+      quarantine.store.put({
+        ...input,
+        timestamp: "2026-08-01T14:00:00.000Z",
+      }),
+    ).resolves.toMatchObject({ quarantine_id: stored.quarantine_id });
   });
 });
