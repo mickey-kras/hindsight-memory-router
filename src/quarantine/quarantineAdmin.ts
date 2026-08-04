@@ -185,7 +185,7 @@ export class QuarantineAdminService {
       throw new HttpError(
         409,
         "postpone_limit_reached",
-        "maximum postpone count reached",
+        "maximum postpone count reached; approve, reject, or wait for expiry",
       );
     }
     const next = await this.options.repository.postpone(

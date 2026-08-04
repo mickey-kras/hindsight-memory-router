@@ -48,6 +48,7 @@ export interface QuarantineStoreLimits {
   rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
   requarantineOpsMax: number;
+  itemTtlDays: number;
 }
 
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
@@ -58,8 +59,10 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   rateLimitWindowMs: 60_000,
   rateLimitGlobalMax: 300,
   requarantineOpsMax: 1_000,
+  itemTtlDays: 0,
 };
 
+const DAY_MS = 24 * 60 * 60 * 1000;
 const GLOBAL_WRITES_BUCKET = "quarantine-writes";
 const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
 const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
@@ -182,10 +185,28 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         ? {}
         : { source_content_sha256: input.sourceContentSha256 }),
       ...(input.dedupeKey === undefined ? {} : { dedupe_key: input.dedupeKey }),
+      ...this.itemExpiry(input.timestamp),
       sha256: encrypted.sha256,
       encrypted,
       status: "pending",
       postpone_count: 0,
+    };
+  }
+
+  private itemExpiry(timestamp: string): { expires_at?: string } {
+    if (this.limits.itemTtlDays <= 0) return {};
+    const created = Date.parse(timestamp);
+    if (!Number.isFinite(created)) {
+      throw new HttpError(
+        400,
+        "invalid_quarantine_timestamp",
+        "quarantine timestamp must be an ISO timestamp",
+      );
+    }
+    return {
+      expires_at: new Date(
+        created + this.limits.itemTtlDays * DAY_MS,
+      ).toISOString(),
     };
   }
 

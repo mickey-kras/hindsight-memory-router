@@ -248,9 +248,6 @@
           },
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -278,9 +275,6 @@
           },
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -323,9 +317,6 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "409": {
             "$ref": "#/components/responses/Conflict"
           }
@@ -364,9 +355,6 @@
           },
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -420,9 +408,6 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -465,9 +450,6 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
@@ -508,9 +490,6 @@
           },
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
           },
           "404": {
             "$ref": "#/components/responses/NotFound"
@@ -656,16 +635,6 @@
       },
       "QuarantineRateLimited": {
         "description": "Too many quarantine writes were generated for the source and writer within the configured window.",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ErrorResponse"
-            }
-          }
-        }
-      },
-      "AdminRateLimited": {
-        "description": "Too many admin API requests within the configured per-process window. Reads and mutations are throttled separately.",
         "content": {
           "application/json": {
             "schema": {
@@ -916,8 +885,7 @@
           "suspicious_content",
           "suspicious_query",
           "recalled_suspicious_memory",
-          "denied_endpoint",
-          "auth_failed"
+          "denied_endpoint"
         ]
       },
       "QuarantineKind": {
@@ -1239,6 +1207,7 @@
           "total_items",
           "pending_items",
           "postponed_items",
+          "expired_items",
           "reviewed_allowed_items",
           "reviewed_blocked_items",
           "encrypted_bytes",
@@ -1256,6 +1225,11 @@
           "postponed_items": {
             "type": "integer",
             "minimum": 0
+          },
+          "expired_items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Reviewable items past their expires_at TTL. They no longer count toward pending/postponed totals or encrypted capacity and are removed by the periodic sweeper."
           },
           "reviewed_allowed_items": {
             "type": "integer",

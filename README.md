@@ -101,6 +101,9 @@ QUARANTINE_RATE_LIMIT_MAX=30
 QUARANTINE_RATE_LIMIT_GLOBAL_MAX=300
 QUARANTINE_REQUARANTINE_OPS_MAX=1000
 QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
+QUARANTINE_ITEM_TTL_DAYS=30
+QUARANTINE_SWEEP_INTERVAL_SECONDS=3600
+QUARANTINE_EVENT_RETENTION_DAYS=90
 ```
 
 Supported database URLs:
@@ -182,7 +185,7 @@ There is no Hindsight quarantine bank.
 
 ## Quarantine
 
-`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history. Existing databases are migrated in place at startup; rows created before deduplication keep a `NULL` dedupe key and are never merged.
+`quarantine_items` stores current encrypted state. `quarantine_events` stores audit history. Existing databases are migrated in place. Legacy rows keep `NULL` dedupe and expiry values, so they are neither merged nor expired automatically.
 
 ```text
 payload -> canonical SHA-256 -> AES-256-GCM envelope -> SQLite/PostgreSQL
@@ -193,6 +196,12 @@ The router stores only the public key. Any `QUARANTINE_PRIVATE_KEY*` environment
 ### Deduplication
 
 Identical retain and recall quarantine requests reuse one pending item. The dedupe key covers request kind, writer, policy target, and canonical JSON payload. Object key order and JSON formatting do not matter; string content remains exact. A repeat refreshes the item, increments `requarantine_count`, and records `requarantined`. Repeats are rejected with `409` while the matching item is under review. Security-event identities are normalized by method and path, scoped by writer, and capped across the process.
+
+### Retention
+
+Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
+
+Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps them forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
 
 Limits fail closed:
 

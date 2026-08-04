@@ -42,6 +42,7 @@ describe("SqlQuarantineRepository branches", () => {
         total_items: 0,
         pending_items: 0,
         postponed_items: 0,
+        expired_items: 0,
         reviewed_allowed_items: 0,
         reviewed_blocked_items: 0,
         encrypted_bytes: 0,

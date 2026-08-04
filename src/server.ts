@@ -33,6 +33,7 @@ import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
 } from "./quarantine/repositoryFactory.js";
+import { startQuarantineSweeper } from "./quarantine/sweeper.js";
 import {
   DEFAULT_QUARANTINE_LIMITS,
   EncryptedDatabaseQuarantineStore,
@@ -66,6 +67,14 @@ const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
 const QUARANTINE_DATABASE_URL =
   process.env.QUARANTINE_DATABASE_URL ?? DEFAULT_QUARANTINE_DATABASE_URL;
 const QUARANTINE_MAX_POSTPONES = numberEnv("QUARANTINE_MAX_POSTPONES", 3);
+const QUARANTINE_SWEEP_INTERVAL_SECONDS = numberEnv(
+  "QUARANTINE_SWEEP_INTERVAL_SECONDS",
+  3600,
+);
+const QUARANTINE_EVENT_RETENTION_DAYS = numberEnv(
+  "QUARANTINE_EVENT_RETENTION_DAYS",
+  90,
+);
 const MAX_BODY_BYTES = Number(
   process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576",
 );
@@ -84,6 +93,8 @@ export interface CreateMemoryRouterServerOptions {
   quarantinePublicKey?: string;
   quarantineLimits?: QuarantineStoreLimits;
   quarantineRateLimiter?: QuarantineRateLimiter;
+  sweepIntervalSeconds?: number;
+  eventRetentionDays?: number;
   validateStorage?: boolean;
 }
 
@@ -142,6 +153,7 @@ function buildLimits(): QuarantineStoreLimits {
       "QUARANTINE_REQUARANTINE_OPS_MAX",
       DEFAULT_QUARANTINE_LIMITS.requarantineOpsMax,
     ),
+    itemTtlDays: numberEnv("QUARANTINE_ITEM_TTL_DAYS", 30),
   };
 }
 
@@ -177,8 +189,12 @@ export function createMemoryRouterServer(
     registry,
     maxPostpones: options.maxPostpones ?? QUARANTINE_MAX_POSTPONES,
   });
+  const sweepIntervalSeconds =
+    options.sweepIntervalSeconds ?? QUARANTINE_SWEEP_INTERVAL_SECONDS;
+  const eventRetentionDays =
+    options.eventRetentionDays ?? QUARANTINE_EVENT_RETENTION_DAYS;
 
-  return createServer(async (req, res) => {
+  const server = createServer(async (req, res) => {
     try {
       const method = req.method ?? "GET";
       const requestUrl = parseUrl(req.url ?? "/", true);
@@ -292,6 +308,15 @@ export function createMemoryRouterServer(
       return send(res, response.status, response.body);
     }
   });
+
+  if (sweepIntervalSeconds > 0) {
+    const sweeper = startQuarantineSweeper(quarantineRepository, {
+      intervalSeconds: sweepIntervalSeconds,
+      eventRetentionDays,
+    });
+    server.once("close", () => clearInterval(sweeper));
+  }
+  return server;
 }
 
 export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
