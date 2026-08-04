@@ -1,29 +1,23 @@
-import { createHash, timingSafeEqual } from "node:crypto";
-import { hostname } from "node:os";
-import {
-  canonicalJson,
-  sha256Hex,
-} from "./canonicalJson.js";
+import { sha256Hex } from "./canonicalJson.js";
 import type { HindsightGateway } from "./hindsightClient.js";
 import { HttpError } from "./httpError.js";
-import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
-  SecurityEventIdentityCap,
   requestDedupeKey,
+  SecurityEventIdentityCap,
   securityEventDedupeKey,
 } from "./quarantine/dedupeKey.js";
+import { getWriter } from "./registry.js";
+import type { QuarantineRepository } from "./quarantine/repository.js";
 import type { QuarantineStore } from "./quarantine/quarantineStore.js";
-import type { WriterRegistry } from "./types.js";
-import { scanContent } from "./safety.js";
+import { scanContent, type SafetyFinding } from "./safety.js";
 import type {
   BankId,
-  PolicyAction,
+  MemoryItem,
   RecallBody,
   RecallResponse,
   RecallResult,
   RetainBody,
-  RetainResponse,
-  WriterConfig,
+  WriterRegistry,
 } from "./types.js";
 
 export interface RouterPolicyDeps {
@@ -53,7 +47,8 @@ function isQuarantineUnavailable(error: unknown): boolean {
     (error.status === 507 ||
       error.status === 429 ||
       (error.status === 409 && error.code === "quarantine_request_in_review"))
-  );}
+  );
+}
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -68,40 +63,46 @@ export class RouterPolicy {
     writerId: string,
     body: RetainBody,
     source = "openclaw",
-  ): Promise<RetainResponse> {
-    const writer = this.lookupWriter(writerId);
+  ): Promise<unknown> {
+    const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      await this.quarantineRetain({
+      return this.quarantineRetain({
         writerId,
         source,
         reason: "unknown_writer",
         body,
       });
-      return { error: "writer is not registered with memory-router" };
     }
 
-    const items = body.items ?? [];
-    const suspicious: { index: number; categories: string[] }[] = [];
-    items.forEach((item, index) => {
-      const scan = scanContent(item.content);
+    for (const item of body.items ?? []) {
+      const scan = scanMemoryItem(item);
       if (!scan.safe) {
-        suspicious.push({ index, categories: scan.categories });
+        return this.quarantineRetain({
+          writerId,
+          source,
+          reason: "suspicious_content",
+          body,
+          targetBank: writer.write_bank,
+          findings: scan.findings,
+        });
       }
-    });
-
-    if (suspicious.length > 0) {
-      await this.quarantineRetain({
-        writerId,
-        source,
-        reason: "suspicious_content",
-        body,
-        targetBank: writer.write_bank,
-      });
-      return { error: "retain content requires memory-router review" };
     }
 
-    await this.deps.hindsight.retain(writer.write_bank, body);
-    return { ok: true };
+    const rewritten: RetainBody = {
+      ...body,
+      items: body.items.map((item) => ({
+        ...item,
+        metadata: {
+          ...item.metadata,
+          router_writer_id: writerId,
+          router_source: source,
+          router_decision: "allowed",
+          router_target_bank: writer.write_bank,
+        },
+      })),
+    };
+
+    return this.deps.hindsight.retain(writer.write_bank, rewritten);
   }
 
   async recall(
@@ -109,7 +110,7 @@ export class RouterPolicy {
     body: RecallBody,
     source = "openclaw",
   ): Promise<RecallResponse> {
-    const writer = this.lookupWriter(writerId);
+    const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
       await this.quarantineRecallOrDegrade({
         writerId,
@@ -120,8 +121,8 @@ export class RouterPolicy {
       return { results: [] };
     }
 
-    const queryScan = scanContent(body.query ?? "");
-    if (!queryScan.safe) {
+    const scan = scanContent(body.query ?? "");
+    if (!scan.safe) {
       await this.quarantineRecallOrDegrade({
         writerId,
         source,
@@ -132,11 +133,22 @@ export class RouterPolicy {
       return { results: [] };
     }
 
-    const responses = await this.recallFromBanks(writerId, writer.read_banks, body);
+    const responses = await this.recallFromBanks(
+      writerId,
+      writer.read_banks,
+      body,
+    );
     const results: RecallResult[] = [];
     for (const { bankId, response } of responses) {
       for (const result of response.results ?? []) {
-        if (await this.allowRecalledResultOrDegrade(writerId, source, bankId, result)) {
+        if (
+          await this.allowRecalledResultOrDegrade(
+            writerId,
+            source,
+            bankId,
+            result,
+          )
+        ) {
           results.push(result);
         }
       }
@@ -148,18 +160,19 @@ export class RouterPolicy {
     method: string,
     path: string,
     writerId?: string,
-    source = "openclaw",
   ): Promise<{ error: string }> {
+    // Normalize the dedupe identity (query string/fragment stripped, casing
+    // lowered, trailing slashes collapsed) and cap distinct identities per
+    // writer so path fuzzing cannot mint one quarantine slot per probe.
     const dedupeKey = this.securityEventIdentities.resolve(
       writerId,
       securityEventDedupeKey(method, path),
     );
-    await this.deps.quarantineStore.put({
-      timestamp: this.timestamp(),
+    await this.quarantine({
+      writerId,
+      source: "http",
       kind: "security_event",
       reason: "denied_endpoint",
-      writerId,
-      source,
       dedupeKey,
       payload: { action: "denied_endpoint", method, path },
     });
@@ -315,6 +328,7 @@ export class RouterPolicy {
   private async quarantineRecall(input: QuarantineRecallInput): Promise<void> {
     const payload = {
       action: "recall",
+      writer_id: input.writerId,
       body: input.body,
     };
     await this.quarantine({
@@ -325,7 +339,9 @@ export class RouterPolicy {
       dedupeKey: requestDedupeKey({
         kind: "recall_request",
         writerId: input.writerId,
-        target: input.targetBanks?.slice().sort().join(","),
+        target: input.targetBanks
+          ? [...input.targetBanks].sort().join(",")
+          : undefined,
         payload,
       }),
       payload,
@@ -338,12 +354,14 @@ export class RouterPolicy {
     reason: "unknown_writer" | "suspicious_content";
     body: RetainBody;
     targetBank?: BankId;
-  }): Promise<void> {
+    findings?: SafetyFinding[];
+  }): Promise<unknown> {
     const payload = {
       action: "retain",
+      writer_id: input.writerId,
       body: input.body,
     };
-    await this.quarantine({
+    const quarantine = await this.quarantine({
       writerId: input.writerId,
       source: input.source,
       kind: "retain_request",
@@ -356,43 +374,63 @@ export class RouterPolicy {
       }),
       payload,
     });
+
+    return {
+      queued: true,
+      reason: input.reason,
+      quarantine_id: quarantine.quarantine_id,
+      ...(input.findings ? { findings: input.findings } : {}),
+    };
   }
 
   private async quarantine(input: {
-    writerId: string;
-    source: string;
+    writerId?: string;
+    source?: string;
     kind:
       | "retain_request"
       | "recall_request"
       | "recalled_memory"
       | "security_event";
-    reason: string;
-    dedupeKey?: string;
+    reason:
+      | "unknown_writer"
+      | "suspicious_content"
+      | "suspicious_query"
+      | "recalled_suspicious_memory"
+      | "denied_endpoint";
     sourceBank?: BankId;
     sourceMemoryId?: string;
     sourceContentSha256?: string;
-    payload: Record<string, unknown>;
-  }): Promise<void> {
-    await this.deps.quarantineStore.put({
-      timestamp: this.timestamp(),
+    dedupeKey?: string;
+    payload: unknown;
+  }) {
+    const timestamp = (this.deps.now?.() ?? new Date()).toISOString();
+    return this.deps.quarantineStore.put({
+      timestamp,
       kind: input.kind,
-      reason: input.reason,
       writerId: input.writerId,
       source: input.source,
-      dedupeKey: input.dedupeKey,
+      reason: input.reason,
       sourceBank: input.sourceBank,
       sourceMemoryId: input.sourceMemoryId,
       sourceContentSha256: input.sourceContentSha256,
+      dedupeKey: input.dedupeKey,
       payload: input.payload,
     });
   }
+}
 
-  private lookupWriter(writerId: string): WriterConfig | undefined {
-    const writers = this.deps.registry.writers as Record<string, WriterConfig>;
-    return writers[writerId];
-  }
+function scanMemoryItem(item: MemoryItem): {
+  safe: boolean;
+  findings: SafetyFinding[];
+} {
+  const fields = [
+    item.content,
+    item.context ?? "",
+    item.document_id ?? "",
+    ...(item.tags ?? []),
+    ...Object.values(item.metadata ?? {}),
+  ].filter((value): value is string => typeof value === "string");
 
-  private timestamp(): string {
-    return (this.deps.now?.() ?? new Date()).toISOString();
-  }
+  const findings = fields.flatMap((value) => scanContent(value).findings);
+  return { safe: findings.length === 0, findings };
 }
