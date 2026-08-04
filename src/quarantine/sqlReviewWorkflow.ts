@@ -1,4 +1,3 @@
-import { gatewayErrorKind } from "../hindsightClient.js";
 import { HttpError } from "../httpError.js";
 import {
   parseStoredItem,
@@ -6,6 +5,10 @@ import {
   type QuarantineEventType,
   type StoredQuarantineItem,
 } from "./repository.js";
+import {
+  reviewInterruptionDetails,
+  runReviewOperation,
+} from "./reviewWorkflowSupport.js";
 import type { SqlDatabase } from "./sqlRepository.js";
 import {
   findItemById,
@@ -74,12 +77,9 @@ export async function approveRetain(
     "only retain requests can be approved into Hindsight",
     at,
   );
-  try {
-    await operation();
-  } catch (error) {
-    await interruptReview(database, claimed, at, error);
-    throw error;
-  }
+  await runReviewOperation(operation, (error) =>
+    interruptReview(database, claimed, at, error),
+  );
   await database.transaction(async (transaction) => {
     await requireReviewInProgress(transaction, quarantineId, at);
     await deleteWithEvent(transaction, quarantineId, "approved", at, details);
@@ -99,12 +99,9 @@ export async function rejectRecalledMemory(
     "only recalled memories can be invalidated",
     at,
   );
-  try {
-    await operation();
-  } catch (error) {
-    await interruptReview(database, claimed, at, error);
-    throw error;
-  }
+  await runReviewOperation(operation, (error) =>
+    interruptReview(database, claimed, at, error),
+  );
   await database.transaction(async (transaction) => {
     const current = await requireReviewInProgress(
       transaction,
@@ -168,11 +165,12 @@ async function interruptReview(
     );
     await insertEvent(
       transaction,
-      quarantineEvent(claimed.quarantine_id, "review_interrupted", at, {
-        outcome: "restored",
-        status: claimed.status,
-        error_kind: gatewayErrorKind(error),
-      }),
+      quarantineEvent(
+        claimed.quarantine_id,
+        "review_interrupted",
+        at,
+        reviewInterruptionDetails(claimed.status, error),
+      ),
     );
   });
 }
