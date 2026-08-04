@@ -1,5 +1,9 @@
 import { sha256Hex } from "./canonicalJson.js";
-import type { HindsightGateway } from "./hindsightClient.js";
+import {
+  HindsightGatewayError,
+  type HindsightGateway,
+} from "./hindsightClient.js";
+import { HttpError } from "./httpError.js";
 import {
   requestDedupeKey,
   SecurityEventIdentityCap,
@@ -25,6 +29,39 @@ export interface RouterPolicyDeps {
   quarantineStore: QuarantineStore;
   quarantineRepository: QuarantineRepository;
   now?: () => Date;
+}
+
+interface QuarantineRecallInput {
+  writerId: string;
+  source: string;
+  reason: "unknown_writer" | "suspicious_query";
+  body: RecallBody;
+  targetBanks?: readonly BankId[];
+}
+
+function isQuarantineUnavailable(error: unknown): error is HttpError {
+  return (
+    error instanceof HttpError &&
+    (error.status === 507 ||
+      error.status === 429 ||
+      (error.status === 409 && error.code === "quarantine_request_in_review"))
+  );
+}
+
+function quarantineErrorDetails(error: HttpError): Record<string, unknown> {
+  return { status: error.status, code: error.code };
+}
+
+function gatewayErrorDetails(
+  error: HindsightGatewayError,
+): Record<string, unknown> {
+  return {
+    error_kind: error.kind,
+    status: error.status,
+    ...(error.upstreamStatus === undefined
+      ? {}
+      : { upstream_status: error.upstreamStatus }),
+  };
 }
 
 export class RouterPolicy {
@@ -85,7 +122,7 @@ export class RouterPolicy {
   ): Promise<RecallResponse> {
     const writer = getWriter(this.deps.registry, writerId);
     if (!writer) {
-      await this.quarantineRecall({
+      await this.quarantineRecallOrDegrade({
         writerId,
         source,
         reason: "unknown_writer",
@@ -96,7 +133,7 @@ export class RouterPolicy {
 
     const scan = scanContent(body.query ?? "");
     if (!scan.safe) {
-      await this.quarantineRecall({
+      await this.quarantineRecallOrDegrade({
         writerId,
         source,
         reason: "suspicious_query",
@@ -106,16 +143,22 @@ export class RouterPolicy {
       return { results: [] };
     }
 
-    const responses = await Promise.all(
-      writer.read_banks.map(async (bankId) => ({
-        bankId,
-        response: await this.deps.hindsight.recall(bankId, body),
-      })),
+    const responses = await this.recallFromBanks(
+      writerId,
+      writer.read_banks,
+      body,
     );
     const results: RecallResult[] = [];
     for (const { bankId, response } of responses) {
       for (const result of response.results ?? []) {
-        if (await this.allowRecalledResult(writerId, source, bankId, result)) {
+        if (
+          await this.allowRecalledResultOrDegrade(
+            writerId,
+            source,
+            bankId,
+            result,
+          )
+        ) {
           results.push(result);
         }
       }
@@ -128,9 +171,6 @@ export class RouterPolicy {
     path: string,
     writerId?: string,
   ): Promise<{ error: string }> {
-    // Normalize the dedupe identity (query string/fragment stripped, casing
-    // lowered, trailing slashes collapsed) and cap distinct identities per
-    // writer so path fuzzing cannot mint one quarantine slot per probe.
     const dedupeKey = this.securityEventIdentities.resolve(
       writerId,
       securityEventDedupeKey(method, path),
@@ -144,6 +184,81 @@ export class RouterPolicy {
       payload: { action: "denied_endpoint", method, path },
     });
     return { error: "endpoint denied by memory-router policy" };
+  }
+
+  private async recallFromBanks(
+    writerId: string,
+    readBanks: readonly BankId[],
+    body: RecallBody,
+  ): Promise<{ bankId: BankId; response: RecallResponse }[]> {
+    const settled = await Promise.allSettled(
+      readBanks.map(async (bankId) => ({
+        bankId,
+        response: await this.deps.hindsight.recall(bankId, body),
+      })),
+    );
+    const responses: { bankId: BankId; response: RecallResponse }[] = [];
+    for (let index = 0; index < settled.length; index += 1) {
+      const outcome = settled[index];
+      if (!outcome) continue;
+      if (outcome.status === "fulfilled") {
+        responses.push(outcome.value);
+        continue;
+      }
+      if (!(outcome.reason instanceof HindsightGatewayError)) {
+        throw outcome.reason;
+      }
+      this.logRecallDegradation("bank_unavailable", {
+        writer_id: writerId,
+        bank_id: readBanks[index],
+        ...gatewayErrorDetails(outcome.reason),
+      });
+    }
+    return responses;
+  }
+
+  private async allowRecalledResultOrDegrade(
+    writerId: string,
+    source: string,
+    bankId: BankId,
+    result: RecallResult,
+  ): Promise<boolean> {
+    try {
+      return await this.allowRecalledResult(writerId, source, bankId, result);
+    } catch (error) {
+      if (!isQuarantineUnavailable(error)) throw error;
+      this.logRecallDegradation("quarantine_write_unavailable", {
+        writer_id: writerId,
+        bank_id: bankId,
+        memory_id: result.id,
+        ...quarantineErrorDetails(error),
+      });
+      return false;
+    }
+  }
+
+  private async quarantineRecallOrDegrade(
+    input: QuarantineRecallInput,
+  ): Promise<void> {
+    try {
+      await this.quarantineRecall(input);
+    } catch (error) {
+      if (!isQuarantineUnavailable(error)) throw error;
+      this.logRecallDegradation("quarantine_write_unavailable", {
+        writer_id: input.writerId,
+        reason: input.reason,
+        ...quarantineErrorDetails(error),
+      });
+    }
+  }
+
+  private logRecallDegradation(
+    event: "bank_unavailable" | "quarantine_write_unavailable",
+    details: Record<string, unknown>,
+  ): void {
+    process.stderr.write(
+      `memory-router recall degraded: ${JSON.stringify({ event, ...details })}\n`,
+    );
   }
 
   private async allowRecalledResult(
@@ -218,13 +333,7 @@ export class RouterPolicy {
     });
   }
 
-  private async quarantineRecall(input: {
-    writerId: string;
-    source: string;
-    reason: "unknown_writer" | "suspicious_query";
-    body: RecallBody;
-    targetBanks?: readonly BankId[];
-  }): Promise<void> {
+  private async quarantineRecall(input: QuarantineRecallInput): Promise<void> {
     const payload = {
       action: "recall",
       writer_id: input.writerId,

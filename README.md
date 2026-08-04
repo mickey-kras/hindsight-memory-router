@@ -169,6 +169,15 @@ reviewed allowed result      -> returned while content is unchanged
 reviewed blocked result      -> suppressed and invalidated
 ```
 
+Recall availability rules:
+
+- A typed Hindsight failure affects only that read bank.
+- If all read banks fail, recall returns empty results.
+- `429`, `507`, and `quarantine_request_in_review` prevent the affected suspicious result from being returned but do not fail recall.
+- Unexpected application or database errors still propagate.
+- Degradation logs contain structured error codes, not upstream response text.
+- Retain never degrades when quarantine is unavailable.
+
 There is no Hindsight quarantine bank.
 
 ## Quarantine
