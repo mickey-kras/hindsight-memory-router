@@ -46,7 +46,10 @@ describe("review claim recovery", () => {
     approval.catch(() => undefined);
 
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      if ((await repository.get(stored.quarantine_id))?.status === "review_in_progress") {
+      if (
+        (await repository.get(stored.quarantine_id))?.status ===
+        "review_in_progress"
+      ) {
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
