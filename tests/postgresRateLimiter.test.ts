@@ -24,9 +24,7 @@ const transactionSql = {
     ) {
       return [{ count: state.distinctCounts.get(String(params[0])) ?? 0 }];
     }
-    if (
-      sql.includes("SELECT identity FROM quarantine_rate_limit_identities")
-    ) {
+    if (sql.includes("SELECT identity FROM quarantine_rate_limit_identities")) {
       const scope = String(params[0]);
       const requested = (params[1] as readonly string[]) ?? [];
       const existing = state.distinctExisting.get(scope) ?? new Set<string>();
@@ -144,7 +142,13 @@ describe("PostgresSlidingWindowRateLimiter", () => {
 
     await limiter.consumeManyDistinct(
       [{ key: "writer:a", rule: RULE }],
-      [{ scope: "family:a", identity: "f1", rule: { max: 2, windowMs: 60_000 } }],
+      [
+        {
+          scope: "family:a",
+          identity: "f1",
+          rule: { max: 2, windowMs: 60_000 },
+        },
+      ],
       new Date(1_000),
     );
 
@@ -154,10 +158,9 @@ describe("PostgresSlidingWindowRateLimiter", () => {
         .filter((call) => call.statement.includes("pg_advisory_xact_lock"))
         .map((call) => call.params[0]),
     ).toEqual(["rate-limit-distinct:family:a", "rate-limit:writer:a"]);
-    expect(findCall("DELETE FROM quarantine_rate_limit_identities")?.params).toEqual([
-      "family:a",
-      1_000 - 60_000,
-    ]);
+    expect(
+      findCall("DELETE FROM quarantine_rate_limit_identities")?.params,
+    ).toEqual(["family:a", 1_000 - 60_000]);
     expect(findCall("identity = ANY($2::text[])")?.params).toEqual([
       "family:a",
       ["f1"],
@@ -189,7 +192,9 @@ describe("PostgresSlidingWindowRateLimiter", () => {
       ),
     ).rejects.toMatchObject({ status: 429, code: "quarantine_rate_limited" });
 
-    expect(findCall("INSERT INTO quarantine_rate_limit_events")).toBeUndefined();
+    expect(
+      findCall("INSERT INTO quarantine_rate_limit_events"),
+    ).toBeUndefined();
     expect(findCall("ON CONFLICT (scope, identity)")).toBeUndefined();
   });
 
@@ -260,9 +265,7 @@ describe("PostgresSlidingWindowRateLimiter", () => {
     await limiter.consume("k", { max: 30, windowMs: 0 }, new Date(0));
     await limiter.consumeManyDistinct(
       [],
-      [
-        { scope: "s", identity: "i", rule: { max: 0, windowMs: 60_000 } },
-      ],
+      [{ scope: "s", identity: "i", rule: { max: 0, windowMs: 60_000 } }],
       new Date(0),
     );
 
