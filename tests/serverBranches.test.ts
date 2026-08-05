@@ -78,6 +78,45 @@ describe("server request branches", () => {
     });
   });
 
+  it("returns 400 for malformed percent-encoding in memory paths", async () => {
+    await withServer({ routerToken: "router-token" }, async (baseUrl) => {
+      const headers = {
+        authorization: "Bearer router-token",
+        "content-type": "application/json",
+      };
+      const retain = await fetch(
+        `${baseUrl}/v1/default/banks/%E0%A4%A/memories`,
+        { method: "POST", headers, body: "{}" },
+      );
+      expect(retain.status).toBe(400);
+      expect(await retain.json()).toMatchObject({
+        error: "invalid_path_encoding",
+      });
+
+      const recall = await fetch(
+        `${baseUrl}/v1/default/banks/%E0%A4%A/memories/recall`,
+        { method: "POST", headers, body: "{}" },
+      );
+      expect(recall.status).toBe(400);
+      expect(await recall.json()).toMatchObject({
+        error: "invalid_path_encoding",
+      });
+    });
+  });
+
+  it("returns 400 for malformed percent-encoding in admin item paths", async () => {
+    await withServer({ adminToken: "admin-token" }, async (baseUrl) => {
+      const headers = { authorization: "Bearer admin-token" };
+      const response = await fetch(`${baseUrl}/admin/quarantine/items/%ZZ`, {
+        headers,
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toMatchObject({
+        error: "invalid_path_encoding",
+      });
+    });
+  });
+
   it("rejects malformed JSON request bodies", async () => {
     await withServer({ routerToken: "router-token" }, async (baseUrl) => {
       const response = await fetch(

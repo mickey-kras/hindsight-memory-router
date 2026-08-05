@@ -32,6 +32,7 @@ import {
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
+  validateQuarantineStorage,
 } from "./quarantine/repositoryFactory.js";
 import { startQuarantineSweeper } from "./quarantine/sweeper.js";
 import {
@@ -95,6 +96,12 @@ export interface CreateMemoryRouterServerOptions {
   quarantineRateLimiter?: QuarantineRateLimiter;
   sweepIntervalSeconds?: number;
   eventRetentionDays?: number;
+}
+
+export interface CreateConfiguredMemoryRouterServerOptions extends CreateMemoryRouterServerOptions {
+  // Validates quarantine storage reachability and writability at startup,
+  // failing fast with a clear error. Defaults to true; only disable for
+  // embedded deployments that validate storage themselves.
   validateStorage?: boolean;
 }
 
@@ -319,18 +326,27 @@ export function createMemoryRouterServer(
   return server;
 }
 
-export async function createConfiguredMemoryRouterServer(): Promise<ConfiguredMemoryRouterServer> {
+export async function createConfiguredMemoryRouterServer(
+  options: CreateConfiguredMemoryRouterServerOptions = {},
+): Promise<ConfiguredMemoryRouterServer> {
   assertNoPrivateKeyEnvironment();
   assertRouterAuthEnvironment();
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
+  if (options.validateStorage ?? true) {
+    await validateQuarantineStorage(
+      quarantineRepository,
+      QUARANTINE_DATABASE_URL,
+    );
+  }
   const quarantineRateLimiter = await createSharedRateLimiter(
     QUARANTINE_DATABASE_URL,
   );
   const server = createMemoryRouterServer({
+    ...options,
     quarantineRepository,
-    quarantinePublicKey: QUARANTINE_PUBLIC_KEY,
+    quarantinePublicKey: options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
     quarantineRateLimiter,
   });
   return { server, quarantineRepository, quarantineRateLimiter };

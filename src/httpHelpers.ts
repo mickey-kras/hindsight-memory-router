@@ -30,19 +30,31 @@ export function send(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new HttpError(
+      400,
+      "invalid_path_encoding",
+      "path segment contains malformed percent-encoding",
+    );
+  }
+}
+
 export function parseMemoryPath(
   pathname: string,
 ): { writerId: string; action: "retain" | "recall" } | null {
   const retain = pathname.match(/^\/v1\/default\/banks\/([^/]+)\/memories$/);
   if (retain) {
-    return { writerId: decodeURIComponent(retain[1]), action: "retain" };
+    return { writerId: decodePathSegment(retain[1]), action: "retain" };
   }
 
   const recall = pathname.match(
     /^\/v1\/default\/banks\/([^/]+)\/memories\/recall$/,
   );
   if (recall) {
-    return { writerId: decodeURIComponent(recall[1]), action: "recall" };
+    return { writerId: decodePathSegment(recall[1]), action: "recall" };
   }
 
   return null;
@@ -57,7 +69,7 @@ export function parseAdminItemPath(pathname: string): {
   );
   if (!match) return null;
   return {
-    quarantineId: decodeURIComponent(match[1]),
+    quarantineId: decodePathSegment(match[1]),
     action: (match[2] ?? "read") as "read" | "approve" | "reject" | "postpone",
   };
 }

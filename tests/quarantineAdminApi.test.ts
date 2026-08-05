@@ -126,6 +126,35 @@ describe("quarantine admin API", () => {
     });
   });
 
+  it("reports the total queue depth independently of pagination", async () => {
+    await withAdminServer(async ({ baseUrl }) => {
+      await createSuspiciousRetain(baseUrl, "first-document");
+      await createSuspiciousRetain(baseUrl, "second-document");
+
+      const firstPage = await adminFetch(
+        baseUrl,
+        "/admin/quarantine/queue?limit=1",
+      );
+      const first = (await firstPage.json()) as {
+        items: Array<{ quarantine_id: string }>;
+        total: number;
+      };
+      expect(first.items).toHaveLength(1);
+      expect(first.total).toBe(2);
+
+      const secondPage = await adminFetch(
+        baseUrl,
+        "/admin/quarantine/queue?limit=1&offset=1",
+      );
+      const second = (await secondPage.json()) as {
+        items: Array<{ quarantine_id: string }>;
+        total: number;
+      };
+      expect(second.items).toHaveLength(1);
+      expect(second.total).toBe(2);
+    });
+  });
+
   it("approves only the exact original retain request", async () => {
     await withAdminServer(async ({ baseUrl, hindsight, privateKey }) => {
       const quarantineId = await createSuspiciousRetain(baseUrl);
@@ -205,7 +234,7 @@ describe("quarantine admin API", () => {
 
       expect((await routerRecall(baseUrl)).results).toHaveLength(1);
       const queueAfter = await adminFetch(baseUrl, "/admin/quarantine/queue");
-      expect(await queueAfter.json()).toEqual({ items: [] });
+      expect(await queueAfter.json()).toEqual({ items: [], total: 0 });
     }, hindsight);
   });
 
