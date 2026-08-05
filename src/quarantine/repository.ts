@@ -36,6 +36,7 @@ export interface NewQuarantineItem {
 
 export interface QuarantineCapacityLimits {
   maxPendingItems: number;
+  maxPendingItemsPerWriter: number;
   maxEncryptedBytes: number;
 }
 
@@ -145,6 +146,19 @@ export interface QuarantineRepository {
   ): Promise<CleanupPreview>;
   sweepExpiredItems(at: string): Promise<number>;
   pruneEventsBefore(cutoff: string, at: string): Promise<number>;
+}
+
+export function sameCapacityScope(
+  left: Pick<NewQuarantineItem, "kind" | "reason" | "writer_id">,
+  right: Pick<NewQuarantineItem, "kind" | "reason" | "writer_id">,
+): boolean {
+  if (left.reason === "unknown_writer" || right.reason === "unknown_writer") {
+    return left.reason === "unknown_writer" && right.reason === "unknown_writer";
+  }
+  if (left.writer_id !== undefined || right.writer_id !== undefined) {
+    return left.writer_id !== undefined && left.writer_id === right.writer_id;
+  }
+  return left.kind === right.kind;
 }
 
 export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {
