@@ -2,6 +2,7 @@ import { HttpError } from "../httpError.js";
 import {
   parseStoredItem,
   quarantineEvent,
+  sameCapacityScope,
   type CleanupFilter,
   type NewQuarantineItem,
   type QuarantineCapacityLimits,
@@ -170,11 +171,14 @@ export async function assertCapacity(
     existingLive?.status === "pending" || existingLive?.status === "postponed"
       ? 1
       : 0;
-  const existingEncryptedBytes = encryptedBytes(existingLive);
+  const existingScopedReviewable =
+    existingReviewable && existingLive && sameCapacityScope(item, existingLive)
+      ? 1
+      : 0;
   const nextPendingItems =
     stats.pending_items + stats.postponed_items - existingReviewable + 1;
   const nextEncryptedBytes =
-    stats.encrypted_bytes - existingEncryptedBytes + encryptedBytes(item);
+    stats.encrypted_bytes - encryptedBytes(existingLive) + encryptedBytes(item);
 
   if (
     nextPendingItems > limits.maxPendingItems ||
@@ -186,6 +190,47 @@ export async function assertCapacity(
       "quarantine capacity is exhausted",
     );
   }
+  if (limits.maxPendingItemsPerWriter > 0) {
+    const scoped = await readScopedReviewableCount(database, item, at);
+    if (
+      scoped - existingScopedReviewable + 1 >
+      limits.maxPendingItemsPerWriter
+    ) {
+      throw new HttpError(
+        507,
+        "quarantine_writer_capacity_exceeded",
+        "writer quarantine capacity is exhausted",
+      );
+    }
+  }
+}
+
+async function readScopedReviewableCount(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+  at: string,
+): Promise<number> {
+  const p = (index: number) => database.placeholder(index);
+  let scope: string;
+  let params: unknown[];
+  if (item.reason === "unknown_writer") {
+    scope = `reason = ${p(2)}`;
+    params = [at, "unknown_writer"];
+  } else if (item.writer_id !== undefined) {
+    scope = `reason <> 'unknown_writer' AND writer_id = ${p(2)}`;
+    params = [at, item.writer_id];
+  } else {
+    scope = `reason <> 'unknown_writer' AND writer_id IS NULL AND kind = ${p(2)}`;
+    params = [at, item.kind];
+  }
+  const row = await database.get<{ count: number }>(
+    `SELECT COUNT(*) AS count FROM quarantine_items
+     WHERE status IN ('pending', 'postponed')
+       AND NOT (expires_at IS NOT NULL AND expires_at <= ${p(1)})
+       AND ${scope}`,
+    params,
+  );
+  return Number(row?.count ?? 0);
 }
 
 export async function readStats(
@@ -196,10 +241,7 @@ export async function readStats(
   const events = await database.get<{ event_count: number }>(
     "SELECT COUNT(*) AS event_count FROM quarantine_events",
   );
-  return {
-    ...stats,
-    event_count: Number(events?.event_count ?? 0),
-  };
+  return { ...stats, event_count: Number(events?.event_count ?? 0) };
 }
 
 export async function insertEvent(
@@ -225,13 +267,12 @@ export async function requireItem(
   quarantineId: string,
 ): Promise<StoredQuarantineItem> {
   const item = await findItemById(database, quarantineId, true);
-  if (!item) {
+  if (!item)
     throw new HttpError(
       404,
       "quarantine_not_found",
       "quarantine item not found",
     );
-  }
   return item;
 }
 
@@ -257,17 +298,15 @@ export function cleanupWhere(
   const conditions: string[] = [];
   const params: string[] = [];
   let parameterIndex = 1;
-
-  if ((filter.scope ?? "pending") === "pending") {
-    conditions.push("status IN ('pending', 'postponed')");
-  } else {
-    conditions.push("status <> 'review_in_progress'");
-  }
+  conditions.push(
+    (filter.scope ?? "pending") === "pending"
+      ? "status IN ('pending', 'postponed')"
+      : "status <> 'review_in_progress'",
+  );
   if (filter.reasons?.length) {
-    const reasonPlaceholders = filter.reasons.map(() =>
-      database.placeholder(parameterIndex++),
+    conditions.push(
+      `reason IN (${filter.reasons.map(() => database.placeholder(parameterIndex++)).join(", ")})`,
     );
-    conditions.push(`reason IN (${reasonPlaceholders.join(", ")})`);
     params.push(...filter.reasons);
   }
   if (filter.older_than) {
@@ -384,17 +423,12 @@ async function readItemStats(
   const row = await database.get<Record<string, unknown>>(
     `SELECT
       COUNT(*) AS total_items,
-      SUM(CASE WHEN status = 'pending' AND NOT ${expiredClause()}
-        THEN 1 ELSE 0 END) AS pending_items,
-      SUM(CASE WHEN status = 'postponed' AND NOT ${expiredClause()}
-        THEN 1 ELSE 0 END) AS postponed_items,
+      SUM(CASE WHEN status = 'pending' AND NOT ${expiredClause()} THEN 1 ELSE 0 END) AS pending_items,
+      SUM(CASE WHEN status = 'postponed' AND NOT ${expiredClause()} THEN 1 ELSE 0 END) AS postponed_items,
       SUM(CASE WHEN ${expiredClause()} THEN 1 ELSE 0 END) AS expired_items,
-      SUM(CASE WHEN status = 'reviewed_allowed' THEN 1 ELSE 0 END)
-        AS reviewed_allowed_items,
-      SUM(CASE WHEN status = 'reviewed_blocked' THEN 1 ELSE 0 END)
-        AS reviewed_blocked_items,
-      COALESCE(SUM(CASE WHEN ${expiredClause()} THEN 0 ELSE encrypted_bytes
-        END), 0) AS encrypted_bytes
+      SUM(CASE WHEN status = 'reviewed_allowed' THEN 1 ELSE 0 END) AS reviewed_allowed_items,
+      SUM(CASE WHEN status = 'reviewed_blocked' THEN 1 ELSE 0 END) AS reviewed_blocked_items,
+      COALESCE(SUM(CASE WHEN ${expiredClause()} THEN 0 ELSE encrypted_bytes END), 0) AS encrypted_bytes
     FROM quarantine_items`,
     [at, at, at, at],
   );

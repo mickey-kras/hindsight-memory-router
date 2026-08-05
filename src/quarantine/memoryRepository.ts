@@ -5,6 +5,7 @@ import {
   quarantineEvent,
   RETENTION_EVENT_QUARANTINE_ID,
   RETENTION_SWEEP_BATCH_LIMIT,
+  sameCapacityScope,
   toSummary,
   type CleanupFilter,
   type CleanupPreview,
@@ -24,7 +25,6 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   async initialize(): Promise<void> {
     await this.reviews.recover(new Date().toISOString());
   }
-
   async ping(): Promise<void> {}
   async close(): Promise<void> {}
 
@@ -32,9 +32,8 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     item: NewQuarantineItem,
     capacity?: QuarantineCapacityLimits,
   ): Promise<void> {
-    if (this.items.has(item.quarantine_id)) {
+    if (this.items.has(item.quarantine_id))
       throw new Error("duplicate quarantine_id");
-    }
     this.store(item, null, capacity);
   }
 
@@ -42,9 +41,8 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     item: NewQuarantineItem,
     capacity?: QuarantineCapacityLimits,
   ): Promise<void> {
-    if (!item.source_bank || !item.source_memory_id) {
+    if (!item.source_bank || !item.source_memory_id)
       throw new Error("recalled memory source identity is required");
-    }
     const existing =
       [...this.items.values()].find(
         (entry) =>
@@ -58,11 +56,9 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     item: NewQuarantineItem,
     capacity?: QuarantineCapacityLimits,
   ): Promise<void> {
-    if (item.kind !== "security_event") {
+    if (item.kind !== "security_event")
       throw new Error("security event item is required");
-    }
-    const existing = this.items.get(item.quarantine_id) ?? null;
-    this.store(item, existing, capacity);
+    this.store(item, this.items.get(item.quarantine_id) ?? null, capacity);
   }
 
   async upsertRequestItem(
@@ -72,9 +68,8 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     if (
       (item.kind !== "retain_request" && item.kind !== "recall_request") ||
       !item.dedupe_key
-    ) {
+    )
       throw new Error("request item dedupe identity is required");
-    }
     const existing =
       [...this.items.values()].find(
         (entry) => entry.dedupe_key === item.dedupe_key,
@@ -83,26 +78,23 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       existing &&
       existing.status !== "pending" &&
       existing.status !== "postponed"
-    ) {
+    )
       return;
-    }
     this.store(item, existing, capacity);
   }
 
   async get(quarantineId: string): Promise<StoredQuarantineItem | null> {
     return this.items.get(quarantineId) ?? null;
   }
-
   async listReviewable(limit = 100, offset = 0) {
     return [...this.items.values()]
       .filter(
         (item) => item.status === "pending" || item.status === "postponed",
       )
-      .sort((left, right) => left.created_at.localeCompare(right.created_at))
+      .sort((a, b) => a.created_at.localeCompare(b.created_at))
       .slice(offset, offset + limit)
       .map(toSummary);
   }
-
   async findMemoryState(bankId: BankId, memoryId: string) {
     return (
       [...this.items.values()].find(
@@ -139,7 +131,6 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   ): Promise<void> {
     return this.reviews.markMemoryReviewed(quarantineId, status, at);
   }
-
   approveRetain(
     quarantineId: string,
     at: string,
@@ -148,7 +139,6 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   ): Promise<void> {
     return this.reviews.approveRetain(quarantineId, at, details, operation);
   }
-
   rejectRecalledMemory(
     quarantineId: string,
     at: string,
@@ -174,20 +164,16 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     const active = values.filter((item) => !isExpired(item, at));
     return {
       total_items: values.length,
-      pending_items: active.filter((item) => item.status === "pending").length,
-      postponed_items: active.filter((item) => item.status === "postponed")
-        .length,
+      pending_items: active.filter((i) => i.status === "pending").length,
+      postponed_items: active.filter((i) => i.status === "postponed").length,
       expired_items: expired.length,
       reviewed_allowed_items: active.filter(
-        (item) => item.status === "reviewed_allowed",
+        (i) => i.status === "reviewed_allowed",
       ).length,
       reviewed_blocked_items: active.filter(
-        (item) => item.status === "reviewed_blocked",
+        (i) => i.status === "reviewed_blocked",
       ).length,
-      encrypted_bytes: active.reduce(
-        (total, item) => total + encryptedBytes(item),
-        0,
-      ),
+      encrypted_bytes: active.reduce((n, i) => n + encryptedBytes(i), 0),
       event_count: this.events.length,
     };
   }
@@ -196,64 +182,53 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     const items = this.filtered(filter);
     return {
       count: items.length,
-      encrypted_bytes: items.reduce(
-        (total, item) => total + encryptedBytes(item),
-        0,
-      ),
+      encrypted_bytes: items.reduce((n, i) => n + encryptedBytes(i), 0),
     };
   }
-
   async cleanup(
     filter: CleanupFilter,
     expectedCount: number,
     at: string,
   ): Promise<CleanupPreview> {
     const preview = await this.previewCleanup(filter);
-    if (preview.count !== expectedCount) {
+    if (preview.count !== expectedCount)
       throw new HttpError(
         409,
         "quarantine_cleanup_changed",
         "quarantine cleanup selection changed after preview",
       );
-    }
-    for (const item of this.filtered(filter)) {
+    for (const item of this.filtered(filter))
       await this.remove(item.quarantine_id, "cleanup", at, { filter });
-    }
     return preview;
   }
-
   async sweepExpiredItems(at: string): Promise<number> {
     const expired = [...this.items.values()]
       .filter((item) => isExpired(item, at))
       .slice(0, RETENTION_SWEEP_BATCH_LIMIT);
-    for (const item of expired) {
+    for (const item of expired)
       this.removeCurrent(item.quarantine_id, "cleanup", at, {
         reason: "expired",
         expires_at: item.expires_at,
       });
-    }
     return expired.length;
   }
-
   async pruneEventsBefore(cutoff: string, at: string): Promise<number> {
     const batch = new Set(
       this.events
-        .filter((event) => event.occurred_at < cutoff)
+        .filter((e) => e.occurred_at < cutoff)
         .slice(0, RETENTION_SWEEP_BATCH_LIMIT),
     );
-    const pruned = batch.size;
-    const kept = this.events.filter((event) => !batch.has(event));
+    const kept = this.events.filter((e) => !batch.has(e));
     this.events.length = 0;
     this.events.push(...kept);
-    if (pruned > 0) {
+    if (batch.size > 0)
       this.events.push(
         quarantineEvent(RETENTION_EVENT_QUARANTINE_ID, "retention_pruned", at, {
-          pruned_events: pruned,
+          pruned_events: batch.size,
           older_than: cutoff,
         }),
       );
-    }
-    return pruned;
+    return batch.size;
   }
 
   private store(
@@ -296,82 +271,88 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     const values = [...this.items.values()].filter(
       (entry) => !isExpired(entry, at),
     );
-    const pendingItems = values.filter(
+    const reviewable = values.filter(
       (entry) => entry.status === "pending" || entry.status === "postponed",
-    ).length;
-    const encryptedTotal = values.reduce(
-      (total, entry) => total + encryptedBytes(entry),
-      0,
     );
     const existingLive = existing && !isExpired(existing, at) ? existing : null;
     const existingReviewable =
       existingLive?.status === "pending" || existingLive?.status === "postponed"
         ? 1
         : 0;
-    const nextPending = pendingItems - existingReviewable + 1;
+    const existingScoped =
+      existingReviewable &&
+      existingLive &&
+      sameCapacityScope(item, existingLive)
+        ? 1
+        : 0;
+    const nextPending = reviewable.length - existingReviewable + 1;
+    const nextScoped =
+      reviewable.filter((entry) => sameCapacityScope(item, entry)).length -
+      existingScoped +
+      1;
     const nextEncrypted =
-      encryptedTotal - encryptedBytes(existingLive) + encryptedBytes(item);
+      values.reduce((n, e) => n + encryptedBytes(e), 0) -
+      encryptedBytes(existingLive) +
+      encryptedBytes(item);
     if (
       nextPending > limits.maxPendingItems ||
       nextEncrypted > limits.maxEncryptedBytes
-    ) {
+    )
       throw new HttpError(
         507,
         "quarantine_capacity_exceeded",
         "quarantine capacity is exhausted",
       );
-    }
+    if (
+      limits.maxPendingItemsPerWriter > 0 &&
+      nextScoped > limits.maxPendingItemsPerWriter
+    )
+      throw new HttpError(
+        507,
+        "quarantine_writer_capacity_exceeded",
+        "writer quarantine capacity is exhausted",
+      );
   }
 
   private filtered(filter: CleanupFilter): StoredQuarantineItem[] {
-    return [...this.items.values()].filter((item) => {
-      if (item.status === "review_in_progress") return false;
-      if (
-        (filter.scope ?? "pending") === "pending" &&
-        item.status !== "pending" &&
-        item.status !== "postponed"
-      ) {
-        return false;
-      }
-      if (filter.reasons?.length && !filter.reasons.includes(item.reason)) {
-        return false;
-      }
-      return !filter.older_than || item.created_at < filter.older_than;
-    });
+    return [...this.items.values()].filter(
+      (item) =>
+        item.status !== "review_in_progress" &&
+        ((filter.scope ?? "pending") !== "pending" ||
+          item.status === "pending" ||
+          item.status === "postponed") &&
+        (!filter.reasons?.length || filter.reasons.includes(item.reason)) &&
+        (!filter.older_than || item.created_at < filter.older_than),
+    );
   }
-
-  private requireItem(quarantineId: string): StoredQuarantineItem {
-    const item = this.items.get(quarantineId);
-    if (!item) {
+  private requireItem(id: string): StoredQuarantineItem {
+    const item = this.items.get(id);
+    if (!item)
       throw new HttpError(
         404,
         "quarantine_not_found",
         "quarantine item not found",
       );
-    }
     return item;
   }
-
-  private requireReviewable(quarantineId: string): StoredQuarantineItem {
-    const item = this.requireItem(quarantineId);
-    if (item.status !== "pending" && item.status !== "postponed") {
+  private requireReviewable(id: string): StoredQuarantineItem {
+    const item = this.requireItem(id);
+    if (item.status !== "pending" && item.status !== "postponed")
       throw new HttpError(
         409,
         "quarantine_already_finalized",
         "quarantine item is not pending review",
       );
-    }
     return item;
   }
-
   private removeCurrent(
-    quarantineId: string,
+    id: string,
     eventType: "approved" | "rejected" | "cleanup",
     at: string,
     details: Record<string, unknown>,
   ): void {
-    this.items.delete(quarantineId);
-    this.events.push(quarantineEvent(quarantineId, eventType, at, details));
+    this.items.delete(id);
+    this.events.push(quarantineEvent(id, eventType, at, details));
   }
 }
 
@@ -382,7 +363,6 @@ function encryptedBytes(
     ? Buffer.byteLength(JSON.stringify(item.encrypted))
     : 0;
 }
-
 function isExpired(item: StoredQuarantineItem, at: string): boolean {
   return (
     (item.status === "pending" || item.status === "postponed") &&

@@ -140,6 +140,10 @@ function buildLimits(): QuarantineStoreLimits {
       "QUARANTINE_MAX_PENDING_ITEMS",
       DEFAULT_QUARANTINE_LIMITS.maxPendingItems,
     ),
+    maxPendingItemsPerWriter: numberEnv(
+      "QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER",
+      DEFAULT_QUARANTINE_LIMITS.maxPendingItemsPerWriter,
+    ),
     maxEncryptedBytes: numberEnv(
       "QUARANTINE_MAX_ENCRYPTED_BYTES",
       DEFAULT_QUARANTINE_LIMITS.maxEncryptedBytes,

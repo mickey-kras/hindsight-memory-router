@@ -43,6 +43,7 @@ export interface QuarantineStore {
 export interface QuarantineStoreLimits {
   maxItemBytes: number;
   maxPendingItems: number;
+  maxPendingItemsPerWriter: number;
   maxEncryptedBytes: number;
   rateLimitMax: number;
   rateLimitWindowMs: number;
@@ -54,6 +55,7 @@ export interface QuarantineStoreLimits {
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxItemBytes: 1_048_576,
   maxPendingItems: 1_000,
+  maxPendingItemsPerWriter: 50,
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
@@ -84,6 +86,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     this.publicKey = decodePublicKey(publicKey);
     this.capacity = {
       maxPendingItems: limits.maxPendingItems,
+      maxPendingItemsPerWriter: effectiveWriterLimit(limits),
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
     this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
@@ -117,7 +120,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         if (input.kind === "recalled_memory") {
           await this.repository.upsertRecalledMemory(item, this.capacity);
         } else if (input.kind === "security_event") {
-          await this.repository.upsertSecurityEvent(item, this.capacity);
+          await this.repository.upsertSecurityEvent(item, {
+            ...this.capacity,
+            maxPendingItemsPerWriter: 0,
+          });
         } else if (item.dedupe_key) {
           await this.repository.upsertRequestItem(item, this.capacity);
         } else {
@@ -309,4 +315,14 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
+}
+
+function effectiveWriterLimit(limits: QuarantineStoreLimits): number {
+  if (limits.maxPendingItemsPerWriter <= 0) return 0;
+  const itemReserve = Math.max(0, limits.maxPendingItems - 1);
+  const byteReserve = Math.max(
+    0,
+    Math.floor((limits.maxEncryptedBytes - 1) / limits.maxItemBytes),
+  );
+  return Math.min(limits.maxPendingItemsPerWriter, itemReserve, byteReserve);
 }
