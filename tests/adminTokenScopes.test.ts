@@ -80,9 +80,9 @@ describe("scoped admin tokens", () => {
           headers: auth("review-token"),
         }),
       ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "review-token")).toMatchObject({
-        status: 404,
-      });
+      const reviewed = await reject(baseUrl, "review-token");
+      expect(reviewed.status).toBe(400);
+      expect(reviewed.status).not.toBe(401);
       expect(await cleanup(baseUrl, "review-token")).toMatchObject({
         status: 401,
       });
@@ -115,9 +115,9 @@ describe("scoped admin tokens", () => {
           headers: auth("legacy-token"),
         }),
       ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "legacy-token")).toMatchObject({
-        status: 404,
-      });
+      const reviewed = await reject(baseUrl, "legacy-token");
+      expect(reviewed.status).toBe(400);
+      expect(reviewed.status).not.toBe(401);
       expect(await cleanup(baseUrl, "legacy-token")).toMatchObject({
         status: 200,
       });
