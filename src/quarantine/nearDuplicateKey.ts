@@ -51,10 +51,9 @@ function normalizeValue(value: unknown, key?: string): unknown {
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([entryKey, entry]) => [
-        entryKey,
-        normalizeValue(entry, entryKey),
-      ]),
+      Object.entries(value as Record<string, unknown>).map(
+        ([entryKey, entry]) => [entryKey, normalizeValue(entry, entryKey)],
+      ),
     );
   }
   return value;
@@ -76,10 +75,9 @@ function shapeValue(value: unknown, key?: string): unknown {
   }
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([entryKey, entry]) => [
-        entryKey,
-        shapeValue(entry, entryKey),
-      ]),
+      Object.entries(value as Record<string, unknown>).map(
+        ([entryKey, entry]) => [entryKey, shapeValue(entry, entryKey)],
+      ),
     );
   }
   return typeof value;
