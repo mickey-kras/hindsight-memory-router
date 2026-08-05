@@ -20,7 +20,9 @@ services:
     environment:
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_TOKEN: test-router-token
-      MEMORY_ROUTER_ADMIN_TOKEN: test-admin-token
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-read-token
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-cleanup-token
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
