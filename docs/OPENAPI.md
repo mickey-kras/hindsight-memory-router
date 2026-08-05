@@ -35,13 +35,17 @@ docker compose \
 
 ## Authentication model
 
-The contract defines bearer schemes for:
+The contract defines two bearer mechanisms:
 
 - `RouterToken` for `/version` and normal retain/recall operations.
-- `AdminReadToken` for queue, statistics, and encrypted-item reads.
-- `AdminReviewToken` for reads plus approve, reject, and postpone operations.
-- `AdminCleanupToken` for cleanup only.
-- `LegacyAdminToken` as a temporary migration superuser for every admin operation.
+- `AdminToken` for `/admin/quarantine/*` operations.
+
+`AdminToken` is a generic OpenAPI bearer slot. The credential accepted by a concrete operation is capability-scoped:
+
+- queue, statistics, and encrypted-item reads accept the read or review token;
+- approve, reject, and postpone accept the review token;
+- cleanup accepts the cleanup token;
+- the legacy admin token is accepted everywhere only during migration.
 
 `GET /health` and `GET /ready` are anonymous.
 
