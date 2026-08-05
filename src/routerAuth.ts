@@ -19,6 +19,11 @@ export interface AdminTokens {
   cleanup?: string;
 }
 
+export interface AuthOverrides extends AdminTokens {
+  router?: string;
+  allowAnonymous?: boolean;
+}
+
 export function isAuthorized(
   req: IncomingMessage,
   routerToken: string | undefined,
@@ -53,7 +58,11 @@ function adminTokensForScope(
     ...(scope === "read" ? [read, review] : []),
     ...(scope === "review" ? [review] : []),
     ...(scope === "cleanup" ? [cleanup] : []),
-  ].filter((token): token is string => token !== undefined && token !== "");
+  ].filter(isConfiguredToken);
+}
+
+function isConfiguredToken(token: string | undefined): token is string {
+  return token !== undefined && token !== "";
 }
 
 function bearerTokenMatchesAny(
@@ -136,9 +145,21 @@ export function assertNoPrivateKeyEnvironment(
 
 export function assertRouterAuthEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
+  overrides: AuthOverrides = {},
 ): void {
-  if (!environment.MEMORY_ROUTER_TOKEN) {
-    if (environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true") {
+  const routerToken = overrides.router ?? environment.MEMORY_ROUTER_TOKEN;
+  const allowAnonymous =
+    overrides.allowAnonymous ??
+    environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
+  const adminTokens: AdminTokens = {
+    legacy: overrides.legacy ?? environment.MEMORY_ROUTER_ADMIN_TOKEN,
+    read: overrides.read ?? environment.MEMORY_ROUTER_ADMIN_READ_TOKEN,
+    review: overrides.review ?? environment.MEMORY_ROUTER_ADMIN_REVIEW_TOKEN,
+    cleanup: overrides.cleanup ?? environment.MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN,
+  };
+
+  if (!isConfiguredToken(routerToken)) {
+    if (allowAnonymous) {
       process.stderr.write(
         "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only\n",
       );
@@ -149,22 +170,27 @@ export function assertRouterAuthEnvironment(
     }
   }
 
-  if (environment.MEMORY_ROUTER_ADMIN_TOKEN) return;
+  if (isConfiguredToken(adminTokens.legacy)) {
+    process.stderr.write(
+      "memory-router WARNING: legacy admin migration superuser is active; migrate clients to scoped tokens and unset MEMORY_ROUTER_ADMIN_TOKEN\n",
+    );
+    return;
+  }
 
   if (
-    !environment.MEMORY_ROUTER_ADMIN_READ_TOKEN &&
-    !environment.MEMORY_ROUTER_ADMIN_REVIEW_TOKEN
+    !isConfiguredToken(adminTokens.read) &&
+    !isConfiguredToken(adminTokens.review)
   ) {
     process.stderr.write(
       "memory-router WARNING: admin read token is not set; admin read endpoints fail-closed\n",
     );
   }
-  if (!environment.MEMORY_ROUTER_ADMIN_REVIEW_TOKEN) {
+  if (!isConfiguredToken(adminTokens.review)) {
     process.stderr.write(
       "memory-router WARNING: admin review token is not set; review endpoints fail-closed\n",
     );
   }
-  if (!environment.MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN) {
+  if (!isConfiguredToken(adminTokens.cleanup)) {
     process.stderr.write(
       "memory-router WARNING: admin cleanup token is not set; cleanup endpoint fails-closed\n",
     );
