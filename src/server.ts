@@ -103,7 +103,8 @@ export interface CreateMemoryRouterServerOptions {
   eventRetentionDays?: number;
 }
 
-export interface CreateConfiguredMemoryRouterServerOptions extends CreateMemoryRouterServerOptions {
+export interface CreateConfiguredMemoryRouterServerOptions
+  extends CreateMemoryRouterServerOptions {
   validateStorage?: boolean;
 }
 
@@ -347,7 +348,14 @@ export async function createConfiguredMemoryRouterServer(
   options: CreateConfiguredMemoryRouterServerOptions = {},
 ): Promise<ConfiguredMemoryRouterServer> {
   assertNoPrivateKeyEnvironment();
-  assertRouterAuthEnvironment();
+  assertRouterAuthEnvironment(process.env, {
+    router: options.routerToken,
+    legacy: options.adminToken,
+    read: options.adminReadToken,
+    review: options.adminReviewToken,
+    cleanup: options.adminCleanupToken,
+    allowAnonymous: options.allowAnonymous,
+  });
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
