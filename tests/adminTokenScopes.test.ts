@@ -64,8 +64,12 @@ describe("scoped admin tokens", () => {
           headers: auth("read-token"),
         }),
       ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "read-token")).toMatchObject({ status: 401 });
-      expect(await cleanup(baseUrl, "read-token")).toMatchObject({ status: 401 });
+      expect(await reject(baseUrl, "read-token")).toMatchObject({
+        status: 401,
+      });
+      expect(await cleanup(baseUrl, "read-token")).toMatchObject({
+        status: 401,
+      });
     });
   });
 
@@ -76,21 +80,32 @@ describe("scoped admin tokens", () => {
           headers: auth("review-token"),
         }),
       ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "review-token")).toMatchObject({ status: 404 });
-      expect(await cleanup(baseUrl, "review-token")).toMatchObject({ status: 401 });
+      expect(await reject(baseUrl, "review-token")).toMatchObject({
+        status: 404,
+      });
+      expect(await cleanup(baseUrl, "review-token")).toMatchObject({
+        status: 401,
+      });
     });
   });
 
   it("limits the cleanup token to cleanup", async () => {
-    await withServer({ adminCleanupToken: "cleanup-token" }, async (baseUrl) => {
-      expect(await cleanup(baseUrl, "cleanup-token")).toMatchObject({ status: 200 });
-      expect(
-        await fetch(`${baseUrl}/admin/quarantine/stats`, {
-          headers: auth("cleanup-token"),
-        }),
-      ).toMatchObject({ status: 401 });
-      expect(await reject(baseUrl, "cleanup-token")).toMatchObject({ status: 401 });
-    });
+    await withServer(
+      { adminCleanupToken: "cleanup-token" },
+      async (baseUrl) => {
+        expect(await cleanup(baseUrl, "cleanup-token")).toMatchObject({
+          status: 200,
+        });
+        expect(
+          await fetch(`${baseUrl}/admin/quarantine/stats`, {
+            headers: auth("cleanup-token"),
+          }),
+        ).toMatchObject({ status: 401 });
+        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({
+          status: 401,
+        });
+      },
+    );
   });
 
   it("keeps the legacy admin token as a migration superuser", async () => {
@@ -100,8 +115,12 @@ describe("scoped admin tokens", () => {
           headers: auth("legacy-token"),
         }),
       ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "legacy-token")).toMatchObject({ status: 404 });
-      expect(await cleanup(baseUrl, "legacy-token")).toMatchObject({ status: 200 });
+      expect(await reject(baseUrl, "legacy-token")).toMatchObject({
+        status: 404,
+      });
+      expect(await cleanup(baseUrl, "legacy-token")).toMatchObject({
+        status: 200,
+      });
     });
   });
 
@@ -113,10 +132,18 @@ describe("scoped admin tokens", () => {
         adminCleanupToken: "cleanup-token",
       },
       async (baseUrl) => {
-        expect(await cleanup(baseUrl, "read-token")).toMatchObject({ status: 401 });
-        expect(await cleanup(baseUrl, "review-token")).toMatchObject({ status: 401 });
-        expect(await reject(baseUrl, "read-token")).toMatchObject({ status: 401 });
-        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({ status: 401 });
+        expect(await cleanup(baseUrl, "read-token")).toMatchObject({
+          status: 401,
+        });
+        expect(await cleanup(baseUrl, "review-token")).toMatchObject({
+          status: 401,
+        });
+        expect(await reject(baseUrl, "read-token")).toMatchObject({
+          status: 401,
+        });
+        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({
+          status: 401,
+        });
       },
     );
   });
