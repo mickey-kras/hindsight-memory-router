@@ -153,7 +153,9 @@ export function sameCapacityScope(
   right: Pick<NewQuarantineItem, "kind" | "reason" | "writer_id">,
 ): boolean {
   if (left.reason === "unknown_writer" || right.reason === "unknown_writer") {
-    return left.reason === "unknown_writer" && right.reason === "unknown_writer";
+    return (
+      left.reason === "unknown_writer" && right.reason === "unknown_writer"
+    );
   }
   if (left.writer_id !== undefined || right.writer_id !== undefined) {
     return left.writer_id !== undefined && left.writer_id === right.writer_id;
