@@ -200,7 +200,16 @@ export class QuarantineAdminService {
   }
 
   async stats() {
-    return this.options.repository.stats();
+    const stats = await this.options.repository.stats();
+    return {
+      total_items: stats.total_items,
+      pending_items: stats.pending_items,
+      postponed_items: stats.postponed_items,
+      reviewed_allowed_items: stats.reviewed_allowed_items,
+      reviewed_blocked_items: stats.reviewed_blocked_items,
+      encrypted_bytes: stats.encrypted_bytes,
+      event_count: stats.event_count,
+    };
   }
 
   async cleanup(body: CleanupBody) {
