@@ -49,6 +49,8 @@ import {
   createAuthFailureAuditor,
   isAdminAuthorized,
   isAuthorized,
+  type AdminScope,
+  type AdminTokens,
 } from "./routerAuth.js";
 import type { WriterRegistry } from "./types.js";
 
@@ -83,6 +85,9 @@ const MAX_BODY_BYTES = Number(
 export interface CreateMemoryRouterServerOptions {
   routerToken?: string;
   adminToken?: string;
+  adminReadToken?: string;
+  adminReviewToken?: string;
+  adminCleanupToken?: string;
   allowAnonymous?: boolean;
   adminRateLimiter?: AdminRateLimiter;
   maxPostpones?: number;
@@ -185,6 +190,12 @@ export function createMemoryRouterServer(
       options.quarantineRateLimiter,
     );
   const allowAnonymous = options.allowAnonymous ?? ALLOW_ANONYMOUS;
+  const adminTokens: AdminTokens = {
+    legacy: options.adminToken,
+    read: options.adminReadToken,
+    review: options.adminReviewToken,
+    cleanup: options.adminCleanupToken,
+  };
   const adminRateLimiter =
     options.adminRateLimiter ??
     new AdminRateLimiter(adminRateLimitConfigFromEnv());
@@ -229,7 +240,8 @@ export function createMemoryRouterServer(
       }
 
       if (pathname.startsWith("/admin/")) {
-        if (!isAdminAuthorized(req, options.adminToken)) {
+        const adminScope = adminScopeForRequest(method, pathname);
+        if (!isAdminAuthorized(req, adminScope, adminTokens)) {
           await auditAuthFailure("admin");
           return send(res, 401, { error: "unauthorized" });
         }
@@ -369,6 +381,14 @@ async function createSharedRateLimiter(
   const limiter = new PostgresSlidingWindowRateLimiter(connectionString);
   await limiter.initialize();
   return limiter;
+}
+
+function adminScopeForRequest(method: string, pathname: string): AdminScope {
+  if (method === "GET") return "read";
+  if (method === "POST" && pathname === "/admin/quarantine/cleanup") {
+    return "cleanup";
+  }
+  return "review";
 }
 
 function requireQuarantineRepository(
