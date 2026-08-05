@@ -25,16 +25,16 @@ POST /v1/default/banks/{writer}/memories/recall   router token
 Admin API:
 
 ```text
-GET  /admin/quarantine/queue
-GET  /admin/quarantine/stats
-POST /admin/quarantine/cleanup
-GET  /admin/quarantine/items/{id}
-POST /admin/quarantine/items/{id}/approve
-POST /admin/quarantine/items/{id}/reject
-POST /admin/quarantine/items/{id}/postpone
+GET  /admin/quarantine/queue                    read or review token
+GET  /admin/quarantine/stats                    read or review token
+POST /admin/quarantine/cleanup                  cleanup token
+GET  /admin/quarantine/items/{id}               read or review token
+POST /admin/quarantine/items/{id}/approve       review token
+POST /admin/quarantine/items/{id}/reject        review token
+POST /admin/quarantine/items/{id}/postpone      review token
 ```
 
-Router and admin authentication fail closed when their token is unset. `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` enables anonymous router access for local development only.
+The legacy `MEMORY_ROUTER_ADMIN_TOKEN` remains a migration superuser for every admin route. Prefer scoped tokens and leave the legacy token unset. Router and admin authentication fail closed when no token authorized for the requested capability is configured. `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` enables anonymous router access for local development only.
 
 ## Images
 
@@ -79,7 +79,10 @@ The container runs as the non-root `node` user.
 ```text
 MEMORY_ROUTER_PORT=8890
 MEMORY_ROUTER_TOKEN=change-me
-MEMORY_ROUTER_ADMIN_TOKEN=change-me-admin
+MEMORY_ROUTER_ADMIN_READ_TOKEN=change-me-admin-read
+MEMORY_ROUTER_ADMIN_REVIEW_TOKEN=change-me-admin-review
+MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN=change-me-admin-cleanup
+MEMORY_ROUTER_ADMIN_TOKEN=
 MEMORY_ROUTER_ALLOW_ANONYMOUS=false
 MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX=120
 MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX=30
@@ -96,9 +99,11 @@ QUARANTINE_DATABASE_URL=sqlite:./data/quarantine.db
 QUARANTINE_MAX_POSTPONES=3
 QUARANTINE_MAX_ITEM_BYTES=1048576
 QUARANTINE_MAX_PENDING_ITEMS=1000
+QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER=50
 QUARANTINE_MAX_ENCRYPTED_BYTES=104857600
 QUARANTINE_RATE_LIMIT_MAX=30
 QUARANTINE_RATE_LIMIT_GLOBAL_MAX=300
+QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX=10
 QUARANTINE_REQUARANTINE_OPS_MAX=1000
 QUARANTINE_RATE_LIMIT_WINDOW_MS=60000
 QUARANTINE_ITEM_TTL_DAYS=30
@@ -127,20 +132,26 @@ At startup the configured router validates quarantine storage and fails fast wit
 ## Authentication
 
 - Router and admin tokens are separate.
+- `MEMORY_ROUTER_ADMIN_READ_TOKEN` can list queue state, read statistics, and fetch encrypted items only.
+- `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN` has read access plus approve, reject, and postpone actions.
+- `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN` can invoke cleanup only; it cannot list or review items.
+- `MEMORY_ROUTER_ADMIN_TOKEN` is a legacy migration superuser and should be unset after clients move to scoped tokens.
 - Token comparison is constant-time.
 - Token values are never logged or stored in quarantine.
 - Failed authentication creates one deduplicated `auth_failed` item per route group.
 - Admin reads and writes have separate process-local sliding-window limits.
 - Failed authentication does not consume admin quota.
 
-A leaked admin token can read encrypted envelopes and run review actions. It cannot decrypt envelopes or approve modified content.
+A leaked read token cannot mutate quarantine state. A leaked cleanup token cannot inspect encrypted envelopes or make review decisions. A leaked review token can read encrypted envelopes and run review actions, but cannot execute bulk cleanup. No admin token can decrypt envelopes or approve modified content.
 
-Token rotation:
+Token migration and rotation:
 
-1. Generate new router and admin tokens.
-2. Update the deployment and restart the router.
-3. Update OpenClaw and admin clients.
-4. Review quarantine events if compromise is suspected.
+1. Generate independent read, review, and cleanup tokens.
+2. Configure the scoped tokens while temporarily retaining the legacy admin token.
+3. Update each admin client to use only the token matching its responsibilities.
+4. Unset `MEMORY_ROUTER_ADMIN_TOKEN` and restart the router.
+5. Rotate any individual scoped token without changing the others.
+6. Review quarantine events if compromise is suspected.
 
 Keep tokens out of prompts, logs, shell history, and committed configuration.
 
@@ -219,8 +230,8 @@ PostgreSQL rate limits are shared across router replicas and use PostgreSQL time
 
 ## Manual review
 
-1. List pending items with the admin token.
-2. Fetch the encrypted item.
+1. List pending items with the review token.
+2. Fetch the encrypted item with the review token.
 3. Decrypt outside the router:
 
 ```bash
@@ -228,7 +239,7 @@ npm run build
 private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.json
 ```
 
-4. Approve, reject, or postpone.
+4. Approve, reject, or postpone with the review token.
 
 Approval requires the complete decrypted object unchanged. Modified content returns `quarantine_hash_mismatch`.
 
@@ -251,6 +262,8 @@ private-key-command | npm run migrate:legacy-quarantine -- \
 The command is idempotent and leaves source files untouched. Verify the migration summary before removing legacy data.
 
 ## Cleanup
+
+Use the cleanup token for preview and execution.
 
 Preview:
 
