@@ -231,10 +231,7 @@ export class PostgresSlidingWindowRateLimiter implements QuarantineRateLimiter {
     return this.consumeMany([{ key, rule }], at);
   }
 
-  consumeMany(
-    buckets: readonly RateLimitBucket[],
-    at?: Date,
-  ): Promise<void> {
+  consumeMany(buckets: readonly RateLimitBucket[], at?: Date): Promise<void> {
     return this.consumeManyDistinct(buckets, [], at);
   }
 
