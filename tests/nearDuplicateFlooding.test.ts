@@ -130,6 +130,28 @@ describe("distinct request-family limiting", () => {
     });
   });
 
+  it("shares the ordinary writer bucket across unknown writer ids", async () => {
+    const quarantine = memoryQuarantine({
+      rateLimitMax: 1,
+      rateLimitGlobalMax: 100,
+      distinctFamilyLimitMax: 0,
+    });
+    const first = {
+      ...retain("unknown-a", "1", "first suspicious request"),
+      reason: "unknown_writer" as const,
+    };
+    const second = {
+      ...retain("unknown-b", "2", "second suspicious request"),
+      reason: "unknown_writer" as const,
+    };
+
+    await quarantine.store.put(first);
+    await expect(quarantine.store.put(second)).rejects.toMatchObject({
+      status: 429,
+      code: "quarantine_rate_limited",
+    });
+  });
+
   it("does not charge exact deduplicated refreshes again", async () => {
     const quarantine = memoryQuarantine({
       rateLimitMax: 100,
