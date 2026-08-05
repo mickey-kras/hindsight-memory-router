@@ -98,11 +98,11 @@ describe("quarantine writer capacity fairness", () => {
       quarantine.store.put(retain("writer-a", "suspicious_content", "3")),
     ]);
 
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(
-      2,
-    );
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(
-      1,
-    );
+    expect(
+      results.filter((result) => result.status === "fulfilled"),
+    ).toHaveLength(2);
+    expect(
+      results.filter((result) => result.status === "rejected"),
+    ).toHaveLength(1);
   });
 });
