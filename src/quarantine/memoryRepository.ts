@@ -3,6 +3,8 @@ import type { BankId } from "../types.js";
 import { MemoryReviewWorkflow } from "./memoryReviewWorkflow.js";
 import {
   quarantineEvent,
+  RETENTION_EVENT_QUARANTINE_ID,
+  RETENTION_SWEEP_BATCH_LIMIT,
   toSummary,
   type CleanupFilter,
   type CleanupPreview,
@@ -77,8 +79,6 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       [...this.items.values()].find(
         (entry) => entry.dedupe_key === item.dedupe_key,
       ) ?? null;
-    // Refresh only a live queue item; never clobber an active or completed
-    // review (see SqlQuarantineRepository.upsertRequestItem).
     if (
       existing &&
       existing.status !== "pending" &&
@@ -168,19 +168,23 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
   }
 
   async stats(): Promise<QuarantineStats> {
+    const at = new Date().toISOString();
     const values = [...this.items.values()];
+    const expired = values.filter((item) => isExpired(item, at));
+    const active = values.filter((item) => !isExpired(item, at));
     return {
       total_items: values.length,
-      pending_items: values.filter((item) => item.status === "pending").length,
-      postponed_items: values.filter((item) => item.status === "postponed")
+      pending_items: active.filter((item) => item.status === "pending").length,
+      postponed_items: active.filter((item) => item.status === "postponed")
         .length,
-      reviewed_allowed_items: values.filter(
+      expired_items: expired.length,
+      reviewed_allowed_items: active.filter(
         (item) => item.status === "reviewed_allowed",
       ).length,
-      reviewed_blocked_items: values.filter(
+      reviewed_blocked_items: active.filter(
         (item) => item.status === "reviewed_blocked",
       ).length,
-      encrypted_bytes: values.reduce(
+      encrypted_bytes: active.reduce(
         (total, item) => total + encryptedBytes(item),
         0,
       ),
@@ -216,6 +220,40 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       await this.remove(item.quarantine_id, "cleanup", at, { filter });
     }
     return preview;
+  }
+
+  async sweepExpiredItems(at: string): Promise<number> {
+    const expired = [...this.items.values()]
+      .filter((item) => isExpired(item, at))
+      .slice(0, RETENTION_SWEEP_BATCH_LIMIT);
+    for (const item of expired) {
+      this.removeCurrent(item.quarantine_id, "cleanup", at, {
+        reason: "expired",
+        expires_at: item.expires_at,
+      });
+    }
+    return expired.length;
+  }
+
+  async pruneEventsBefore(cutoff: string, at: string): Promise<number> {
+    const batch = new Set(
+      this.events
+        .filter((event) => event.occurred_at < cutoff)
+        .slice(0, RETENTION_SWEEP_BATCH_LIMIT),
+    );
+    const pruned = batch.size;
+    const kept = this.events.filter((event) => !batch.has(event));
+    this.events.length = 0;
+    this.events.push(...kept);
+    if (pruned > 0) {
+      this.events.push(
+        quarantineEvent(RETENTION_EVENT_QUARANTINE_ID, "retention_pruned", at, {
+          pruned_events: pruned,
+          older_than: cutoff,
+        }),
+      );
+    }
+    return pruned;
   }
 
   private store(
@@ -254,7 +292,10 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     limits?: QuarantineCapacityLimits,
   ): void {
     if (!limits) return;
-    const values = [...this.items.values()];
+    const at = new Date().toISOString();
+    const values = [...this.items.values()].filter(
+      (entry) => !isExpired(entry, at),
+    );
     const pendingItems = values.filter(
       (entry) => entry.status === "pending" || entry.status === "postponed",
     ).length;
@@ -262,13 +303,14 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
       (total, entry) => total + encryptedBytes(entry),
       0,
     );
+    const existingLive = existing && !isExpired(existing, at) ? existing : null;
     const existingReviewable =
-      existing?.status === "pending" || existing?.status === "postponed"
+      existingLive?.status === "pending" || existingLive?.status === "postponed"
         ? 1
         : 0;
     const nextPending = pendingItems - existingReviewable + 1;
     const nextEncrypted =
-      encryptedTotal - encryptedBytes(existing) + encryptedBytes(item);
+      encryptedTotal - encryptedBytes(existingLive) + encryptedBytes(item);
     if (
       nextPending > limits.maxPendingItems ||
       nextEncrypted > limits.maxEncryptedBytes
@@ -339,4 +381,12 @@ function encryptedBytes(
   return item?.encrypted
     ? Buffer.byteLength(JSON.stringify(item.encrypted))
     : 0;
+}
+
+function isExpired(item: StoredQuarantineItem, at: string): boolean {
+  return (
+    (item.status === "pending" || item.status === "postponed") &&
+    item.expires_at !== undefined &&
+    item.expires_at <= at
+  );
 }

@@ -3,6 +3,8 @@ import type { BankId, QuarantineStatus } from "../types.js";
 import {
   parseStoredItem,
   quarantineEvent,
+  RETENTION_EVENT_QUARANTINE_ID,
+  RETENTION_SWEEP_BATCH_LIMIT,
   toSummary,
   type CleanupFilter,
   type CleanupPreview,
@@ -260,6 +262,58 @@ export class SqlQuarantineRepository implements QuarantineRepository {
     });
   }
 
+  async sweepExpiredItems(at: string): Promise<number> {
+    return this.database.transaction(async (database) => {
+      const rows = await database.all<{
+        quarantine_id: string;
+        expires_at: string;
+      }>(
+        `SELECT quarantine_id, expires_at FROM quarantine_items
+         WHERE status IN ('pending', 'postponed')
+           AND expires_at IS NOT NULL
+           AND expires_at <= ${database.placeholder(1)}
+         ORDER BY expires_at
+         LIMIT ${database.placeholder(2)}${database.rowLockClause}`,
+        [at, RETENTION_SWEEP_BATCH_LIMIT],
+      );
+      for (const row of rows) {
+        await deleteWithEvent(database, row.quarantine_id, "cleanup", at, {
+          reason: "expired",
+          expires_at: String(row.expires_at),
+        });
+      }
+      return rows.length;
+    });
+  }
+
+  async pruneEventsBefore(cutoff: string, at: string): Promise<number> {
+    return this.database.transaction(async (database) => {
+      const pruned = await database.all<{ event_id: string }>(
+        `DELETE FROM quarantine_events
+         WHERE event_id IN (
+           SELECT event_id FROM quarantine_events
+           WHERE occurred_at < ${database.placeholder(1)}
+           ORDER BY occurred_at
+           LIMIT ${database.placeholder(2)}
+         )
+         RETURNING event_id`,
+        [cutoff, RETENTION_SWEEP_BATCH_LIMIT],
+      );
+      if (pruned.length > 0) {
+        await insertEvent(
+          database,
+          quarantineEvent(
+            RETENTION_EVENT_QUARANTINE_ID,
+            "retention_pruned",
+            at,
+            { pruned_events: pruned.length, older_than: cutoff },
+          ),
+        );
+      }
+      return pruned.length;
+    });
+  }
+
   private async store(
     item: NewQuarantineItem,
     capacity: QuarantineCapacityLimits | undefined,
@@ -273,9 +327,6 @@ export class SqlQuarantineRepository implements QuarantineRepository {
       const existing = await findExisting(database);
       await assertCapacity(database, item, existing, capacity);
       if (existing) {
-        // Request-item dedupe refreshes only a live queue item: refreshing an
-        // item under review (or already reviewed) would reset its status and
-        // overwrite the envelope, duplicating the Hindsight write on approve.
         if (
           refreshStatuses === undefined ||
           refreshStatuses.includes(existing.status)

@@ -11,6 +11,7 @@ import type {
 export interface StoredQuarantineItem extends QuarantineItemSummary {
   encrypted: EncryptedQuarantineEnvelope | null;
   source_content_sha256?: string;
+  expires_at?: string;
 }
 
 export interface NewQuarantineItem {
@@ -26,6 +27,7 @@ export interface NewQuarantineItem {
   source_content_sha256?: string;
   dedupe_key?: string;
   requarantine_count?: number;
+  expires_at?: string;
   sha256: string;
   encrypted: EncryptedQuarantineEnvelope;
   status: "pending";
@@ -46,7 +48,11 @@ export type QuarantineEventType =
   | "reviewed_blocked"
   | "review_interrupted"
   | "rejected"
-  | "cleanup";
+  | "cleanup"
+  | "retention_pruned";
+
+export const RETENTION_EVENT_QUARANTINE_ID = "quarantine_retention";
+export const RETENTION_SWEEP_BATCH_LIMIT = 1000;
 
 export interface QuarantineEvent {
   event_id: string;
@@ -60,6 +66,7 @@ export interface QuarantineStats {
   total_items: number;
   pending_items: number;
   postponed_items: number;
+  expired_items: number;
   reviewed_allowed_items: number;
   reviewed_blocked_items: number;
   encrypted_bytes: number;
@@ -136,6 +143,8 @@ export interface QuarantineRepository {
     expectedCount: number,
     at: string,
   ): Promise<CleanupPreview>;
+  sweepExpiredItems(at: string): Promise<number>;
+  pruneEventsBefore(cutoff: string, at: string): Promise<number>;
 }
 
 export function toSummary(item: StoredQuarantineItem): QuarantineItemSummary {
@@ -197,6 +206,7 @@ export function parseStoredItem(
       ? {}
       : { source_content_sha256: String(row.source_content_sha256) }),
     ...(row.dedupe_key == null ? {} : { dedupe_key: String(row.dedupe_key) }),
+    ...(row.expires_at == null ? {} : { expires_at: String(row.expires_at) }),
     sha256: String(row.sha256),
     encrypted:
       row.encrypted_envelope == null

@@ -30,7 +30,8 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
       encrypted_bytes INTEGER NOT NULL DEFAULT 0,
       status TEXT NOT NULL,
       postpone_count INTEGER NOT NULL DEFAULT 0,
-      requarantine_count INTEGER NOT NULL DEFAULT 0
+      requarantine_count INTEGER NOT NULL DEFAULT 0,
+      expires_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_quarantine_items_review
       ON quarantine_items(status, created_at);
@@ -51,10 +52,6 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_quarantine_events_type
       ON quarantine_events(event_type, occurred_at);
   `);
-  // Databases created before request-item deduplication lack these columns.
-  // CREATE TABLE IF NOT EXISTS leaves them untouched, so add the columns when
-  // a probe shows they are missing, then build the partial unique index that
-  // deduplication relies on. Legacy rows keep a NULL dedupe key.
   await ensureColumn(
     database,
     "dedupe_key",
@@ -65,16 +62,24 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
     "requarantine_count",
     "ALTER TABLE quarantine_items ADD COLUMN requarantine_count INTEGER NOT NULL DEFAULT 0",
   );
+  await ensureColumn(
+    database,
+    "expires_at",
+    "ALTER TABLE quarantine_items ADD COLUMN expires_at TEXT",
+  );
   await database.executeScript(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key
       ON quarantine_items(dedupe_key)
       WHERE dedupe_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at
+      ON quarantine_items(expires_at)
+      WHERE expires_at IS NOT NULL;
   `);
 }
 
 async function ensureColumn(
   database: SqlDatabase,
-  column: "dedupe_key" | "requarantine_count",
+  column: "dedupe_key" | "requarantine_count" | "expires_at",
   alterStatement: string,
 ): Promise<void> {
   try {
@@ -82,8 +87,6 @@ async function ensureColumn(
       `SELECT ${column} FROM quarantine_items WHERE 1 = 0 LIMIT 1`,
     );
   } catch {
-    // Both backends reject selects of unknown columns; the table itself is
-    // guaranteed to exist because CREATE TABLE IF NOT EXISTS ran above.
     await database.run(alterStatement);
   }
 }
@@ -160,10 +163,14 @@ export async function assertCapacity(
   limits?: QuarantineCapacityLimits,
 ): Promise<void> {
   if (!limits) return;
-  const stats = await readItemStats(database);
+  const at = new Date().toISOString();
+  const stats = await readItemStats(database, at);
+  const existingLive = existing && !isExpired(existing, at) ? existing : null;
   const existingReviewable =
-    existing?.status === "pending" || existing?.status === "postponed" ? 1 : 0;
-  const existingEncryptedBytes = encryptedBytes(existing);
+    existingLive?.status === "pending" || existingLive?.status === "postponed"
+      ? 1
+      : 0;
+  const existingEncryptedBytes = encryptedBytes(existingLive);
   const nextPendingItems =
     stats.pending_items + stats.postponed_items - existingReviewable + 1;
   const nextEncryptedBytes =
@@ -183,8 +190,9 @@ export async function assertCapacity(
 
 export async function readStats(
   database: SqlDatabase,
+  at = new Date().toISOString(),
 ): Promise<QuarantineStats> {
-  const stats = await readItemStats(database);
+  const stats = await readItemStats(database, at);
   const events = await database.get<{ event_count: number }>(
     "SELECT COUNT(*) AS event_count FROM quarantine_events",
   );
@@ -288,8 +296,8 @@ async function insertItem(
        quarantine_id, created_at, updated_at, kind, reason, writer_id, source,
        source_bank, source_memory_id, source_content_sha256, dedupe_key, sha256,
        encrypted_envelope, encrypted_bytes, status, postpone_count,
-       requarantine_count
-     ) VALUES (${placeholders(database, 17)})`,
+       requarantine_count, expires_at
+     ) VALUES (${placeholders(database, 18)})`,
     itemParameters(item, envelope),
   );
 }
@@ -307,12 +315,16 @@ async function updateItem(
        reason = ${p(4)}, writer_id = ${p(5)}, source = ${p(6)},
        source_bank = ${p(7)}, source_memory_id = ${p(8)},
        source_content_sha256 = ${p(9)}, dedupe_key = ${p(10)},
-       sha256 = ${p(11)},
-       encrypted_envelope = ${p(12)}, encrypted_bytes = ${p(13)},
+       sha256 = ${p(11)}, encrypted_envelope = ${p(12)},
+       encrypted_bytes = ${p(13)}, expires_at = ${p(14)},
        status = 'pending', postpone_count = 0,
        requarantine_count = requarantine_count + 1
-     WHERE quarantine_id = ${p(14)}`,
-    [...itemParameters(item, envelope).slice(1, 14), quarantineId],
+     WHERE quarantine_id = ${p(15)}`,
+    [
+      ...itemParameters(item, envelope).slice(1, 14),
+      item.expires_at ?? null,
+      quarantineId,
+    ],
   );
 }
 
@@ -358,28 +370,39 @@ function itemParameters(
     item.status,
     item.postpone_count,
     item.requarantine_count ?? 0,
+    item.expires_at ?? null,
   ];
 }
 
 async function readItemStats(
   database: SqlDatabase,
+  at: string,
 ): Promise<Omit<QuarantineStats, "event_count">> {
-  const row = await database.get<Record<string, unknown>>(`
-    SELECT
+  let parameterIndex = 0;
+  const expiredClause = () =>
+    `(status IN ('pending', 'postponed') AND expires_at IS NOT NULL AND expires_at <= ${database.placeholder(++parameterIndex)})`;
+  const row = await database.get<Record<string, unknown>>(
+    `SELECT
       COUNT(*) AS total_items,
-      SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_items,
-      SUM(CASE WHEN status = 'postponed' THEN 1 ELSE 0 END) AS postponed_items,
+      SUM(CASE WHEN status = 'pending' AND NOT ${expiredClause()}
+        THEN 1 ELSE 0 END) AS pending_items,
+      SUM(CASE WHEN status = 'postponed' AND NOT ${expiredClause()}
+        THEN 1 ELSE 0 END) AS postponed_items,
+      SUM(CASE WHEN ${expiredClause()} THEN 1 ELSE 0 END) AS expired_items,
       SUM(CASE WHEN status = 'reviewed_allowed' THEN 1 ELSE 0 END)
         AS reviewed_allowed_items,
       SUM(CASE WHEN status = 'reviewed_blocked' THEN 1 ELSE 0 END)
         AS reviewed_blocked_items,
-      COALESCE(SUM(encrypted_bytes), 0) AS encrypted_bytes
-    FROM quarantine_items
-  `);
+      COALESCE(SUM(CASE WHEN ${expiredClause()} THEN 0 ELSE encrypted_bytes
+        END), 0) AS encrypted_bytes
+    FROM quarantine_items`,
+    [at, at, at, at],
+  );
   return {
     total_items: Number(row?.total_items ?? 0),
     pending_items: Number(row?.pending_items ?? 0),
     postponed_items: Number(row?.postponed_items ?? 0),
+    expired_items: Number(row?.expired_items ?? 0),
     reviewed_allowed_items: Number(row?.reviewed_allowed_items ?? 0),
     reviewed_blocked_items: Number(row?.reviewed_blocked_items ?? 0),
     encrypted_bytes: Number(row?.encrypted_bytes ?? 0),
@@ -392,4 +415,12 @@ function encryptedBytes(
   return item?.encrypted
     ? Buffer.byteLength(JSON.stringify(item.encrypted))
     : 0;
+}
+
+function isExpired(item: StoredQuarantineItem, at: string): boolean {
+  return (
+    (item.status === "pending" || item.status === "postponed") &&
+    item.expires_at !== undefined &&
+    item.expires_at <= at
+  );
 }
