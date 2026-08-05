@@ -72,29 +72,31 @@ describe("quarantine store rate limiting", () => {
     const { store } = memoryQuarantine({
       rateLimitMax: 1,
       rateLimitGlobalMax: 100,
+      distinctFamilyLimitMax: 0,
       rateLimitWindowMs: 60_000,
     });
 
-    await store.put(newWriterPut("writer-a", "first"));
+    await store.put(writerPut("writer-a", "first"));
     await expect(
-      store.put(newWriterPut("writer-a", "second")),
+      store.put(writerPut("writer-a", "second")),
     ).rejects.toMatchObject({ status: 429, code: "quarantine_rate_limited" });
 
-    // A different writer still has its own quota.
-    await store.put(newWriterPut("writer-b", "first"));
+    // A different registered writer still has its own quota.
+    await store.put(writerPut("writer-b", "first"));
   });
 
   it("enforces the global backstop across writers", async () => {
     const { store } = memoryQuarantine({
       rateLimitMax: 10,
       rateLimitGlobalMax: 2,
+      distinctFamilyLimitMax: 0,
       rateLimitWindowMs: 60_000,
     });
 
-    await store.put(newWriterPut("writer-a", "one"));
-    await store.put(newWriterPut("writer-b", "two"));
+    await store.put(writerPut("writer-a", "one"));
+    await store.put(writerPut("writer-b", "two"));
     await expect(
-      store.put(newWriterPut("writer-c", "three")),
+      store.put(writerPut("writer-c", "three")),
     ).rejects.toMatchObject({ status: 429, code: "quarantine_rate_limited" });
   });
 
@@ -102,6 +104,7 @@ describe("quarantine store rate limiting", () => {
     const { store } = memoryQuarantine({
       rateLimitMax: 1,
       rateLimitGlobalMax: 100,
+      distinctFamilyLimitMax: 0,
       requarantineOpsMax: 100,
       rateLimitWindowMs: 60_000,
     });
@@ -121,7 +124,7 @@ describe("quarantine store rate limiting", () => {
 
     // The writer's request quota was only spent on the first, unique event.
     await expect(
-      store.put(newWriterPut("writer-a", "next")),
+      store.put(writerPut("writer-a", "next")),
     ).rejects.toMatchObject({ status: 429 });
   });
 
@@ -129,6 +132,7 @@ describe("quarantine store rate limiting", () => {
     const { store } = memoryQuarantine({
       rateLimitMax: 100,
       rateLimitGlobalMax: 1_000,
+      distinctFamilyLimitMax: 0,
       requarantineOpsMax: 3,
       rateLimitWindowMs: 60_000,
     });
@@ -156,17 +160,18 @@ describe("quarantine store rate limiting", () => {
       maxPendingItems: 1,
       rateLimitMax: 2,
       rateLimitGlobalMax: 100,
+      distinctFamilyLimitMax: 0,
       rateLimitWindowMs: 60_000,
     });
 
-    await store.put(newWriterPut("writer-a", "stored"));
+    await store.put(writerPut("writer-a", "stored"));
     await expect(
-      store.put(newWriterPut("writer-a", "overflow-1")),
+      store.put(writerPut("writer-a", "overflow-1")),
     ).rejects.toMatchObject({ status: 507 });
     // Quota was not burned by the 507, so a further attempt is still
     // rejected by capacity (507), not by the rate limiter (429).
     await expect(
-      store.put(newWriterPut("writer-a", "overflow-2")),
+      store.put(writerPut("writer-a", "overflow-2")),
     ).rejects.toMatchObject({ status: 507 });
   });
 
@@ -174,14 +179,15 @@ describe("quarantine store rate limiting", () => {
     const { store } = memoryQuarantine({
       rateLimitMax: 0,
       rateLimitGlobalMax: 1,
+      distinctFamilyLimitMax: 1,
       rateLimitWindowMs: 60_000,
     });
 
     // A zero per-writer limit turns the whole new-identity limiter off,
-    // including the global backstop, as before the overhaul.
-    await store.put(newWriterPut("writer-a", "one"));
-    await store.put(newWriterPut("writer-b", "two"));
-    await store.put(newWriterPut("writer-c", "three"));
+    // including the global and family backstops, as before the overhaul.
+    await store.put(writerPut("writer-a", "one"));
+    await store.put(writerPut("writer-b", "two"));
+    await store.put(writerPut("writer-c", "three"));
   });
 
   it("does not consume request quota for oversized items", async () => {
@@ -189,22 +195,23 @@ describe("quarantine store rate limiting", () => {
       maxItemBytes: 2_000,
       rateLimitMax: 1,
       rateLimitGlobalMax: 100,
+      distinctFamilyLimitMax: 0,
       rateLimitWindowMs: 60_000,
     });
 
     await expect(
-      store.put(newWriterPut("writer-a", "x".repeat(5_000))),
+      store.put(writerPut("writer-a", "x".repeat(5_000))),
     ).rejects.toMatchObject({ status: 413 });
     // The 413 did not burn the writer's single request slot.
-    await store.put(newWriterPut("writer-a", "ok"));
+    await store.put(writerPut("writer-a", "ok"));
   });
 });
 
-function newWriterPut(writerId: string, marker: string) {
+function writerPut(writerId: string, marker: string) {
   return {
     timestamp: "2026-08-02T00:00:00.000Z",
     kind: "retain_request" as const,
-    reason: "unknown_writer" as const,
+    reason: "suspicious_content" as const,
     writerId,
     source: "openclaw",
     payload: { action: "retain", body: { items: [{ content: marker }] } },

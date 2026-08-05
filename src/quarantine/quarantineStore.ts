@@ -7,6 +7,7 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
+import { requestFamilyIdentity } from "./nearDuplicateKey.js";
 import {
   InMemorySlidingWindowRateLimiter,
   type QuarantineRateLimiter,
@@ -48,6 +49,7 @@ export interface QuarantineStoreLimits {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
+  distinctFamilyLimitMax: number;
   requarantineOpsMax: number;
   itemTtlDays: number;
 }
@@ -60,12 +62,14 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
   rateLimitGlobalMax: 300,
+  distinctFamilyLimitMax: 10,
   requarantineOpsMax: 1_000,
   itemTtlDays: 0,
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GLOBAL_WRITES_BUCKET = "quarantine-writes";
+const FAMILY_SCOPE_BUCKET = "quarantine-request-family";
 const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
 const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
 const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
@@ -243,17 +247,35 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       return;
     }
 
-    const writer = input.writerId ?? UNKNOWN_WRITER_BUCKET;
-    await rateLimitSession.consumeMany([
-      {
-        key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
-        rule: { max: this.limits.rateLimitMax, windowMs },
-      },
-      {
-        key: GLOBAL_WRITES_BUCKET,
-        rule: { max: this.limits.rateLimitGlobalMax, windowMs },
-      },
-    ]);
+    const writer =
+      input.reason === "unknown_writer"
+        ? UNKNOWN_WRITER_BUCKET
+        : (input.writerId ?? UNKNOWN_WRITER_BUCKET);
+    const family = requestFamilyIdentity(input);
+    await rateLimitSession.consumeManyDistinct(
+      [
+        {
+          key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
+          rule: { max: this.limits.rateLimitMax, windowMs },
+        },
+        {
+          key: GLOBAL_WRITES_BUCKET,
+          rule: { max: this.limits.rateLimitGlobalMax, windowMs },
+        },
+      ],
+      family
+        ? [
+            {
+              scope: `${FAMILY_SCOPE_BUCKET}:${family.scope}`,
+              identity: family.family,
+              rule: {
+                max: this.limits.distinctFamilyLimitMax,
+                windowMs,
+              },
+            },
+          ]
+        : [],
+    );
   }
 
   private async isKnownIdentity(
