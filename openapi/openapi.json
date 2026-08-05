@@ -1002,13 +1002,18 @@
       "QuarantineQueueResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["items"],
+        "required": ["items", "total"],
         "properties": {
           "items": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/QuarantineItemSummary"
             }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Total number of reviewable items (pending + postponed) across all pages."
           }
         }
       },
