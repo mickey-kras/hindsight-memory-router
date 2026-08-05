@@ -1,7 +1,12 @@
 import { randomBytes } from "node:crypto";
 import { sha256Hex } from "../canonicalJson.js";
 import { HttpError } from "../httpError.js";
-import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
+import type {
+  BankId,
+  QuarantineItemSummary,
+  QuarantineKind,
+  ReviewReason,
+} from "../types.js";
 import {
   createEncryptedQuarantineEnvelope,
   decodePublicKey,
@@ -16,6 +21,7 @@ import type {
   NewQuarantineItem,
   QuarantineCapacityLimits,
   QuarantineRepository,
+  StoredQuarantineItem,
 } from "./repository.js";
 
 export interface QuarantineInput {
@@ -43,6 +49,7 @@ export interface QuarantineStore {
 export interface QuarantineStoreLimits {
   maxItemBytes: number;
   maxPendingItems: number;
+  maxPendingItemsPerWriter: number;
   maxEncryptedBytes: number;
   rateLimitMax: number;
   rateLimitWindowMs: number;
@@ -54,6 +61,7 @@ export interface QuarantineStoreLimits {
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxItemBytes: 1_048_576,
   maxPendingItems: 1_000,
+  maxPendingItemsPerWriter: 100,
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
@@ -101,11 +109,15 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
+    const capacityScope = this.capacityScope(input);
     return this.rateLimiter.withIdentityLock(
-      quarantineId,
+      `quarantine-capacity:${capacityScope}`,
       async (rateLimitSession) => {
         const existing = await this.repository.get(quarantineId);
         this.assertRequestRefreshAllowed(input, existing?.status);
+        if (!existing) {
+          await this.assertWriterCapacity(input, capacityScope);
+        }
         const knownIdentity = await this.isKnownIdentity(
           input,
           quarantineId,
@@ -148,6 +160,60 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         "matching quarantine request is already being reviewed",
       );
     }
+  }
+
+  private async assertWriterCapacity(
+    input: QuarantineInput,
+    capacityScope: string,
+  ): Promise<void> {
+    const limit = this.limits.maxPendingItemsPerWriter;
+    if (limit <= 0) return;
+
+    const reviewable = await this.repository.listReviewable(
+      this.limits.maxPendingItems + 1,
+      0,
+    );
+    const at = new Date().toISOString();
+    let count = 0;
+    for (const summary of reviewable) {
+      if (!this.matchesCapacityScope(input, capacityScope, summary)) continue;
+      const item = await this.repository.get(summary.quarantine_id);
+      if (!item || isExpired(item, at)) continue;
+      count += 1;
+      if (count >= limit) {
+        throw new HttpError(
+          507,
+          "quarantine_writer_capacity_exceeded",
+          "writer quarantine capacity is exhausted",
+        );
+      }
+    }
+  }
+
+  private capacityScope(input: QuarantineInput): string {
+    if (input.reason === "unknown_writer") return UNKNOWN_WRITER_BUCKET;
+    if (input.writerId !== undefined) return `writer:${input.writerId}`;
+    return `system:${input.kind}`;
+  }
+
+  private matchesCapacityScope(
+    input: QuarantineInput,
+    capacityScope: string,
+    item: QuarantineItemSummary,
+  ): boolean {
+    if (capacityScope === UNKNOWN_WRITER_BUCKET) {
+      return item.reason === "unknown_writer";
+    }
+    if (input.writerId !== undefined) {
+      return (
+        item.reason !== "unknown_writer" && item.writer_id === input.writerId
+      );
+    }
+    return (
+      item.reason !== "unknown_writer" &&
+      item.writer_id === undefined &&
+      item.kind === input.kind
+    );
   }
 
   private encrypt(input: QuarantineInput, quarantineId: string) {
@@ -309,4 +375,12 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     }
     return `q_${input.timestamp.replace(/[^0-9A-Za-z]/g, "")}_${randomBytes(8).toString("hex")}`;
   }
+}
+
+function isExpired(item: StoredQuarantineItem, at: string): boolean {
+  return (
+    (item.status === "pending" || item.status === "postponed") &&
+    item.expires_at !== undefined &&
+    item.expires_at <= at
+  );
 }
