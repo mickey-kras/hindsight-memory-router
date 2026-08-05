@@ -27,12 +27,16 @@ type Schema = {
   properties?: Record<string, Schema>;
 };
 
+type SecurityScheme = {
+  description?: string;
+};
+
 type OpenApiDocument = {
   openapi: string;
   info: { version: string };
   paths: Record<string, Record<string, Operation>>;
   components: {
-    securitySchemes: Record<string, unknown>;
+    securitySchemes: Record<string, SecurityScheme>;
     schemas: Record<string, Schema>;
   };
 };
@@ -161,6 +165,15 @@ describe("OpenAPI contract", () => {
         expect(securityScheme(operation), key).toBe("AdminToken");
       }
     }
+
+    const adminDescription =
+      document.components.securitySchemes.AdminToken?.description ?? "";
+    expect(adminDescription).toContain("read or review");
+    expect(adminDescription).toContain("cleanup");
+    expect(adminDescription).toContain("legacy migration superuser");
+    expect(adminDescription).not.toContain(
+      "MEMORY_ROUTER_ADMIN_TOKEN is required",
+    );
   });
 
   it("documents exact unchanged-object approval", () => {
