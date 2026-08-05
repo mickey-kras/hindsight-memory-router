@@ -7,7 +7,7 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
-import { nearDuplicateKeys } from "./nearDuplicateKey.js";
+import { requestFamilyIdentity } from "./nearDuplicateKey.js";
 import {
   InMemorySlidingWindowRateLimiter,
   type QuarantineRateLimiter,
@@ -49,7 +49,7 @@ export interface QuarantineStoreLimits {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
-  nearDuplicateRateLimitMax?: number;
+  distinctFamilyLimitMax: number;
   requarantineOpsMax: number;
   itemTtlDays: number;
 }
@@ -62,14 +62,14 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
   rateLimitGlobalMax: 300,
-  nearDuplicateRateLimitMax: 10,
+  distinctFamilyLimitMax: 10,
   requarantineOpsMax: 1_000,
   itemTtlDays: 0,
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GLOBAL_WRITES_BUCKET = "quarantine-writes";
-const NEAR_DUPLICATE_BUCKET = "quarantine-near-duplicate";
+const FAMILY_SCOPE_BUCKET = "quarantine-request-family";
 const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
 const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
 const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
@@ -80,7 +80,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private readonly publicKey: string;
   private readonly capacity: QuarantineCapacityLimits;
   private readonly rateLimiter: QuarantineRateLimiter;
-  private readonly nearDuplicateRateLimitMax: number;
 
   constructor(
     publicKey: string,
@@ -95,7 +94,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
     this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
-    this.nearDuplicateRateLimitMax = nearDuplicateLimit(limits);
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
@@ -253,20 +251,31 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       input.reason === "unknown_writer"
         ? UNKNOWN_WRITER_BUCKET
         : (input.writerId ?? UNKNOWN_WRITER_BUCKET);
-    await rateLimitSession.consumeMany([
-      {
-        key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
-        rule: { max: this.limits.rateLimitMax, windowMs },
-      },
-      {
-        key: GLOBAL_WRITES_BUCKET,
-        rule: { max: this.limits.rateLimitGlobalMax, windowMs },
-      },
-      ...nearDuplicateKeys(input).map((key) => ({
-        key: `${NEAR_DUPLICATE_BUCKET}:${key}`,
-        rule: { max: this.nearDuplicateRateLimitMax, windowMs },
-      })),
-    ]);
+    const family = requestFamilyIdentity(input);
+    await rateLimitSession.consumeManyDistinct(
+      [
+        {
+          key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
+          rule: { max: this.limits.rateLimitMax, windowMs },
+        },
+        {
+          key: GLOBAL_WRITES_BUCKET,
+          rule: { max: this.limits.rateLimitGlobalMax, windowMs },
+        },
+      ],
+      family
+        ? [
+            {
+              scope: `${FAMILY_SCOPE_BUCKET}:${family.scope}`,
+              identity: family.family,
+              rule: {
+                max: this.limits.distinctFamilyLimitMax,
+                windowMs,
+              },
+            },
+          ]
+        : [],
+    );
   }
 
   private async isKnownIdentity(
@@ -338,19 +347,4 @@ function effectiveWriterLimit(limits: QuarantineStoreLimits): number {
     Math.floor((limits.maxEncryptedBytes - 1) / limits.maxItemBytes),
   );
   return Math.min(limits.maxPendingItemsPerWriter, itemReserve, byteReserve);
-}
-
-function nearDuplicateLimit(limits: QuarantineStoreLimits): number {
-  if (limits.nearDuplicateRateLimitMax !== undefined) {
-    return limits.nearDuplicateRateLimitMax;
-  }
-  const raw = process.env.QUARANTINE_NEAR_DUPLICATE_RATE_LIMIT_MAX;
-  if (raw === undefined) return 10;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(
-      "QUARANTINE_NEAR_DUPLICATE_RATE_LIMIT_MAX must be a non-negative integer",
-    );
-  }
-  return value;
 }
