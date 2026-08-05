@@ -147,11 +147,12 @@ A leaked read token cannot mutate quarantine state. A leaked cleanup token canno
 Token migration and rotation:
 
 1. Generate independent read, review, and cleanup tokens.
-2. Configure the scoped tokens while temporarily retaining the legacy admin token.
+2. Configure the scoped tokens while temporarily retaining the legacy admin token, then restart the router.
 3. Update each admin client to use only the token matching its responsibilities.
-4. Unset `MEMORY_ROUTER_ADMIN_TOKEN` and restart the router.
-5. Rotate any individual scoped token without changing the others.
-6. Review quarantine events if compromise is suspected.
+4. Verify every scoped client works and confirm the startup warning still reports the legacy migration superuser as active.
+5. Unset `MEMORY_ROUTER_ADMIN_TOKEN` and restart the router again.
+6. Rotate any individual scoped token without changing the others.
+7. Review quarantine events if compromise is suspected.
 
 Keep tokens out of prompts, logs, shell history, and committed configuration.
 
