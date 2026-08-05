@@ -4,7 +4,11 @@ import { describe, expect, it } from "vitest";
 // Guards .env.example against drifting from the configuration the router
 // actually reads. Every MEMORY_ROUTER_*/QUARANTINE_*/HINDSIGHT_* variable
 // referenced by the server configuration must be present in .env.example.
-const CONFIG_SOURCES = ["src/server.ts", "src/adminRateLimit.ts"];
+const CONFIG_SOURCES = [
+  "src/server.ts",
+  "src/adminRateLimit.ts",
+  "src/routerAuth.ts",
+];
 
 function envVarsReadByServer(): Set<string> {
   const names = new Set<string>();
