@@ -1,12 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { sha256Hex } from "../canonicalJson.js";
 import { HttpError } from "../httpError.js";
-import type {
-  BankId,
-  QuarantineItemSummary,
-  QuarantineKind,
-  ReviewReason,
-} from "../types.js";
+import type { BankId, QuarantineKind, ReviewReason } from "../types.js";
 import {
   createEncryptedQuarantineEnvelope,
   decodePublicKey,
@@ -21,7 +16,6 @@ import type {
   NewQuarantineItem,
   QuarantineCapacityLimits,
   QuarantineRepository,
-  StoredQuarantineItem,
 } from "./repository.js";
 
 export interface QuarantineInput {
@@ -61,7 +55,7 @@ export interface QuarantineStoreLimits {
 export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   maxItemBytes: 1_048_576,
   maxPendingItems: 1_000,
-  maxPendingItemsPerWriter: 100,
+  maxPendingItemsPerWriter: 50,
   maxEncryptedBytes: 104_857_600,
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
@@ -89,9 +83,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
     rateLimiter?: QuarantineRateLimiter,
   ) {
+    assertFairCapacityConfiguration(limits);
     this.publicKey = decodePublicKey(publicKey);
     this.capacity = {
       maxPendingItems: limits.maxPendingItems,
+      maxPendingItemsPerWriter: limits.maxPendingItemsPerWriter,
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
     this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
@@ -109,15 +105,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       );
     }
 
-    const capacityScope = this.capacityScope(input);
     return this.rateLimiter.withIdentityLock(
-      `quarantine-capacity:${capacityScope}`,
+      quarantineId,
       async (rateLimitSession) => {
         const existing = await this.repository.get(quarantineId);
         this.assertRequestRefreshAllowed(input, existing?.status);
-        if (!existing) {
-          await this.assertWriterCapacity(input, capacityScope);
-        }
         const knownIdentity = await this.isKnownIdentity(
           input,
           quarantineId,
@@ -160,60 +152,6 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         "matching quarantine request is already being reviewed",
       );
     }
-  }
-
-  private async assertWriterCapacity(
-    input: QuarantineInput,
-    capacityScope: string,
-  ): Promise<void> {
-    const limit = this.limits.maxPendingItemsPerWriter;
-    if (limit <= 0) return;
-
-    const reviewable = await this.repository.listReviewable(
-      this.limits.maxPendingItems + 1,
-      0,
-    );
-    const at = new Date().toISOString();
-    let count = 0;
-    for (const summary of reviewable) {
-      if (!this.matchesCapacityScope(input, capacityScope, summary)) continue;
-      const item = await this.repository.get(summary.quarantine_id);
-      if (!item || isExpired(item, at)) continue;
-      count += 1;
-      if (count >= limit) {
-        throw new HttpError(
-          507,
-          "quarantine_writer_capacity_exceeded",
-          "writer quarantine capacity is exhausted",
-        );
-      }
-    }
-  }
-
-  private capacityScope(input: QuarantineInput): string {
-    if (input.reason === "unknown_writer") return UNKNOWN_WRITER_BUCKET;
-    if (input.writerId !== undefined) return `writer:${input.writerId}`;
-    return `system:${input.kind}`;
-  }
-
-  private matchesCapacityScope(
-    input: QuarantineInput,
-    capacityScope: string,
-    item: QuarantineItemSummary,
-  ): boolean {
-    if (capacityScope === UNKNOWN_WRITER_BUCKET) {
-      return item.reason === "unknown_writer";
-    }
-    if (input.writerId !== undefined) {
-      return (
-        item.reason !== "unknown_writer" && item.writer_id === input.writerId
-      );
-    }
-    return (
-      item.reason !== "unknown_writer" &&
-      item.writer_id === undefined &&
-      item.kind === input.kind
-    );
   }
 
   private encrypt(input: QuarantineInput, quarantineId: string) {
@@ -377,10 +315,17 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 }
 
-function isExpired(item: StoredQuarantineItem, at: string): boolean {
-  return (
-    (item.status === "pending" || item.status === "postponed") &&
-    item.expires_at !== undefined &&
-    item.expires_at <= at
-  );
+function assertFairCapacityConfiguration(limits: QuarantineStoreLimits): void {
+  const writerLimit = limits.maxPendingItemsPerWriter;
+  if (writerLimit <= 0) return;
+  if (writerLimit >= limits.maxPendingItems) {
+    throw new Error(
+      "QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER must be below QUARANTINE_MAX_PENDING_ITEMS",
+    );
+  }
+  if (writerLimit * limits.maxItemBytes >= limits.maxEncryptedBytes) {
+    throw new Error(
+      "per-writer quarantine capacity must leave encrypted-byte capacity for other writers",
+    );
+  }
 }
