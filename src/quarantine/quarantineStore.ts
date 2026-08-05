@@ -49,7 +49,7 @@ export interface QuarantineStoreLimits {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
-  nearDuplicateRateLimitMax: number;
+  nearDuplicateRateLimitMax?: number;
   requarantineOpsMax: number;
   itemTtlDays: number;
 }
@@ -80,6 +80,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   private readonly publicKey: string;
   private readonly capacity: QuarantineCapacityLimits;
   private readonly rateLimiter: QuarantineRateLimiter;
+  private readonly nearDuplicateRateLimitMax: number;
 
   constructor(
     publicKey: string,
@@ -94,6 +95,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
     this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
+    this.nearDuplicateRateLimitMax = nearDuplicateLimit(limits);
   }
 
   async put(input: QuarantineInput): Promise<QuarantineResult> {
@@ -251,7 +253,7 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       input.reason === "unknown_writer"
         ? UNKNOWN_WRITER_BUCKET
         : (input.writerId ?? UNKNOWN_WRITER_BUCKET);
-    const buckets = [
+    await rateLimitSession.consumeMany([
       {
         key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
         rule: { max: this.limits.rateLimitMax, windowMs },
@@ -262,10 +264,9 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       },
       ...nearDuplicateKeys(input).map((key) => ({
         key: `${NEAR_DUPLICATE_BUCKET}:${key}`,
-        rule: { max: this.limits.nearDuplicateRateLimitMax, windowMs },
+        rule: { max: this.nearDuplicateRateLimitMax, windowMs },
       })),
-    ];
-    await rateLimitSession.consumeMany(buckets);
+    ]);
   }
 
   private async isKnownIdentity(
@@ -337,4 +338,19 @@ function effectiveWriterLimit(limits: QuarantineStoreLimits): number {
     Math.floor((limits.maxEncryptedBytes - 1) / limits.maxItemBytes),
   );
   return Math.min(limits.maxPendingItemsPerWriter, itemReserve, byteReserve);
+}
+
+function nearDuplicateLimit(limits: QuarantineStoreLimits): number {
+  if (limits.nearDuplicateRateLimitMax !== undefined) {
+    return limits.nearDuplicateRateLimitMax;
+  }
+  const raw = process.env.QUARANTINE_NEAR_DUPLICATE_RATE_LIMIT_MAX;
+  if (raw === undefined) return 10;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(
+      "QUARANTINE_NEAR_DUPLICATE_RATE_LIMIT_MAX must be a non-negative integer",
+    );
+  }
+  return value;
 }
