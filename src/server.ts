@@ -99,9 +99,6 @@ export interface CreateMemoryRouterServerOptions {
 }
 
 export interface CreateConfiguredMemoryRouterServerOptions extends CreateMemoryRouterServerOptions {
-  // Validates quarantine storage reachability and writability at startup,
-  // failing fast with a clear error. Defaults to true; only disable for
-  // embedded deployments that validate storage themselves.
   validateStorage?: boolean;
 }
 
@@ -159,6 +156,10 @@ function buildLimits(): QuarantineStoreLimits {
     rateLimitGlobalMax: numberEnv(
       "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
       DEFAULT_QUARANTINE_LIMITS.rateLimitGlobalMax,
+    ),
+    distinctFamilyLimitMax: numberEnv(
+      "QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX",
+      DEFAULT_QUARANTINE_LIMITS.distinctFamilyLimitMax,
     ),
     requarantineOpsMax: numberEnv(
       "QUARANTINE_REQUARANTINE_OPS_MAX",
