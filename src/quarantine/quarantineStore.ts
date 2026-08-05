@@ -83,11 +83,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
     private readonly limits: QuarantineStoreLimits = DEFAULT_QUARANTINE_LIMITS,
     rateLimiter?: QuarantineRateLimiter,
   ) {
-    assertFairCapacityConfiguration(limits);
     this.publicKey = decodePublicKey(publicKey);
     this.capacity = {
       maxPendingItems: limits.maxPendingItems,
-      maxPendingItemsPerWriter: limits.maxPendingItemsPerWriter,
+      maxPendingItemsPerWriter: effectiveWriterLimit(limits),
       maxEncryptedBytes: limits.maxEncryptedBytes,
     };
     this.rateLimiter = rateLimiter ?? new InMemorySlidingWindowRateLimiter();
@@ -315,17 +314,16 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
   }
 }
 
-function assertFairCapacityConfiguration(limits: QuarantineStoreLimits): void {
-  const writerLimit = limits.maxPendingItemsPerWriter;
-  if (writerLimit <= 0) return;
-  if (writerLimit >= limits.maxPendingItems) {
-    throw new Error(
-      "QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER must be below QUARANTINE_MAX_PENDING_ITEMS",
-    );
-  }
-  if (writerLimit * limits.maxItemBytes >= limits.maxEncryptedBytes) {
-    throw new Error(
-      "per-writer quarantine capacity must leave encrypted-byte capacity for other writers",
-    );
-  }
+function effectiveWriterLimit(limits: QuarantineStoreLimits): number {
+  if (limits.maxPendingItemsPerWriter <= 0) return 0;
+  const itemReserve = Math.max(0, limits.maxPendingItems - 1);
+  const byteReserve = Math.max(
+    0,
+    Math.floor((limits.maxEncryptedBytes - 1) / limits.maxItemBytes),
+  );
+  return Math.min(
+    limits.maxPendingItemsPerWriter,
+    itemReserve,
+    byteReserve,
+  );
 }
