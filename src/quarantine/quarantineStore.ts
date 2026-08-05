@@ -7,6 +7,7 @@ import {
   decodePublicKey,
   type DecryptedQuarantineObject,
 } from "./envelopeCrypto.js";
+import { nearDuplicateKeys } from "./nearDuplicateKey.js";
 import {
   InMemorySlidingWindowRateLimiter,
   type QuarantineRateLimiter,
@@ -48,6 +49,7 @@ export interface QuarantineStoreLimits {
   rateLimitMax: number;
   rateLimitWindowMs: number;
   rateLimitGlobalMax: number;
+  nearDuplicateRateLimitMax: number;
   requarantineOpsMax: number;
   itemTtlDays: number;
 }
@@ -60,12 +62,14 @@ export const DEFAULT_QUARANTINE_LIMITS: QuarantineStoreLimits = {
   rateLimitMax: 30,
   rateLimitWindowMs: 60_000,
   rateLimitGlobalMax: 300,
+  nearDuplicateRateLimitMax: 10,
   requarantineOpsMax: 1_000,
   itemTtlDays: 0,
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GLOBAL_WRITES_BUCKET = "quarantine-writes";
+const NEAR_DUPLICATE_BUCKET = "quarantine-near-duplicate";
 const REQUARANTINE_OPS_BUCKET = "quarantine-requarantine-ops";
 const AUTH_AUDIT_WRITES_BUCKET = "quarantine-writes:auth-audit";
 const AUTH_AUDIT_REQUARANTINE_OPS_BUCKET =
@@ -243,8 +247,11 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
       return;
     }
 
-    const writer = input.writerId ?? UNKNOWN_WRITER_BUCKET;
-    await rateLimitSession.consumeMany([
+    const writer =
+      input.reason === "unknown_writer"
+        ? UNKNOWN_WRITER_BUCKET
+        : (input.writerId ?? UNKNOWN_WRITER_BUCKET);
+    const buckets = [
       {
         key: `${GLOBAL_WRITES_BUCKET}:writer:${writer}`,
         rule: { max: this.limits.rateLimitMax, windowMs },
@@ -253,7 +260,12 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         key: GLOBAL_WRITES_BUCKET,
         rule: { max: this.limits.rateLimitGlobalMax, windowMs },
       },
-    ]);
+      ...nearDuplicateKeys(input).map((key) => ({
+        key: `${NEAR_DUPLICATE_BUCKET}:${key}`,
+        rule: { max: this.limits.nearDuplicateRateLimitMax, windowMs },
+      })),
+    ];
+    await rateLimitSession.consumeMany(buckets);
   }
 
   private async isKnownIdentity(
