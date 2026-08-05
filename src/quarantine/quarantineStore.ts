@@ -321,9 +321,5 @@ function effectiveWriterLimit(limits: QuarantineStoreLimits): number {
     0,
     Math.floor((limits.maxEncryptedBytes - 1) / limits.maxItemBytes),
   );
-  return Math.min(
-    limits.maxPendingItemsPerWriter,
-    itemReserve,
-    byteReserve,
-  );
+  return Math.min(limits.maxPendingItemsPerWriter, itemReserve, byteReserve);
 }
