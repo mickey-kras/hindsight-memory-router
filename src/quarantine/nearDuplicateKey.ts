@@ -7,14 +7,19 @@ const ORDER_INSENSITIVE_ARRAY_KEYS = new Set([
   "types",
 ]);
 
-export function nearDuplicateKeys(input: {
+export interface RequestFamilyIdentity {
+  scope: string;
+  family: string;
+}
+
+export function requestFamilyIdentity(input: {
   kind: QuarantineKind;
   reason: ReviewReason;
   writerId?: string;
   payload: unknown;
-}): readonly string[] {
+}): RequestFamilyIdentity | null {
   if (input.kind !== "retain_request" && input.kind !== "recall_request") {
-    return [];
+    return null;
   }
   const scope =
     input.reason === "unknown_writer"
@@ -23,22 +28,17 @@ export function nearDuplicateKeys(input: {
   const base = {
     kind: input.kind,
     reason: input.reason,
-    scope,
   };
-  return [
-    sha256Hex(
-      canonicalJson({
-        ...base,
-        payload: normalizeValue(input.payload),
-      }),
-    ),
-    sha256Hex(
-      canonicalJson({
-        ...base,
-        payload: shapeValue(input.payload),
-      }),
-    ),
-  ];
+  const normalized = sha256Hex(
+    canonicalJson({ ...base, payload: normalizeValue(input.payload) }),
+  );
+  const structural = sha256Hex(
+    canonicalJson({ ...base, payload: shapeValue(input.payload) }),
+  );
+  return {
+    scope: `${input.kind}:${input.reason}:${scope}`,
+    family: sha256Hex(`${normalized}:${structural}`),
+  };
 }
 
 function normalizeValue(value: unknown, key?: string): unknown {
