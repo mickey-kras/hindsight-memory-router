@@ -56,72 +56,80 @@ async function reject(baseUrl: string, token: string): Promise<Response> {
   });
 }
 
+async function assertReadEndpoints(baseUrl: string, token: string) {
+  expect(
+    await fetch(`${baseUrl}/admin/quarantine/stats`, {
+      headers: auth(token),
+    }),
+  ).toMatchObject({ status: 200 });
+  expect(
+    await fetch(`${baseUrl}/admin/quarantine/queue`, {
+      headers: auth(token),
+    }),
+  ).toMatchObject({ status: 200 });
+  const item = await fetch(`${baseUrl}/admin/quarantine/items/missing`, {
+    headers: auth(token),
+  });
+  expect(item.status).toBe(400);
+  expect(item.status).not.toBe(401);
+}
+
 describe("scoped admin tokens", () => {
   it("limits the read token to read-only endpoints", async () => {
     await withServer({ adminReadToken: "read-token" }, async (baseUrl) => {
-      expect(
-        await fetch(`${baseUrl}/admin/quarantine/stats`, {
-          headers: auth("read-token"),
-        }),
-      ).toMatchObject({ status: 200 });
-      expect(await reject(baseUrl, "read-token")).toMatchObject({
-        status: 401,
-      });
-      expect(await cleanup(baseUrl, "read-token")).toMatchObject({
-        status: 401,
-      });
+      await assertReadEndpoints(baseUrl, "read-token");
+      expect(await reject(baseUrl, "read-token")).toMatchObject({ status: 401 });
+      expect(await cleanup(baseUrl, "read-token")).toMatchObject({ status: 401 });
     });
   });
 
   it("lets the review token read and review but not clean up", async () => {
     await withServer({ adminReviewToken: "review-token" }, async (baseUrl) => {
-      expect(
-        await fetch(`${baseUrl}/admin/quarantine/stats`, {
-          headers: auth("review-token"),
-        }),
-      ).toMatchObject({ status: 200 });
+      await assertReadEndpoints(baseUrl, "review-token");
       const reviewed = await reject(baseUrl, "review-token");
       expect(reviewed.status).toBe(400);
       expect(reviewed.status).not.toBe(401);
-      expect(await cleanup(baseUrl, "review-token")).toMatchObject({
-        status: 401,
-      });
+      expect(await cleanup(baseUrl, "review-token")).toMatchObject({ status: 401 });
     });
   });
 
   it("limits the cleanup token to cleanup", async () => {
-    await withServer(
-      { adminCleanupToken: "cleanup-token" },
-      async (baseUrl) => {
-        expect(await cleanup(baseUrl, "cleanup-token")).toMatchObject({
-          status: 200,
-        });
-        expect(
-          await fetch(`${baseUrl}/admin/quarantine/stats`, {
-            headers: auth("cleanup-token"),
-          }),
-        ).toMatchObject({ status: 401 });
-        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({
-          status: 401,
-        });
-      },
-    );
+    await withServer({ adminCleanupToken: "cleanup-token" }, async (baseUrl) => {
+      expect(await cleanup(baseUrl, "cleanup-token")).toMatchObject({ status: 200 });
+      expect(
+        await fetch(`${baseUrl}/admin/quarantine/stats`, {
+          headers: auth("cleanup-token"),
+        }),
+      ).toMatchObject({ status: 401 });
+      expect(await reject(baseUrl, "cleanup-token")).toMatchObject({ status: 401 });
+    });
   });
 
   it("keeps the legacy admin token as a migration superuser", async () => {
     await withServer({ adminToken: "legacy-token" }, async (baseUrl) => {
-      expect(
-        await fetch(`${baseUrl}/admin/quarantine/stats`, {
-          headers: auth("legacy-token"),
-        }),
-      ).toMatchObject({ status: 200 });
+      await assertReadEndpoints(baseUrl, "legacy-token");
       const reviewed = await reject(baseUrl, "legacy-token");
       expect(reviewed.status).toBe(400);
       expect(reviewed.status).not.toBe(401);
-      expect(await cleanup(baseUrl, "legacy-token")).toMatchObject({
-        status: 200,
-      });
+      expect(await cleanup(baseUrl, "legacy-token")).toMatchObject({ status: 200 });
     });
+  });
+
+  it("keeps both legacy and scoped credentials active during migration", async () => {
+    await withServer(
+      {
+        adminToken: "legacy-token",
+        adminReadToken: "read-token",
+        adminReviewToken: "review-token",
+        adminCleanupToken: "cleanup-token",
+      },
+      async (baseUrl) => {
+        await assertReadEndpoints(baseUrl, "legacy-token");
+        await assertReadEndpoints(baseUrl, "read-token");
+        await assertReadEndpoints(baseUrl, "review-token");
+        expect(await cleanup(baseUrl, "cleanup-token")).toMatchObject({ status: 200 });
+      },
+    );
   });
 
   it("does not let one scoped token impersonate another scope", async () => {
@@ -132,18 +140,10 @@ describe("scoped admin tokens", () => {
         adminCleanupToken: "cleanup-token",
       },
       async (baseUrl) => {
-        expect(await cleanup(baseUrl, "read-token")).toMatchObject({
-          status: 401,
-        });
-        expect(await cleanup(baseUrl, "review-token")).toMatchObject({
-          status: 401,
-        });
-        expect(await reject(baseUrl, "read-token")).toMatchObject({
-          status: 401,
-        });
-        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({
-          status: 401,
-        });
+        expect(await cleanup(baseUrl, "read-token")).toMatchObject({ status: 401 });
+        expect(await cleanup(baseUrl, "review-token")).toMatchObject({ status: 401 });
+        expect(await reject(baseUrl, "read-token")).toMatchObject({ status: 401 });
+        expect(await reject(baseUrl, "cleanup-token")).toMatchObject({ status: 401 });
       },
     );
   });
