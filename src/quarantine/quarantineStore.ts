@@ -120,7 +120,10 @@ export class EncryptedDatabaseQuarantineStore implements QuarantineStore {
         if (input.kind === "recalled_memory") {
           await this.repository.upsertRecalledMemory(item, this.capacity);
         } else if (input.kind === "security_event") {
-          await this.repository.upsertSecurityEvent(item, this.capacity);
+          await this.repository.upsertSecurityEvent(item, {
+            ...this.capacity,
+            maxPendingItemsPerWriter: 0,
+          });
         } else if (item.dedupe_key) {
           await this.repository.upsertRequestItem(item, this.capacity);
         } else {
