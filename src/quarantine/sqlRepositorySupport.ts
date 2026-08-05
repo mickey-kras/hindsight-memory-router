@@ -53,9 +53,21 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_quarantine_events_type
       ON quarantine_events(event_type, occurred_at);
   `);
-  await ensureColumn(database, "dedupe_key", "ALTER TABLE quarantine_items ADD COLUMN dedupe_key TEXT");
-  await ensureColumn(database, "requarantine_count", "ALTER TABLE quarantine_items ADD COLUMN requarantine_count INTEGER NOT NULL DEFAULT 0");
-  await ensureColumn(database, "expires_at", "ALTER TABLE quarantine_items ADD COLUMN expires_at TEXT");
+  await ensureColumn(
+    database,
+    "dedupe_key",
+    "ALTER TABLE quarantine_items ADD COLUMN dedupe_key TEXT",
+  );
+  await ensureColumn(
+    database,
+    "requarantine_count",
+    "ALTER TABLE quarantine_items ADD COLUMN requarantine_count INTEGER NOT NULL DEFAULT 0",
+  );
+  await ensureColumn(
+    database,
+    "expires_at",
+    "ALTER TABLE quarantine_items ADD COLUMN expires_at TEXT",
+  );
   await database.executeScript(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key
       ON quarantine_items(dedupe_key)
@@ -66,15 +78,25 @@ export async function initializeSchema(database: SqlDatabase): Promise<void> {
   `);
 }
 
-async function ensureColumn(database: SqlDatabase, column: "dedupe_key" | "requarantine_count" | "expires_at", alterStatement: string): Promise<void> {
+async function ensureColumn(
+  database: SqlDatabase,
+  column: "dedupe_key" | "requarantine_count" | "expires_at",
+  alterStatement: string,
+): Promise<void> {
   try {
-    await database.get(`SELECT ${column} FROM quarantine_items WHERE 1 = 0 LIMIT 1`);
+    await database.get(
+      `SELECT ${column} FROM quarantine_items WHERE 1 = 0 LIMIT 1`,
+    );
   } catch {
     await database.run(alterStatement);
   }
 }
 
-export async function findItemById(database: SqlDatabase, quarantineId: string, lock = false): Promise<StoredQuarantineItem | null> {
+export async function findItemById(
+  database: SqlDatabase,
+  quarantineId: string,
+  lock = false,
+): Promise<StoredQuarantineItem | null> {
   const row = await database.get<Record<string, unknown>>(
     `SELECT * FROM quarantine_items
      WHERE quarantine_id = ${database.placeholder(1)}${lock ? database.rowLockClause : ""}`,
@@ -83,7 +105,12 @@ export async function findItemById(database: SqlDatabase, quarantineId: string, 
   return row ? parseStoredItem(row) : null;
 }
 
-export async function findItemBySource(database: SqlDatabase, sourceBank: string, sourceMemoryId: string, lock = false): Promise<StoredQuarantineItem | null> {
+export async function findItemBySource(
+  database: SqlDatabase,
+  sourceBank: string,
+  sourceMemoryId: string,
+  lock = false,
+): Promise<StoredQuarantineItem | null> {
   const row = await database.get<Record<string, unknown>>(
     `SELECT * FROM quarantine_items
      WHERE source_bank = ${database.placeholder(1)}
@@ -93,7 +120,11 @@ export async function findItemBySource(database: SqlDatabase, sourceBank: string
   return row ? parseStoredItem(row) : null;
 }
 
-export async function findItemByDedupeKey(database: SqlDatabase, dedupeKey: string, lock = false): Promise<StoredQuarantineItem | null> {
+export async function findItemByDedupeKey(
+  database: SqlDatabase,
+  dedupeKey: string,
+  lock = false,
+): Promise<StoredQuarantineItem | null> {
   const row = await database.get<Record<string, unknown>>(
     `SELECT * FROM quarantine_items
      WHERE dedupe_key = ${database.placeholder(1)}${lock ? database.rowLockClause : ""}`,
@@ -102,38 +133,83 @@ export async function findItemByDedupeKey(database: SqlDatabase, dedupeKey: stri
   return row ? parseStoredItem(row) : null;
 }
 
-export async function createStoredItem(database: SqlDatabase, item: NewQuarantineItem): Promise<void> {
+export async function createStoredItem(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+): Promise<void> {
   await insertItem(database, item);
   await insertItemEvent(database, item, "quarantined");
 }
 
-export async function refreshStoredItem(database: SqlDatabase, quarantineId: string, item: NewQuarantineItem, requarantineCount: number): Promise<void> {
+export async function refreshStoredItem(
+  database: SqlDatabase,
+  quarantineId: string,
+  item: NewQuarantineItem,
+  requarantineCount: number,
+): Promise<void> {
   await updateItem(database, quarantineId, item);
-  await insertItemEvent(database, item, "requarantined", quarantineId, requarantineCount);
+  await insertItemEvent(
+    database,
+    item,
+    "requarantined",
+    quarantineId,
+    requarantineCount,
+  );
 }
 
-export async function assertCapacity(database: SqlDatabase, item: NewQuarantineItem, existing: StoredQuarantineItem | null, limits?: QuarantineCapacityLimits): Promise<void> {
+export async function assertCapacity(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+  existing: StoredQuarantineItem | null,
+  limits?: QuarantineCapacityLimits,
+): Promise<void> {
   if (!limits) return;
   const at = new Date().toISOString();
   const stats = await readItemStats(database, at);
   const existingLive = existing && !isExpired(existing, at) ? existing : null;
-  const existingReviewable = existingLive?.status === "pending" || existingLive?.status === "postponed" ? 1 : 0;
-  const existingScopedReviewable = existingReviewable && existingLive && sameCapacityScope(item, existingLive) ? 1 : 0;
-  const nextPendingItems = stats.pending_items + stats.postponed_items - existingReviewable + 1;
-  const nextEncryptedBytes = stats.encrypted_bytes - encryptedBytes(existingLive) + encryptedBytes(item);
+  const existingReviewable =
+    existingLive?.status === "pending" || existingLive?.status === "postponed"
+      ? 1
+      : 0;
+  const existingScopedReviewable =
+    existingReviewable && existingLive && sameCapacityScope(item, existingLive)
+      ? 1
+      : 0;
+  const nextPendingItems =
+    stats.pending_items + stats.postponed_items - existingReviewable + 1;
+  const nextEncryptedBytes =
+    stats.encrypted_bytes - encryptedBytes(existingLive) + encryptedBytes(item);
 
-  if (nextPendingItems > limits.maxPendingItems || nextEncryptedBytes > limits.maxEncryptedBytes) {
-    throw new HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted");
+  if (
+    nextPendingItems > limits.maxPendingItems ||
+    nextEncryptedBytes > limits.maxEncryptedBytes
+  ) {
+    throw new HttpError(
+      507,
+      "quarantine_capacity_exceeded",
+      "quarantine capacity is exhausted",
+    );
   }
   if (limits.maxPendingItemsPerWriter > 0) {
     const scoped = await readScopedReviewableCount(database, item, at);
-    if (scoped - existingScopedReviewable + 1 > limits.maxPendingItemsPerWriter) {
-      throw new HttpError(507, "quarantine_writer_capacity_exceeded", "writer quarantine capacity is exhausted");
+    if (
+      scoped - existingScopedReviewable + 1 >
+      limits.maxPendingItemsPerWriter
+    ) {
+      throw new HttpError(
+        507,
+        "quarantine_writer_capacity_exceeded",
+        "writer quarantine capacity is exhausted",
+      );
     }
   }
 }
 
-async function readScopedReviewableCount(database: SqlDatabase, item: NewQuarantineItem, at: string): Promise<number> {
+async function readScopedReviewableCount(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+  at: string,
+): Promise<number> {
   const p = (index: number) => database.placeholder(index);
   let scope: string;
   let params: unknown[];
@@ -157,56 +233,102 @@ async function readScopedReviewableCount(database: SqlDatabase, item: NewQuarant
   return Number(row?.count ?? 0);
 }
 
-export async function readStats(database: SqlDatabase, at = new Date().toISOString()): Promise<QuarantineStats> {
+export async function readStats(
+  database: SqlDatabase,
+  at = new Date().toISOString(),
+): Promise<QuarantineStats> {
   const stats = await readItemStats(database, at);
-  const events = await database.get<{ event_count: number }>("SELECT COUNT(*) AS event_count FROM quarantine_events");
+  const events = await database.get<{ event_count: number }>(
+    "SELECT COUNT(*) AS event_count FROM quarantine_events",
+  );
   return { ...stats, event_count: Number(events?.event_count ?? 0) };
 }
 
-export async function insertEvent(database: SqlDatabase, event: QuarantineEvent): Promise<void> {
+export async function insertEvent(
+  database: SqlDatabase,
+  event: QuarantineEvent,
+): Promise<void> {
   await database.run(
     `INSERT INTO quarantine_events
        (event_id, quarantine_id, occurred_at, event_type, details)
      VALUES (${placeholders(database, 5)})`,
-    [event.event_id, event.quarantine_id, event.occurred_at, event.event_type, JSON.stringify(event.details)],
+    [
+      event.event_id,
+      event.quarantine_id,
+      event.occurred_at,
+      event.event_type,
+      JSON.stringify(event.details),
+    ],
   );
 }
 
-export async function requireItem(database: SqlDatabase, quarantineId: string): Promise<StoredQuarantineItem> {
+export async function requireItem(
+  database: SqlDatabase,
+  quarantineId: string,
+): Promise<StoredQuarantineItem> {
   const item = await findItemById(database, quarantineId, true);
-  if (!item) throw new HttpError(404, "quarantine_not_found", "quarantine item not found");
+  if (!item)
+    throw new HttpError(
+      404,
+      "quarantine_not_found",
+      "quarantine item not found",
+    );
   return item;
 }
 
-export async function requireReviewable(database: SqlDatabase, quarantineId: string): Promise<StoredQuarantineItem> {
+export async function requireReviewable(
+  database: SqlDatabase,
+  quarantineId: string,
+): Promise<StoredQuarantineItem> {
   const item = await requireItem(database, quarantineId);
   if (item.status !== "pending" && item.status !== "postponed") {
-    throw new HttpError(409, "quarantine_already_finalized", "quarantine item is not pending review");
+    throw new HttpError(
+      409,
+      "quarantine_already_finalized",
+      "quarantine item is not pending review",
+    );
   }
   return item;
 }
 
-export function cleanupWhere(database: SqlDatabase, filter: CleanupFilter): { where: string; params: string[] } {
+export function cleanupWhere(
+  database: SqlDatabase,
+  filter: CleanupFilter,
+): { where: string; params: string[] } {
   const conditions: string[] = [];
   const params: string[] = [];
   let parameterIndex = 1;
-  conditions.push((filter.scope ?? "pending") === "pending" ? "status IN ('pending', 'postponed')" : "status <> 'review_in_progress'");
+  conditions.push(
+    (filter.scope ?? "pending") === "pending"
+      ? "status IN ('pending', 'postponed')"
+      : "status <> 'review_in_progress'",
+  );
   if (filter.reasons?.length) {
-    conditions.push(`reason IN (${filter.reasons.map(() => database.placeholder(parameterIndex++)).join(", ")})`);
+    conditions.push(
+      `reason IN (${filter.reasons.map(() => database.placeholder(parameterIndex++)).join(", ")})`,
+    );
     params.push(...filter.reasons);
   }
   if (filter.older_than) {
     conditions.push(`created_at < ${database.placeholder(parameterIndex)}`);
     params.push(filter.older_than);
   }
-  return { where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "", params };
+  return {
+    where: conditions.length ? `WHERE ${conditions.join(" AND ")}` : "",
+    params,
+  };
 }
 
 function placeholders(database: SqlDatabase, count: number): string {
-  return Array.from({ length: count }, (_, index) => database.placeholder(index + 1)).join(", ");
+  return Array.from({ length: count }, (_, index) =>
+    database.placeholder(index + 1),
+  ).join(", ");
 }
 
-async function insertItem(database: SqlDatabase, item: NewQuarantineItem): Promise<void> {
+async function insertItem(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+): Promise<void> {
   const envelope = JSON.stringify(item.encrypted);
   await database.run(
     `INSERT INTO quarantine_items (
@@ -219,7 +341,11 @@ async function insertItem(database: SqlDatabase, item: NewQuarantineItem): Promi
   );
 }
 
-async function updateItem(database: SqlDatabase, quarantineId: string, item: NewQuarantineItem): Promise<void> {
+async function updateItem(
+  database: SqlDatabase,
+  quarantineId: string,
+  item: NewQuarantineItem,
+): Promise<void> {
   const p = (index: number) => database.placeholder(index);
   const envelope = JSON.stringify(item.encrypted);
   await database.run(
@@ -233,36 +359,67 @@ async function updateItem(database: SqlDatabase, quarantineId: string, item: New
        status = 'pending', postpone_count = 0,
        requarantine_count = requarantine_count + 1
      WHERE quarantine_id = ${p(15)}`,
-    [...itemParameters(item, envelope).slice(1, 14), item.expires_at ?? null, quarantineId],
+    [
+      ...itemParameters(item, envelope).slice(1, 14),
+      item.expires_at ?? null,
+      quarantineId,
+    ],
   );
 }
 
-async function insertItemEvent(database: SqlDatabase, item: NewQuarantineItem, eventType: "quarantined" | "requarantined", quarantineId = item.quarantine_id, requarantineCount?: number): Promise<void> {
+async function insertItemEvent(
+  database: SqlDatabase,
+  item: NewQuarantineItem,
+  eventType: "quarantined" | "requarantined",
+  quarantineId = item.quarantine_id,
+  requarantineCount?: number,
+): Promise<void> {
   await insertEvent(
     database,
     quarantineEvent(quarantineId, eventType, item.created_at, {
       kind: item.kind,
       reason: item.reason,
       sha256: item.sha256,
-      ...(requarantineCount === undefined ? {} : { requarantine_count: requarantineCount }),
+      ...(requarantineCount === undefined
+        ? {}
+        : { requarantine_count: requarantineCount }),
     }),
   );
 }
 
-function itemParameters(item: NewQuarantineItem, envelope: string): readonly unknown[] {
+function itemParameters(
+  item: NewQuarantineItem,
+  envelope: string,
+): readonly unknown[] {
   return [
-    item.quarantine_id, item.created_at, item.updated_at, item.kind, item.reason,
-    item.writer_id ?? null, item.source ?? null, item.source_bank ?? null,
-    item.source_memory_id ?? null, item.source_content_sha256 ?? null,
-    item.dedupe_key ?? null, item.sha256, envelope, Buffer.byteLength(envelope),
-    item.status, item.postpone_count, item.requarantine_count ?? 0,
+    item.quarantine_id,
+    item.created_at,
+    item.updated_at,
+    item.kind,
+    item.reason,
+    item.writer_id ?? null,
+    item.source ?? null,
+    item.source_bank ?? null,
+    item.source_memory_id ?? null,
+    item.source_content_sha256 ?? null,
+    item.dedupe_key ?? null,
+    item.sha256,
+    envelope,
+    Buffer.byteLength(envelope),
+    item.status,
+    item.postpone_count,
+    item.requarantine_count ?? 0,
     item.expires_at ?? null,
   ];
 }
 
-async function readItemStats(database: SqlDatabase, at: string): Promise<Omit<QuarantineStats, "event_count">> {
+async function readItemStats(
+  database: SqlDatabase,
+  at: string,
+): Promise<Omit<QuarantineStats, "event_count">> {
   let parameterIndex = 0;
-  const expiredClause = () => `(status IN ('pending', 'postponed') AND expires_at IS NOT NULL AND expires_at <= ${database.placeholder(++parameterIndex)})`;
+  const expiredClause = () =>
+    `(status IN ('pending', 'postponed') AND expires_at IS NOT NULL AND expires_at <= ${database.placeholder(++parameterIndex)})`;
   const row = await database.get<Record<string, unknown>>(
     `SELECT
       COUNT(*) AS total_items,
@@ -286,10 +443,18 @@ async function readItemStats(database: SqlDatabase, at: string): Promise<Omit<Qu
   };
 }
 
-function encryptedBytes(item: NewQuarantineItem | StoredQuarantineItem | null): number {
-  return item?.encrypted ? Buffer.byteLength(JSON.stringify(item.encrypted)) : 0;
+function encryptedBytes(
+  item: NewQuarantineItem | StoredQuarantineItem | null,
+): number {
+  return item?.encrypted
+    ? Buffer.byteLength(JSON.stringify(item.encrypted))
+    : 0;
 }
 
 function isExpired(item: StoredQuarantineItem, at: string): boolean {
-  return (item.status === "pending" || item.status === "postponed") && item.expires_at !== undefined && item.expires_at <= at;
+  return (
+    (item.status === "pending" || item.status === "postponed") &&
+    item.expires_at !== undefined &&
+    item.expires_at <= at
+  );
 }
