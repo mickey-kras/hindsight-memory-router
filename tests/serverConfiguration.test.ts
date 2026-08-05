@@ -63,6 +63,16 @@ describe("router authentication startup validation", () => {
     expect(stderrOutput).toEqual([]);
   });
 
+  it("stays quiet when all scoped admin tokens are configured", () => {
+    assertRouterAuthEnvironment({
+      MEMORY_ROUTER_TOKEN: "router-token",
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: "read-token",
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: "review-token",
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: "cleanup-token",
+    });
+    expect(stderrOutput).toEqual([]);
+  });
+
   it("warns that router authentication fails closed when unset", () => {
     assertRouterAuthEnvironment({
       MEMORY_ROUTER_ADMIN_TOKEN: "admin-token",
@@ -70,14 +80,27 @@ describe("router authentication startup validation", () => {
     const output = stderrOutput.join("");
     expect(output).toContain("MEMORY_ROUTER_TOKEN is not set");
     expect(output).toContain("fail-closed");
-    expect(output).not.toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
+    expect(output).not.toContain("admin read token is not set");
   });
 
-  it("warns when the admin token is missing even if router auth is configured", () => {
+  it("warns for every missing scoped admin capability", () => {
     assertRouterAuthEnvironment({ MEMORY_ROUTER_TOKEN: "router-token" });
     const output = stderrOutput.join("");
-    expect(output).toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
+    expect(output).toContain("admin read token is not set");
+    expect(output).toContain("admin review token is not set");
+    expect(output).toContain("admin cleanup token is not set");
     expect(output).not.toContain("MEMORY_ROUTER_TOKEN is not set");
+  });
+
+  it("treats the review token as sufficient for admin reads", () => {
+    assertRouterAuthEnvironment({
+      MEMORY_ROUTER_TOKEN: "router-token",
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: "review-token",
+    });
+    const output = stderrOutput.join("");
+    expect(output).not.toContain("admin read token is not set");
+    expect(output).not.toContain("admin review token is not set");
+    expect(output).toContain("admin cleanup token is not set");
   });
 
   it("warns loudly that anonymous access is development-only", () => {
