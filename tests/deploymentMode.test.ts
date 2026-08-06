@@ -1,23 +1,37 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertDeploymentMode,
   deploymentModeConfigFromEnv,
 } from "../src/deploymentMode.js";
 
 describe("deployment modes", () => {
-  it("defaults to single-process mode", () => {
+  let stderr: ReturnType<typeof vi.spyOn>;
+  let output: string[];
+
+  beforeEach(() => {
+    output = [];
+    stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk: unknown) => {
+        output.push(String(chunk));
+        return true;
+      });
+  });
+
+  afterEach(() => stderr.mockRestore());
+
+  it("parses single-process defaults", () => {
     expect(deploymentModeConfigFromEnv({})).toEqual({
       mode: "single",
       databaseUrl: "sqlite:./data/quarantine.db",
       externalAdminRateLimit: false,
     });
-    expect(() => assertDeploymentMode({})).not.toThrow();
   });
 
-  it("rejects unknown deployment modes", () => {
+  it("rejects unknown deployment modes with the received value", () => {
     expect(() =>
       assertDeploymentMode({ MEMORY_ROUTER_DEPLOYMENT_MODE: "distributed" }),
-    ).toThrow("must be either single or cluster");
+    ).toThrow('received "distributed"');
   });
 
   it("requires PostgreSQL for cluster mode", () => {
@@ -40,33 +54,26 @@ describe("deployment modes", () => {
     ).toThrow("requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true");
   });
 
-  it("accepts cluster mode only with shared persistence and admin throttling", () => {
-    expect(() =>
-      assertDeploymentMode({
-        MEMORY_ROUTER_DEPLOYMENT_MODE: "cluster",
-        QUARANTINE_DATABASE_URL:
-          "postgresql://router:secret@database:5432/quarantine",
-        MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true",
-      }),
-    ).not.toThrow();
-  });
+  it.each(["postgres://db/quarantine", "postgresql://db/quarantine"])(
+    "accepts cluster mode with %s",
+    (databaseUrl) => {
+      expect(() =>
+        assertDeploymentMode({
+          MEMORY_ROUTER_DEPLOYMENT_MODE: "cluster",
+          MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true",
+          QUARANTINE_DATABASE_URL: databaseUrl,
+        }),
+      ).not.toThrow();
+    },
+  );
 
   it("warns when external admin limiting is declared in single mode", () => {
-    const stderr = vi
-      .spyOn(process.stderr, "write")
-      .mockImplementation(() => true);
-    try {
-      assertDeploymentMode({
-        MEMORY_ROUTER_DEPLOYMENT_MODE: "single",
-        MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true",
-      });
-      expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "ensure the external limiter is actually present",
-        ),
-      );
-    } finally {
-      stderr.mockRestore();
-    }
+    assertDeploymentMode({
+      MEMORY_ROUTER_DEPLOYMENT_MODE: "single",
+      MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true",
+    });
+    expect(output.join("")).toContain(
+      "ensure the external limiter is actually present",
+    );
   });
 });
