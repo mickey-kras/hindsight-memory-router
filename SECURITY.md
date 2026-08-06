@@ -15,12 +15,22 @@ Report vulnerabilities with a private GitHub security advisory. Do not publish e
 - `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` is for local development only.
 - Tokens are compared in constant time and are never logged.
 - Failed authentication is recorded as a bounded `auth_failed` security event.
-- Admin requests are rate-limited per process.
+- Built-in admin request limits are process-local.
+- Cluster mode requires PostgreSQL-backed quarantine controls and a real shared admin limiter before traffic reaches any replica.
+- `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true` is only an operator assertion; it does not install or configure that limiter.
 - The router stores only `QUARANTINE_PUBLIC_KEY`.
 - `QUARANTINE_PRIVATE_KEY` must stay outside the router runtime.
 - Admin approval requires the exact decrypted object and stored SHA-256.
 
 A leaked read token cannot mutate quarantine state. A leaked cleanup token cannot inspect encrypted envelopes or make review decisions. A leaked review token can read encrypted envelopes and make review decisions but cannot execute bulk cleanup. No admin credential can decrypt envelopes or approve modified content.
+
+## Deployment modes
+
+- `single` mode permits SQLite or PostgreSQL and is intended for one router process unless shared controls are supplied externally.
+- `cluster` mode fails startup unless `QUARANTINE_DATABASE_URL` is PostgreSQL and `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true`.
+- Declaring cluster mode without an actual shared edge limiter is a deployment-policy violation even though startup cannot independently verify the external component.
+
+See `docs/DEPLOYMENT_MODES.md` for the scale-out and rollback procedure.
 
 ## Rotation and migration
 
