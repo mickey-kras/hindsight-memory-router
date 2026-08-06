@@ -19,7 +19,7 @@ function envVarsReadByServer(): Set<string> {
       names.add(match[1]);
     }
     for (const match of text.matchAll(
-      /"((?:MEMORY_ROUTER|QUARANTINE|HINDSIGHT)_[A-Z0-9_]+)"/g,
+      /["']((?:MEMORY_ROUTER|QUARANTINE|HINDSIGHT)_[A-Z0-9_]+)["']/g,
     )) {
       names.add(match[1]);
     }
@@ -37,6 +37,12 @@ function envExampleEntries(): Set<string> {
 }
 
 describe(".env.example completeness", () => {
+  it("detects deployment-mode environment variables", () => {
+    const names = envVarsReadByServer();
+    expect(names).toContain("MEMORY_ROUTER_DEPLOYMENT_MODE");
+    expect(names).toContain("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT");
+  });
+
   it("documents every environment variable the server reads", () => {
     const documented = envExampleEntries();
     const missing: string[] = [];
