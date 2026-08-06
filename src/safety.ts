@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 export interface SafetyFinding {
   matched: string;
   reason: "prompt_injection" | "secret_like" | "permission_rewrite";
@@ -80,12 +78,4 @@ export function scanContent(content: string): SafetyResult {
     ({ matched, reason }) => ({ matched, reason }),
   );
   return { safe: findings.length === 0, findings };
-}
-
-export function safePreview(content: string, maxChars = 300): string {
-  return content.replace(/\s+/g, " ").trim().slice(0, maxChars);
-}
-
-export function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
 }
