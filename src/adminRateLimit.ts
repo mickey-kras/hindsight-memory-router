@@ -1,4 +1,5 @@
 import { HttpError } from "./httpError.js";
+import { integerEnv } from "./integerEnv.js";
 import { InMemorySlidingWindowRateLimiter } from "./quarantine/rateLimiter.js";
 
 export type AdminRequestClass = "read" | "write";
@@ -19,20 +20,23 @@ export function adminRateLimitConfigFromEnv(
   environment: NodeJS.ProcessEnv = process.env,
 ): AdminRateLimitConfig {
   return {
-    readMax: positiveIntegerEnv(
+    readMax: integerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX",
       DEFAULT_ADMIN_RATE_LIMIT.readMax,
+      { minimum: 1 },
     ),
-    writeMax: positiveIntegerEnv(
+    writeMax: integerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX",
       DEFAULT_ADMIN_RATE_LIMIT.writeMax,
+      { minimum: 1 },
     ),
-    windowMs: positiveIntegerEnv(
+    windowMs: integerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS",
       DEFAULT_ADMIN_RATE_LIMIT.windowMs,
+      { minimum: 1 },
     ),
   };
 }
@@ -69,18 +73,4 @@ export class AdminRateLimiter {
       throw error;
     }
   }
-}
-
-function positiveIntegerEnv(
-  environment: NodeJS.ProcessEnv,
-  name: string,
-  fallback: number,
-): number {
-  const raw = environment[name];
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value <= 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  return value;
 }
