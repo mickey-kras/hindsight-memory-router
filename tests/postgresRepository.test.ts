@@ -63,7 +63,7 @@ describe("PostgresQuarantineRepository", () => {
       { max: 5 },
     );
     expect(rootSql.unsafe).not.toHaveBeenCalled();
-    expect(rootSql.begin).toHaveBeenCalledTimes(2);
+    expect(rootSql.begin).toHaveBeenCalledTimes(3);
 
     const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>
       String(statement),
