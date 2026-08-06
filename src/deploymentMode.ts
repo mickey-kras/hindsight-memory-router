@@ -1,7 +1,7 @@
 import {
   DEFAULT_QUARANTINE_DATABASE_URL,
   isPostgresConnectionString,
-} from "./quarantine/repositoryFactory.js";
+} from "./quarantine/databaseUrl.js";
 
 const DEPLOYMENT_MODE_ENV = "MEMORY_ROUTER_DEPLOYMENT_MODE";
 const EXTERNAL_ADMIN_RATE_LIMIT_ENV =
