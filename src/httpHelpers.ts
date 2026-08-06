@@ -1,6 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { ParsedUrlQuery } from "node:querystring";
 import { HttpError } from "./httpError.js";
+
+const REQUEST_URL_BASE = "http://memory-router.internal";
+
+export function parseRequestUrl(rawUrl: string): URL {
+  try {
+    return new URL(rawUrl, REQUEST_URL_BASE);
+  } catch {
+    throw new HttpError(400, "invalid_url", "request URL is malformed");
+  }
+}
 
 export async function readJson(
   req: IncomingMessage,
@@ -75,18 +84,18 @@ export function parseAdminItemPath(pathname: string): {
 }
 
 export function integerQuery(
-  query: ParsedUrlQuery,
+  query: URLSearchParams,
   name: string,
   fallback: number,
   min: number,
   max: number,
 ): number {
-  const raw = query[name];
-  if (raw === undefined) return fallback;
-  if (Array.isArray(raw)) {
+  const values = query.getAll(name);
+  if (values.length === 0) return fallback;
+  if (values.length > 1) {
     throw new HttpError(400, "invalid_query", `${name} is invalid`);
   }
-  const value = Number(raw);
+  const value = Number(values[0]);
   if (!Number.isSafeInteger(value) || value < min || value > max) {
     throw new HttpError(400, "invalid_query", `${name} is invalid`);
   }
