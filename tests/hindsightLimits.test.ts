@@ -62,11 +62,11 @@ describe("Hindsight request limits", () => {
     });
   });
 
-  it("accepts exact request-boundary values across retain content fields", () => {
+  it("accepts exact request-boundary values across forwarded string fields", () => {
     const control = new HindsightLimits(
       limits({
         maxRetainItems: 1,
-        maxRetainContentBytes: 12,
+        maxRetainContentBytes: 17,
         maxRecallQueryBytes: 4,
         maxRecallMaxTokens: 10,
       }),
@@ -81,9 +81,11 @@ describe("Hindsight request limits", () => {
             document_id: "c",
             tags: ["dd"],
             metadata: { source: "eeee" },
+            extra: { nested: "gg" },
           },
         ],
         document_tags: ["ff"],
+        extra: { value: "hhh" },
       }),
     ).not.toThrow();
     expect(() =>
@@ -91,7 +93,7 @@ describe("Hindsight request limits", () => {
     ).not.toThrow();
   });
 
-  it("rejects retain content overflow through document tags", () => {
+  it("rejects retain content overflow through arbitrary forwarded fields", () => {
     const control = new HindsightLimits(limits({ maxRetainContentBytes: 8 }));
 
     expect(() =>
@@ -99,12 +101,9 @@ describe("Hindsight request limits", () => {
         items: [
           {
             content: "a",
-            context: "bb",
-            tags: ["cc"],
-            metadata: { source: "ddd" },
+            extra: { payload: "12345678" },
           },
         ],
-        document_tags: ["e"],
       }),
     ).toThrow("retain content exceeds the configured byte limit");
   });
@@ -197,7 +196,7 @@ describe("Hindsight request-limit server integration", () => {
           ],
           [
             "/v1/default/banks/main/memories",
-            { items: [{ content: "a" }], document_tags: ["hello"] },
+            { items: [{ content: "a", extra: { payload: "hello" } }] },
             "retain_content_too_large",
           ],
           [

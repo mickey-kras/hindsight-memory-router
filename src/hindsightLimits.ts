@@ -4,7 +4,6 @@ import {
   InMemorySlidingWindowRateLimiter,
   type RateLimitSession,
 } from "./quarantine/rateLimiter.js";
-import { memoryItemContentFields } from "./safety.js";
 import type { RecallBody, RetainBody } from "./types.js";
 
 export interface HindsightLimitConfig {
@@ -111,11 +110,7 @@ export class HindsightLimits {
         "retain request contains too many memory items",
       );
     }
-    const contentBytes = [
-      ...body.items.flatMap(memoryItemContentFields),
-      ...(body.document_tags ?? []),
-    ].reduce((total, field) => total + Buffer.byteLength(field, "utf8"), 0);
-    if (contentBytes > this.config.maxRetainContentBytes) {
+    if (stringValueBytes(body) > this.config.maxRetainContentBytes) {
       throw new HttpError(
         413,
         "retain_content_too_large",
@@ -200,4 +195,20 @@ export class HindsightLimits {
       throw error;
     }
   }
+}
+
+function stringValueBytes(value: unknown): number {
+  const pending: unknown[] = [value];
+  let total = 0;
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (typeof current === "string") {
+      total += Buffer.byteLength(current, "utf8");
+    } else if (Array.isArray(current)) {
+      pending.push(...current);
+    } else if (current !== null && typeof current === "object") {
+      pending.push(...Object.values(current));
+    }
+  }
+  return total;
 }

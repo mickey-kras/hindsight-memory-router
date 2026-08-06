@@ -654,16 +654,6 @@
           }
         }
       },
-      "QuarantineRateLimited": {
-        "description": "Too many quarantine writes were generated for the source and writer within the configured window.",
-        "content": {
-          "application/json": {
-            "schema": {
-              "$ref": "#/components/schemas/ErrorResponse"
-            }
-          }
-        }
-      },
       "MemoryRateLimited": {
         "description": "Hindsight request quota or quarantine rate limit exceeded. Hindsight quota responses include Retry-After.",
         "headers": {
@@ -802,7 +792,7 @@
       },
       "RetainRequest": {
         "type": "object",
-        "description": "Retain requests allow at most 100 items and 524288 aggregate UTF-8 bytes across item content fields.",
+        "description": "Retain requests allow at most 100 items and 524288 aggregate UTF-8 bytes across all string values forwarded downstream.",
         "required": ["items"],
         "properties": {
           "items": {
