@@ -18,6 +18,12 @@ describe("remaining minor findings", () => {
     expect(() => parseRecallResponse({ results: "invalid" })).toThrow(
       "invalid response shape",
     );
+    expect(() =>
+      parseRecallResponse({
+        results: [{ id: "m1", text: "memory" }],
+        trace: [],
+      }),
+    ).toThrow("invalid response shape");
   });
 
   it("shares encrypted-size and expiration semantics", () => {
