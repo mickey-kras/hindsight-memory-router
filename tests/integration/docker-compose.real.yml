@@ -64,6 +64,8 @@ services:
         condition: service_started
     environment:
       MEMORY_ROUTER_PORT: "8890"
+      MEMORY_ROUTER_DEPLOYMENT_MODE: cluster
+      MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true"
       MEMORY_ROUTER_TOKEN: test-router-token
       MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-token
       MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-token
@@ -72,8 +74,8 @@ services:
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
       QUARANTINE_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/quarantine
-    ports:
-      - "127.0.0.1:8890:8890"
+    expose:
+      - "8890"
     healthcheck:
       test:
         [
@@ -85,6 +87,24 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
+    networks:
+      - internal
+
+  admin-limiter:
+    image: node:26-alpine
+    working_dir: /workspace
+    command: ["node", "fake-admin-limiter.js"]
+    environment:
+      ADMIN_READ_MAX: "120"
+      ADMIN_WRITE_MAX: "30"
+      ADMIN_WINDOW_MS: "60000"
+    depends_on:
+      memory-router:
+        condition: service_healthy
+    volumes:
+      - ./fake-admin-limiter.js:/workspace/fake-admin-limiter.js:ro
+    ports:
+      - "127.0.0.1:8890:8890"
     networks:
       - internal
 
