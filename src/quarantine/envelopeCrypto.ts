@@ -303,7 +303,9 @@ export function parseDecryptedQuarantineObject(
 }
 
 function authenticatedMetadata(
-  envelope: Omit<EncryptedQuarantineEnvelope, "ciphertext_b64"> | EncryptedQuarantineEnvelope,
+  envelope:
+    | Omit<EncryptedQuarantineEnvelope, "ciphertext_b64">
+    | EncryptedQuarantineEnvelope,
 ): Buffer {
   return Buffer.from(
     canonicalJson({
