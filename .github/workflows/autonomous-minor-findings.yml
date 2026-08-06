@@ -1,0 +1,115 @@
+name: Apply remaining minor findings
+
+on:
+  push:
+    branches:
+      - refactor/address-remaining-minor-findings
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply refactor
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"missing expected text in {path}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace(
+              "src/server.ts",
+              '  DEFAULT_QUARANTINE_DATABASE_URL,\n  validateQuarantineStorage,\n',
+              '  DEFAULT_QUARANTINE_DATABASE_URL,\n  isPostgresConnectionString,\n  validateQuarantineStorage,\n',
+          )
+          replace(
+              "src/server.ts",
+              '  if (\n    !connectionString.startsWith("postgres://") &&\n    !connectionString.startsWith("postgresql://")\n  ) {\n',
+              '  if (!isPostgresConnectionString(connectionString)) {\n',
+          )
+
+          repository = Path("src/quarantine/repository.ts")
+          text = repository.read_text()
+          text += '''\nexport function encryptedBytes(\n  item: NewQuarantineItem | StoredQuarantineItem | null,\n): number {\n  return item?.encrypted\n    ? Buffer.byteLength(JSON.stringify(item.encrypted))\n    : 0;\n}\n\nexport function isExpired(item: StoredQuarantineItem, at: string): boolean {\n  return (\n    (item.status === "pending" || item.status === "postponed") &&\n    item.expires_at !== undefined &&\n    item.expires_at <= at\n  );\n}\n'''
+          repository.write_text(text)
+
+          for path in ["src/quarantine/memoryRepository.ts", "src/quarantine/sqlRepositorySupport.ts"]:
+              replace(
+                  path,
+                  '  quarantineEvent,\n',
+                  '  encryptedBytes,\n  isExpired,\n  quarantineEvent,\n',
+              )
+              file = Path(path)
+              text = file.read_text()
+              marker = '\nfunction encryptedBytes(\n'
+              start = text.rfind(marker)
+              if start < 0:
+                  raise SystemExit(f"missing encryptedBytes helper in {path}")
+              file.write_text(text[:start] + '\n')
+
+          replace(
+              "src/quarantine/sqlRepository.ts",
+              'export interface SqlDatabase {\n  readonly rowLockClause: string;\n',
+              'export type SqlDialect = "postgres" | "sqlite";\n\nexport interface SqlDatabase {\n  readonly dialect: SqlDialect;\n  readonly rowLockClause: string;\n',
+          )
+          replace(
+              "src/quarantine/sqlRepositorySupport.ts",
+              '  const postgres = database.placeholder(1) === "$1";\n  const existing = postgres\n',
+              '  const existing = database.dialect === "postgres"\n',
+          )
+          replace(
+              "src/quarantine/sqliteRepository.ts",
+              'class SqliteDatabase implements SqlDatabase {\n  readonly rowLockClause = "";\n',
+              'class SqliteDatabase implements SqlDatabase {\n  readonly dialect = "sqlite" as const;\n  readonly rowLockClause = "";\n',
+          )
+          replace(
+              "src/quarantine/sqliteRepository.ts",
+              'class SqliteTransactionDatabase implements SqlDatabase {\n  readonly rowLockClause = "";\n',
+              'class SqliteTransactionDatabase implements SqlDatabase {\n  readonly dialect = "sqlite" as const;\n  readonly rowLockClause = "";\n',
+          )
+          replace(
+              "src/quarantine/postgresRepository.ts",
+              'class PostgresDatabase implements SqlDatabase {\n  readonly rowLockClause = " FOR UPDATE";\n',
+              'class PostgresDatabase implements SqlDatabase {\n  readonly dialect = "postgres" as const;\n  readonly rowLockClause = " FOR UPDATE";\n',
+          )
+
+          replace(
+              "src/hindsightClient.ts",
+              '  async recall(bankId: string, body: RecallBody): Promise<RecallResponse> {\n    return this.request(\n      "POST",\n      `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,\n      body,\n    ) as Promise<RecallResponse>;\n  }\n',
+              '  async recall(bankId: string, body: RecallBody): Promise<RecallResponse> {\n    const response = await this.request(\n      "POST",\n      `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,\n      body,\n    );\n    return parseRecallResponse(response);\n  }\n',
+          )
+          replace(
+              "src/hindsightClient.ts",
+              '\nfunction truncateUpstreamBody(text: string): string {\n',
+              '''\nexport function parseRecallResponse(value: unknown): RecallResponse {\n  if (!value || typeof value !== "object" || Array.isArray(value)) {\n    throw invalidRecallResponse();\n  }\n  const response = value as Record<string, unknown>;\n  if (!Array.isArray(response.results)) {\n    throw invalidRecallResponse();\n  }\n  for (const result of response.results) {\n    if (\n      !result ||\n      typeof result !== "object" ||\n      Array.isArray(result) ||\n      typeof (result as Record<string, unknown>).id !== "string" ||\n      typeof (result as Record<string, unknown>).text !== "string"\n    ) {\n      throw invalidRecallResponse();\n    }\n  }\n  for (const field of ["chunks", "entities", "source_facts", "trace"] as const) {\n    const fieldValue = response[field];\n    if (\n      fieldValue !== undefined &&\n      fieldValue !== null &&\n      (typeof fieldValue !== "object" || Array.isArray(fieldValue))\n    ) {\n      throw invalidRecallResponse();\n    }\n  }\n  return value as RecallResponse;\n}\n\nfunction invalidRecallResponse(): HindsightGatewayError {\n  return new HindsightGatewayError(\n    "invalid-response",\n    "Hindsight recall returned an invalid response shape",\n  );\n}\n\nfunction truncateUpstreamBody(text: string): string {\n''',
+          )
+
+          Path("tests/minorFindings.test.ts").write_text('''import { describe, expect, it } from "vitest";\nimport {\n  HindsightGatewayError,\n  parseRecallResponse,\n} from "../src/hindsightClient.js";\nimport { encryptedBytes, isExpired } from "../src/quarantine/repository.js";\n\ndescribe("remaining minor findings", () => {\n  it("validates Hindsight recall response shape", () => {\n    expect(parseRecallResponse({ results: [{ id: "m1", text: "memory" }] })).toEqual({\n      results: [{ id: "m1", text: "memory" }],\n    });\n    expect(() => parseRecallResponse({ results: [{ id: 1, text: "memory" }] })).toThrow(\n      HindsightGatewayError,\n    );\n    expect(() => parseRecallResponse({ results: "invalid" })).toThrow(\n      "invalid response shape",\n    );\n  });\n\n  it("shares encrypted-size and expiration semantics", () => {\n    const item = {\n      status: "pending" as const,\n      expires_at: "2026-08-06T00:00:00.000Z",\n      encrypted: { version: 1 },\n    };\n    expect(encryptedBytes(item as never)).toBe(\n      Buffer.byteLength(JSON.stringify(item.encrypted)),\n    );\n    expect(isExpired(item as never, "2026-08-06T00:00:00.000Z")).toBe(true);\n  });\n});\n''')
+      - run: npm run format
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:coverage
+      - name: Commit implementation
+        run: |
+          git rm .github/workflows/autonomous-minor-findings.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src tests
+          git commit -m "refactor: address remaining minor findings"
+          git push
