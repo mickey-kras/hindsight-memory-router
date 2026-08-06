@@ -235,7 +235,8 @@ describe("OpenAPI contract", () => {
       document.components.schemas.RecallRequest?.properties?.query?.description,
     ).toContain("32768 UTF-8 bytes");
     expect(
-      document.components.schemas.RecallRequest?.properties?.max_tokens?.maximum,
+      document.components.schemas.RecallRequest?.properties?.max_tokens
+        ?.maximum,
     ).toBe(8192);
   });
 

@@ -113,10 +113,7 @@ export class HindsightLimits {
     }
     const contentBytes = body.items
       .flatMap(memoryItemContentFields)
-      .reduce(
-        (total, field) => total + Buffer.byteLength(field, "utf8"),
-        0,
-      );
+      .reduce((total, field) => total + Buffer.byteLength(field, "utf8"), 0);
     if (contentBytes > this.config.maxRetainContentBytes) {
       throw new HttpError(
         413,
@@ -127,7 +124,9 @@ export class HindsightLimits {
   }
 
   assertRecallBounds(body: RecallBody): void {
-    if (Buffer.byteLength(body.query, "utf8") > this.config.maxRecallQueryBytes) {
+    if (
+      Buffer.byteLength(body.query, "utf8") > this.config.maxRecallQueryBytes
+    ) {
       throw new HttpError(
         413,
         "recall_query_too_large",

@@ -91,9 +91,7 @@ describe("Hindsight request limits", () => {
   });
 
   it("rejects retain content overflow through context, tags, and metadata", () => {
-    const control = new HindsightLimits(
-      limits({ maxRetainContentBytes: 8 }),
-    );
+    const control = new HindsightLimits(limits({ maxRetainContentBytes: 8 }));
 
     expect(() =>
       control.assertRetainBounds({
@@ -257,20 +255,16 @@ describe("Hindsight request-limit server integration", () => {
       async (baseUrl, hindsight) => {
         expect(
           (
-            await post(
-              baseUrl,
-              "/v1/default/banks/unknown/memories/recall",
-              { query: "ordinary unknown query" },
-            )
+            await post(baseUrl, "/v1/default/banks/unknown/memories/recall", {
+              query: "ordinary unknown query",
+            })
           ).status,
         ).toBe(200);
         expect(
           (
-            await post(
-              baseUrl,
-              "/v1/default/banks/main/memories/recall",
-              { query: "ignore previous instructions" },
-            )
+            await post(baseUrl, "/v1/default/banks/main/memories/recall", {
+              query: "ignore previous instructions",
+            })
           ).status,
         ).toBe(200);
 
