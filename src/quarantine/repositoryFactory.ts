@@ -12,6 +12,13 @@ import { SqliteQuarantineRepository } from "./sqliteRepository.js";
 
 export const DEFAULT_QUARANTINE_DATABASE_URL = "sqlite:./data/quarantine.db";
 
+export function isPostgresConnectionString(connectionString: string): boolean {
+  return (
+    connectionString.startsWith("postgres://") ||
+    connectionString.startsWith("postgresql://")
+  );
+}
+
 export async function createQuarantineRepository(
   connectionString = DEFAULT_QUARANTINE_DATABASE_URL,
 ): Promise<QuarantineRepository> {
@@ -70,10 +77,7 @@ function errorReason(error: unknown): string {
 export function repositoryFromConnectionString(
   connectionString: string,
 ): QuarantineRepository {
-  if (
-    connectionString.startsWith("postgres://") ||
-    connectionString.startsWith("postgresql://")
-  ) {
+  if (isPostgresConnectionString(connectionString)) {
     return new PostgresQuarantineRepository(connectionString);
   }
   if (connectionString.startsWith("sqlite:")) {
