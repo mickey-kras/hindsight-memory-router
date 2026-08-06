@@ -94,7 +94,7 @@ export function scanContent(content: string): SafetyResult {
 }
 
 export function scanRetainBody(body: RetainBody): SafetyResult {
-  return scanFields((body.items ?? []).flatMap(memoryItemFields));
+  return scanFields((body.items ?? []).flatMap(memoryItemContentFields));
 }
 
 export function scanRecallResult(result: RecallResult): SafetyResult {
@@ -244,7 +244,7 @@ function scanBase64Candidate(candidate: string, state: ScanState): void {
   decodedFindings.forEach((finding) => addFinding(state.findings, finding));
 }
 
-function memoryItemFields(item: MemoryItem): string[] {
+export function memoryItemContentFields(item: MemoryItem): string[] {
   return [
     item.content,
     item.context ?? "",
