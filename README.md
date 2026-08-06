@@ -93,6 +93,15 @@ MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 HINDSIGHT_BASE_URL=http://hindsight:8888
 HINDSIGHT_API_KEY=change-me
 HINDSIGHT_TIMEOUT_MS=10000
+HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX=30
+HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX=300
+HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX=120
+HINDSIGHT_RECALL_RATE_LIMIT_GLOBAL_MAX=1200
+HINDSIGHT_RATE_LIMIT_WINDOW_MS=60000
+HINDSIGHT_RETAIN_MAX_ITEMS=100
+HINDSIGHT_RETAIN_MAX_CONTENT_BYTES=524288
+HINDSIGHT_RECALL_MAX_QUERY_BYTES=32768
+HINDSIGHT_RECALL_MAX_TOKENS=8192
 
 QUARANTINE_PUBLIC_KEY=<PEM or base64 PEM>
 QUARANTINE_DATABASE_URL=sqlite:./data/quarantine.db
@@ -122,6 +131,8 @@ postgresql://user:password@database:5432/quarantine
 Use a separate PostgreSQL database or schema from Hindsight application data.
 
 `HINDSIGHT_TIMEOUT_MS` must be a positive integer. Hindsight timeouts return `504 hindsight_timeout`; HTTP, network, and invalid JSON responses return a typed `502` error. Upstream error bodies are truncated.
+
+Retain and recall have separate per-writer and global sliding-window budgets. Request bounds return `413`; quota exhaustion returns `429 hindsight_rate_limited` with `Retry-After`. PostgreSQL shares these quotas across replicas. They are independent of quarantine capacity/rate limits and admin throttling.
 
 Breaking change: the built-in default database URL is now `sqlite:./data/quarantine.db` (resolved against the router working directory). It previously defaulted to the host-specific path `sqlite:/volume1/reports/hindsight-quarantine/quarantine.db`. Deployments that relied on the old default must set `QUARANTINE_DATABASE_URL` explicitly (or move the existing database to `./data/quarantine.db`) before upgrading.
 

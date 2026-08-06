@@ -9,6 +9,11 @@ import {
   FetchHindsightGateway,
   type HindsightGateway,
 } from "./hindsightClient.js";
+import {
+  HindsightLimits,
+  hindsightLimitConfigFromEnv,
+  type HindsightLimitConfig,
+} from "./hindsightLimits.js";
 import { safeErrorBody } from "./httpError.js";
 import {
   integerQuery,
@@ -29,6 +34,7 @@ import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
   PostgresSlidingWindowRateLimiter,
   type QuarantineRateLimiter,
+  type RateLimitSession,
 } from "./quarantine/rateLimiter.js";
 import {
   createQuarantineRepository,
@@ -109,6 +115,8 @@ export interface CreateMemoryRouterServerOptions {
   maxBodyBytes?: number;
   registry?: WriterRegistry;
   hindsight?: HindsightGateway;
+  hindsightLimits?: HindsightLimitConfig;
+  hindsightRateLimiter?: RateLimitSession;
   quarantineRepository?: QuarantineRepository;
   quarantineStore?: QuarantineStore;
   quarantinePublicKey?: string;
@@ -204,6 +212,10 @@ export function createMemoryRouterServer(
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const registry = buildRegistry(options);
   const hindsight = buildHindsight(options);
+  const hindsightLimits = new HindsightLimits(
+    options.hindsightLimits ?? hindsightLimitConfigFromEnv(),
+    options.hindsightRateLimiter,
+  );
   const quarantineRepository = requireQuarantineRepository(options);
   const quarantineStore =
     options.quarantineStore ??
@@ -336,12 +348,14 @@ export function createMemoryRouterServer(
       const memoryPath = parseMemoryPath(pathname);
       if (method === "POST" && memoryPath?.action === "retain") {
         const body = parseRetainBody(await readJson(req, maxBodyBytes));
+        await hindsightLimits.consumeRetain(memoryPath.writerId, body);
         const result = await policy.retain(memoryPath.writerId, body);
         return send(res, 200, result);
       }
 
       if (method === "POST" && memoryPath?.action === "recall") {
         const body = parseRecallBody(await readJson(req, maxBodyBytes));
+        await hindsightLimits.consumeRecall(memoryPath.writerId, body);
         const result = await policy.recall(memoryPath.writerId, body);
         return send(res, 200, result);
       }
@@ -353,7 +367,7 @@ export function createMemoryRouterServer(
       if (response.status === 500) {
         process.stderr.write("memory-router request failed\n");
       }
-      return send(res, response.status, response.body);
+      return send(res, response.status, response.body, response.headers);
     }
   });
 
@@ -379,6 +393,8 @@ export async function createConfiguredMemoryRouterServer(
     cleanup: options.adminCleanupToken,
     allowAnonymous: options.allowAnonymous,
   });
+  const hindsightLimits =
+    options.hindsightLimits ?? hindsightLimitConfigFromEnv();
   const quarantineRepository = await createQuarantineRepository(
     QUARANTINE_DATABASE_URL,
   );
@@ -393,6 +409,8 @@ export async function createConfiguredMemoryRouterServer(
   );
   const server = createMemoryRouterServer({
     ...options,
+    hindsightLimits,
+    hindsightRateLimiter: quarantineRateLimiter,
     quarantineRepository,
     quarantinePublicKey: options.quarantinePublicKey ?? QUARANTINE_PUBLIC_KEY,
     quarantineRateLimiter,
