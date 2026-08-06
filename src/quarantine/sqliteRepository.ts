@@ -14,7 +14,9 @@ class SqliteDatabase implements SqlDatabase {
   readonly rowLockClause = "";
   private accessTail: Promise<void> = Promise.resolve();
 
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(private readonly database: DatabaseSync) {
+    this.database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
+  }
 
   placeholder(_index: number): string {
     return "?";
@@ -23,12 +25,7 @@ class SqliteDatabase implements SqlDatabase {
   async acquireCapacityLock(): Promise<void> {}
 
   executeScript(script: string): Promise<void> {
-    return this.enqueue(() => {
-      this.database.exec(
-        "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;",
-      );
-      this.database.exec(script);
-    });
+    return this.enqueue(() => this.database.exec(script));
   }
 
   run(statement: string, params: readonly unknown[] = []): Promise<void> {
