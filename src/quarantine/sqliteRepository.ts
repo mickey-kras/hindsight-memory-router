@@ -11,6 +11,7 @@ export class SqliteQuarantineRepository extends SqlQuarantineRepository {
 }
 
 class SqliteDatabase implements SqlDatabase {
+  readonly dialect = "sqlite" as const;
   readonly rowLockClause = "";
   private accessTail: Promise<void> = Promise.resolve();
 
@@ -76,6 +77,7 @@ class SqliteDatabase implements SqlDatabase {
 }
 
 class SqliteTransactionDatabase implements SqlDatabase {
+  readonly dialect = "sqlite" as const;
   readonly rowLockClause = "";
 
   constructor(private readonly database: DatabaseSync) {}

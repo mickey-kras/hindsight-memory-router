@@ -238,3 +238,19 @@ export function parseStoredItem(
     requarantine_count: Number(row.requarantine_count ?? 0),
   };
 }
+
+export function encryptedBytes(
+  item: NewQuarantineItem | StoredQuarantineItem | null,
+): number {
+  return item?.encrypted
+    ? Buffer.byteLength(JSON.stringify(item.encrypted))
+    : 0;
+}
+
+export function isExpired(item: StoredQuarantineItem, at: string): boolean {
+  return (
+    (item.status === "pending" || item.status === "postponed") &&
+    item.expires_at !== undefined &&
+    item.expires_at <= at
+  );
+}

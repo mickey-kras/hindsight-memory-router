@@ -33,6 +33,7 @@ import {
 import {
   createQuarantineRepository,
   DEFAULT_QUARANTINE_DATABASE_URL,
+  isPostgresConnectionString,
   validateQuarantineStorage,
 } from "./quarantine/repositoryFactory.js";
 import { startQuarantineSweeper } from "./quarantine/sweeper.js";
@@ -402,10 +403,7 @@ export async function createConfiguredMemoryRouterServer(
 async function createSharedRateLimiter(
   connectionString: string,
 ): Promise<PostgresSlidingWindowRateLimiter | undefined> {
-  if (
-    !connectionString.startsWith("postgres://") &&
-    !connectionString.startsWith("postgresql://")
-  ) {
+  if (!isPostgresConnectionString(connectionString)) {
     return undefined;
   }
   const limiter = new PostgresSlidingWindowRateLimiter(connectionString);
