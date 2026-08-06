@@ -1,5 +1,4 @@
 import { createServer, type Server } from "node:http";
-import { parse as parseUrl } from "node:url";
 import {
   AdminRateLimiter,
   adminRateLimitConfigFromEnv,
@@ -15,6 +14,7 @@ import {
   integerQuery,
   parseAdminItemPath,
   parseMemoryPath,
+  parseRequestUrl,
   readJson,
   send,
 } from "./httpHelpers.js";
@@ -220,8 +220,8 @@ export function createMemoryRouterServer(
   const server = createServer(async (req, res) => {
     try {
       const method = req.method ?? "GET";
-      const requestUrl = parseUrl(req.url ?? "/", true);
-      const pathname = requestUrl.pathname ?? "/";
+      const requestUrl = parseRequestUrl(req.url ?? "/");
+      const pathname = requestUrl.pathname;
 
       if (method === "GET" && pathname === "/health") {
         return send(res, 200, { status: "healthy", service: "memory-router" });
@@ -251,9 +251,9 @@ export function createMemoryRouterServer(
             res,
             200,
             await admin.listQueue(
-              integerQuery(requestUrl.query, "limit", 100, 1, 500),
+              integerQuery(requestUrl.searchParams, "limit", 100, 1, 500),
               integerQuery(
-                requestUrl.query,
+                requestUrl.searchParams,
                 "offset",
                 0,
                 0,
