@@ -19,17 +19,17 @@ export function adminRateLimitConfigFromEnv(
   environment: NodeJS.ProcessEnv = process.env,
 ): AdminRateLimitConfig {
   return {
-    readMax: numberEnv(
+    readMax: positiveIntegerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX",
       DEFAULT_ADMIN_RATE_LIMIT.readMax,
     ),
-    writeMax: numberEnv(
+    writeMax: positiveIntegerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX",
       DEFAULT_ADMIN_RATE_LIMIT.writeMax,
     ),
-    windowMs: numberEnv(
+    windowMs: positiveIntegerEnv(
       environment,
       "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS",
       DEFAULT_ADMIN_RATE_LIMIT.windowMs,
@@ -71,7 +71,7 @@ export class AdminRateLimiter {
   }
 }
 
-function numberEnv(
+function positiveIntegerEnv(
   environment: NodeJS.ProcessEnv,
   name: string,
   fallback: number,
@@ -79,8 +79,8 @@ function numberEnv(
   const raw = environment[name];
   if (raw === undefined) return fallback;
   const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative integer`);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer`);
   }
   return value;
 }
