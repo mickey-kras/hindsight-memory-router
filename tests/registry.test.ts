@@ -20,6 +20,10 @@ function registryWith(writers: WriterRegistry["writers"]): WriterRegistry {
   };
 }
 
+function registry(value: unknown): WriterRegistry {
+  return value as WriterRegistry;
+}
+
 describe("registry", () => {
   it("uses the default registry and resolves known writers", () => {
     expect(loadRegistry()).toBe(DEFAULT_REGISTRY);
@@ -109,6 +113,88 @@ describe("registry", () => {
         },
       }),
       "main writer cannot read research",
+    ],
+    [
+      registry({
+        writers: { ops: null },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      }),
+      "writer ops must be an object",
+    ],
+    [
+      registry({
+        writers: {
+          ops: {
+            role: "",
+            source: "test",
+            write_bank: "ops",
+            read_banks: ["ops"],
+          },
+        },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      }),
+      "writer ops missing role",
+    ],
+    [
+      registry({
+        writers: {
+          ops: {
+            role: "ops",
+            source: "",
+            write_bank: "ops",
+            read_banks: ["ops"],
+          },
+        },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      }),
+      "writer ops missing source",
+    ],
+    [
+      registry({
+        writers: {
+          ops: {
+            role: "ops",
+            source: "test",
+            write_bank: "bogus",
+            read_banks: ["ops"],
+          },
+        },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      }),
+      "writer ops has invalid write_bank",
+    ],
+    [
+      registry({
+        writers: {
+          ops: {
+            role: "ops",
+            source: "test",
+            write_bank: "ops",
+            read_banks: ["bogus"],
+          },
+        },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      }),
+      "writer ops has invalid read_bank",
+    ],
+    [
+      registry({ writers: {}, defaults: null }),
+      "registry.defaults must be an object",
     ],
   ])("rejects invalid registry input", (value, message) => {
     expect(() => validateRegistry(value as WriterRegistry)).toThrow(message);
