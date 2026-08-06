@@ -66,7 +66,7 @@ describe("Hindsight request limits", () => {
     const control = new HindsightLimits(
       limits({
         maxRetainItems: 1,
-        maxRetainContentBytes: 10,
+        maxRetainContentBytes: 12,
         maxRecallQueryBytes: 4,
         maxRecallMaxTokens: 10,
       }),
@@ -83,6 +83,7 @@ describe("Hindsight request limits", () => {
             metadata: { source: "eeee" },
           },
         ],
+        document_tags: ["ff"],
       }),
     ).not.toThrow();
     expect(() =>
@@ -90,7 +91,7 @@ describe("Hindsight request limits", () => {
     ).not.toThrow();
   });
 
-  it("rejects retain content overflow through context, tags, and metadata", () => {
+  it("rejects retain content overflow through document tags", () => {
     const control = new HindsightLimits(limits({ maxRetainContentBytes: 8 }));
 
     expect(() =>
@@ -100,9 +101,10 @@ describe("Hindsight request limits", () => {
             content: "a",
             context: "bb",
             tags: ["cc"],
-            metadata: { source: "dddd" },
+            metadata: { source: "ddd" },
           },
         ],
+        document_tags: ["e"],
       }),
     ).toThrow("retain content exceeds the configured byte limit");
   });
@@ -195,7 +197,7 @@ describe("Hindsight request-limit server integration", () => {
           ],
           [
             "/v1/default/banks/main/memories",
-            { items: [{ content: "a", context: "hello" }] },
+            { items: [{ content: "a" }], document_tags: ["hello"] },
             "retain_content_too_large",
           ],
           [

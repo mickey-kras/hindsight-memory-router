@@ -111,9 +111,10 @@ export class HindsightLimits {
         "retain request contains too many memory items",
       );
     }
-    const contentBytes = body.items
-      .flatMap(memoryItemContentFields)
-      .reduce((total, field) => total + Buffer.byteLength(field, "utf8"), 0);
+    const contentBytes = [
+      ...body.items.flatMap(memoryItemContentFields),
+      ...(body.document_tags ?? []),
+    ].reduce((total, field) => total + Buffer.byteLength(field, "utf8"), 0);
     if (contentBytes > this.config.maxRetainContentBytes) {
       throw new HttpError(
         413,
