@@ -14,6 +14,7 @@ export { sha256Hex } from "../canonicalJson.js";
 const GCM_AUTH_TAG_LENGTH_BYTES = 16;
 const GCM_IV_LENGTH_BYTES = 12;
 const AES_KEY_LENGTH_BYTES = 32;
+const AAD_FORMAT = "metadata-v1" as const;
 const REVIEW_REASONS = new Set<ReviewReason>([
   "unknown_writer",
   "suspicious_content",
@@ -39,6 +40,7 @@ export interface EncryptedQuarantineEnvelope {
   encryption: {
     algorithm: "AES-256-GCM";
     key_wrap: "RSA-OAEP-SHA256";
+    aad?: typeof AAD_FORMAT;
     [WRAPPED_KEY_FIELD]: string;
     iv_b64: string;
     tag_b64: string;
@@ -63,13 +65,6 @@ export function createEncryptedQuarantineEnvelope(
   const plaintext = canonicalizeDecryptedQuarantineObject(decrypted);
   const key = randomBytes(AES_KEY_LENGTH_BYTES);
   const iv = randomBytes(GCM_IV_LENGTH_BYTES);
-  const cipher = createCipheriv("aes-256-gcm", key, iv, {
-    authTagLength: GCM_AUTH_TAG_LENGTH_BYTES,
-  });
-  const ciphertext = Buffer.concat([
-    cipher.update(plaintext, "utf8"),
-    cipher.final(),
-  ]);
   const wrappedKey = publicEncrypt(
     {
       key: decodePublicKey(publicKeyInput),
@@ -78,8 +73,8 @@ export function createEncryptedQuarantineEnvelope(
     },
     key,
   );
-  return {
-    version: 1,
+  const metadata = {
+    version: 1 as const,
     quarantine_id: decrypted.quarantine_id,
     created_at: decrypted.created_at,
     reason: decrypted.reason,
@@ -89,10 +84,25 @@ export function createEncryptedQuarantineEnvelope(
     ...(decrypted.source === undefined ? {} : { source: decrypted.source }),
     sha256: sha256Hex(plaintext),
     encryption: {
-      algorithm: "AES-256-GCM",
-      key_wrap: "RSA-OAEP-SHA256",
+      algorithm: "AES-256-GCM" as const,
+      key_wrap: "RSA-OAEP-SHA256" as const,
+      aad: AAD_FORMAT,
       [WRAPPED_KEY_FIELD]: wrappedKey.toString("base64"),
       iv_b64: iv.toString("base64"),
+    },
+  };
+  const cipher = createCipheriv("aes-256-gcm", key, iv, {
+    authTagLength: GCM_AUTH_TAG_LENGTH_BYTES,
+  });
+  cipher.setAAD(authenticatedMetadata(metadata));
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+  return {
+    ...metadata,
+    encryption: {
+      ...metadata.encryption,
       tag_b64: cipher.getAuthTag().toString("base64"),
     },
     ciphertext_b64: ciphertext.toString("base64"),
@@ -127,6 +137,9 @@ export function parseEncryptedQuarantineEnvelope(
   }
   if (encryption.key_wrap !== "RSA-OAEP-SHA256") {
     throw new Error("unsupported quarantine key wrapping algorithm");
+  }
+  if (encryption.aad !== undefined && encryption.aad !== AAD_FORMAT) {
+    throw new Error("unsupported quarantine AAD format");
   }
 
   const quarantineId = requireString(envelope.quarantine_id, "quarantine_id");
@@ -177,6 +190,7 @@ export function parseEncryptedQuarantineEnvelope(
     encryption: {
       algorithm: "AES-256-GCM",
       key_wrap: "RSA-OAEP-SHA256",
+      ...(encryption.aad === AAD_FORMAT ? { aad: AAD_FORMAT } : {}),
       [WRAPPED_KEY_FIELD]: wrappedKeyB64,
       iv_b64: ivB64,
       tag_b64: tagB64,
@@ -237,6 +251,9 @@ export function decryptQuarantineEnvelope(
     decodeBase64(envelope.encryption.iv_b64, "iv_b64"),
     { authTagLength: GCM_AUTH_TAG_LENGTH_BYTES },
   );
+  if (envelope.encryption.aad === AAD_FORMAT) {
+    decipher.setAAD(authenticatedMetadata(envelope));
+  }
   decipher.setAuthTag(decodeBase64(envelope.encryption.tag_b64, "tag_b64"));
 
   const plaintext = Buffer.concat([
@@ -283,6 +300,32 @@ export function parseDecryptedQuarantineObject(
     ...(source === undefined ? {} : { source }),
     payload: jsonValue(object.payload, "payload"),
   };
+}
+
+function authenticatedMetadata(
+  envelope: Omit<EncryptedQuarantineEnvelope, "ciphertext_b64"> | EncryptedQuarantineEnvelope,
+): Buffer {
+  return Buffer.from(
+    canonicalJson({
+      version: envelope.version,
+      quarantine_id: envelope.quarantine_id,
+      created_at: envelope.created_at,
+      reason: envelope.reason,
+      ...(envelope.writer_id === undefined
+        ? {}
+        : { writer_id: envelope.writer_id }),
+      ...(envelope.source === undefined ? {} : { source: envelope.source }),
+      sha256: envelope.sha256,
+      encryption: {
+        algorithm: envelope.encryption.algorithm,
+        key_wrap: envelope.encryption.key_wrap,
+        aad: AAD_FORMAT,
+        [WRAPPED_KEY_FIELD]: envelope.encryption[WRAPPED_KEY_FIELD],
+        iv_b64: envelope.encryption.iv_b64,
+      },
+    }),
+    "utf8",
+  );
 }
 
 function jsonValue(value: unknown, label: string): unknown {
