@@ -4,6 +4,7 @@ import {
   InMemorySlidingWindowRateLimiter,
   type RateLimitSession,
 } from "./quarantine/rateLimiter.js";
+import { memoryItemContentFields } from "./safety.js";
 import type { RecallBody, RetainBody } from "./types.js";
 
 export interface HindsightLimitConfig {
@@ -102,27 +103,7 @@ export class HindsightLimits {
     this.limiter = limiter;
   }
 
-  async consumeRetain(writerId: string, body: RetainBody): Promise<void> {
-    this.assertRetainBounds(body);
-    await this.consumeQuota(
-      "retain",
-      writerId,
-      this.config.retainWriterMax,
-      this.config.retainGlobalMax,
-    );
-  }
-
-  async consumeRecall(writerId: string, body: RecallBody): Promise<void> {
-    this.assertRecallBounds(body);
-    await this.consumeQuota(
-      "recall",
-      writerId,
-      this.config.recallWriterMax,
-      this.config.recallGlobalMax,
-    );
-  }
-
-  private assertRetainBounds(body: RetainBody): void {
+  assertRetainBounds(body: RetainBody): void {
     if (body.items.length > this.config.maxRetainItems) {
       throw new HttpError(
         413,
@@ -130,10 +111,12 @@ export class HindsightLimits {
         "retain request contains too many memory items",
       );
     }
-    const contentBytes = body.items.reduce(
-      (total, item) => total + Buffer.byteLength(item.content, "utf8"),
-      0,
-    );
+    const contentBytes = body.items
+      .flatMap(memoryItemContentFields)
+      .reduce(
+        (total, field) => total + Buffer.byteLength(field, "utf8"),
+        0,
+      );
     if (contentBytes > this.config.maxRetainContentBytes) {
       throw new HttpError(
         413,
@@ -143,7 +126,7 @@ export class HindsightLimits {
     }
   }
 
-  private assertRecallBounds(body: RecallBody): void {
+  assertRecallBounds(body: RecallBody): void {
     if (Buffer.byteLength(body.query, "utf8") > this.config.maxRecallQueryBytes) {
       throw new HttpError(
         413,
@@ -161,6 +144,24 @@ export class HindsightLimits {
         "recall max_tokens exceeds the configured limit",
       );
     }
+  }
+
+  consumeRetain(writerId: string): Promise<void> {
+    return this.consumeQuota(
+      "retain",
+      writerId,
+      this.config.retainWriterMax,
+      this.config.retainGlobalMax,
+    );
+  }
+
+  consumeRecall(writerId: string): Promise<void> {
+    return this.consumeQuota(
+      "recall",
+      writerId,
+      this.config.recallWriterMax,
+      this.config.recallGlobalMax,
+    );
   }
 
   private async consumeQuota(
