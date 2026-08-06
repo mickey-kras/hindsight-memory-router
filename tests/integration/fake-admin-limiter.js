@@ -1,14 +1,28 @@
+import { Buffer } from "node:buffer";
 import http from "node:http";
+import process from "node:process";
 
-const upstream = process.env.ROUTER_UPSTREAM ?? "http://memory-router:8890";
+const upstreamHost = "memory-router";
+const upstreamPort = 8890;
 const readMax = Number(process.env.ADMIN_READ_MAX ?? "120");
 const writeMax = Number(process.env.ADMIN_WRITE_MAX ?? "30");
 const windowMs = Number(process.env.ADMIN_WINDOW_MS ?? "60000");
+const maxBodyBytes = 1_048_576;
 const events = { read: [], write: [] };
 
 function requestClass(method, path) {
   if (!path.startsWith("/admin/")) return null;
   return method === "GET" || method === "HEAD" ? "read" : "write";
+}
+
+function isAllowedPath(path) {
+  return (
+    path === "/health" ||
+    path === "/ready" ||
+    path === "/version" ||
+    path.startsWith("/v1/default/banks/") ||
+    path.startsWith("/admin/quarantine/")
+  );
 }
 
 function consume(kind) {
@@ -21,29 +35,67 @@ function consume(kind) {
   return true;
 }
 
-const server = http.createServer(async (req, res) => {
-  const kind = requestClass(req.method ?? "GET", req.url ?? "/");
-  if (kind && !consume(kind)) {
-    res.writeHead(429, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "external_admin_rate_limited" }));
+function sendJson(res, status, body) {
+  res.writeHead(status, { "content-type": "application/json" });
+  res.end(JSON.stringify(body));
+}
+
+const server = http.createServer((req, res) => {
+  const method = req.method ?? "GET";
+  const path = req.url ?? "/";
+  if (!isAllowedPath(path)) {
+    sendJson(res, 404, { error: "proxy_path_not_allowed" });
     return;
   }
 
-  try {
-    const chunks = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const response = await fetch(new URL(req.url ?? "/", upstream), {
-      method: req.method,
-      headers: req.headers,
-      body: chunks.length > 0 ? Buffer.concat(chunks) : undefined,
-      redirect: "manual",
-    });
-    res.writeHead(response.status, Object.fromEntries(response.headers));
-    res.end(Buffer.from(await response.arrayBuffer()));
-  } catch {
-    res.writeHead(502, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: "router_unavailable" }));
+  const kind = requestClass(method, path);
+  if (kind && !consume(kind)) {
+    sendJson(res, 429, { error: "external_admin_rate_limited" });
+    return;
   }
+
+  let bodyBytes = 0;
+  const upstream = http.request(
+    {
+      host: upstreamHost,
+      port: upstreamPort,
+      method,
+      path,
+      headers: {
+        ...(req.headers.authorization
+          ? { authorization: req.headers.authorization }
+          : {}),
+        ...(req.headers["content-type"]
+          ? { "content-type": req.headers["content-type"] }
+          : {}),
+      },
+    },
+    (upstreamResponse) => {
+      res.writeHead(upstreamResponse.statusCode ?? 502, {
+        "content-type":
+          upstreamResponse.headers["content-type"] ?? "application/json",
+      });
+      upstreamResponse.pipe(res);
+    },
+  );
+
+  upstream.on("error", () => {
+    if (!res.headersSent) sendJson(res, 502, { error: "router_unavailable" });
+    else res.destroy();
+  });
+
+  req.on("data", (chunk) => {
+    bodyBytes += Buffer.byteLength(chunk);
+    if (bodyBytes > maxBodyBytes) {
+      upstream.destroy();
+      if (!res.headersSent) sendJson(res, 413, { error: "payload_too_large" });
+      req.destroy();
+      return;
+    }
+    upstream.write(chunk);
+  });
+  req.on("end", () => upstream.end());
+  req.on("error", () => upstream.destroy());
 });
 
 server.listen(8890, "0.0.0.0");
