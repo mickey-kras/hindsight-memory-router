@@ -57,7 +57,9 @@ import type { WriterRegistry } from "./types.js";
 
 export { assertNoPrivateKeyEnvironment, assertRouterAuthEnvironment };
 
-const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
+const PORT = integerEnv(process.env, "MEMORY_ROUTER_PORT", 8890, {
+  minimum: 1,
+});
 const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
@@ -87,8 +89,11 @@ const QUARANTINE_EVENT_RETENTION_DAYS = integerEnv(
   "QUARANTINE_EVENT_RETENTION_DAYS",
   90,
 );
-const MAX_BODY_BYTES = Number(
-  process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576",
+const MAX_BODY_BYTES = integerEnv(
+  process.env,
+  "MEMORY_ROUTER_MAX_BODY_BYTES",
+  1048576,
+  { minimum: 1 },
 );
 
 export interface CreateMemoryRouterServerOptions {
@@ -434,13 +439,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
         process.stdout.write(`memory-router listening on ${PORT}\n`);
       });
       const shutdown = () => {
+        const forceCloseTimer = setTimeout(() => {
+          server.closeAllConnections();
+        }, 30_000);
+        forceCloseTimer.unref();
         server.close(() => {
+          clearTimeout(forceCloseTimer);
           const closeLimiter =
             quarantineRateLimiter?.close() ?? Promise.resolve();
           closeLimiter.finally(() => {
             quarantineRepository.close().finally(() => process.exit(0));
           });
         });
+        server.closeIdleConnections();
       };
       process.once("SIGINT", shutdown);
       process.once("SIGTERM", shutdown);
