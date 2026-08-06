@@ -1,11 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError } from "./httpError.js";
 
-const REQUEST_URL_BASE = "http://memory-router.internal";
-
 export function parseRequestUrl(rawUrl: string): URL {
   try {
-    return new URL(rawUrl, REQUEST_URL_BASE);
+    return new URL(rawUrl, import.meta.url);
   } catch {
     throw new HttpError(400, "invalid_url", "request URL is malformed");
   }
