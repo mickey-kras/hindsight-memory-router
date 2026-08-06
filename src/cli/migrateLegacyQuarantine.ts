@@ -82,15 +82,22 @@ export function parseArguments(
     usage();
   }
 
-  if (!values.queue || !values.objects) usage();
+  const queuePath = stringOption(values.queue);
+  const objectDirectory = stringOption(values.objects);
+  const databaseUrl = stringOption(values.database);
+  if (!queuePath || !objectDirectory) usage();
   return {
-    queuePath: values.queue,
-    objectDirectory: values.objects,
+    queuePath,
+    objectDirectory,
     databaseUrl:
-      values.database ??
+      databaseUrl ??
       environment.QUARANTINE_DATABASE_URL ??
       DEFAULT_QUARANTINE_DATABASE_URL,
   };
+}
+
+function stringOption(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function usage(): never {
