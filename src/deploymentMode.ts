@@ -1,3 +1,13 @@
+import {
+  DEFAULT_QUARANTINE_DATABASE_URL,
+  isPostgresConnectionString,
+} from "./quarantine/repositoryFactory.js";
+
+const DEPLOYMENT_MODE_ENV = "MEMORY_ROUTER_DEPLOYMENT_MODE";
+const EXTERNAL_ADMIN_RATE_LIMIT_ENV =
+  "MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT";
+const QUARANTINE_DATABASE_URL_ENV = "QUARANTINE_DATABASE_URL";
+
 export type DeploymentMode = "single" | "cluster";
 
 export interface DeploymentModeConfig {
@@ -8,32 +18,32 @@ export interface DeploymentModeConfig {
 
 export function deploymentModeConfigFromEnv(
   environment: NodeJS.ProcessEnv = process.env,
+  databaseUrl =
+    environment[QUARANTINE_DATABASE_URL_ENV] ??
+    DEFAULT_QUARANTINE_DATABASE_URL,
 ): DeploymentModeConfig {
-  const rawMode = environment.MEMORY_ROUTER_DEPLOYMENT_MODE ?? "single";
+  const rawMode = environment[DEPLOYMENT_MODE_ENV] ?? "single";
   if (rawMode !== "single" && rawMode !== "cluster") {
     throw new Error(
-      "MEMORY_ROUTER_DEPLOYMENT_MODE must be either single or cluster",
+      `${DEPLOYMENT_MODE_ENV} must be single or cluster; received ${JSON.stringify(rawMode)}`,
     );
   }
   return {
     mode: rawMode,
-    databaseUrl:
-      environment.QUARANTINE_DATABASE_URL ?? "sqlite:./data/quarantine.db",
+    databaseUrl,
     externalAdminRateLimit:
-      environment.MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT === "true",
+      environment[EXTERNAL_ADMIN_RATE_LIMIT_ENV] === "true",
   };
 }
 
 export function assertDeploymentMode(
   environment: NodeJS.ProcessEnv = process.env,
+  databaseUrl?: string,
 ): void {
-  const config = deploymentModeConfigFromEnv(environment);
-  const postgres =
-    config.databaseUrl.startsWith("postgres://") ||
-    config.databaseUrl.startsWith("postgresql://");
+  const config = deploymentModeConfigFromEnv(environment, databaseUrl);
 
   if (config.mode === "cluster") {
-    if (!postgres) {
+    if (!isPostgresConnectionString(config.databaseUrl)) {
       throw new Error(
         "cluster deployment mode requires a PostgreSQL QUARANTINE_DATABASE_URL",
       );
