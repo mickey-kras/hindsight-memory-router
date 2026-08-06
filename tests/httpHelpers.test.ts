@@ -26,6 +26,20 @@ describe("parseRequestUrl", () => {
     expect(url.pathname).toBe("/health");
   });
 
+  it("rejects unsupported relative and asterisk request-target forms", () => {
+    for (const raw of ["health", "*"]) {
+      let caught: unknown;
+      try {
+        parseRequestUrl(raw);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(HttpError);
+      expect((caught as HttpError).status).toBe(400);
+      expect((caught as HttpError).code).toBe("invalid_url");
+    }
+  });
+
   it("rejects malformed request targets with 400 invalid_url", () => {
     for (const raw of ["http://", "http://exa mple/", "https://["]) {
       let caught: unknown;
