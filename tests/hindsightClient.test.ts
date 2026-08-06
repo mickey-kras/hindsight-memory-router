@@ -3,6 +3,7 @@ import {
   FakeHindsightGateway,
   FetchHindsightGateway,
   HindsightGatewayError,
+  parseRecallResponse,
 } from "../src/hindsightClient.js";
 
 function mockFetch(...responses: Response[]) {
@@ -169,6 +170,27 @@ describe("FetchHindsightGateway", () => {
     expect(
       () => new FetchHindsightGateway("https://hindsight.test", "k", 0),
     ).toThrow("Hindsight timeout must be a positive integer");
+  });
+});
+
+describe("parseRecallResponse", () => {
+  it("accepts valid recall responses", () => {
+    expect(
+      parseRecallResponse({ results: [{ id: "m1", text: "memory" }] }),
+    ).toEqual({
+      results: [{ id: "m1", text: "memory" }],
+    });
+  });
+
+  it.each([
+    [{ results: "invalid" }],
+    [{ results: [{ id: 1, text: "memory" }] }],
+    [{ results: [{ id: "m1", text: "memory" }], trace: [] }],
+  ])("rejects malformed recall responses", (response) => {
+    expect(() => parseRecallResponse(response)).toThrow(HindsightGatewayError);
+    expect(() => parseRecallResponse(response)).toThrow(
+      "invalid response shape",
+    );
   });
 });
 
