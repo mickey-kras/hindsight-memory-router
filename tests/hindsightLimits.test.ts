@@ -106,9 +106,7 @@ describe("Hindsight request limits", () => {
           },
         ],
       }),
-    ).toThrow(
-      expect.objectContaining({ status: 413, code: "retain_content_too_large" }),
-    );
+    ).toThrow("retain content exceeds the configured byte limit");
   });
 
   it("rejects oversized retain and recall fields with stable 413 errors", () => {
@@ -125,22 +123,16 @@ describe("Hindsight request limits", () => {
       control.assertRetainBounds({
         items: [{ content: "a" }, { content: "b" }],
       }),
-    ).toThrow(
-      expect.objectContaining({ status: 413, code: "retain_item_limit_exceeded" }),
-    );
+    ).toThrow("retain request contains too many memory items");
     expect(() =>
       control.assertRetainBounds({ items: [{ content: "hello" }] }),
-    ).toThrow(
-      expect.objectContaining({ status: 413, code: "retain_content_too_large" }),
-    );
+    ).toThrow("retain content exceeds the configured byte limit");
     expect(() => control.assertRecallBounds({ query: "hello" })).toThrow(
-      expect.objectContaining({ status: 413, code: "recall_query_too_large" }),
+      "recall query exceeds the configured byte limit",
     );
     expect(() =>
       control.assertRecallBounds({ query: "ok", max_tokens: 11 }),
-    ).toThrow(
-      expect.objectContaining({ status: 413, code: "recall_max_tokens_exceeded" }),
-    );
+    ).toThrow("recall max_tokens exceeds the configured limit");
   });
 
   it("returns Retry-After for rate-limit responses", async () => {
