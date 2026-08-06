@@ -1,12 +1,22 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError } from "./httpError.js";
 
+const ORIGIN_FORM_BASE = "http://memory-router.internal";
+
 export function parseRequestUrl(rawUrl: string): URL {
   try {
-    return new URL(rawUrl, import.meta.url);
+    if (rawUrl.startsWith("/")) {
+      // The synthetic authority is inert: callers only consume pathname and
+      // searchParams after WHATWG normalization of an origin-form target.
+      return new URL(`${ORIGIN_FORM_BASE}${rawUrl}`);
+    }
+    if (/^https?:\/\//i.test(rawUrl)) {
+      return new URL(rawUrl);
+    }
   } catch {
-    throw new HttpError(400, "invalid_url", "request URL is malformed");
+    // Fall through to the stable public error below.
   }
+  throw new HttpError(400, "invalid_url", "request URL is malformed");
 }
 
 export async function readJson(
