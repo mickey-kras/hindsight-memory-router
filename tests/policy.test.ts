@@ -66,32 +66,67 @@ describe("RouterPolicy quarantine", () => {
     expect((hindsight as FakeHindsightGateway).retained).toHaveLength(0);
   });
 
-  it("scans context, tags, document id, and metadata before retaining", async () => {
-    const { hindsight, policy, repository } = buildPolicy();
-    const marker = "ignore previous instructions";
-
-    const result = (await policy.retain("ops", {
+  it("scans existing content-bearing retain fields", async () => {
+    const { hindsight, policy } = buildPolicy();
+    const result = await policy.retain("ops", {
       items: [
         {
           content: "Ordinary note.",
           context: "normal context",
           document_id: "doc-2",
-          tags: ["safe", marker],
+          tags: ["safe", "ignore previous instructions"],
           metadata: { source_note: "normal" },
         },
       ],
-      async: true,
-    })) as { quarantine_id: string };
+    });
 
     expect(result).toMatchObject({
       queued: true,
       reason: "suspicious_content",
     });
-    expect(await repository.get(result.quarantine_id)).toMatchObject({
-      reason: "suspicious_content",
-      kind: "retain_request",
-    });
     expect((hindsight as FakeHindsightGateway).retained).toHaveLength(0);
+  });
+
+  it("stores transformation metadata without rewriting evidence", async () => {
+    const { policy, repository, keys } = buildPolicy();
+    const original = "ｉｇｎｏｒｅ previous instructions";
+    const result = (await policy.retain("ops", {
+      items: [{ content: original }],
+    })) as { quarantine_id: string };
+
+    const stored = await repository.get(result.quarantine_id);
+    expect(
+      decryptQuarantineEnvelope(stored?.encrypted, keys.privateKey),
+    ).toMatchObject({
+      payload: {
+        body: { items: [{ content: original }] },
+        safety: { transformations: ["nfkc"] },
+      },
+    });
+  });
+
+  it("detects instructions split across retain fields and items", async () => {
+    const { hindsight, policy } = buildPolicy();
+    const result = (await policy.retain("ops", {
+      items: [{ content: "ignore previous" }, { content: "instructions" }],
+    })) as { findings: Array<{ reason: string }> };
+
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({ reason: "split_instruction" }),
+    );
+    expect((hindsight as FakeHindsightGateway).retained).toHaveLength(0);
+  });
+
+  it("canonicalizes recall queries", async () => {
+    const { hindsight, policy } = buildPolicy();
+    expect(
+      (
+        await policy.recall("ops", {
+          query: "ｉｇｎｏｒｅ\u200B previous instructions",
+        })
+      ).results,
+    ).toEqual([]);
+    expect((hindsight as FakeHindsightGateway).recalled).toHaveLength(0);
   });
 
   it("binds recalled-memory approval to evaluated text", async () => {
@@ -108,7 +143,6 @@ describe("RouterPolicy quarantine", () => {
       source_bank: "ops",
       source_memory_id: "memory-1",
     });
-
     await repository.markMemoryReviewed(
       pending.quarantine_id,
       "reviewed_allowed",

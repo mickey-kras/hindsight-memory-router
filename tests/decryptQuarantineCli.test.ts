@@ -12,7 +12,7 @@ import {
 import { createEncryptedQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
 import { quarantineKeys } from "./quarantineTestUtils.js";
 
-function createContext() {
+function createContext(content = "decrypt locally", payload?: unknown) {
   const directory = mkdtempSync(join(tmpdir(), "decrypt-quarantine-cli-"));
   const responsePath = join(directory, "response.json");
   const barePath = join(directory, "envelope.json");
@@ -24,7 +24,7 @@ function createContext() {
       reason: "suspicious_content",
       writer_id: "unknown",
       source: "cli-test",
-      payload: { content: "decrypt locally" },
+      payload: payload ?? { content },
     },
     keys.publicKey,
   );
@@ -99,6 +99,61 @@ describe("decrypt quarantine CLI", () => {
         payload: { content: "decrypt locally" },
       });
       expect(stderr.value()).toBe("");
+    } finally {
+      rmSync(context.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("warns with an escaped view without rewriting original evidence", async () => {
+    const original = "visible\u200Bhidden\nnext";
+    const context = createContext(original);
+    const stdout = capture();
+    const stderr = capture();
+    try {
+      await expect(
+        runDecryptQuarantineCli([context.responsePath], {
+          stdin: Readable.from([context.privateKey]),
+          stdout: stdout.stream,
+          stderr: stderr.stream,
+        }),
+      ).resolves.toBe(0);
+
+      expect(
+        (JSON.parse(stdout.value()) as { payload: { content: string } }).payload
+          .content,
+      ).toBe(original);
+      expect(stderr.value()).toContain(
+        "stdout preserves the original evidence",
+      );
+      expect(stderr.value()).toContain("visible\\\\u200Bhidden\\\\nnext");
+    } finally {
+      rmSync(context.directory, { recursive: true, force: true });
+    }
+  });
+
+  it("warns when only an object key contains a hidden character", async () => {
+    const hiddenKey = "hidden\u200Bkey";
+    const context = createContext("", { [hiddenKey]: "value" });
+    const stdout = capture();
+    const stderr = capture();
+    try {
+      await expect(
+        runDecryptQuarantineCli([context.responsePath], {
+          stdin: Readable.from([context.privateKey]),
+          stdout: stdout.stream,
+          stderr: stderr.stream,
+        }),
+      ).resolves.toBe(0);
+
+      expect(
+        Object.keys(
+          (JSON.parse(stdout.value()) as { payload: object }).payload,
+        ),
+      ).toEqual([hiddenKey]);
+      expect(stderr.value()).toContain(
+        "stdout preserves the original evidence",
+      );
+      expect(stderr.value()).toContain("hidden\\\\u200Bkey");
     } finally {
       rmSync(context.directory, { recursive: true, force: true });
     }

@@ -15,6 +15,10 @@ Use a private GitHub security advisory.
 - Private quarantine key must never enter the router runtime.
 - Approval requires the exact decrypted object and stored hash.
 
+## Content scanning
+
+The scanner is a deterministic tripwire, not a safety guarantee. It normalizes known Unicode evasions, checks bounded Base64 content, and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
+
 ## Deployment
 
 - `single`: one router process; SQLite or PostgreSQL.

@@ -12,10 +12,15 @@ import {
 import { getWriter } from "./registry.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
 import type { QuarantineStore } from "./quarantine/quarantineStore.js";
-import { scanContent, type SafetyFinding } from "./safety.js";
+import {
+  scanContent,
+  scanRecallResult,
+  scanRetainBody,
+  type SafetyFinding,
+  type SafetyResult,
+} from "./safety.js";
 import type {
   BankId,
-  MemoryItem,
   RecallBody,
   RecallResponse,
   RecallResult,
@@ -37,6 +42,7 @@ interface QuarantineRecallInput {
   reason: "unknown_writer" | "suspicious_query";
   body: RecallBody;
   targetBanks?: readonly BankId[];
+  transformations?: SafetyResult["transformations"];
 }
 
 function isQuarantineUnavailable(error: unknown): error is HttpError {
@@ -84,18 +90,17 @@ export class RouterPolicy {
       });
     }
 
-    for (const item of body.items ?? []) {
-      const scan = scanMemoryItem(item);
-      if (!scan.safe) {
-        return this.quarantineRetain({
-          writerId,
-          source,
-          reason: "suspicious_content",
-          body,
-          targetBank: writer.write_bank,
-          findings: scan.findings,
-        });
-      }
+    const scan = scanRetainBody(body);
+    if (!scan.safe) {
+      return this.quarantineRetain({
+        writerId,
+        source,
+        reason: "suspicious_content",
+        body,
+        targetBank: writer.write_bank,
+        findings: scan.findings,
+        transformations: scan.transformations,
+      });
     }
 
     const rewritten: RetainBody = {
@@ -139,6 +144,7 @@ export class RouterPolicy {
         reason: "suspicious_query",
         body,
         targetBanks: writer.read_banks,
+        transformations: scan.transformations,
       });
       return { results: [] };
     }
@@ -272,6 +278,7 @@ export class RouterPolicy {
       result.id,
     );
     const sourceContentSha256 = sha256Hex(result.text ?? "");
+    const scan = scanRecallResult(result);
 
     if (state?.status === "reviewed_blocked") return false;
     if (state?.status === "reviewed_allowed") {
@@ -282,6 +289,7 @@ export class RouterPolicy {
         bankId,
         result,
         sourceContentSha256,
+        scan.transformations,
       );
       return false;
     }
@@ -293,12 +301,12 @@ export class RouterPolicy {
         bankId,
         result,
         sourceContentSha256,
+        scan.transformations,
       );
       return false;
     }
 
-    const resultScan = scanContent(result.text ?? "");
-    if (resultScan.safe) return true;
+    if (scan.safe) return true;
 
     await this.quarantineRecalledResult(
       writerId,
@@ -306,6 +314,7 @@ export class RouterPolicy {
       bankId,
       result,
       sourceContentSha256,
+      scan.transformations,
     );
     return false;
   }
@@ -316,7 +325,13 @@ export class RouterPolicy {
     bankId: BankId,
     result: RecallResult,
     sourceContentSha256: string,
+    transformations: SafetyResult["transformations"],
   ): Promise<void> {
+    const payload = {
+      action: "recalled_memory",
+      bank_id: bankId,
+      result,
+    };
     await this.quarantine({
       writerId,
       source,
@@ -325,11 +340,7 @@ export class RouterPolicy {
       sourceBank: bankId,
       sourceMemoryId: result.id,
       sourceContentSha256,
-      payload: {
-        action: "recalled_memory",
-        bank_id: bankId,
-        result,
-      },
+      payload: addTransformationEvidence(payload, transformations),
     });
   }
 
@@ -352,7 +363,7 @@ export class RouterPolicy {
           : undefined,
         payload,
       }),
-      payload,
+      payload: addTransformationEvidence(payload, input.transformations),
     });
   }
 
@@ -363,6 +374,7 @@ export class RouterPolicy {
     body: RetainBody;
     targetBank?: BankId;
     findings?: SafetyFinding[];
+    transformations?: SafetyResult["transformations"];
   }): Promise<unknown> {
     const payload = {
       action: "retain",
@@ -380,7 +392,7 @@ export class RouterPolicy {
         target: input.targetBank,
         payload,
       }),
-      payload,
+      payload: addTransformationEvidence(payload, input.transformations),
     });
 
     return {
@@ -427,18 +439,11 @@ export class RouterPolicy {
   }
 }
 
-function scanMemoryItem(item: MemoryItem): {
-  safe: boolean;
-  findings: SafetyFinding[];
-} {
-  const fields = [
-    item.content,
-    item.context ?? "",
-    item.document_id ?? "",
-    ...(item.tags ?? []),
-    ...Object.values(item.metadata ?? {}),
-  ].filter((value): value is string => typeof value === "string");
-
-  const findings = fields.flatMap((value) => scanContent(value).findings);
-  return { safe: findings.length === 0, findings };
+function addTransformationEvidence<T extends Record<string, unknown>>(
+  payload: T,
+  transformations?: SafetyResult["transformations"],
+): T | (T & { safety: { transformations: SafetyResult["transformations"] } }) {
+  return transformations?.length
+    ? { ...payload, safety: { transformations } }
+    : payload;
 }
