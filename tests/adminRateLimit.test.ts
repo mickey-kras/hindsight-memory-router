@@ -51,7 +51,7 @@ describe("AdminRateLimiter", () => {
     await limiter.consume("read");
   });
 
-  it("is disabled by non-positive limits", async () => {
+  it("is disabled by non-positive programmatic limits", async () => {
     const limiter = new AdminRateLimiter(
       { readMax: 0, writeMax: 0, windowMs: 60_000 },
       () => 0,
@@ -85,7 +85,7 @@ describe("adminRateLimitConfigFromEnv", () => {
     ).toEqual({ readMax: 10, writeMax: 5, windowMs: 30_000 });
   });
 
-  it("rejects malformed values instead of ignoring them", () => {
+  it("rejects malformed or disabling values", () => {
     expect(() =>
       adminRateLimitConfigFromEnv({
         MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX: "fast",
@@ -96,6 +96,11 @@ describe("adminRateLimitConfigFromEnv", () => {
         MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX: "-1",
       }),
     ).toThrow("MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX");
+    expect(() =>
+      adminRateLimitConfigFromEnv({
+        MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX: "0",
+      }),
+    ).toThrow("MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX");
     expect(() =>
       adminRateLimitConfigFromEnv({
         MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS: "1.5",
