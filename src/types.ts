@@ -70,13 +70,16 @@ export interface RecallResponse {
   trace?: Record<string, unknown> | null;
 }
 
-export type ReviewReason =
-  | "unknown_writer"
-  | "suspicious_content"
-  | "suspicious_query"
-  | "recalled_suspicious_memory"
-  | "denied_endpoint"
-  | "auth_failed";
+export const REVIEW_REASONS = [
+  "unknown_writer",
+  "suspicious_content",
+  "suspicious_query",
+  "recalled_suspicious_memory",
+  "denied_endpoint",
+  "auth_failed",
+] as const;
+
+export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
 export type QuarantineKind =
   "retain_request" | "recall_request" | "recalled_memory" | "security_event";
