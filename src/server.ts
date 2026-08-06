@@ -239,6 +239,7 @@ export function createMemoryRouterServer(
   const policy = new RouterPolicy({
     registry,
     hindsight,
+    hindsightLimits,
     quarantineStore,
     quarantineRepository,
   });
@@ -348,14 +349,14 @@ export function createMemoryRouterServer(
       const memoryPath = parseMemoryPath(pathname);
       if (method === "POST" && memoryPath?.action === "retain") {
         const body = parseRetainBody(await readJson(req, maxBodyBytes));
-        await hindsightLimits.consumeRetain(memoryPath.writerId, body);
+        hindsightLimits.assertRetainBounds(body);
         const result = await policy.retain(memoryPath.writerId, body);
         return send(res, 200, result);
       }
 
       if (method === "POST" && memoryPath?.action === "recall") {
         const body = parseRecallBody(await readJson(req, maxBodyBytes));
-        await hindsightLimits.consumeRecall(memoryPath.writerId, body);
+        hindsightLimits.assertRecallBounds(body);
         const result = await policy.recall(memoryPath.writerId, body);
         return send(res, 200, result);
       }
