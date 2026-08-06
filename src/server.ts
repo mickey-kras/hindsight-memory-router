@@ -18,6 +18,7 @@ import {
   readJson,
   send,
 } from "./httpHelpers.js";
+import { integerEnv } from "./integerEnv.js";
 import { RouterPolicy } from "./policy.js";
 import {
   QuarantineAdminService,
@@ -61,20 +62,28 @@ const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
 const HINDSIGHT_BASE_URL =
   process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
 const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
-const HINDSIGHT_TIMEOUT_MS = positiveNumberEnv(
+const HINDSIGHT_TIMEOUT_MS = integerEnv(
+  process.env,
   "HINDSIGHT_TIMEOUT_MS",
   DEFAULT_HINDSIGHT_TIMEOUT_MS,
+  { minimum: 1 },
 );
 const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
 const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
 const QUARANTINE_DATABASE_URL =
   process.env.QUARANTINE_DATABASE_URL ?? DEFAULT_QUARANTINE_DATABASE_URL;
-const QUARANTINE_MAX_POSTPONES = numberEnv("QUARANTINE_MAX_POSTPONES", 3);
-const QUARANTINE_SWEEP_INTERVAL_SECONDS = numberEnv(
+const QUARANTINE_MAX_POSTPONES = integerEnv(
+  process.env,
+  "QUARANTINE_MAX_POSTPONES",
+  3,
+);
+const QUARANTINE_SWEEP_INTERVAL_SECONDS = integerEnv(
+  process.env,
   "QUARANTINE_SWEEP_INTERVAL_SECONDS",
   3600,
 );
-const QUARANTINE_EVENT_RETENTION_DAYS = numberEnv(
+const QUARANTINE_EVENT_RETENTION_DAYS = integerEnv(
+  process.env,
   "QUARANTINE_EVENT_RETENTION_DAYS",
   90,
 );
@@ -134,43 +143,52 @@ function buildRegistry(
 
 function buildLimits(): QuarantineStoreLimits {
   return {
-    maxItemBytes: numberEnv(
+    maxItemBytes: integerEnv(
+      process.env,
       "QUARANTINE_MAX_ITEM_BYTES",
       DEFAULT_QUARANTINE_LIMITS.maxItemBytes,
     ),
-    maxPendingItems: numberEnv(
+    maxPendingItems: integerEnv(
+      process.env,
       "QUARANTINE_MAX_PENDING_ITEMS",
       DEFAULT_QUARANTINE_LIMITS.maxPendingItems,
     ),
-    maxPendingItemsPerWriter: numberEnv(
+    maxPendingItemsPerWriter: integerEnv(
+      process.env,
       "QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER",
       DEFAULT_QUARANTINE_LIMITS.maxPendingItemsPerWriter,
     ),
-    maxEncryptedBytes: numberEnv(
+    maxEncryptedBytes: integerEnv(
+      process.env,
       "QUARANTINE_MAX_ENCRYPTED_BYTES",
       DEFAULT_QUARANTINE_LIMITS.maxEncryptedBytes,
     ),
-    rateLimitMax: numberEnv(
+    rateLimitMax: integerEnv(
+      process.env,
       "QUARANTINE_RATE_LIMIT_MAX",
       DEFAULT_QUARANTINE_LIMITS.rateLimitMax,
     ),
-    rateLimitWindowMs: numberEnv(
+    rateLimitWindowMs: integerEnv(
+      process.env,
       "QUARANTINE_RATE_LIMIT_WINDOW_MS",
       DEFAULT_QUARANTINE_LIMITS.rateLimitWindowMs,
     ),
-    rateLimitGlobalMax: numberEnv(
+    rateLimitGlobalMax: integerEnv(
+      process.env,
       "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
       DEFAULT_QUARANTINE_LIMITS.rateLimitGlobalMax,
     ),
-    distinctFamilyLimitMax: numberEnv(
+    distinctFamilyLimitMax: integerEnv(
+      process.env,
       "QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX",
       DEFAULT_QUARANTINE_LIMITS.distinctFamilyLimitMax,
     ),
-    requarantineOpsMax: numberEnv(
+    requarantineOpsMax: integerEnv(
+      process.env,
       "QUARANTINE_REQUARANTINE_OPS_MAX",
       DEFAULT_QUARANTINE_LIMITS.requarantineOpsMax,
     ),
-    itemTtlDays: numberEnv("QUARANTINE_ITEM_TTL_DAYS", 30),
+    itemTtlDays: integerEnv(process.env, "QUARANTINE_ITEM_TTL_DAYS", 30),
   };
 }
 
@@ -407,24 +425,6 @@ function requireQuarantineRepository(
     );
   }
   return options.quarantineRepository;
-}
-
-function numberEnv(name: string, fallback: number): number {
-  const raw = process.env[name];
-  if (raw === undefined) return fallback;
-  const value = Number(raw);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${name} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function positiveNumberEnv(name: string, fallback: number): number {
-  const value = numberEnv(name, fallback);
-  if (value === 0) {
-    throw new Error(`${name} must be a positive integer`);
-  }
-  return value;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

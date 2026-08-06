@@ -12,83 +12,101 @@ import {
 } from "./repository.js";
 import type { SqlDatabase } from "./sqlRepository.js";
 
+const SCHEMA_COLUMNS = [
+  {
+    name: "dedupe_key",
+    definition: "dedupe_key TEXT",
+  },
+  {
+    name: "requarantine_count",
+    definition: "requarantine_count INTEGER NOT NULL DEFAULT 0",
+  },
+  {
+    name: "expires_at",
+    definition: "expires_at TEXT",
+  },
+] as const;
+
 export async function initializeSchema(database: SqlDatabase): Promise<void> {
-  await database.executeScript(`
-    CREATE TABLE IF NOT EXISTS quarantine_items (
-      quarantine_id TEXT PRIMARY KEY,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      kind TEXT NOT NULL,
-      reason TEXT NOT NULL,
-      writer_id TEXT,
-      source TEXT,
-      source_bank TEXT,
-      source_memory_id TEXT,
-      source_content_sha256 TEXT,
-      dedupe_key TEXT,
-      sha256 TEXT NOT NULL,
-      encrypted_envelope TEXT,
-      encrypted_bytes INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL,
-      postpone_count INTEGER NOT NULL DEFAULT 0,
-      requarantine_count INTEGER NOT NULL DEFAULT 0,
-      expires_at TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_quarantine_items_review
-      ON quarantine_items(status, created_at);
-    CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason
-      ON quarantine_items(reason, status, created_at);
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory
-      ON quarantine_items(source_bank, source_memory_id)
-      WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL;
-    CREATE TABLE IF NOT EXISTS quarantine_events (
-      event_id TEXT PRIMARY KEY,
-      quarantine_id TEXT NOT NULL,
-      occurred_at TEXT NOT NULL,
-      event_type TEXT NOT NULL,
-      details TEXT NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_quarantine_events_item
-      ON quarantine_events(quarantine_id, occurred_at);
-    CREATE INDEX IF NOT EXISTS idx_quarantine_events_type
-      ON quarantine_events(event_type, occurred_at);
-  `);
-  await ensureColumn(
-    database,
-    "dedupe_key",
-    "ALTER TABLE quarantine_items ADD COLUMN dedupe_key TEXT",
-  );
-  await ensureColumn(
-    database,
-    "requarantine_count",
-    "ALTER TABLE quarantine_items ADD COLUMN requarantine_count INTEGER NOT NULL DEFAULT 0",
-  );
-  await ensureColumn(
-    database,
-    "expires_at",
-    "ALTER TABLE quarantine_items ADD COLUMN expires_at TEXT",
-  );
-  await database.executeScript(`
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key
-      ON quarantine_items(dedupe_key)
-      WHERE dedupe_key IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at
-      ON quarantine_items(expires_at)
-      WHERE expires_at IS NOT NULL;
-  `);
+  await database.transaction(async (transaction) => {
+    await transaction.acquireCapacityLock();
+    await transaction.executeScript(`
+      CREATE TABLE IF NOT EXISTS quarantine_items (
+        quarantine_id TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        writer_id TEXT,
+        source TEXT,
+        source_bank TEXT,
+        source_memory_id TEXT,
+        source_content_sha256 TEXT,
+        dedupe_key TEXT,
+        sha256 TEXT NOT NULL,
+        encrypted_envelope TEXT,
+        encrypted_bytes INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        postpone_count INTEGER NOT NULL DEFAULT 0,
+        requarantine_count INTEGER NOT NULL DEFAULT 0,
+        expires_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_quarantine_items_review
+        ON quarantine_items(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason
+        ON quarantine_items(reason, status, created_at);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory
+        ON quarantine_items(source_bank, source_memory_id)
+        WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL;
+      CREATE TABLE IF NOT EXISTS quarantine_events (
+        event_id TEXT PRIMARY KEY,
+        quarantine_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        details TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_quarantine_events_item
+        ON quarantine_events(quarantine_id, occurred_at);
+      CREATE INDEX IF NOT EXISTS idx_quarantine_events_type
+        ON quarantine_events(event_type, occurred_at);
+    `);
+    for (const column of SCHEMA_COLUMNS) {
+      await ensureColumn(transaction, column.name, column.definition);
+    }
+    await transaction.executeScript(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key
+        ON quarantine_items(dedupe_key)
+        WHERE dedupe_key IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at
+        ON quarantine_items(expires_at)
+        WHERE expires_at IS NOT NULL;
+    `);
+  });
 }
 
 async function ensureColumn(
   database: SqlDatabase,
-  column: "dedupe_key" | "requarantine_count" | "expires_at",
-  alterStatement: string,
+  column: (typeof SCHEMA_COLUMNS)[number]["name"],
+  definition: string,
 ): Promise<void> {
-  try {
-    await database.get(
-      `SELECT ${column} FROM quarantine_items WHERE 1 = 0 LIMIT 1`,
-    );
-  } catch {
-    await database.run(alterStatement);
+  const postgres = database.placeholder(1) === "$1";
+  const existing = postgres
+    ? await database.get<{ present: number }>(
+        `SELECT 1 AS present
+         FROM information_schema.columns
+         WHERE table_schema = current_schema()
+           AND table_name = $1
+           AND column_name = $2`,
+        ["quarantine_items", column],
+      )
+    : await database.get<{ present: number }>(
+        `SELECT 1 AS present
+         FROM pragma_table_info('quarantine_items')
+         WHERE name = ?`,
+        [column],
+      );
+  if (!existing) {
+    await database.run(`ALTER TABLE quarantine_items ADD COLUMN ${definition}`);
   }
 }
 

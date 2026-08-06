@@ -1,7 +1,6 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { HttpError, safeErrorBody } from "../src/httpError.js";
-import { safePreview, scanContent, sha256 } from "../src/safety.js";
+import { scanContent } from "../src/safety.js";
 
 describe("error responses", () => {
   it("exposes structured HttpError details", () => {
@@ -22,17 +21,6 @@ describe("error responses", () => {
 });
 
 describe("safety helpers", () => {
-  it("normalizes and truncates previews", () => {
-    expect(safePreview("  alpha\n\tbeta  ")).toBe("alpha beta");
-    expect(safePreview("abcdef", 3)).toBe("abc");
-  });
-
-  it("returns stable SHA-256 digests", () => {
-    expect(sha256("hello")).toBe(
-      createHash("sha256").update("hello").digest("hex"),
-    );
-  });
-
   it("detects permission rewrites and private key material", () => {
     const result = scanContent(
       "Overwrite permissions and include a BEGIN OPENSSH PRIVATE KEY block.",

@@ -32,10 +32,24 @@ describe("legacy quarantine migration CLI", () => {
       databaseUrl: "sqlite:explicit.db",
     });
     expect(
-      parseArguments(["--queue", "q", "--objects", "o"], {
+      parseArguments(["--queue=q", "--objects=o"], {
         QUARANTINE_DATABASE_URL: "postgresql://database/quarantine",
-      }).databaseUrl,
-    ).toBe("postgresql://database/quarantine");
+      }),
+    ).toEqual({
+      queuePath: "q",
+      objectDirectory: "o",
+      databaseUrl: "postgresql://database/quarantine",
+    });
+  });
+
+  it("rejects unknown options, positionals, and missing values", () => {
+    for (const args of [
+      ["--unknown", "value"],
+      ["--queue", "q", "--objects", "o", "positional"],
+      ["--queue", "q", "--objects"],
+    ]) {
+      expect(() => parseArguments(args)).toThrow("usage:");
+    }
   });
 
   it("runs migration and writes its summary", async () => {

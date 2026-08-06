@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 
 describe("PostgresQuarantineRepository", () => {
-  it("uses native placeholders and a transaction-scoped capacity lock", async () => {
+  it("uses native placeholders and transaction-scoped locks", async () => {
     const { PostgresQuarantineRepository } =
       await import("../src/quarantine/postgresRepository.js");
     const repository = new PostgresQuarantineRepository(
@@ -62,20 +62,16 @@ describe("PostgresQuarantineRepository", () => {
       "postgresql://router:test@database/router",
       { max: 5 },
     );
-    const rootStatements = rootSql.unsafe.mock.calls.map(([statement]) =>
-      String(statement),
-    );
-    expect(rootStatements[0]).toContain("CREATE TABLE IF NOT EXISTS");
-    expect(rootStatements.join("\n")).toContain(
-      "idx_quarantine_items_dedupe_key",
-    );
-    expect(rootSql.begin).toHaveBeenCalledTimes(2);
+    expect(rootSql.unsafe).not.toHaveBeenCalled();
+    expect(rootSql.begin).toHaveBeenCalledTimes(3);
 
     const statements = transactionSql.unsafe.mock.calls.map(([statement]) =>
       String(statement),
     );
     expect(statements).toEqual(
       expect.arrayContaining([
+        expect.stringContaining("CREATE TABLE IF NOT EXISTS"),
+        expect.stringContaining("idx_quarantine_items_dedupe_key"),
         expect.stringContaining("review_in_progress"),
         expect.stringContaining("pg_advisory_xact_lock"),
         expect.stringContaining("WHERE quarantine_id = $1"),

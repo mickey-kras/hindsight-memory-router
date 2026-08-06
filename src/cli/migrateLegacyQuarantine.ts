@@ -1,3 +1,4 @@
+import { parseArgs } from "node:util";
 import {
   migrateLegacyQuarantine,
   type LegacyMigrationOptions,
@@ -65,28 +66,38 @@ export function parseArguments(
   argv: string[],
   environment: NodeJS.ProcessEnv = process.env,
 ): Arguments {
-  const values = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
-    const name = argv[index];
-    const value = argv[index + 1];
-    if (!name?.startsWith("--") || !value) usage();
-    if (name !== "--queue" && name !== "--objects" && name !== "--database") {
-      usage();
-    }
-    values.set(name, value);
+  let values: ReturnType<typeof parseArgs>["values"];
+  try {
+    ({ values } = parseArgs({
+      args: argv,
+      options: {
+        queue: { type: "string" },
+        objects: { type: "string" },
+        database: { type: "string" },
+      },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch {
+    usage();
   }
 
-  const queuePath = values.get("--queue");
-  const objectDirectory = values.get("--objects");
+  const queuePath = stringOption(values.queue);
+  const objectDirectory = stringOption(values.objects);
+  const databaseUrl = stringOption(values.database);
   if (!queuePath || !objectDirectory) usage();
   return {
     queuePath,
     objectDirectory,
     databaseUrl:
-      values.get("--database") ??
+      databaseUrl ??
       environment.QUARANTINE_DATABASE_URL ??
       DEFAULT_QUARANTINE_DATABASE_URL,
   };
+}
+
+function stringOption(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function usage(): never {

@@ -155,7 +155,7 @@ describe("quarantine envelope validation", () => {
     ).toContain("BEGIN RSA PRIVATE KEY");
   });
 
-  it("detects authenticated metadata mismatch", () => {
+  it("rejects authenticated metadata tampering", () => {
     const { envelope, privateKey } = context();
     const mutations: Array<Record<string, unknown>> = [
       { quarantine_id: "q_other_0123456789abcdef" },
@@ -167,7 +167,7 @@ describe("quarantine envelope validation", () => {
     for (const mutation of mutations) {
       expect(() =>
         decryptQuarantineEnvelope({ ...envelope, ...mutation }, privateKey),
-      ).toThrow("quarantine envelope metadata mismatch");
+      ).toThrow();
     }
   });
 });

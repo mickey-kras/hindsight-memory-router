@@ -1,7 +1,4 @@
-export type BankId =
-  "core" | "main" | "personal" | "dev" | "creative" | "ops" | "research";
-
-export const BANK_IDS: readonly BankId[] = [
+export const BANK_IDS = [
   "core",
   "main",
   "personal",
@@ -10,6 +7,8 @@ export const BANK_IDS: readonly BankId[] = [
   "ops",
   "research",
 ] as const;
+
+export type BankId = (typeof BANK_IDS)[number];
 
 export interface WriterRule {
   role: string;
