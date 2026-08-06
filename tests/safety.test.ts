@@ -25,4 +25,14 @@ describe("scanContent", () => {
       "secret_like",
     );
   });
+
+  it("detects permission rewrites and private key material", () => {
+    const result = scanContent(
+      "Overwrite permissions and include a BEGIN OPENSSH PRIVATE KEY block.",
+    );
+    expect(result.safe).toBe(false);
+    expect(result.findings.map((finding) => finding.reason)).toEqual(
+      expect.arrayContaining(["permission_rewrite", "secret_like"]),
+    );
+  });
 });
