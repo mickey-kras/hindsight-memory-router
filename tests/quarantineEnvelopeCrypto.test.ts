@@ -1,4 +1,10 @@
-import { generateKeyPairSync } from "node:crypto";
+import {
+  constants,
+  createCipheriv,
+  generateKeyPairSync,
+  publicEncrypt,
+  randomBytes,
+} from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   canonicalizeDecryptedQuarantineObject,
@@ -6,7 +12,9 @@ import {
   decryptQuarantineEnvelope,
   parseEncryptedQuarantineEnvelope,
   sha256Hex,
+  WRAPPED_KEY_FIELD,
   type DecryptedQuarantineObject,
+  type EncryptedQuarantineEnvelope,
 } from "../src/quarantine/envelopeCrypto.js";
 
 function keyPair(): {
@@ -41,6 +49,47 @@ function decrypted(): DecryptedQuarantineObject {
         items: [{ metadata: { z: "last", a: "first" }, content: "raw" }],
       },
     },
+  };
+}
+
+function createLegacyEnvelope(
+  value: DecryptedQuarantineObject,
+  publicKey: string,
+): EncryptedQuarantineEnvelope {
+  const plaintext = canonicalizeDecryptedQuarantineObject(value);
+  const key = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv, {
+    authTagLength: 16,
+  });
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, "utf8"),
+    cipher.final(),
+  ]);
+  const wrappedKey = publicEncrypt(
+    {
+      key: publicKey,
+      oaepHash: "sha256",
+      padding: constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    key,
+  );
+  return {
+    version: 1,
+    quarantine_id: value.quarantine_id,
+    created_at: value.created_at,
+    reason: value.reason,
+    writer_id: value.writer_id,
+    source: value.source,
+    sha256: sha256Hex(plaintext),
+    encryption: {
+      algorithm: "AES-256-GCM",
+      key_wrap: "RSA-OAEP-SHA256",
+      [WRAPPED_KEY_FIELD]: wrappedKey.toString("base64"),
+      iv_b64: iv.toString("base64"),
+      tag_b64: cipher.getAuthTag().toString("base64"),
+    },
+    ciphertext_b64: ciphertext.toString("base64"),
   };
 }
 
@@ -135,5 +184,31 @@ describe("quarantine envelope crypto", () => {
         keys.privateKeyPem,
       ),
     ).toThrow();
+  });
+
+  it("rejects removal of the AAD marker from a modern envelope", () => {
+    const keys = keyPair();
+    const envelope = createEncryptedQuarantineEnvelope(
+      decrypted(),
+      keys.publicKeyPem,
+    );
+    const downgraded = structuredClone(envelope);
+    delete downgraded.encryption.aad;
+
+    expect(() =>
+      decryptQuarantineEnvelope(downgraded, keys.privateKeyPem),
+    ).toThrow();
+  });
+
+  it("continues to decrypt legacy envelopes without AAD", () => {
+    const keys = keyPair();
+    const value = decrypted();
+
+    expect(
+      decryptQuarantineEnvelope(
+        createLegacyEnvelope(value, keys.publicKeyPem),
+        keys.privateKeyPem,
+      ),
+    ).toEqual(value);
   });
 });
