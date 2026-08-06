@@ -104,11 +104,17 @@ export function validateRegistry(registry: WriterRegistry): void {
     if (typeof rule.write_bank !== "string" || !rule.write_bank) {
       throw new Error(`writer ${writerId} missing write_bank`);
     }
+    if (rule.write_bank === ("quarantine" as string)) {
+      throw new Error(`writer ${writerId} cannot write quarantine`);
+    }
     if (!BANK_ID_SET.has(rule.write_bank)) {
       throw new Error(`writer ${writerId} has invalid write_bank`);
     }
     if (!Array.isArray(rule.read_banks)) {
       throw new Error(`writer ${writerId} missing read_banks`);
+    }
+    if ((rule.read_banks as string[]).includes("quarantine")) {
+      throw new Error(`writer ${writerId} cannot read quarantine`);
     }
     for (const bank of rule.read_banks as unknown[]) {
       if (typeof bank !== "string" || !BANK_ID_SET.has(bank)) {
