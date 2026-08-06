@@ -1,0 +1,211 @@
+name: apply-zod-patches-v2
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: apply and validate rebased Zod patch series
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: agent/zod-validation-config
+
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
+        with:
+          egress-policy: audit
+
+      - name: Reconstruct patch archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/zod-patches.b64.part* | base64 --decode > /tmp/zod-patches.tgz
+          mkdir -p /tmp/zod-patches
+          tar -xzf /tmp/zod-patches.tgz -C /tmp/zod-patches
+
+      - name: Apply proposed patch series to current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          PATCH_DIR=/tmp/zod-patches
+
+          git apply --index \
+            --exclude=src/server.ts \
+            --exclude=tests/envExample.test.ts \
+            "$PATCH_DIR/0002-Port-request-and-environment-validation-to-Zod(2).patch"
+
+          python3 <<'PY'
+          from pathlib import Path
+
+          server = Path("src/server.ts")
+          text = server.read_text()
+          replacements = [
+              ('} from "./adminRateLimit.js";\nimport {\n  DEFAULT_HINDSIGHT_TIMEOUT_MS,\n', '} from "./adminRateLimit.js";\nimport { loadServerConfig, nonNegativeIntegerFromEnv } from "./config.js";\nimport {\n'),
+              ('import {\n  createQuarantineRepository,\n  DEFAULT_QUARANTINE_DATABASE_URL,\n  validateQuarantineStorage,\n} from "./quarantine/repositoryFactory.js";', 'import {\n  createQuarantineRepository,\n  validateQuarantineStorage,\n} from "./quarantine/repositoryFactory.js";'),
+              ('''const PORT = Number(process.env.MEMORY_ROUTER_PORT ?? "8890");
+const ALLOW_ANONYMOUS = process.env.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
+const HINDSIGHT_BASE_URL =
+  process.env.HINDSIGHT_BASE_URL ?? "http://hindsight:8888";
+const HINDSIGHT_API_KEY = process.env.HINDSIGHT_API_KEY;
+const HINDSIGHT_TIMEOUT_MS = positiveNumberEnv(
+  "HINDSIGHT_TIMEOUT_MS",
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
+);
+const REGISTRY_PATH = process.env.MEMORY_ROUTER_REGISTRY;
+const QUARANTINE_PUBLIC_KEY = process.env.QUARANTINE_PUBLIC_KEY ?? "";
+const QUARANTINE_DATABASE_URL =
+  process.env.QUARANTINE_DATABASE_URL ?? DEFAULT_QUARANTINE_DATABASE_URL;
+const QUARANTINE_MAX_POSTPONES = numberEnv("QUARANTINE_MAX_POSTPONES", 3);
+const QUARANTINE_SWEEP_INTERVAL_SECONDS = numberEnv(
+  "QUARANTINE_SWEEP_INTERVAL_SECONDS",
+  3600,
+);
+const QUARANTINE_EVENT_RETENTION_DAYS = numberEnv(
+  "QUARANTINE_EVENT_RETENTION_DAYS",
+  90,
+);
+const MAX_BODY_BYTES = Number(
+  process.env.MEMORY_ROUTER_MAX_BODY_BYTES ?? "1048576",
+);''', '''const CONFIG = loadServerConfig();
+const PORT = CONFIG.port;
+const ALLOW_ANONYMOUS = CONFIG.allowAnonymous;
+const HINDSIGHT_BASE_URL = CONFIG.hindsightBaseUrl;
+const HINDSIGHT_API_KEY = CONFIG.hindsightApiKey;
+const HINDSIGHT_TIMEOUT_MS = CONFIG.hindsightTimeoutMs;
+const REGISTRY_PATH = CONFIG.registryPath;
+const QUARANTINE_PUBLIC_KEY = CONFIG.quarantinePublicKey;
+const QUARANTINE_DATABASE_URL = CONFIG.quarantineDatabaseUrl;
+const QUARANTINE_MAX_POSTPONES = CONFIG.quarantineMaxPostpones;
+const QUARANTINE_SWEEP_INTERVAL_SECONDS = CONFIG.quarantineSweepIntervalSeconds;
+const QUARANTINE_EVENT_RETENTION_DAYS = CONFIG.quarantineEventRetentionDays;
+const MAX_BODY_BYTES = CONFIG.maxBodyBytes;'''),
+              ('''function numberEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined) return fallback;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function positiveNumberEnv(name: string, fallback: number): number {
+  const value = numberEnv(name, fallback);
+  if (value === 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
+}
+
+''', ''),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"expected server fragment not found: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+
+          for name in [
+              "QUARANTINE_MAX_ITEM_BYTES",
+              "QUARANTINE_MAX_PENDING_ITEMS",
+              "QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER",
+              "QUARANTINE_MAX_ENCRYPTED_BYTES",
+              "QUARANTINE_RATE_LIMIT_MAX",
+              "QUARANTINE_RATE_LIMIT_WINDOW_MS",
+              "QUARANTINE_RATE_LIMIT_GLOBAL_MAX",
+              "QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX",
+              "QUARANTINE_REQUARANTINE_OPS_MAX",
+          ]:
+              old = f'numberEnv(\n      "{name}",'
+              new = f'nonNegativeIntegerFromEnv(\n      process.env,\n      "{name}",'
+              if old not in text:
+                  raise SystemExit(f"expected limit parser not found: {name}")
+              text = text.replace(old, new, 1)
+
+          old = 'itemTtlDays: numberEnv("QUARANTINE_ITEM_TTL_DAYS", 30),'
+          new = '''itemTtlDays: nonNegativeIntegerFromEnv(
+      process.env,
+      "QUARANTINE_ITEM_TTL_DAYS",
+      30,
+    ),'''
+          if old not in text:
+              raise SystemExit("expected item TTL parser not found")
+          text = text.replace(old, new, 1)
+          server.write_text(text)
+
+          env_test = Path("tests/envExample.test.ts")
+          env_text = env_test.read_text()
+          marker = 'const CONFIG_SOURCES = [\n  "src/server.ts",\n'
+          replacement = 'const CONFIG_SOURCES = [\n  "src/server.ts",\n  "src/config.ts",\n'
+          if marker not in env_text:
+              raise SystemExit("expected CONFIG_SOURCES marker not found")
+          env_test.write_text(env_text.replace(marker, replacement, 1))
+          PY
+          git add src/server.ts tests/envExample.test.ts
+          git commit -m "Port request and environment validation to Zod"
+
+          git am "$PATCH_DIR/0005-Enforce-strict-request-bodies-end-to-end.patch"
+
+          git apply --index --exclude=src/server.ts \
+            "$PATCH_DIR/0006-Extend-strict-Zod-validation-to-registry-admin-bodie.patch"
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("src/server.ts")
+          text = path.read_text()
+          replacements = [
+              ('''import {
+  QuarantineAdminService,
+  type ApproveBody,
+  type CleanupBody,
+} from "./quarantine/quarantineAdmin.js";''', 'import { QuarantineAdminService } from "./quarantine/quarantineAdmin.js";'),
+              ('import { parseRecallBody, parseRetainBody } from "./requestValidation.js";', '''import {
+  parseApproveBody,
+  parseCleanupBody,
+  parseRecallBody,
+  parseRetainBody,
+} from "./requestValidation.js";'''),
+              ('const body = (await readJson(req, maxBodyBytes)) as CleanupBody;', 'const body = parseCleanupBody(await readJson(req, maxBodyBytes));'),
+              ('const body = (await readJson(req, maxBodyBytes)) as ApproveBody;', 'const body = parseApproveBody(await readJson(req, maxBodyBytes));'),
+          ]
+          for old, new in replacements:
+              if old not in text:
+                  raise SystemExit(f"expected admin server fragment not found: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          git add src/server.ts
+          git commit -m "Extend strict Zod validation to registry and admin bodies"
+
+          git am \
+            "$PATCH_DIR/0009-Reject-unknown-keys-in-quarantine-envelopes-and-decr.patch" \
+            "$PATCH_DIR/0011-Scan-every-string-value-in-retained-items-not-a-fixe.patch" \
+            "$PATCH_DIR/0012-Revert-wire-body-strictness-restore-additionalProper.patch"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full validation
+        run: npm run check
+
+      - name: Publish clean implementation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin HEAD:agent/zod-validation-config
