@@ -26,6 +26,16 @@ describe("parseRequestUrl", () => {
     expect(url.pathname).toBe("/health");
   });
 
+  it("keeps protocol-relative targets in the path instead of the authority", () => {
+    // Pins the string-concatenation form: with new URL(raw, base) a
+    // "//host" target would displace the authority and collapse the
+    // pathname to "/", losing the probe's real target from denied-endpoint
+    // security events.
+    const url = parseRequestUrl("//attacker.example/path");
+    expect(url.hostname).toBe("memory-router.internal");
+    expect(url.pathname).toBe("//attacker.example/path");
+  });
+
   it("rejects unsupported relative and asterisk request-target forms", () => {
     for (const raw of ["health", "*"]) {
       let caught: unknown;
