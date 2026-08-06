@@ -6,22 +6,21 @@ import {
   openSync,
 } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { assertDeploymentMode } from "../deploymentMode.js";
+import {
+  DEFAULT_QUARANTINE_DATABASE_URL,
+  isPostgresConnectionString,
+} from "./databaseUrl.js";
 import type { QuarantineRepository } from "./repository.js";
 import { PostgresQuarantineRepository } from "./postgresRepository.js";
 import { SqliteQuarantineRepository } from "./sqliteRepository.js";
 
-export const DEFAULT_QUARANTINE_DATABASE_URL = "sqlite:./data/quarantine.db";
-
-export function isPostgresConnectionString(connectionString: string): boolean {
-  return (
-    connectionString.startsWith("postgres://") ||
-    connectionString.startsWith("postgresql://")
-  );
-}
+export { DEFAULT_QUARANTINE_DATABASE_URL, isPostgresConnectionString };
 
 export async function createQuarantineRepository(
   connectionString = DEFAULT_QUARANTINE_DATABASE_URL,
 ): Promise<QuarantineRepository> {
+  assertDeploymentMode(process.env, connectionString);
   const repository = repositoryFromConnectionString(connectionString);
   await repository.initialize();
   return repository;
