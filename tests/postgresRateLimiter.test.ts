@@ -160,10 +160,9 @@ describe("PostgresSlidingWindowRateLimiter", () => {
       new PostgresSlidingWindowRateLimiter(CONNECTION),
       () => 1_000,
     );
-    const body = { items: [{ content: "ordinary" }] };
 
-    await first.consumeRetain("writer-a", body);
-    await expect(second.consumeRetain("writer-b", body)).rejects.toMatchObject({
+    await first.consumeRetain("writer-a");
+    await expect(second.consumeRetain("writer-b")).rejects.toMatchObject({
       status: 429,
       code: "hindsight_rate_limited",
     });
