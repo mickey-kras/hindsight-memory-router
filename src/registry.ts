@@ -81,7 +81,9 @@ export function validateRegistry(registry: WriterRegistry): void {
     throw new Error("registry.defaults must be an object");
   }
   if (registry.defaults.unknown_writer_action !== "review_queue") {
-    throw new Error("registry.defaults.unknown_writer_action must be review_queue");
+    throw new Error(
+      "registry.defaults.unknown_writer_action must be review_queue",
+    );
   }
   if (registry.defaults.suspicious_content_action !== "review_queue") {
     throw new Error(

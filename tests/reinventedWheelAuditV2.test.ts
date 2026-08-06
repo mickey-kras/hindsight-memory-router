@@ -189,7 +189,10 @@ describe("reinvented-wheel audit v2 regressions", () => {
       }),
       "writer ops has invalid read_bank",
     ],
-    [registry({ writers: {}, defaults: null }), "registry.defaults must be an object"],
+    [
+      registry({ writers: {}, defaults: null }),
+      "registry.defaults must be an object",
+    ],
   ])("rejects incomplete registry runtime shapes", (value, message) => {
     expect(() => validateRegistry(value)).toThrow(message);
   });
