@@ -318,7 +318,9 @@ type AuthenticatedMetadataEnvelope = Pick<
   >;
 };
 
-function authenticatedMetadata(envelope: AuthenticatedMetadataEnvelope): Buffer {
+function authenticatedMetadata(
+  envelope: AuthenticatedMetadataEnvelope,
+): Buffer {
   return Buffer.from(
     canonicalJson({
       version: envelope.version,
