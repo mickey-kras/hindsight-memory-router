@@ -61,7 +61,9 @@ describe("deployment modes", () => {
         MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true",
       });
       expect(stderr).toHaveBeenCalledWith(
-        expect.stringContaining("ensure the external limiter is actually present"),
+        expect.stringContaining(
+          "ensure the external limiter is actually present",
+        ),
       );
     } finally {
       stderr.mockRestore();

@@ -17,7 +17,8 @@ export function deploymentModeConfigFromEnv(
   }
   return {
     mode: rawMode,
-    databaseUrl: environment.QUARANTINE_DATABASE_URL ?? "sqlite:./data/quarantine.db",
+    databaseUrl:
+      environment.QUARANTINE_DATABASE_URL ?? "sqlite:./data/quarantine.db",
     externalAdminRateLimit:
       environment.MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT === "true",
   };
