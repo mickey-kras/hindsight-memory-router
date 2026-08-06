@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 const CONFIG_SOURCES = [
   "src/server.ts",
   "src/adminRateLimit.ts",
+  "src/hindsightLimits.ts",
   "src/routerAuth.ts",
   "src/deploymentMode.ts",
 ];

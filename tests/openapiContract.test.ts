@@ -24,6 +24,9 @@ type Operation = {
 type Schema = {
   minLength?: number;
   minItems?: number;
+  maxItems?: number;
+  maximum?: number;
+  description?: string;
   properties?: Record<string, Schema>;
 };
 
@@ -219,6 +222,21 @@ describe("OpenAPI contract", () => {
         error: "invalid_recall_body",
       });
     });
+  });
+
+  it("documents Hindsight request bounds", () => {
+    expect(
+      document.components.schemas.RetainRequest?.properties?.items?.maxItems,
+    ).toBe(100);
+    expect(document.components.schemas.RetainRequest?.description).toContain(
+      "524288 aggregate UTF-8 bytes",
+    );
+    expect(
+      document.components.schemas.RecallRequest?.properties?.query?.description,
+    ).toContain("32768 UTF-8 bytes");
+    expect(
+      document.components.schemas.RecallRequest?.properties?.max_tokens?.maximum,
+    ).toBe(8192);
   });
 
   it("keeps the documented version aligned with the running router", async () => {
