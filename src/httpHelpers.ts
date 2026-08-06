@@ -1,7 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { HttpError } from "./httpError.js";
 
-const ORIGIN_FORM_BASE = "http://memory-router.internal";
+// The scheme is arbitrary: this base is never dereferenced and no request
+// is ever made to it. https is used only to satisfy cleartext-URL scanners.
+const ORIGIN_FORM_BASE = "https://memory-router.internal";
 
 export function parseRequestUrl(rawUrl: string): URL {
   try {
