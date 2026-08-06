@@ -302,11 +302,23 @@ export function parseDecryptedQuarantineObject(
   };
 }
 
-function authenticatedMetadata(
-  envelope:
-    | Omit<EncryptedQuarantineEnvelope, "ciphertext_b64">
-    | EncryptedQuarantineEnvelope,
-): Buffer {
+type AuthenticatedMetadataEnvelope = Pick<
+  EncryptedQuarantineEnvelope,
+  | "version"
+  | "quarantine_id"
+  | "created_at"
+  | "reason"
+  | "writer_id"
+  | "source"
+  | "sha256"
+> & {
+  encryption: Pick<
+    EncryptedQuarantineEnvelope["encryption"],
+    "algorithm" | "key_wrap" | "aad" | "iv_b64" | WrappedKeyField
+  >;
+};
+
+function authenticatedMetadata(envelope: AuthenticatedMetadataEnvelope): Buffer {
   return Buffer.from(
     canonicalJson({
       version: envelope.version,
