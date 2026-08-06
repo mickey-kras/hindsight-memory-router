@@ -53,6 +53,7 @@ describe("quarantine envelope crypto", () => {
       keys.publicKeyBase64,
     );
 
+    expect(envelope.encryption.aad).toBe("metadata-v1");
     expect(envelope.sha256).toBe(
       sha256Hex(canonicalizeDecryptedQuarantineObject(value)),
     );
@@ -94,6 +95,12 @@ describe("quarantine envelope crypto", () => {
       }),
     ).toThrow("authentication tag length");
     expect(() =>
+      parseEncryptedQuarantineEnvelope({
+        ...envelope,
+        encryption: { ...envelope.encryption, aad: "unknown" },
+      }),
+    ).toThrow("AAD format");
+    expect(() =>
       createEncryptedQuarantineEnvelope(decrypted(), "bad-key"),
     ).toThrow("QUARANTINE_PUBLIC_KEY");
     expect(() => decryptQuarantineEnvelope(envelope, "bad-key")).toThrow(
@@ -101,7 +108,7 @@ describe("quarantine envelope crypto", () => {
     );
   });
 
-  it("detects digest and ciphertext tampering", () => {
+  it("authenticates envelope metadata and ciphertext", () => {
     const keys = keyPair();
     const envelope = createEncryptedQuarantineEnvelope(
       decrypted(),
@@ -109,10 +116,16 @@ describe("quarantine envelope crypto", () => {
     );
     expect(() =>
       decryptQuarantineEnvelope(
+        { ...envelope, created_at: "2026-08-01T00:00:00.000Z" },
+        keys.privateKeyPem,
+      ),
+    ).toThrow();
+    expect(() =>
+      decryptQuarantineEnvelope(
         { ...envelope, sha256: "0".repeat(64) },
         keys.privateKeyPem,
       ),
-    ).toThrow("digest mismatch");
+    ).toThrow();
     expect(() =>
       decryptQuarantineEnvelope(
         {
