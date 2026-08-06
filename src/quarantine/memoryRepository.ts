@@ -2,6 +2,8 @@ import { HttpError } from "../httpError.js";
 import type { BankId } from "../types.js";
 import { MemoryReviewWorkflow } from "./memoryReviewWorkflow.js";
 import {
+  encryptedBytes,
+  isExpired,
   quarantineEvent,
   RETENTION_EVENT_QUARANTINE_ID,
   RETENTION_SWEEP_BATCH_LIMIT,
@@ -354,19 +356,4 @@ export class MemoryQuarantineRepository implements QuarantineRepository {
     this.items.delete(id);
     this.events.push(quarantineEvent(id, eventType, at, details));
   }
-}
-
-function encryptedBytes(
-  item: NewQuarantineItem | StoredQuarantineItem | null,
-): number {
-  return item?.encrypted
-    ? Buffer.byteLength(JSON.stringify(item.encrypted))
-    : 0;
-}
-function isExpired(item: StoredQuarantineItem, at: string): boolean {
-  return (
-    (item.status === "pending" || item.status === "postponed") &&
-    item.expires_at !== undefined &&
-    item.expires_at <= at
-  );
 }

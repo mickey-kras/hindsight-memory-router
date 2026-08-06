@@ -1,6 +1,8 @@
 import { HttpError } from "../httpError.js";
 import {
   parseStoredItem,
+  encryptedBytes,
+  isExpired,
   quarantineEvent,
   sameCapacityScope,
   type CleanupFilter,
@@ -89,22 +91,22 @@ async function ensureColumn(
   column: (typeof SCHEMA_COLUMNS)[number]["name"],
   definition: string,
 ): Promise<void> {
-  const postgres = database.placeholder(1) === "$1";
-  const existing = postgres
-    ? await database.get<{ present: number }>(
-        `SELECT 1 AS present
+  const existing =
+    database.dialect === "postgres"
+      ? await database.get<{ present: number }>(
+          `SELECT 1 AS present
          FROM information_schema.columns
          WHERE table_schema = current_schema()
            AND table_name = $1
            AND column_name = $2`,
-        ["quarantine_items", column],
-      )
-    : await database.get<{ present: number }>(
-        `SELECT 1 AS present
+          ["quarantine_items", column],
+        )
+      : await database.get<{ present: number }>(
+          `SELECT 1 AS present
          FROM pragma_table_info('quarantine_items')
          WHERE name = ?`,
-        [column],
-      );
+          [column],
+        );
   if (!existing) {
     await database.run(`ALTER TABLE quarantine_items ADD COLUMN ${definition}`);
   }
@@ -459,20 +461,4 @@ async function readItemStats(
     reviewed_blocked_items: Number(row?.reviewed_blocked_items ?? 0),
     encrypted_bytes: Number(row?.encrypted_bytes ?? 0),
   };
-}
-
-function encryptedBytes(
-  item: NewQuarantineItem | StoredQuarantineItem | null,
-): number {
-  return item?.encrypted
-    ? Buffer.byteLength(JSON.stringify(item.encrypted))
-    : 0;
-}
-
-function isExpired(item: StoredQuarantineItem, at: string): boolean {
-  return (
-    (item.status === "pending" || item.status === "postponed") &&
-    item.expires_at !== undefined &&
-    item.expires_at <= at
-  );
 }

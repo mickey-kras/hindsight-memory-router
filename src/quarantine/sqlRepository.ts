@@ -36,7 +36,10 @@ import {
   requireReviewable,
 } from "./sqlRepositorySupport.js";
 
+export type SqlDialect = "postgres" | "sqlite";
+
 export interface SqlDatabase {
+  readonly dialect: SqlDialect;
   readonly rowLockClause: string;
   placeholder(index: number): string;
   acquireCapacityLock(): Promise<void>;

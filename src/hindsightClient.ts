@@ -71,11 +71,12 @@ export class FetchHindsightGateway implements HindsightGateway {
   }
 
   async recall(bankId: string, body: RecallBody): Promise<RecallResponse> {
-    return this.request(
+    const response = await this.request(
       "POST",
       `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,
       body,
-    ) as Promise<RecallResponse>;
+    );
+    return parseRecallResponse(response);
   }
 
   async invalidateMemory(
@@ -153,6 +154,50 @@ export class FetchHindsightGateway implements HindsightGateway {
       `Hindsight ${method} ${path} failed: ${truncateUpstreamBody(message)}`,
     );
   }
+}
+
+export function parseRecallResponse(value: unknown): RecallResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw invalidRecallResponse();
+  }
+  const response = value as Record<string, unknown>;
+  if (!Array.isArray(response.results)) {
+    throw invalidRecallResponse();
+  }
+  for (const result of response.results) {
+    if (
+      !result ||
+      typeof result !== "object" ||
+      Array.isArray(result) ||
+      typeof (result as Record<string, unknown>).id !== "string" ||
+      typeof (result as Record<string, unknown>).text !== "string"
+    ) {
+      throw invalidRecallResponse();
+    }
+  }
+  for (const field of [
+    "chunks",
+    "entities",
+    "source_facts",
+    "trace",
+  ] as const) {
+    const fieldValue = response[field];
+    if (
+      fieldValue !== undefined &&
+      fieldValue !== null &&
+      (typeof fieldValue !== "object" || Array.isArray(fieldValue))
+    ) {
+      throw invalidRecallResponse();
+    }
+  }
+  return value as RecallResponse;
+}
+
+function invalidRecallResponse(): HindsightGatewayError {
+  return new HindsightGatewayError(
+    "invalid-response",
+    "Hindsight recall returned an invalid response shape",
+  );
 }
 
 function truncateUpstreamBody(text: string): string {

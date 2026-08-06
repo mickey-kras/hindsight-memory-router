@@ -15,6 +15,7 @@ export class PostgresQuarantineRepository extends SqlQuarantineRepository {
 }
 
 class PostgresDatabase implements SqlDatabase {
+  readonly dialect = "postgres" as const;
   readonly rowLockClause = " FOR UPDATE";
 
   constructor(
