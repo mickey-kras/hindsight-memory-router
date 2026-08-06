@@ -4,9 +4,25 @@ import type { QuarantineStore } from "./quarantine/quarantineStore.js";
 
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
 const ADMIN_TOKEN = process.env.MEMORY_ROUTER_ADMIN_TOKEN;
+const ADMIN_READ_TOKEN = process.env.MEMORY_ROUTER_ADMIN_READ_TOKEN;
+const ADMIN_REVIEW_TOKEN = process.env.MEMORY_ROUTER_ADMIN_REVIEW_TOKEN;
+const ADMIN_CLEANUP_TOKEN = process.env.MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN;
 const AUTH_FAILURE_LOG_WINDOW_MS = 60_000;
 
 export type AuthRouteGroup = "router" | "admin";
+export type AdminScope = "read" | "review" | "cleanup";
+
+export interface AdminTokens {
+  legacy?: string;
+  read?: string;
+  review?: string;
+  cleanup?: string;
+}
+
+export interface AuthOverrides extends AdminTokens {
+  router?: string;
+  allowAnonymous?: boolean;
+}
 
 export function isAuthorized(
   req: IncomingMessage,
@@ -21,20 +37,53 @@ export function isAuthorized(
 
 export function isAdminAuthorized(
   req: IncomingMessage,
-  adminToken?: string,
+  scope: AdminScope,
+  configured: AdminTokens = {},
 ): boolean {
-  const token = adminToken ?? ADMIN_TOKEN;
-  return token ? bearerTokenMatches(req.headers.authorization, token) : false;
+  const tokens = adminTokensForScope(scope, configured);
+  return bearerTokenMatchesAny(req.headers.authorization, tokens);
+}
+
+function adminTokensForScope(
+  scope: AdminScope,
+  configured: AdminTokens,
+): string[] {
+  const legacy = configured.legacy ?? ADMIN_TOKEN;
+  const read = configured.read ?? ADMIN_READ_TOKEN;
+  const review = configured.review ?? ADMIN_REVIEW_TOKEN;
+  const cleanup = configured.cleanup ?? ADMIN_CLEANUP_TOKEN;
+
+  return [
+    legacy,
+    ...(scope === "read" ? [read, review] : []),
+    ...(scope === "review" ? [review] : []),
+    ...(scope === "cleanup" ? [cleanup] : []),
+  ].filter(isConfiguredToken);
+}
+
+function isConfiguredToken(token: string | undefined): token is string {
+  return token !== undefined && token !== "";
+}
+
+function bearerTokenMatchesAny(
+  authorization: string | undefined,
+  tokens: readonly string[],
+): boolean {
+  if (!authorization || tokens.length === 0) return false;
+  const presented = createHash("sha256").update(authorization).digest();
+  let matched = false;
+  for (const token of tokens) {
+    const expected = createHash("sha256").update(`Bearer ${token}`).digest();
+    matched = timingSafeEqual(presented, expected) || matched;
+  }
+  return matched;
 }
 
 function bearerTokenMatches(
   authorization: string | undefined,
   token: string,
 ): boolean {
-  if (!authorization) return false;
-  const presented = createHash("sha256").update(authorization).digest();
-  const expected = createHash("sha256").update(`Bearer ${token}`).digest();
-  return timingSafeEqual(presented, expected);
+  return bearerTokenMatchesAny(authorization, [token]);
 }
 
 export function createAuthFailureAuditor(
@@ -96,9 +145,21 @@ export function assertNoPrivateKeyEnvironment(
 
 export function assertRouterAuthEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
+  overrides: AuthOverrides = {},
 ): void {
-  if (!environment.MEMORY_ROUTER_TOKEN) {
-    if (environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true") {
+  const routerToken = overrides.router ?? environment.MEMORY_ROUTER_TOKEN;
+  const allowAnonymous =
+    overrides.allowAnonymous ??
+    environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
+  const adminTokens: AdminTokens = {
+    legacy: overrides.legacy ?? environment.MEMORY_ROUTER_ADMIN_TOKEN,
+    read: overrides.read ?? environment.MEMORY_ROUTER_ADMIN_READ_TOKEN,
+    review: overrides.review ?? environment.MEMORY_ROUTER_ADMIN_REVIEW_TOKEN,
+    cleanup: overrides.cleanup ?? environment.MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN,
+  };
+
+  if (!isConfiguredToken(routerToken)) {
+    if (allowAnonymous) {
       process.stderr.write(
         "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only\n",
       );
@@ -108,9 +169,30 @@ export function assertRouterAuthEnvironment(
       );
     }
   }
-  if (!environment.MEMORY_ROUTER_ADMIN_TOKEN) {
+
+  if (isConfiguredToken(adminTokens.legacy)) {
     process.stderr.write(
-      "memory-router WARNING: MEMORY_ROUTER_ADMIN_TOKEN is not set; admin endpoints fail-closed\n",
+      "memory-router WARNING: legacy admin migration superuser is active; migrate clients to scoped tokens and unset MEMORY_ROUTER_ADMIN_TOKEN\n",
+    );
+    return;
+  }
+
+  if (
+    !isConfiguredToken(adminTokens.read) &&
+    !isConfiguredToken(adminTokens.review)
+  ) {
+    process.stderr.write(
+      "memory-router WARNING: admin read token is not set; admin read endpoints fail-closed\n",
+    );
+  }
+  if (!isConfiguredToken(adminTokens.review)) {
+    process.stderr.write(
+      "memory-router WARNING: admin review token is not set; review endpoints fail-closed\n",
+    );
+  }
+  if (!isConfiguredToken(adminTokens.cleanup)) {
+    process.stderr.write(
+      "memory-router WARNING: admin cleanup token is not set; cleanup endpoint fails-closed\n",
     );
   }
 }

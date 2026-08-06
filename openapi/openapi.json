@@ -26,7 +26,7 @@
     },
     {
       "name": "Quarantine administration",
-      "description": "Manual review operations protected by the dedicated router admin token."
+      "description": "Capability-scoped manual review operations. Use read, review, or cleanup credentials according to the endpoint; the legacy admin credential is migration-only."
     }
   ],
   "paths": {
@@ -323,11 +323,11 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -365,14 +365,14 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -420,14 +420,14 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -465,14 +465,14 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -509,14 +509,14 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          },
           "404": {
             "$ref": "#/components/responses/NotFound"
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -568,7 +568,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "API key",
-        "description": "Manual review token from MEMORY_ROUTER_ADMIN_TOKEN. This token must not be exposed to agents."
+        "description": "Bearer credential authorized for the requested admin capability: read or review for admin reads, review for approve/reject/postpone, cleanup for cleanup, or the legacy migration superuser."
       }
     },
     "parameters": {

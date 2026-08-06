@@ -55,10 +55,22 @@ describe("router authentication startup validation", () => {
     stderrSpy.mockRestore();
   });
 
-  it("stays quiet when both tokens are configured", () => {
+  it("warns while the legacy migration superuser is configured", () => {
     assertRouterAuthEnvironment({
       MEMORY_ROUTER_TOKEN: "router-token",
       MEMORY_ROUTER_ADMIN_TOKEN: "admin-token",
+    });
+    const output = stderrOutput.join("");
+    expect(output).toContain("legacy admin migration superuser is active");
+    expect(output).not.toContain("fail-closed");
+  });
+
+  it("stays quiet when all scoped admin tokens are configured", () => {
+    assertRouterAuthEnvironment({
+      MEMORY_ROUTER_TOKEN: "router-token",
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: "read-token",
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: "review-token",
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: "cleanup-token",
     });
     expect(stderrOutput).toEqual([]);
   });
@@ -70,20 +82,68 @@ describe("router authentication startup validation", () => {
     const output = stderrOutput.join("");
     expect(output).toContain("MEMORY_ROUTER_TOKEN is not set");
     expect(output).toContain("fail-closed");
-    expect(output).not.toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
+    expect(output).toContain("legacy admin migration superuser is active");
+    expect(output).not.toContain("admin read token is not set");
   });
 
-  it("warns when the admin token is missing even if router auth is configured", () => {
+  it("warns for every missing scoped admin capability", () => {
     assertRouterAuthEnvironment({ MEMORY_ROUTER_TOKEN: "router-token" });
     const output = stderrOutput.join("");
-    expect(output).toContain("MEMORY_ROUTER_ADMIN_TOKEN is not set");
+    expect(output).toContain("admin read token is not set");
+    expect(output).toContain("admin review token is not set");
+    expect(output).toContain("admin cleanup token is not set");
     expect(output).not.toContain("MEMORY_ROUTER_TOKEN is not set");
+  });
+
+  it("treats the review token as sufficient for admin reads", () => {
+    assertRouterAuthEnvironment({
+      MEMORY_ROUTER_TOKEN: "router-token",
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: "review-token",
+    });
+    const output = stderrOutput.join("");
+    expect(output).not.toContain("admin read token is not set");
+    expect(output).not.toContain("admin review token is not set");
+    expect(output).toContain("admin cleanup token is not set");
+  });
+
+  it("uses option overrides instead of contradictory environment values", () => {
+    assertRouterAuthEnvironment(
+      {
+        MEMORY_ROUTER_TOKEN: "env-router-token",
+        MEMORY_ROUTER_ADMIN_TOKEN: "env-legacy-token",
+      },
+      {
+        router: "option-router-token",
+        legacy: "",
+        read: "option-read-token",
+        review: "option-review-token",
+        cleanup: "option-cleanup-token",
+      },
+    );
+    expect(stderrOutput).toEqual([]);
+  });
+
+  it("warns when an empty option explicitly disables an environment token", () => {
+    assertRouterAuthEnvironment(
+      {
+        MEMORY_ROUTER_TOKEN: "router-token",
+        MEMORY_ROUTER_ADMIN_TOKEN: "env-legacy-token",
+      },
+      { legacy: "" },
+    );
+    const output = stderrOutput.join("");
+    expect(output).toContain("admin read token is not set");
+    expect(output).toContain("admin review token is not set");
+    expect(output).toContain("admin cleanup token is not set");
+    expect(output).not.toContain("legacy admin migration superuser is active");
   });
 
   it("warns loudly that anonymous access is development-only", () => {
     assertRouterAuthEnvironment({
       MEMORY_ROUTER_ALLOW_ANONYMOUS: "true",
-      MEMORY_ROUTER_ADMIN_TOKEN: "admin-token",
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: "read-token",
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: "review-token",
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: "cleanup-token",
     });
     const output = stderrOutput.join("");
     expect(output).toContain("MEMORY_ROUTER_ALLOW_ANONYMOUS=true");
