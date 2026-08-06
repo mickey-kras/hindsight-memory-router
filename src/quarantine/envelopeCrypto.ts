@@ -7,7 +7,7 @@ import {
   randomBytes,
 } from "node:crypto";
 import { canonicalJson, sha256Hex } from "../canonicalJson.js";
-import type { ReviewReason } from "../types.js";
+import { REVIEW_REASONS, type ReviewReason } from "../types.js";
 
 export { sha256Hex } from "../canonicalJson.js";
 
@@ -15,19 +15,10 @@ const GCM_AUTH_TAG_LENGTH_BYTES = 16;
 const GCM_IV_LENGTH_BYTES = 12;
 const AES_KEY_LENGTH_BYTES = 32;
 const AAD_FORMAT = "metadata-v1" as const;
-const REVIEW_REASONS = new Set<ReviewReason>([
-  "unknown_writer",
-  "suspicious_content",
-  "suspicious_query",
-  "recalled_suspicious_memory",
-  "denied_endpoint",
-  "auth_failed",
-]);
+const REVIEW_REASON_SET = new Set<ReviewReason>(REVIEW_REASONS);
 
 type WrappedKeyField = `wrapped_${"key"}_b64`;
-export const WRAPPED_KEY_FIELD = ["wrapped", "key", "b64"].join(
-  "_",
-) as WrappedKeyField;
+export const WRAPPED_KEY_FIELD: WrappedKeyField = `wrapped_${"key"}_b64`;
 
 export interface EncryptedQuarantineEnvelope {
   version: 1;
@@ -148,7 +139,7 @@ export function parseEncryptedQuarantineEnvelope(
   }
 
   const reason = requireString(envelope.reason, "reason");
-  if (!REVIEW_REASONS.has(reason as ReviewReason)) {
+  if (!REVIEW_REASON_SET.has(reason as ReviewReason)) {
     throw new Error("invalid quarantine reason");
   }
 
@@ -283,7 +274,7 @@ export function parseDecryptedQuarantineObject(
 ): DecryptedQuarantineObject {
   const object = requireObject(value, "decrypted quarantine object");
   const reason = requireString(object.reason, "reason");
-  if (!REVIEW_REASONS.has(reason as ReviewReason)) {
+  if (!REVIEW_REASON_SET.has(reason as ReviewReason)) {
     throw new Error("invalid quarantine reason");
   }
   if (!("payload" in object)) {
