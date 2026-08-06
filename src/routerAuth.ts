@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { assertDeploymentMode } from "./deploymentMode.js";
 import type { QuarantineStore } from "./quarantine/quarantineStore.js";
 
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
@@ -147,6 +148,8 @@ export function assertRouterAuthEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
   overrides: AuthOverrides = {},
 ): void {
+  assertDeploymentMode(environment);
+
   const routerToken = overrides.router ?? environment.MEMORY_ROUTER_TOKEN;
   const allowAnonymous =
     overrides.allowAnonymous ??
