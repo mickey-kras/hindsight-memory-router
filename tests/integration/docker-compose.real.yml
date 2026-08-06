@@ -95,7 +95,6 @@ services:
     working_dir: /workspace
     command: ["node", "fake-admin-limiter.js"]
     environment:
-      ROUTER_UPSTREAM: http://memory-router:8890
       ADMIN_READ_MAX: "120"
       ADMIN_WRITE_MAX: "30"
       ADMIN_WINDOW_MS: "60000"
