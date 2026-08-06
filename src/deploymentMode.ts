@@ -4,8 +4,7 @@ import {
 } from "./quarantine/databaseUrl.js";
 
 const DEPLOYMENT_MODE_ENV = "MEMORY_ROUTER_DEPLOYMENT_MODE";
-const EXTERNAL_ADMIN_RATE_LIMIT_ENV =
-  "MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT";
+const EXTERNAL_ADMIN_RATE_LIMIT_ENV = "MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT";
 const QUARANTINE_DATABASE_URL_ENV = "QUARANTINE_DATABASE_URL";
 
 export type DeploymentMode = "single" | "cluster";
@@ -18,8 +17,7 @@ export interface DeploymentModeConfig {
 
 export function deploymentModeConfigFromEnv(
   environment: NodeJS.ProcessEnv = process.env,
-  databaseUrl =
-    environment[QUARANTINE_DATABASE_URL_ENV] ??
+  databaseUrl = environment[QUARANTINE_DATABASE_URL_ENV] ??
     DEFAULT_QUARANTINE_DATABASE_URL,
 ): DeploymentModeConfig {
   const rawMode = environment[DEPLOYMENT_MODE_ENV] ?? "single";
