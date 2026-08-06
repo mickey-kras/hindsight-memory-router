@@ -103,8 +103,7 @@ export interface CreateMemoryRouterServerOptions {
   eventRetentionDays?: number;
 }
 
-export interface CreateConfiguredMemoryRouterServerOptions
-  extends CreateMemoryRouterServerOptions {
+export interface CreateConfiguredMemoryRouterServerOptions extends CreateMemoryRouterServerOptions {
   validateStorage?: boolean;
 }
 
