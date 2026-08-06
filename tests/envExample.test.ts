@@ -8,6 +8,7 @@ const CONFIG_SOURCES = [
   "src/server.ts",
   "src/adminRateLimit.ts",
   "src/routerAuth.ts",
+  "src/deploymentMode.ts",
 ];
 
 function envVarsReadByServer(): Set<string> {
