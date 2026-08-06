@@ -1,5 +1,8 @@
 import { HttpError } from "./httpError.js";
-import { InMemorySlidingWindowRateLimiter } from "./quarantine/rateLimiter.js";
+import {
+  InMemorySlidingWindowRateLimiter,
+  type QuarantineRateLimiter,
+} from "./quarantine/rateLimiter.js";
 
 export type AdminRequestClass = "read" | "write";
 
@@ -42,10 +45,10 @@ export function classifyAdminRequest(method: string): AdminRequestClass {
 }
 
 export class AdminRateLimiter {
-  private readonly limiter = new InMemorySlidingWindowRateLimiter();
-
   constructor(
     private readonly config: AdminRateLimitConfig = DEFAULT_ADMIN_RATE_LIMIT,
+    private readonly limiter: QuarantineRateLimiter =
+      new InMemorySlidingWindowRateLimiter(),
     private readonly now: () => number = () => Date.now(),
   ) {}
 
