@@ -3,6 +3,7 @@ import {
   HindsightGatewayError,
   type HindsightGateway,
 } from "./hindsightClient.js";
+import type { HindsightLimits } from "./hindsightLimits.js";
 import { HttpError } from "./httpError.js";
 import {
   requestDedupeKey,
@@ -31,6 +32,7 @@ import type {
 export interface RouterPolicyDeps {
   registry: WriterRegistry;
   hindsight: HindsightGateway;
+  hindsightLimits?: HindsightLimits;
   quarantineStore: QuarantineStore;
   quarantineRepository: QuarantineRepository;
   now?: () => Date;
@@ -117,6 +119,7 @@ export class RouterPolicy {
       })),
     };
 
+    await this.deps.hindsightLimits?.consumeRetain(writerId);
     return this.deps.hindsight.retain(writer.write_bank, rewritten);
   }
 
@@ -149,6 +152,7 @@ export class RouterPolicy {
       return { results: [] };
     }
 
+    await this.deps.hindsightLimits?.consumeRecall(writerId);
     const responses = await this.recallFromBanks(
       writerId,
       writer.read_banks,
