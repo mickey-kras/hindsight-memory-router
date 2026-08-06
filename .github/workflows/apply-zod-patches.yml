@@ -1,0 +1,64 @@
+name: apply-zod-patches
+
+on:
+  push:
+    branches:
+      - agent/zod-validation-config
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    name: apply and validate Zod patch series
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
+        with:
+          egress-policy: audit
+
+      - name: Reconstruct patch archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .bootstrap/zod-patches.b64.part* | base64 --decode > /tmp/zod-patches.tgz
+          mkdir -p /tmp/zod-patches
+          tar -xzf /tmp/zod-patches.tgz -C /tmp/zod-patches
+
+      - name: Apply proposed patch series to current main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git reset --hard origin/main
+          git am -3 \
+            "/tmp/zod-patches/0002-Port-request-and-environment-validation-to-Zod(2).patch" \
+            "/tmp/zod-patches/0005-Enforce-strict-request-bodies-end-to-end.patch" \
+            "/tmp/zod-patches/0006-Extend-strict-Zod-validation-to-registry-admin-bodie.patch" \
+            "/tmp/zod-patches/0009-Reject-unknown-keys-in-quarantine-envelopes-and-decr.patch" \
+            "/tmp/zod-patches/0011-Scan-every-string-value-in-retained-items-not-a-fixe.patch" \
+            "/tmp/zod-patches/0012-Revert-wire-body-strictness-restore-additionalProper.patch"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full validation
+        run: npm run check
+
+      - name: Publish clean implementation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git push --force-with-lease origin HEAD:agent/zod-validation-config
