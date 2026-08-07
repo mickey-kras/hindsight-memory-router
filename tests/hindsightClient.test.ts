@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   FakeHindsightGateway,
   FetchHindsightGateway,
+  hindsightGatewayErrorDetails,
   HindsightGatewayError,
   parseRecallResponse,
 } from "../src/hindsightClient.js";
+import { safeErrorBody } from "../src/httpError.js";
 
 function mockFetch(...responses: Response[]) {
   const fetchMock = vi.fn();
@@ -88,16 +90,72 @@ describe("FetchHindsightGateway", () => {
     ]);
   });
 
-  it("throws an actionable error for failed upstream requests", async () => {
-    mockFetch(new Response('{"error":"down"}', { status: 503 }));
+  it("hides upstream HTTP error bodies from public errors", async () => {
+    const upstreamBody = '{"error":"internal secret detail"}';
+    mockFetch(new Response(upstreamBody, { status: 503 }));
     const gateway = new FetchHindsightGateway("https://hindsight.test");
 
-    await expect(gateway.health()).rejects.toThrow(
-      'Hindsight GET /health failed: HTTP 503 {"error":"down"}',
-    );
+    const failure = (await gateway
+      .health()
+      .catch((error: unknown) => error)) as HindsightGatewayError;
+
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "http",
+      status: 502,
+      code: "hindsight_http_error",
+      message: "Upstream memory service request failed",
+      upstreamStatus: 503,
+    });
+    expect(JSON.stringify(safeErrorBody(failure))).not.toContain(upstreamBody);
+    expect(hindsightGatewayErrorDetails(failure)).toMatchObject({
+      error_kind: "http",
+      status: 502,
+      upstream_status: 503,
+      operation: "health",
+      method: "GET",
+      error_body_bytes_read: Buffer.byteLength(upstreamBody),
+      error_body_truncated: false,
+    });
   });
 
-  it("rejects with a typed timeout error when the upstream hangs", async () => {
+  it("does not retain malicious upstream error text in diagnostics", async () => {
+    const upstreamBody =
+      "first line\r\nsecond line\u0000 Authorization: Bearer secret https://user:pass@example.test/path";
+    mockFetch(new Response(upstreamBody, { status: 500 }));
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = (await gateway
+      .health()
+      .catch((error: unknown) => error)) as HindsightGatewayError;
+    const publicError = JSON.stringify(safeErrorBody(failure));
+    const diagnostics = JSON.stringify(hindsightGatewayErrorDetails(failure));
+
+    expect(publicError).not.toContain("first line");
+    expect(publicError).not.toContain("Bearer secret");
+    expect(publicError).not.toContain("user:pass");
+    expect(diagnostics).not.toContain("first line");
+    expect(diagnostics).not.toContain("Bearer secret");
+    expect(diagnostics).not.toContain("user:pass");
+    expect(diagnostics).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u);
+  });
+
+  it("bounds excessively large upstream error bodies", async () => {
+    mockFetch(new Response("x".repeat(4096), { status: 500 }));
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = (await gateway
+      .health()
+      .catch((error: unknown) => error)) as HindsightGatewayError;
+
+    expect(hindsightGatewayErrorDetails(failure)).toMatchObject({
+      error_body_bytes_read: 1024,
+      error_body_truncated: true,
+    });
+    expect(failure.message).not.toContain("x");
+  });
+
+  it("rejects with a stable typed timeout error when the upstream hangs", async () => {
     const fetchMock = vi.fn((...args: unknown[]) => {
       const init = args[1] as { signal: AbortSignal };
       return new Promise((_resolve, reject) => {
@@ -118,11 +176,20 @@ describe("FetchHindsightGateway", () => {
       kind: "timeout",
       status: 504,
       code: "hindsight_timeout",
+      message: "Upstream memory service timed out",
     });
-    expect((failure as Error).message).toContain("timed out after 10ms");
+    expect(hindsightGatewayErrorDetails(failure as HindsightGatewayError)).toMatchObject(
+      {
+        error_kind: "timeout",
+        status: 504,
+        operation: "health",
+        method: "GET",
+        timeout_ms: 10,
+      },
+    );
   });
 
-  it("rejects with a typed invalid-response error for non-JSON upstream bodies", async () => {
+  it("rejects with a stable typed invalid-response error for non-JSON upstream bodies", async () => {
     mockFetch(new Response("<html>proxy error</html>", { status: 200 }));
     const gateway = new FetchHindsightGateway("https://hindsight.test");
 
@@ -132,27 +199,16 @@ describe("FetchHindsightGateway", () => {
       kind: "invalid-response",
       status: 502,
       code: "hindsight_invalid_response",
+      message: "Upstream memory service returned an invalid response",
       upstreamStatus: 200,
     });
   });
 
-  it("truncates unbounded upstream error bodies", async () => {
-    mockFetch(new Response("x".repeat(4096), { status: 500 }));
-    const gateway = new FetchHindsightGateway("https://hindsight.test");
-
-    const failure = (await gateway
-      .health()
-      .catch((error: unknown) => error)) as HindsightGatewayError;
-    expect(failure).toBeInstanceOf(HindsightGatewayError);
-    expect(failure.kind).toBe("http");
-    expect(failure.upstreamStatus).toBe(500);
-    expect(failure.message).toContain(`${"x".repeat(512)}...(truncated)`);
-    expect(failure.message.length).toBeLessThan(600);
-  });
-
-  it("rejects with a typed network error when the connection fails", async () => {
+  it("rejects with a stable typed network error when the connection fails", async () => {
     const fetchMock = vi.fn(async () => {
-      throw new TypeError("fetch failed");
+      throw new TypeError(
+        "fetch failed https://user:pass@example.test/private\nstack detail",
+      );
     });
     vi.stubGlobal("fetch", fetchMock);
     const gateway = new FetchHindsightGateway("https://hindsight.test");
@@ -163,7 +219,11 @@ describe("FetchHindsightGateway", () => {
       kind: "network",
       status: 502,
       code: "hindsight_unavailable",
+      message: "Upstream memory service is unavailable",
     });
+    expect(JSON.stringify(hindsightGatewayErrorDetails(failure as HindsightGatewayError))).not.toContain(
+      "user:pass",
+    );
   });
 
   it("rejects non-positive timeouts", () => {
@@ -189,7 +249,7 @@ describe("parseRecallResponse", () => {
   ])("rejects malformed recall responses", (response) => {
     expect(() => parseRecallResponse(response)).toThrow(HindsightGatewayError);
     expect(() => parseRecallResponse(response)).toThrow(
-      "invalid response shape",
+      "Upstream memory service returned an invalid response",
     );
   });
 });
