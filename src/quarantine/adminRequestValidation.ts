@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { HttpError } from "../httpError.js";
 import { REVIEW_REASONS } from "../types.js";
+import type { ApproveBody, CleanupBody } from "./quarantineAdmin.js";
 
 const approveBodySchema = z
   .object({
@@ -18,9 +19,6 @@ const cleanupBodySchema = z
   })
   .passthrough();
 
-export type ApproveBody = z.infer<typeof approveBodySchema>;
-export type CleanupBody = z.infer<typeof cleanupBodySchema>;
-
 export function parseApproveBody(value: unknown): ApproveBody {
   const parsed = approveBodySchema.safeParse(value);
   if (!parsed.success) {
@@ -32,9 +30,13 @@ export function parseApproveBody(value: unknown): ApproveBody {
 export function parseCleanupBody(value: unknown): CleanupBody {
   const parsed = cleanupBodySchema.safeParse(value);
   if (!parsed.success) {
-    throw new HttpError(400, "invalid_request", cleanupValidationMessage(parsed.error.issues[0]));
+    throw new HttpError(
+      400,
+      "invalid_request",
+      cleanupValidationMessage(parsed.error.issues[0]),
+    );
   }
-  return parsed.data;
+  return parsed.data as CleanupBody;
 }
 
 function cleanupValidationMessage(issue: z.core.$ZodIssue | undefined): string {
