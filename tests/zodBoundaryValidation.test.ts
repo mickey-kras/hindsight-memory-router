@@ -1,32 +1,10 @@
-import type { Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   HindsightGatewayError,
   parseRecallResponse,
 } from "../src/hindsightClient.js";
-import {
-  parseApproveBody,
-  parseCleanupBody,
-} from "../src/quarantine/adminRequestValidation.js";
 import { DEFAULT_REGISTRY, validateRegistry } from "../src/registry.js";
-import { createMemoryRouterServer } from "../src/server.js";
 import type { WriterRegistry } from "../src/types.js";
-import { memoryQuarantine } from "./quarantineTestUtils.js";
-
-const servers: Server[] = [];
-
-afterEach(async () => {
-  await Promise.all(
-    servers
-      .splice(0)
-      .map(
-        (server) =>
-          new Promise<void>((resolve, reject) =>
-            server.close((error) => (error ? reject(error) : resolve())),
-          ),
-      ),
-  );
-});
 
 describe("registry Zod boundary", () => {
   it.each([
@@ -131,94 +109,6 @@ describe("Hindsight recall Zod boundary", () => {
       message: "Upstream memory service returned an invalid response",
       kind: "invalid-response",
       context: { operation: "recall", method: "POST" },
-    });
-  });
-});
-
-describe("admin HTTP Zod boundary", () => {
-  it("preserves valid admin bodies and expected_count semantics", () => {
-    expect(
-      parseApproveBody({ decrypted: null, extension: { future: true } }),
-    ).toEqual({ decrypted: null, extension: { future: true } });
-    expect(
-      parseCleanupBody({
-        scope: "all",
-        reasons: ["unknown_writer"],
-        older_than: "2026-01-01T00:00:00Z",
-        dry_run: false,
-        expected_count: "not-coerced",
-        extension: { future: true },
-      }),
-    ).toEqual({
-      scope: "all",
-      reasons: ["unknown_writer"],
-      older_than: "2026-01-01T00:00:00Z",
-      dry_run: false,
-      expected_count: "not-coerced",
-      extension: { future: true },
-    });
-  });
-
-  it.each([
-    [null, "cleanup body must be an object"],
-    [{ scope: "other" }, "scope must be pending or all"],
-    [{ reasons: ["other"] }, "reasons must contain valid review reasons"],
-    [{ older_than: 1 }, "older_than must be a string"],
-    [{ dry_run: "false" }, "dry_run must be a boolean"],
-  ])("rejects malformed cleanup body %#", (value, message) => {
-    expect(() => parseCleanupBody(value)).toThrow(message);
-  });
-
-  it("rejects malformed approve bodies", () => {
-    expect(() => parseApproveBody(null)).toThrow(
-      "approve body must be an object",
-    );
-    expect(() => parseApproveBody([])).toThrow(
-      "approve body must be an object",
-    );
-  });
-
-  it("returns 400 invalid_request for malformed admin HTTP bodies", async () => {
-    const quarantine = memoryQuarantine();
-    const server = createMemoryRouterServer({
-      registry: DEFAULT_REGISTRY,
-      adminToken: "admin-token",
-      quarantineRepository: quarantine.repository,
-      quarantineStore: quarantine.store,
-    });
-    servers.push(server);
-    await new Promise<void>((resolve) =>
-      server.listen(0, "127.0.0.1", resolve),
-    );
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("unexpected server address");
-    }
-    const baseUrl = `http://127.0.0.1:${address.port}`;
-    const headers = {
-      authorization: "Bearer admin-token",
-      "content-type": "application/json",
-    };
-
-    const cleanup = await fetch(`${baseUrl}/admin/quarantine/cleanup`, {
-      method: "POST",
-      headers,
-      body: "null",
-    });
-    expect(cleanup.status).toBe(400);
-    await expect(cleanup.json()).resolves.toEqual({
-      error: "invalid_request",
-      message: "cleanup body must be an object",
-    });
-
-    const approve = await fetch(
-      `${baseUrl}/admin/quarantine/items/q_test_0123456789abcdef/approve`,
-      { method: "POST", headers, body: "null" },
-    );
-    expect(approve.status).toBe(400);
-    await expect(approve.json()).resolves.toEqual({
-      error: "invalid_request",
-      message: "approve body must be an object",
     });
   });
 });

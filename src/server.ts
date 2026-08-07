@@ -28,10 +28,10 @@ import {
 import { integerEnv } from "./integerEnv.js";
 import { RouterPolicy } from "./policy.js";
 import {
-  parseApproveBody,
-  parseCleanupBody,
-} from "./quarantine/adminRequestValidation.js";
-import { QuarantineAdminService } from "./quarantine/quarantineAdmin.js";
+  QuarantineAdminService,
+  type ApproveBody,
+  type CleanupBody,
+} from "./quarantine/quarantineAdmin.js";
 import type { QuarantineRepository } from "./quarantine/repository.js";
 import {
   PostgresSlidingWindowRateLimiter,
@@ -305,7 +305,7 @@ export function createMemoryRouterServer(
           return send(res, 200, await admin.stats());
         }
         if (method === "POST" && pathname === "/admin/quarantine/cleanup") {
-          const body = parseCleanupBody(await readJson(req, maxBodyBytes));
+          const body = (await readJson(req, maxBodyBytes)) as CleanupBody;
           return send(res, 200, await admin.cleanup(body));
         }
 
@@ -314,7 +314,7 @@ export function createMemoryRouterServer(
           return send(res, 200, await admin.readItem(itemPath.quarantineId));
         }
         if (itemPath?.action === "approve" && method === "POST") {
-          const body = parseApproveBody(await readJson(req, maxBodyBytes));
+          const body = (await readJson(req, maxBodyBytes)) as ApproveBody;
           return send(
             res,
             200,
