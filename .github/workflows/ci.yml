@@ -84,7 +84,7 @@ jobs:
             -v "${PWD}:/src" \
             -w /src \
             "$SEMGREP_IMAGE" \
-            semgrep scan --config .semgrep.yml --error
+            semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error
 
       - name: Hadolint
         uses: hadolint/hadolint-action@2332a7b74a6de0dda2e2221d575162eba76ba5e5 # v3.3.0
