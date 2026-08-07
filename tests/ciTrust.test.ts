@@ -33,7 +33,7 @@ describe("CI dependency trust", () => {
     }
   });
 
-  it("pins the Semgrep container by version and digest", () => {
+  it("pins the Semgrep container and uses only the vendored config", () => {
     const source = workflow("ci.yml");
     const references = source.match(/semgrep\/semgrep:[^\s"']+/gu) ?? [];
 
@@ -43,7 +43,22 @@ describe("CI dependency trust", () => {
         /^semgrep\/semgrep:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/u,
       );
     }
+    expect(source).toContain("semgrep scan --config .semgrep.yml --error");
     expect(source).not.toContain("semgrep/semgrep:latest");
+    expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
+    expect(readFileSync(join(root, ".semgrep.yml"), "utf8")).toContain("rules:");
+  });
+
+  it("keeps ci permissions least-privilege by job", () => {
+    const source = workflow("ci.yml");
+
+    expect(source).toContain("permissions:\n  contents: read\n");
+    expect(source).toContain(
+      "checks:\n    permissions:\n      contents: write\n      pull-requests: read\n",
+    );
+    expect(source).toContain(
+      "aislop:\n    name: aislop status\n    permissions:\n      contents: read\n      security-events: write\n",
+    );
   });
 
   it("does not execute mutable latest references in repository workflows", () => {
@@ -54,6 +69,7 @@ describe("CI dependency trust", () => {
       expect(source).not.toMatch(/\buses:\s+\S+@latest\b/u);
       expect(source).not.toMatch(/\bnpx\b[^\n]*@latest\b/u);
       expect(source).not.toMatch(/\bdocker\s+(?:pull|run)\b[^\n]*:latest\b/u);
+      expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
     }
   });
 });
