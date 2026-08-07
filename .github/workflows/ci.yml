@@ -77,11 +77,12 @@ jobs:
 
       - name: Semgrep
         run: |
-          docker pull semgrep/semgrep:latest
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
+          docker pull "$SEMGREP_IMAGE"
           docker run --rm \
             -v "${PWD}:/src" \
             -w /src \
-            semgrep/semgrep:latest \
+            "$SEMGREP_IMAGE" \
             semgrep scan --config auto --error
 
       - name: Hadolint
@@ -135,13 +136,16 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+
+      - run: npm ci
 
       - name: Aislop quality gate
-        run: npx --yes aislop@latest ci --human
+        run: npm run aislop:ci:human
 
       - name: Aislop SARIF
         if: always()
-        run: npx --yes aislop@latest ci --sarif > aislop.sarif
+        run: npm run --silent aislop:ci:sarif > aislop.sarif
 
       - name: Upload Aislop SARIF
         if: always()

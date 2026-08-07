@@ -14,10 +14,18 @@ Use a private GitHub security advisory.
 - Auth fails closed. Tokens are timing-safe and never logged.
 - Private quarantine key must never enter the router runtime.
 - Approval requires the exact decrypted object and stored hash.
+- Hindsight failures expose only stable router error codes and generic messages. Upstream error bodies are discarded without inspection; diagnostics contain fixed bounded metadata only.
 
 ## Content scanning
 
 The scanner is a deterministic tripwire, not a safety guarantee. It normalizes known Unicode evasions, checks bounded Base64 content, and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
+
+## CI dependency trust
+
+- Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
+- Aislop's `adm-zip` dependency is overridden to patched `0.6.0` until its upstream range accepts the fixed release.
+- Semgrep uses a versioned image pinned by digest; update the version and digest together.
+- GitHub Actions remain pinned by commit SHA.
 
 ## Deployment
 

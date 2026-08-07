@@ -2,10 +2,20 @@ import { HttpError } from "./httpError.js";
 import type { RecallBody, RecallResponse, RetainBody } from "./types.js";
 
 export const DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000;
-const MAX_UPSTREAM_ERROR_BODY_CHARS = 512;
 
 export type HindsightGatewayErrorKind =
   "timeout" | "http" | "invalid-response" | "network";
+
+type HindsightOperation =
+  "health" | "version" | "retain" | "recall" | "invalidate_memory";
+
+type HindsightMethod = "GET" | "POST" | "PATCH";
+
+export interface HindsightGatewayErrorContext {
+  operation?: HindsightOperation;
+  method?: HindsightMethod;
+  timeoutMs?: number;
+}
 
 const GATEWAY_ERROR_CODES: Record<HindsightGatewayErrorKind, string> = {
   timeout: "hindsight_timeout",
@@ -14,15 +24,61 @@ const GATEWAY_ERROR_CODES: Record<HindsightGatewayErrorKind, string> = {
   network: "hindsight_unavailable",
 };
 
+const GATEWAY_ERROR_MESSAGES: Record<HindsightGatewayErrorKind, string> = {
+  timeout: "Upstream memory service timed out",
+  http: "Upstream memory service request failed",
+  "invalid-response": "Upstream memory service returned an invalid response",
+  network: "Upstream memory service is unavailable",
+};
+
 export class HindsightGatewayError extends HttpError {
+  readonly upstreamStatus?: number;
+  readonly context: Readonly<HindsightGatewayErrorContext>;
+
   constructor(
     readonly kind: HindsightGatewayErrorKind,
-    message: string,
-    readonly upstreamStatus?: number,
+    upstreamStatusOrLegacyMessage?: number | string,
+    contextOrLegacyStatus: Readonly<HindsightGatewayErrorContext> | number = {},
   ) {
-    super(kind === "timeout" ? 504 : 502, GATEWAY_ERROR_CODES[kind], message);
+    super(
+      kind === "timeout" ? 504 : 502,
+      GATEWAY_ERROR_CODES[kind],
+      GATEWAY_ERROR_MESSAGES[kind],
+    );
     this.name = "HindsightGatewayError";
+    this.upstreamStatus =
+      typeof upstreamStatusOrLegacyMessage === "number"
+        ? upstreamStatusOrLegacyMessage
+        : typeof contextOrLegacyStatus === "number"
+          ? contextOrLegacyStatus
+          : undefined;
+    this.context =
+      contextOrLegacyStatus !== null &&
+      typeof contextOrLegacyStatus === "object"
+        ? contextOrLegacyStatus
+        : {};
   }
+}
+
+export function hindsightGatewayErrorDetails(
+  error: HindsightGatewayError,
+): Record<string, unknown> {
+  return {
+    error_kind: error.kind,
+    status: error.status,
+    ...(error.upstreamStatus === undefined
+      ? {}
+      : { upstream_status: error.upstreamStatus }),
+    ...(error.context.operation === undefined
+      ? {}
+      : { operation: error.context.operation }),
+    ...(error.context.method === undefined
+      ? {}
+      : { method: error.context.method }),
+    ...(error.context.timeoutMs === undefined
+      ? {}
+      : { timeout_ms: error.context.timeoutMs }),
+  };
 }
 
 export function gatewayErrorKind(
@@ -55,15 +111,16 @@ export class FetchHindsightGateway implements HindsightGateway {
   }
 
   async health(): Promise<unknown> {
-    return this.request("GET", "/health");
+    return this.request("health", "GET", "/health");
   }
 
   async version(): Promise<unknown> {
-    return this.request("GET", "/version");
+    return this.request("version", "GET", "/version");
   }
 
   async retain(bankId: string, body: RetainBody): Promise<unknown> {
     return this.request(
+      "retain",
       "POST",
       `/v1/default/banks/${encodeURIComponent(bankId)}/memories`,
       body,
@@ -72,6 +129,7 @@ export class FetchHindsightGateway implements HindsightGateway {
 
   async recall(bankId: string, body: RecallBody): Promise<RecallResponse> {
     const response = await this.request(
+      "recall",
       "POST",
       `/v1/default/banks/${encodeURIComponent(bankId)}/memories/recall`,
       body,
@@ -85,6 +143,7 @@ export class FetchHindsightGateway implements HindsightGateway {
     reason: string,
   ): Promise<void> {
     await this.request(
+      "invalidate_memory",
       "PATCH",
       `/v1/default/banks/${encodeURIComponent(bankId)}/memories/${encodeURIComponent(memoryId)}`,
       { state: "invalidated", reason },
@@ -92,7 +151,8 @@ export class FetchHindsightGateway implements HindsightGateway {
   }
 
   private async request(
-    method: string,
+    operation: HindsightOperation,
+    method: HindsightMethod,
     path: string,
     body?: unknown,
   ): Promise<unknown> {
@@ -102,7 +162,6 @@ export class FetchHindsightGateway implements HindsightGateway {
     if (this.apiKey) headers.authorization = `Bearer ${this.apiKey}`;
 
     let res: Response;
-    let text: string;
     try {
       res = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, {
         method,
@@ -110,49 +169,53 @@ export class FetchHindsightGateway implements HindsightGateway {
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      text = await res.text();
     } catch (error) {
-      throw this.toGatewayError(error, method, path);
+      throw this.toGatewayError(error, operation, method);
     }
 
     if (!res.ok) {
-      throw new HindsightGatewayError(
-        "http",
-        `Hindsight ${method} ${path} failed: HTTP ${res.status} ${truncateUpstreamBody(text)}`,
-        res.status,
-      );
+      await discardErrorBody(res);
+      throw new HindsightGatewayError("http", res.status, {
+        operation,
+        method,
+      });
+    }
+
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (error) {
+      throw this.toGatewayError(error, operation, method);
     }
     if (!text) return null;
     try {
       return JSON.parse(text) as unknown;
     } catch {
-      throw new HindsightGatewayError(
-        "invalid-response",
-        `Hindsight ${method} ${path} returned an invalid JSON response`,
-        res.status,
-      );
+      throw new HindsightGatewayError("invalid-response", res.status, {
+        operation,
+        method,
+      });
     }
   }
 
   private toGatewayError(
     error: unknown,
-    method: string,
-    path: string,
+    operation: HindsightOperation,
+    method: HindsightMethod,
   ): HindsightGatewayError {
     if (error instanceof HindsightGatewayError) return error;
     const name = (error as { name?: unknown } | null)?.name;
     if (name === "TimeoutError" || name === "AbortError") {
-      return new HindsightGatewayError(
-        "timeout",
-        `Hindsight ${method} ${path} timed out after ${this.timeoutMs}ms`,
-      );
+      return new HindsightGatewayError("timeout", undefined, {
+        operation,
+        method,
+        timeoutMs: this.timeoutMs,
+      });
     }
-    const message =
-      error instanceof Error ? error.message : "upstream request failed";
-    return new HindsightGatewayError(
-      "network",
-      `Hindsight ${method} ${path} failed: ${truncateUpstreamBody(message)}`,
-    );
+    return new HindsightGatewayError("network", undefined, {
+      operation,
+      method,
+    });
   }
 }
 
@@ -194,16 +257,18 @@ export function parseRecallResponse(value: unknown): RecallResponse {
 }
 
 function invalidRecallResponse(): HindsightGatewayError {
-  return new HindsightGatewayError(
-    "invalid-response",
-    "Hindsight recall returned an invalid response shape",
-  );
+  return new HindsightGatewayError("invalid-response", undefined, {
+    operation: "recall",
+    method: "POST",
+  });
 }
 
-function truncateUpstreamBody(text: string): string {
-  return text.length > MAX_UPSTREAM_ERROR_BODY_CHARS
-    ? `${text.slice(0, MAX_UPSTREAM_ERROR_BODY_CHARS)}...(truncated)`
-    : text;
+async function discardErrorBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The HTTP error remains authoritative if cancellation fails.
+  }
 }
 
 export class FakeHindsightGateway implements HindsightGateway {
