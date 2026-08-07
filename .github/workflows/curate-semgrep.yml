@@ -1,0 +1,68 @@
+name: curate-semgrep
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  curate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Curate repository rules
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          ruby <<'RUBY'
+          require 'yaml'
+
+          keep = %w[
+            javascript.lang.security.detect-eval-with-expression.detect-eval-with-expression
+            javascript.lang.security.audit.dangerous-spawn-shell.dangerous-spawn-shell
+            javascript.lang.security.audit.spawn-shell-true.spawn-shell-true
+            javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+            problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
+            javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+            javascript.lang.security.insecure-object-assign.insecure-object-assign
+            javascript.lang.security.audit.prototype-pollution.prototype-pollution-loop.prototype-pollution-loop
+            javascript.node-crypto.security.aead-no-final.aead-no-final
+            javascript.node-crypto.security.create-de-cipher-no-iv.create-de-cipher-no-iv
+            javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length
+            yaml.github-actions.security.run-shell-injection.run-shell-injection
+            yaml.github-actions.security.pull-request-target-code-checkout.pull-request-target-code-checkout
+            yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+            yaml.github-actions.security.gha-curl-pipe-shell.gha-curl-pipe-shell
+            yaml.github-actions.security.secrets-inherit.secrets-inherit
+            yaml.docker-compose.security.privileged-service.privileged-service
+            yaml.docker-compose.security.exposing-docker-socket-volume.exposing-docker-socket-volume
+            dockerfile.security.missing-user.missing-user
+            dockerfile.security.no-sudo-in-dockerfile.no-sudo-in-dockerfile
+            dockerfile.security.dockerd-socket-mount.dockerfile-dockerd-socket-mount
+          ].to_h { |id| [id, true] }
+
+          source = YAML.load_file('.semgrep.yml')
+          rules = source.fetch('rules').select { |rule| keep.key?(rule.fetch('id')) }
+          missing = keep.keys - rules.map { |rule| rule.fetch('id') }
+          abort "missing rules: #{missing.join(', ')}" unless missing.empty?
+
+          header = <<~TEXT
+            # Curated Semgrep rules for this repository.
+            # Scope: Node/JavaScript core APIs, Node crypto, GitHub Actions, Docker Compose, and Dockerfile.
+            # Update intentionally: resolve Semgrep auto with the pinned Semgrep version, select only rules for technologies used here, review the diff, and commit it.
+          TEXT
+          File.write('.semgrep.yml', header + YAML.dump('rules' => rules).sub(/\A---\n/, ''))
+          puts "curated #{rules.length} rules"
+          RUBY
+
+          git rm .github/workflows/curate-semgrep.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .semgrep.yml
+          git commit -m "Prune Semgrep rules to repository technologies"
+          git push origin "HEAD:$HEAD_REF"
