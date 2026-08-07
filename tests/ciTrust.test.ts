@@ -35,6 +35,7 @@ describe("CI dependency trust", () => {
 
   it("pins the Semgrep container and uses only the vendored config", () => {
     const source = workflow("ci.yml");
+    const semgrepConfig = readFileSync(join(root, ".semgrep.yml"), "utf8");
     const references = source.match(/semgrep\/semgrep:[^\s"']+/gu) ?? [];
 
     expect(references).not.toHaveLength(0);
@@ -48,9 +49,8 @@ describe("CI dependency trust", () => {
     expect(source).not.toMatch(
       /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
     );
-    expect(readFileSync(join(root, ".semgrep.yml"), "utf8")).toContain(
-      "rules:",
-    );
+    expect(semgrepConfig).toContain("rules:");
+    expect(semgrepConfig).not.toMatch(/https?:\/\/semgrep\.dev\/c\//u);
   });
 
   it("keeps ci permissions least-privilege by job", () => {
