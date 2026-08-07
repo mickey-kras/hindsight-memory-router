@@ -18,6 +18,11 @@ const transactionSql = {
     const sql = String(statement);
     state.calls.push({ statement: sql, params });
     if (sql.includes("clock_timestamp")) return [{ now_ms: state.nowMs }];
+    if (sql.includes("INSERT INTO quarantine_rate_limit_events")) {
+      const bucket = String(params[0]);
+      state.counts.set(bucket, (state.counts.get(bucket) ?? 0) + 1);
+      return [];
+    }
     if (
       sql.includes("SELECT COUNT(*) AS count") &&
       sql.includes("quarantine_rate_limit_identities")
@@ -133,6 +138,35 @@ describe("PostgresSlidingWindowRateLimiter", () => {
         statement.includes("INSERT INTO quarantine_rate_limit_events"),
       ),
     ).toBe(false);
+  });
+
+  it("shares Hindsight quotas across limiter instances", async () => {
+    const { PostgresSlidingWindowRateLimiter } =
+      await import("../src/quarantine/rateLimiter.js");
+    const { DEFAULT_HINDSIGHT_LIMITS, HindsightLimits } =
+      await import("../src/hindsightLimits.js");
+    const config = {
+      ...DEFAULT_HINDSIGHT_LIMITS,
+      retainWriterMax: 10,
+      retainGlobalMax: 1,
+    };
+    const first = new HindsightLimits(
+      config,
+      new PostgresSlidingWindowRateLimiter(CONNECTION),
+      () => 1_000,
+    );
+    const second = new HindsightLimits(
+      config,
+      new PostgresSlidingWindowRateLimiter(CONNECTION),
+      () => 1_000,
+    );
+
+    await first.consumeRetain("writer-a");
+    await expect(second.consumeRetain("writer-b")).rejects.toMatchObject({
+      status: 429,
+      code: "hindsight_rate_limited",
+    });
+    expect(postgres).toHaveBeenCalledTimes(2);
   });
 
   it("registers and refreshes distinct identities in the same transaction", async () => {

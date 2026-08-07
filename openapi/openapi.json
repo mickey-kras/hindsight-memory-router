@@ -135,7 +135,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "429": {
-            "$ref": "#/components/responses/QuarantineRateLimited"
+            "$ref": "#/components/responses/MemoryRateLimited"
           },
           "507": {
             "$ref": "#/components/responses/QuarantineCapacityExceeded"
@@ -190,7 +190,7 @@
             "$ref": "#/components/responses/PayloadTooLarge"
           },
           "429": {
-            "$ref": "#/components/responses/QuarantineRateLimited"
+            "$ref": "#/components/responses/MemoryRateLimited"
           },
           "507": {
             "$ref": "#/components/responses/QuarantineCapacityExceeded"
@@ -645,7 +645,7 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "The HTTP body or encrypted quarantine item exceeds the configured size limit.",
+        "description": "The HTTP body, Hindsight request bounds, or encrypted quarantine item exceeds a configured size limit.",
         "content": {
           "application/json": {
             "schema": {
@@ -654,8 +654,17 @@
           }
         }
       },
-      "QuarantineRateLimited": {
-        "description": "Too many quarantine writes were generated for the source and writer within the configured window.",
+      "MemoryRateLimited": {
+        "description": "Hindsight request quota or quarantine rate limit exceeded. Hindsight quota responses include Retry-After.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying a Hindsight-quota-limited request.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {
@@ -783,11 +792,13 @@
       },
       "RetainRequest": {
         "type": "object",
+        "description": "Retain requests allow at most 100 items and 524288 aggregate UTF-8 bytes across all string values forwarded downstream.",
         "required": ["items"],
         "properties": {
           "items": {
             "type": "array",
             "minItems": 1,
+            "maxItems": 100,
             "items": {
               "$ref": "#/components/schemas/MemoryItem"
             }
@@ -810,11 +821,13 @@
         "properties": {
           "query": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "Maximum 32768 UTF-8 bytes."
           },
           "max_tokens": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 8192
           },
           "budget": {
             "type": "string",
