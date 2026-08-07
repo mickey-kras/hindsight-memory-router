@@ -226,6 +226,13 @@ describe("FetchHindsightGateway", () => {
       code: "hindsight_timeout",
       message: "Upstream memory service timed out",
     });
+    expect(safeErrorBody(failure)).toEqual({
+      status: 504,
+      body: {
+        error: "hindsight_timeout",
+        message: "Upstream memory service timed out",
+      },
+    });
     expect(
       hindsightGatewayErrorDetails(failure as HindsightGatewayError),
     ).toEqual({
