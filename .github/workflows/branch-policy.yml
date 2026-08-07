@@ -1,0 +1,35 @@
+name: branch-policy
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  branch-name:
+    name: branch name
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate same-repository branch name
+        env:
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          REPOSITORY: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "$HEAD_REPO" != "$REPOSITORY" ]]; then
+            exit 0
+          fi
+
+          if [[ "$HEAD_REF" == dependabot/* ]]; then
+            exit 0
+          fi
+
+          if [[ ! "$HEAD_REF" =~ ^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "Branch must match <type>/<short-description>." >&2
+            echo "Allowed types: feat, fix, refactor, docs, ci, security." >&2
+            exit 1
+          fi
