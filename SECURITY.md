@@ -14,7 +14,7 @@ Use a private GitHub security advisory.
 - Auth fails closed. Tokens are timing-safe and never logged.
 - Private quarantine key must never enter the router runtime.
 - Approval requires the exact decrypted object and stored hash.
-- Hindsight failures expose only stable router error codes and generic messages. Upstream error bodies are discarded after a bounded read; diagnostics contain bounded metadata only.
+- Hindsight failures expose only stable router error codes and generic messages. Upstream error bodies are discarded without inspection; diagnostics contain fixed bounded metadata only.
 
 ## Content scanning
 
