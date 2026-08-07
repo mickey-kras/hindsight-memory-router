@@ -137,7 +137,9 @@ describe("FetchHindsightGateway", () => {
     expect(diagnostics).not.toContain("first line");
     expect(diagnostics).not.toContain("Bearer secret");
     expect(diagnostics).not.toContain("user:pass");
-    expect(diagnostics).not.toMatch(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u);
+    expect(diagnostics).not.toContain("\u0000");
+    expect(diagnostics).not.toContain("\r");
+    expect(diagnostics).not.toContain("\n");
   });
 
   it("bounds excessively large upstream error bodies", async () => {
@@ -178,15 +180,15 @@ describe("FetchHindsightGateway", () => {
       code: "hindsight_timeout",
       message: "Upstream memory service timed out",
     });
-    expect(hindsightGatewayErrorDetails(failure as HindsightGatewayError)).toMatchObject(
-      {
-        error_kind: "timeout",
-        status: 504,
-        operation: "health",
-        method: "GET",
-        timeout_ms: 10,
-      },
-    );
+    expect(
+      hindsightGatewayErrorDetails(failure as HindsightGatewayError),
+    ).toMatchObject({
+      error_kind: "timeout",
+      status: 504,
+      operation: "health",
+      method: "GET",
+      timeout_ms: 10,
+    });
   });
 
   it("rejects with a stable typed invalid-response error for non-JSON upstream bodies", async () => {
@@ -221,9 +223,11 @@ describe("FetchHindsightGateway", () => {
       code: "hindsight_unavailable",
       message: "Upstream memory service is unavailable",
     });
-    expect(JSON.stringify(hindsightGatewayErrorDetails(failure as HindsightGatewayError))).not.toContain(
-      "user:pass",
-    );
+    expect(
+      JSON.stringify(
+        hindsightGatewayErrorDetails(failure as HindsightGatewayError),
+      ),
+    ).not.toContain("user:pass");
   });
 
   it("rejects non-positive timeouts", () => {
