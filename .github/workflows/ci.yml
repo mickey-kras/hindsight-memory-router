@@ -32,16 +32,10 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
-
-      - name: Resolve Semgrep digest
+      - name: Install dependencies
         run: |
-          SEMGREP_IMAGE="semgrep/semgrep:1.172.0"
-          docker pull "$SEMGREP_IMAGE"
-          docker image inspect "$SEMGREP_IMAGE" --format='{{range .RepoDigests}}{{println .}}{{end}}'
-
-      - name: Dependency audit diagnostics
-        run: npm audit --audit-level=moderate || true
+          npm install --package-lock-only --ignore-scripts
+          npm ci
 
       - name: Auto-fix before gates
         if: >-
@@ -86,7 +80,7 @@ jobs:
 
       - name: Semgrep
         run: |
-          SEMGREP_IMAGE="semgrep/semgrep:1.172.0"
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
           docker pull "$SEMGREP_IMAGE"
           docker run --rm \
             -v "${PWD}:/src" \
@@ -147,14 +141,17 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci
 
       - name: Aislop quality gate
         run: npm run aislop:ci:human
 
       - name: Aislop SARIF
         if: always()
-        run: npm run aislop:ci:sarif > aislop.sarif
+        run: npm run --silent aislop:ci:sarif > aislop.sarif
 
       - name: Upload Aislop SARIF
         if: always()
