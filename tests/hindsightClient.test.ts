@@ -108,14 +108,12 @@ describe("FetchHindsightGateway", () => {
       upstreamStatus: 503,
     });
     expect(JSON.stringify(safeErrorBody(failure))).not.toContain(upstreamBody);
-    expect(hindsightGatewayErrorDetails(failure)).toMatchObject({
+    expect(hindsightGatewayErrorDetails(failure)).toEqual({
       error_kind: "http",
       status: 502,
       upstream_status: 503,
       operation: "health",
       method: "GET",
-      error_body_bytes_read: Buffer.byteLength(upstreamBody),
-      error_body_truncated: false,
     });
   });
 
@@ -142,19 +140,29 @@ describe("FetchHindsightGateway", () => {
     expect(diagnostics).not.toContain("\n");
   });
 
-  it("bounds excessively large upstream error bodies", async () => {
-    mockFetch(new Response("x".repeat(4096), { status: 500 }));
+  it("does not consume excessively large upstream error bodies", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ cancel });
+    mockFetch(
+      new Response(stream, {
+        status: 500,
+        headers: { "content-length": String(Number.MAX_SAFE_INTEGER) },
+      }),
+    );
     const gateway = new FetchHindsightGateway("https://hindsight.test");
 
     const failure = (await gateway
       .health()
       .catch((error: unknown) => error)) as HindsightGatewayError;
 
-    expect(hindsightGatewayErrorDetails(failure)).toMatchObject({
-      error_body_bytes_read: 1024,
-      error_body_truncated: true,
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(hindsightGatewayErrorDetails(failure)).toEqual({
+      error_kind: "http",
+      status: 502,
+      upstream_status: 500,
+      operation: "health",
+      method: "GET",
     });
-    expect(failure.message).not.toContain("x");
   });
 
   it("rejects with a stable typed timeout error when the upstream hangs", async () => {
