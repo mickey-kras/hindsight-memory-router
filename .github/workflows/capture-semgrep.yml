@@ -23,11 +23,11 @@ jobs:
             -v "${PWD}:/src" \
             -w /src \
             "$SEMGREP_IMAGE" \
-            sh -lc 'semgrep scan --config auto --dump-config > semgrep-auto.yml && python - <<"PY"
+            sh -lc 'semgrep scan --config auto --dump-config > /tmp/semgrep-auto.yml && python - <<"PY"
           import pathlib
           import yaml
 
-          source = pathlib.Path("semgrep-auto.yml")
+          source = pathlib.Path("/tmp/semgrep-auto.yml")
           data = yaml.safe_load(source.read_text())
           relevant = {"typescript", "ts", "javascript", "yaml", "json", "dockerfile", "generic"}
           rules = [
@@ -40,13 +40,14 @@ jobs:
               "# Scope: rules applicable to this repository (TypeScript/JavaScript/YAML/JSON/Dockerfile/generic).\n"
               "# Update intentionally: resolve the new auto config with the pinned Semgrep image, filter to these languages, review the diff, then commit it.\n"
           )
-          pathlib.Path(".semgrep.yml").write_text(
+          pathlib.Path("/src/.semgrep.generated.yml").write_text(
               header + yaml.safe_dump({"rules": rules}, sort_keys=False, width=1000)
           )
-          source.unlink()
           print(f"vendored {len(rules)} rules")
           PY'
 
+          git pull --ff-only origin "${{ github.event.pull_request.head.ref }}"
+          mv .semgrep.generated.yml .semgrep.yml
           git rm .github/workflows/capture-semgrep.yml
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
