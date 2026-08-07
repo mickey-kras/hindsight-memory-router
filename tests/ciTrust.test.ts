@@ -51,6 +51,7 @@ describe("CI dependency trust", () => {
     expect(source).not.toMatch(
       /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
     );
+    expect(semgrepConfig).toContain("Vendored from the Semgrep auto config");
     expect(semgrepConfig).toContain("rules:");
     expect(semgrepConfig).not.toMatch(/https?:\/\/semgrep\.dev\/c\//u);
   });
