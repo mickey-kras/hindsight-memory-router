@@ -9,7 +9,12 @@ import {
 } from "../src/hindsightClient.js";
 import { RouterPolicy } from "../src/policy.js";
 import { createMemoryRouterServer } from "../src/server.js";
-import type { RecallBody, RecallResponse, RetainBody, WriterRegistry } from "../src/types.js";
+import type {
+  RecallBody,
+  RecallResponse,
+  RetainBody,
+  WriterRegistry,
+} from "../src/types.js";
 import { memoryQuarantine } from "./quarantineTestUtils.js";
 
 const registry: WriterRegistry = {
@@ -167,7 +172,9 @@ function postJson(
   });
 }
 
-function closeServer(server: ReturnType<typeof createMemoryRouterServer>): Promise<void> {
+function closeServer(
+  server: ReturnType<typeof createMemoryRouterServer>,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     server.close((error) => {
       if (error) reject(error);
