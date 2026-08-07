@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { z } from "zod";
 import { BANK_IDS, type WriterRegistry, type WriterRule } from "./types.js";
 
 export const DEFAULT_REGISTRY: WriterRegistry = {
@@ -48,11 +49,32 @@ export const DEFAULT_REGISTRY: WriterRegistry = {
 
 const BANK_ID_SET = new Set<string>(BANK_IDS);
 
+const registrySchema = z
+  .object({
+    writers: z.record(z.string(), z.unknown()),
+    defaults: z
+      .object({
+        unknown_writer_action: z.literal("review_queue"),
+        suspicious_content_action: z.literal("review_queue"),
+      })
+      .passthrough(),
+  })
+  .passthrough();
+
+const writerRuleSchema = z
+  .object({
+    role: z.string().refine((value) => value.trim().length > 0),
+    source: z.string().refine((value) => value.trim().length > 0),
+    write_bank: z.string().min(1),
+    read_banks: z.array(z.string()),
+  })
+  .passthrough();
+
 export function loadRegistry(path?: string): WriterRegistry {
   if (!path) return DEFAULT_REGISTRY;
-  const parsed = JSON.parse(readFileSync(path, "utf8")) as WriterRegistry;
-  validateRegistry(parsed);
-  return parsed;
+  const parsed = JSON.parse(readFileSync(path, "utf8")) as unknown;
+  validateRegistry(parsed as WriterRegistry);
+  return parsed as WriterRegistry;
 }
 
 export function getWriter(
@@ -63,63 +85,31 @@ export function getWriter(
 }
 
 export function validateRegistry(registry: WriterRegistry): void {
-  if (!registry || typeof registry !== "object" || Array.isArray(registry)) {
-    throw new Error("registry must be an object");
-  }
-  if (
-    !registry.writers ||
-    typeof registry.writers !== "object" ||
-    Array.isArray(registry.writers)
-  ) {
-    throw new Error("registry.writers must be an object");
-  }
-  if (
-    !registry.defaults ||
-    typeof registry.defaults !== "object" ||
-    Array.isArray(registry.defaults)
-  ) {
-    throw new Error("registry.defaults must be an object");
-  }
-  if (registry.defaults.unknown_writer_action !== "review_queue") {
-    throw new Error(
-      "registry.defaults.unknown_writer_action must be review_queue",
-    );
-  }
-  if (registry.defaults.suspicious_content_action !== "review_queue") {
-    throw new Error(
-      "registry.defaults.suspicious_content_action must be review_queue",
-    );
+  const parsed = registrySchema.safeParse(registry);
+  if (!parsed.success) {
+    throw new Error(registryValidationMessage(registry, parsed.error.issues[0]));
   }
 
-  for (const [writerId, value] of Object.entries(registry.writers)) {
+  for (const [writerId, value] of Object.entries(parsed.data.writers)) {
     if (!writerId.trim()) throw new Error("writer id cannot be empty");
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`writer ${writerId} must be an object`);
+
+    const writer = writerRuleSchema.safeParse(value);
+    if (!writer.success) {
+      throw new Error(writerValidationMessage(writerId, value, writer.error.issues[0]));
     }
-    const rule = value as WriterRule;
-    if (typeof rule.role !== "string" || !rule.role.trim()) {
-      throw new Error(`writer ${writerId} missing role`);
-    }
-    if (typeof rule.source !== "string" || !rule.source.trim()) {
-      throw new Error(`writer ${writerId} missing source`);
-    }
-    if (typeof rule.write_bank !== "string" || !rule.write_bank) {
-      throw new Error(`writer ${writerId} missing write_bank`);
-    }
-    if (rule.write_bank === ("quarantine" as string)) {
+
+    const rule = writer.data;
+    if (rule.write_bank === "quarantine") {
       throw new Error(`writer ${writerId} cannot write quarantine`);
     }
     if (!BANK_ID_SET.has(rule.write_bank)) {
       throw new Error(`writer ${writerId} has invalid write_bank`);
     }
-    if (!Array.isArray(rule.read_banks)) {
-      throw new Error(`writer ${writerId} missing read_banks`);
-    }
-    if ((rule.read_banks as string[]).includes("quarantine")) {
+    if (rule.read_banks.includes("quarantine")) {
       throw new Error(`writer ${writerId} cannot read quarantine`);
     }
-    for (const bank of rule.read_banks as unknown[]) {
-      if (typeof bank !== "string" || !BANK_ID_SET.has(bank)) {
+    for (const bank of rule.read_banks) {
+      if (!BANK_ID_SET.has(bank)) {
         throw new Error(`writer ${writerId} has invalid read_bank`);
       }
     }
@@ -127,4 +117,46 @@ export function validateRegistry(registry: WriterRegistry): void {
       throw new Error("main writer cannot read research");
     }
   }
+}
+
+function registryValidationMessage(
+  value: unknown,
+  issue: z.core.$ZodIssue | undefined,
+): string {
+  if (!isObject(value)) return "registry must be an object";
+  if (issue?.path[0] === "writers") return "registry.writers must be an object";
+  if (issue?.path[0] === "defaults") {
+    if (issue.path[1] === "unknown_writer_action") {
+      return "registry.defaults.unknown_writer_action must be review_queue";
+    }
+    if (issue.path[1] === "suspicious_content_action") {
+      return "registry.defaults.suspicious_content_action must be review_queue";
+    }
+    return "registry.defaults must be an object";
+  }
+  return "registry must be an object";
+}
+
+function writerValidationMessage(
+  writerId: string,
+  value: unknown,
+  issue: z.core.$ZodIssue | undefined,
+): string {
+  if (!isObject(value)) return `writer ${writerId} must be an object`;
+  switch (issue?.path[0]) {
+    case "role":
+      return `writer ${writerId} missing role`;
+    case "source":
+      return `writer ${writerId} missing source`;
+    case "write_bank":
+      return `writer ${writerId} missing write_bank`;
+    case "read_banks":
+      return `writer ${writerId} missing read_banks`;
+    default:
+      return `writer ${writerId} must be an object`;
+  }
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
