@@ -212,7 +212,7 @@ describe("admin HTTP Zod boundary", () => {
     });
 
     const approve = await fetch(
-      `${baseUrl}/admin/quarantine/q_test_0123456789abcdef/approve`,
+      `${baseUrl}/admin/quarantine/items/q_test_0123456789abcdef/approve`,
       { method: "POST", headers, body: "null" },
     );
     expect(approve.status).toBe(400);
