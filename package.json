@@ -24,7 +24,7 @@
     "aislop:ci:sarif": "aislop ci --sarif",
     "aislop:fix:safe": "aislop fix --safe",
     "check": "npm run format:check && npm run lint && npm run openapi:lint && npm run test:coverage && npm run typecheck && npm run security:audit && npm run aislop:ci",
-    "fix": "npm install --package-lock-only --ignore-scripts && npm run format && npm run lint:fix && npm run aislop:fix:safe",
+    "fix": "npm run format && npm run lint:fix && npm run aislop:fix:safe",
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "dependencies": {
