@@ -194,20 +194,22 @@ describe("FetchHindsightGateway", () => {
       code: "hindsight_unavailable",
       message: "Upstream memory service is unavailable",
     });
-    expect(hindsightGatewayErrorDetails(failure as HindsightGatewayError)).toEqual(
-      {
-        error_kind: "network",
-        status: 502,
-        operation: "health",
-        method: "GET",
-      },
-    );
+    expect(
+      hindsightGatewayErrorDetails(failure as HindsightGatewayError),
+    ).toEqual({
+      error_kind: "network",
+      status: 502,
+      operation: "health",
+      method: "GET",
+    });
     expect(JSON.stringify(safeErrorBody(failure))).not.toContain("user:pass");
   });
 
   it("maps a successful response body timeout to hindsight_timeout", async () => {
     mockFetch(
-      responseWithBodyFailure(new DOMException("body timed out", "TimeoutError")),
+      responseWithBodyFailure(
+        new DOMException("body timed out", "TimeoutError"),
+      ),
     );
     const gateway = new FetchHindsightGateway(
       "https://hindsight.test",
