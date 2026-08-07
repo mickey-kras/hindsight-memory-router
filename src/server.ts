@@ -1,14 +1,16 @@
 import { createServer, type Server } from "node:http";
 import {
+  DEFAULT_HINDSIGHT_TIMEOUT_MS,
+  FetchHindsightGateway,
+  hindsightGatewayErrorDetails,
+  HindsightGatewayError,
+  type HindsightGateway,
+} from "./hindsightClient.js";
+import {
   AdminRateLimiter,
   adminRateLimitConfigFromEnv,
   classifyAdminRequest,
 } from "./adminRateLimit.js";
-import {
-  DEFAULT_HINDSIGHT_TIMEOUT_MS,
-  FetchHindsightGateway,
-  type HindsightGateway,
-} from "./hindsightClient.js";
 import {
   HindsightLimits,
   hindsightLimitConfigFromEnv,
@@ -365,7 +367,11 @@ export function createMemoryRouterServer(
       return send(res, 404, denied);
     } catch (error) {
       const response = safeErrorBody(error);
-      if (response.status === 500) {
+      if (error instanceof HindsightGatewayError) {
+        process.stderr.write(
+          `memory-router upstream request failed: ${JSON.stringify(hindsightGatewayErrorDetails(error))}\n`,
+        );
+      } else if (response.status === 500) {
         process.stderr.write("memory-router request failed\n");
       }
       return send(res, response.status, response.body, response.headers);
