@@ -1,0 +1,10 @@
+# Vendored from the Semgrep auto config resolved with Semgrep 1.172.0.
+# Scope: rules applicable to this repository (TypeScript/JavaScript/YAML/JSON/Dockerfile/generic).
+# Update intentionally: resolve the new auto config with the pinned Semgrep image, filter to these languages, review the diff, then commit it.
+rules:
+- id: placeholder
+  pattern: $X
+  message: placeholder
+  languages:
+  - generic
+  severity: INFO
