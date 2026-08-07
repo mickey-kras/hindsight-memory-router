@@ -2,7 +2,6 @@ import { HttpError } from "./httpError.js";
 import type { RecallBody, RecallResponse, RetainBody } from "./types.js";
 
 export const DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000;
-const MAX_UPSTREAM_ERROR_BODY_BYTES = 1_024;
 
 export type HindsightGatewayErrorKind =
   "timeout" | "http" | "invalid-response" | "network";
@@ -16,8 +15,6 @@ export interface HindsightGatewayErrorContext {
   operation?: HindsightOperation;
   method?: HindsightMethod;
   timeoutMs?: number;
-  errorBodyBytesRead?: number;
-  errorBodyTruncated?: boolean;
 }
 
 const GATEWAY_ERROR_CODES: Record<HindsightGatewayErrorKind, string> = {
@@ -81,12 +78,6 @@ export function hindsightGatewayErrorDetails(
     ...(error.context.timeoutMs === undefined
       ? {}
       : { timeout_ms: error.context.timeoutMs }),
-    ...(error.context.errorBodyBytesRead === undefined
-      ? {}
-      : { error_body_bytes_read: error.context.errorBodyBytesRead }),
-    ...(error.context.errorBodyTruncated === undefined
-      ? {}
-      : { error_body_truncated: error.context.errorBodyTruncated }),
   };
 }
 
@@ -183,11 +174,10 @@ export class FetchHindsightGateway implements HindsightGateway {
     }
 
     if (!res.ok) {
-      const bodyInfo = await readBoundedErrorBody(res);
+      await discardErrorBody(res);
       throw new HindsightGatewayError("http", res.status, {
         operation,
         method,
-        ...bodyInfo,
       });
     }
 
@@ -268,66 +258,11 @@ function invalidRecallResponse(): HindsightGatewayError {
   });
 }
 
-async function readBoundedErrorBody(
-  response: Response,
-): Promise<
-  Pick<
-    HindsightGatewayErrorContext,
-    "errorBodyBytesRead" | "errorBodyTruncated"
-  >
-> {
-  if (!response.body) {
-    return { errorBodyBytesRead: 0, errorBodyTruncated: false };
-  }
-
-  const reader = response.body.getReader();
-  let bytesRead = 0;
+async function discardErrorBody(response: Response): Promise<void> {
   try {
-    while (bytesRead < MAX_UPSTREAM_ERROR_BODY_BYTES) {
-      const chunk = await reader.read();
-      if (chunk.done) {
-        return {
-          errorBodyBytesRead: bytesRead,
-          errorBodyTruncated: false,
-        };
-      }
-      if (!chunk.value) continue;
-      const remaining = MAX_UPSTREAM_ERROR_BODY_BYTES - bytesRead;
-      if (chunk.value.byteLength > remaining) {
-        bytesRead = MAX_UPSTREAM_ERROR_BODY_BYTES;
-        await cancelReader(reader);
-        return {
-          errorBodyBytesRead: bytesRead,
-          errorBodyTruncated: true,
-        };
-      }
-      bytesRead += chunk.value.byteLength;
-    }
-
-    const next = await reader.read();
-    if (next.done) {
-      return {
-        errorBodyBytesRead: bytesRead,
-        errorBodyTruncated: false,
-      };
-    }
-    await cancelReader(reader);
-    return {
-      errorBodyBytesRead: bytesRead,
-      errorBodyTruncated: true,
-    };
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-async function cancelReader(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-): Promise<void> {
-  try {
-    await reader.cancel();
+    await response.body?.cancel();
   } catch {
-    // The HTTP error remains authoritative if response-body cancellation fails.
+    // The HTTP error remains authoritative if cancellation fails.
   }
 }
 
