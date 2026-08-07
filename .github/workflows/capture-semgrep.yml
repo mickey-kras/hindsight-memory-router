@@ -4,17 +4,52 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   capture:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Capture resolved auto config
-        run: curl --location --fail --silent --show-error https://semgrep.dev/c/auto -o semgrep-auto.yml
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: semgrep-auto-config
-          path: semgrep-auto.yml
-          if-no-files-found: error
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Vendor resolved Semgrep rules
+        run: |
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
+          docker pull "$SEMGREP_IMAGE"
+          docker run --rm \
+            -v "${PWD}:/src" \
+            -w /src \
+            "$SEMGREP_IMAGE" \
+            sh -lc 'semgrep scan --config auto --dump-config > semgrep-auto.yml && python - <<"PY"
+          import pathlib
+          import yaml
+
+          source = pathlib.Path("semgrep-auto.yml")
+          data = yaml.safe_load(source.read_text())
+          relevant = {"typescript", "ts", "javascript", "yaml", "json", "dockerfile", "generic"}
+          rules = [
+              {key: value for key, value in rule.items() if key != "metadata"}
+              for rule in data["rules"]
+              if set(rule.get("languages", [])) & relevant
+          ]
+          header = (
+              "# Vendored from the Semgrep auto config resolved with Semgrep 1.172.0.\n"
+              "# Scope: rules applicable to this repository (TypeScript/JavaScript/YAML/JSON/Dockerfile/generic).\n"
+              "# Update intentionally: resolve the new auto config with the pinned Semgrep image, filter to these languages, review the diff, then commit it.\n"
+          )
+          pathlib.Path(".semgrep.yml").write_text(
+              header + yaml.safe_dump({"rules": rules}, sort_keys=False, width=1000)
+          )
+          source.unlink()
+          print(f"vendored {len(rules)} rules")
+          PY'
+
+          git rm .github/workflows/capture-semgrep.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .semgrep.yml
+          git commit -m "Vendor resolved Semgrep rules"
+          git push
