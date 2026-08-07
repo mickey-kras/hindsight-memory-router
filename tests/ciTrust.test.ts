@@ -37,6 +37,17 @@ describe("CI dependency trust", () => {
     const source = workflow("ci.yml");
     const semgrepConfig = readFileSync(join(root, ".semgrep.yml"), "utf8");
     const references = source.match(/semgrep\/semgrep:[^\s"']+/gu) ?? [];
+    const ruleIds = [
+      ...semgrepConfig.matchAll(/^\s*-\s+id:\s+(.+)$/gmu),
+    ].map((match) => match[1]);
+    const allowedRulePrefixes = [
+      "javascript.lang.security.",
+      "javascript.node-crypto.security.",
+      "problem-based-packs.insecure-transport.js-node.",
+      "yaml.github-actions.security.",
+      "yaml.docker-compose.security.",
+      "dockerfile.security.",
+    ];
 
     expect(references).not.toHaveLength(0);
     for (const reference of references) {
@@ -51,9 +62,16 @@ describe("CI dependency trust", () => {
     expect(source).not.toMatch(
       /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
     );
-    expect(semgrepConfig).toContain("Vendored from the Semgrep auto config");
+    expect(semgrepConfig).toContain("Curated Semgrep rules for this repository");
     expect(semgrepConfig).toContain("rules:");
     expect(semgrepConfig).not.toMatch(/https?:\/\/semgrep\.dev\/c\//u);
+    expect(ruleIds.length).toBeGreaterThan(0);
+    expect(ruleIds.length).toBeLessThanOrEqual(25);
+    for (const ruleId of ruleIds) {
+      expect(allowedRulePrefixes.some((prefix) => ruleId.startsWith(prefix))).toBe(
+        true,
+      );
+    }
   });
 
   it("keeps ci permissions least-privilege by job", () => {
