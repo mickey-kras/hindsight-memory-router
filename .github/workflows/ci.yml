@@ -33,7 +33,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm install --package-lock-only && npm ci
+      - run: npm ci
 
       - name: Auto-fix before gates
         if: >-
