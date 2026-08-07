@@ -333,15 +333,52 @@ describe("parseRecallResponse", () => {
     });
   });
 
+  it("preserves valid extension fields", () => {
+    const response = {
+      results: [
+        {
+          id: "m1",
+          text: "memory",
+          extension: { nested: [1, { enabled: true }] },
+        },
+      ],
+      trace: { nested: { value: 1 } },
+      extension: { future: true },
+    };
+
+    expect(parseRecallResponse(response)).toEqual(response);
+  });
+
   it.each([
+    [null],
+    [[]],
+    [{}],
     [{ results: "invalid" }],
+    [{ results: [null] }],
     [{ results: [{ id: 1, text: "memory" }] }],
+    [{ results: [{ id: "m1", text: 1 }] }],
+    [{ results: [{ id: "m1", text: "memory" }], chunks: [] }],
+    [{ results: [{ id: "m1", text: "memory" }], entities: "bad" }],
+    [{ results: [{ id: "m1", text: "memory" }], source_facts: [] }],
     [{ results: [{ id: "m1", text: "memory" }], trace: [] }],
-  ])("rejects malformed recall responses", (response) => {
-    expect(() => parseRecallResponse(response)).toThrow(HindsightGatewayError);
-    expect(() => parseRecallResponse(response)).toThrow(
-      "Upstream memory service returned an invalid response",
-    );
+  ])("rejects malformed recall responses %#", (response) => {
+    const error = (() => {
+      try {
+        parseRecallResponse(response);
+        return undefined;
+      } catch (caught) {
+        return caught;
+      }
+    })();
+
+    expect(error).toBeInstanceOf(HindsightGatewayError);
+    expect(error).toMatchObject({
+      status: 502,
+      code: "hindsight_invalid_response",
+      message: "Upstream memory service returned an invalid response",
+      kind: "invalid-response",
+      context: { operation: "recall", method: "POST" },
+    });
   });
 });
 
