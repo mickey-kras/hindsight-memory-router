@@ -44,11 +44,11 @@ describe("CI dependency trust", () => {
         /^semgrep\/semgrep:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/u,
       );
     }
-    expect(source).toContain("semgrep scan --config .semgrep.yml --error");
-    expect(source).not.toContain("semgrep/semgrep:latest");
-    expect(source).not.toMatch(
-      /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
+    expect(source).toContain(
+      "semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error",
     );
+    expect(source).not.toContain("semgrep/semgrep:latest");
+    expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
     expect(semgrepConfig).toContain("rules:");
     expect(semgrepConfig).not.toMatch(/https?:\/\/semgrep\.dev\/c\//u);
   });
@@ -73,9 +73,7 @@ describe("CI dependency trust", () => {
       expect(source).not.toMatch(/\buses:\s+\S+@latest\b/u);
       expect(source).not.toMatch(/\bnpx\b[^\n]*@latest\b/u);
       expect(source).not.toMatch(/\bdocker\s+(?:pull|run)\b[^\n]*:latest\b/u);
-      expect(source).not.toMatch(
-        /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
-      );
+      expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
     }
   });
 });
