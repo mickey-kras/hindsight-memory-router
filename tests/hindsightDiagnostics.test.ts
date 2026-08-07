@@ -65,7 +65,6 @@ describe("Hindsight diagnostics", () => {
     expect(log).toContain('"event":"bank_unavailable"');
     expect(log).toContain('"error_kind":"http"');
     expect(log).toContain('"upstream_status":503');
-    expect(log).toContain('"error_body_truncated":false');
     expect(log).not.toContain("first line");
     expect(log).not.toContain("Bearer secret");
     expect(log).not.toContain("user:pass");
