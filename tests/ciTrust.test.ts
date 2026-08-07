@@ -45,8 +45,12 @@ describe("CI dependency trust", () => {
     }
     expect(source).toContain("semgrep scan --config .semgrep.yml --error");
     expect(source).not.toContain("semgrep/semgrep:latest");
-    expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
-    expect(readFileSync(join(root, ".semgrep.yml"), "utf8")).toContain("rules:");
+    expect(source).not.toMatch(
+      /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
+    );
+    expect(readFileSync(join(root, ".semgrep.yml"), "utf8")).toContain(
+      "rules:",
+    );
   });
 
   it("keeps ci permissions least-privilege by job", () => {
@@ -69,7 +73,9 @@ describe("CI dependency trust", () => {
       expect(source).not.toMatch(/\buses:\s+\S+@latest\b/u);
       expect(source).not.toMatch(/\bnpx\b[^\n]*@latest\b/u);
       expect(source).not.toMatch(/\bdocker\s+(?:pull|run)\b[^\n]*:latest\b/u);
-      expect(source).not.toMatch(/--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u);
+      expect(source).not.toMatch(
+        /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
+      );
     }
   });
 });
