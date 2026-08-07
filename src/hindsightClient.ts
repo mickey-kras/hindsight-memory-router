@@ -35,10 +35,13 @@ const GATEWAY_ERROR_MESSAGES: Record<HindsightGatewayErrorKind, string> = {
 };
 
 export class HindsightGatewayError extends HttpError {
+  readonly upstreamStatus?: number;
+  readonly context: Readonly<HindsightGatewayErrorContext>;
+
   constructor(
     readonly kind: HindsightGatewayErrorKind,
-    readonly upstreamStatus?: number,
-    readonly context: Readonly<HindsightGatewayErrorContext> = {},
+    upstreamStatusOrLegacyMessage?: number | string,
+    contextOrLegacyStatus: Readonly<HindsightGatewayErrorContext> | number = {},
   ) {
     super(
       kind === "timeout" ? 504 : 502,
@@ -46,6 +49,17 @@ export class HindsightGatewayError extends HttpError {
       GATEWAY_ERROR_MESSAGES[kind],
     );
     this.name = "HindsightGatewayError";
+    this.upstreamStatus =
+      typeof upstreamStatusOrLegacyMessage === "number"
+        ? upstreamStatusOrLegacyMessage
+        : typeof contextOrLegacyStatus === "number"
+          ? contextOrLegacyStatus
+          : undefined;
+    this.context =
+      contextOrLegacyStatus !== null &&
+      typeof contextOrLegacyStatus === "object"
+        ? contextOrLegacyStatus
+        : {};
   }
 }
 
