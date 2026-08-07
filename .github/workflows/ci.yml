@@ -32,7 +32,10 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci
 
       - name: Auto-fix before gates
         if: >-
@@ -77,11 +80,13 @@ jobs:
 
       - name: Semgrep
         run: |
-          docker pull semgrep/semgrep:latest
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0"
+          docker pull "$SEMGREP_IMAGE"
+          docker image inspect "$SEMGREP_IMAGE" --format='{{range .RepoDigests}}{{println .}}{{end}}'
           docker run --rm \
             -v "${PWD}:/src" \
             -w /src \
-            semgrep/semgrep:latest \
+            "$SEMGREP_IMAGE" \
             semgrep scan --config auto --error
 
       - name: Hadolint
@@ -135,13 +140,19 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci
 
       - name: Aislop quality gate
-        run: npx --yes aislop@latest ci --human
+        run: npm run aislop:ci:human
 
       - name: Aislop SARIF
         if: always()
-        run: npx --yes aislop@latest ci --sarif > aislop.sarif
+        run: npm run aislop:ci:sarif > aislop.sarif
 
       - name: Upload Aislop SARIF
         if: always()
