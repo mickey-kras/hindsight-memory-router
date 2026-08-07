@@ -181,7 +181,12 @@ export class FetchHindsightGateway implements HindsightGateway {
       });
     }
 
-    const text = await res.text();
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (error) {
+      throw this.toGatewayError(error, operation, method);
+    }
     if (!text) return null;
     try {
       return JSON.parse(text) as unknown;
