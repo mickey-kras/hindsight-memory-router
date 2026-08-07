@@ -87,7 +87,9 @@ export function getWriter(
 export function validateRegistry(registry: WriterRegistry): void {
   const parsed = registrySchema.safeParse(registry);
   if (!parsed.success) {
-    throw new Error(registryValidationMessage(registry, parsed.error.issues[0]));
+    throw new Error(
+      registryValidationMessage(registry, parsed.error.issues[0]),
+    );
   }
 
   for (const [writerId, value] of Object.entries(parsed.data.writers)) {
@@ -95,7 +97,9 @@ export function validateRegistry(registry: WriterRegistry): void {
 
     const writer = writerRuleSchema.safeParse(value);
     if (!writer.success) {
-      throw new Error(writerValidationMessage(writerId, value, writer.error.issues[0]));
+      throw new Error(
+        writerValidationMessage(writerId, value, writer.error.issues[0]),
+      );
     }
 
     const rule = writer.data;

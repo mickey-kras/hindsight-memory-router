@@ -83,10 +83,7 @@ describe("router request validation", () => {
       { items: [{ content: "ok", timestamp: 1 }] },
       "timestamp must be a string or null",
     ],
-    [
-      { items: [{ content: "ok", tags: [1] }] },
-      "tags must contain strings",
-    ],
+    [{ items: [{ content: "ok", tags: [1] }] }, "tags must contain strings"],
     [
       { items: [{ content: "ok", metadata: { key: 1 } }] },
       "metadata must map strings to strings",

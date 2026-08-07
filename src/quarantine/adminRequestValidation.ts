@@ -22,7 +22,11 @@ const cleanupBodySchema = z
 export function parseApproveBody(value: unknown): ApproveBody {
   const parsed = approveBodySchema.safeParse(value);
   if (!parsed.success) {
-    throw new HttpError(400, "invalid_request", "approve body must be an object");
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "approve body must be an object",
+    );
   }
   return parsed.data;
 }

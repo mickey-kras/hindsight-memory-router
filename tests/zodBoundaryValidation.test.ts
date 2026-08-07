@@ -137,9 +137,9 @@ describe("Hindsight recall Zod boundary", () => {
 
 describe("admin HTTP Zod boundary", () => {
   it("preserves valid admin bodies and expected_count semantics", () => {
-    expect(parseApproveBody({ decrypted: null, extension: { future: true } })).toEqual(
-      { decrypted: null, extension: { future: true } },
-    );
+    expect(
+      parseApproveBody({ decrypted: null, extension: { future: true } }),
+    ).toEqual({ decrypted: null, extension: { future: true } });
     expect(
       parseCleanupBody({
         scope: "all",
@@ -170,8 +170,12 @@ describe("admin HTTP Zod boundary", () => {
   });
 
   it("rejects malformed approve bodies", () => {
-    expect(() => parseApproveBody(null)).toThrow("approve body must be an object");
-    expect(() => parseApproveBody([])).toThrow("approve body must be an object");
+    expect(() => parseApproveBody(null)).toThrow(
+      "approve body must be an object",
+    );
+    expect(() => parseApproveBody([])).toThrow(
+      "approve body must be an object",
+    );
   });
 
   it("returns 400 invalid_request for malformed admin HTTP bodies", async () => {

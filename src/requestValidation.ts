@@ -2,7 +2,9 @@ import { z } from "zod";
 import { HttpError } from "./httpError.js";
 import type { RecallBody, RetainBody } from "./types.js";
 
-const nonEmptyStringSchema = z.string().refine((value) => value.trim().length > 0);
+const nonEmptyStringSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0);
 
 const memoryItemSchema = z
   .object({
