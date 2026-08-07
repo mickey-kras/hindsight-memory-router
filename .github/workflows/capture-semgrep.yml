@@ -18,16 +18,17 @@ jobs:
       - name: Vendor resolved Semgrep rules
         run: |
           SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
+          curl --location --fail --silent --show-error https://semgrep.dev/c/auto -o semgrep-auto.yml
           docker pull "$SEMGREP_IMAGE"
           docker run --rm \
             -v "${PWD}:/src" \
             -w /src \
             "$SEMGREP_IMAGE" \
-            sh -lc 'semgrep scan --config auto --dump-config > /tmp/semgrep-auto.yml && python - <<"PY"
+            sh -lc 'python - <<"PY"
           import pathlib
           import yaml
 
-          source = pathlib.Path("/tmp/semgrep-auto.yml")
+          source = pathlib.Path("semgrep-auto.yml")
           data = yaml.safe_load(source.read_text())
           relevant = {"typescript", "ts", "javascript", "yaml", "json", "dockerfile", "generic"}
           rules = [
@@ -40,11 +41,12 @@ jobs:
               "# Scope: rules applicable to this repository (TypeScript/JavaScript/YAML/JSON/Dockerfile/generic).\n"
               "# Update intentionally: resolve the new auto config with the pinned Semgrep image, filter to these languages, review the diff, then commit it.\n"
           )
-          pathlib.Path("/src/.semgrep.generated.yml").write_text(
+          pathlib.Path(".semgrep.generated.yml").write_text(
               header + yaml.safe_dump({"rules": rules}, sort_keys=False, width=1000)
           )
           print(f"vendored {len(rules)} rules")
           PY'
+          rm semgrep-auto.yml
 
           git pull --ff-only origin "${{ github.event.pull_request.head.ref }}"
           mv .semgrep.generated.yml .semgrep.yml
