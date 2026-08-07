@@ -17,6 +17,16 @@ function mockFetch(...responses: Response[]) {
   return fetchMock;
 }
 
+function responseWithBodyFailure(error: Error): Response {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"partial":'));
+      controller.error(error);
+    },
+  });
+  return new Response(stream, { status: 200 });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -162,6 +172,66 @@ describe("FetchHindsightGateway", () => {
       upstream_status: 500,
       operation: "health",
       method: "GET",
+    });
+  });
+
+  it("maps a successful response body stream failure to hindsight_unavailable", async () => {
+    mockFetch(
+      responseWithBodyFailure(
+        new TypeError(
+          "terminated https://user:pass@example.test/private\nstack detail",
+        ),
+      ),
+    );
+    const gateway = new FetchHindsightGateway("https://hindsight.test");
+
+    const failure = await gateway.health().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "network",
+      status: 502,
+      code: "hindsight_unavailable",
+      message: "Upstream memory service is unavailable",
+    });
+    expect(hindsightGatewayErrorDetails(failure as HindsightGatewayError)).toEqual(
+      {
+        error_kind: "network",
+        status: 502,
+        operation: "health",
+        method: "GET",
+      },
+    );
+    expect(JSON.stringify(safeErrorBody(failure))).not.toContain("user:pass");
+  });
+
+  it("maps a successful response body timeout to hindsight_timeout", async () => {
+    mockFetch(
+      responseWithBodyFailure(new DOMException("body timed out", "TimeoutError")),
+    );
+    const gateway = new FetchHindsightGateway(
+      "https://hindsight.test",
+      undefined,
+      10,
+    );
+
+    const failure = await gateway.health().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(HindsightGatewayError);
+    expect(failure).toMatchObject({
+      kind: "timeout",
+      status: 504,
+      code: "hindsight_timeout",
+      message: "Upstream memory service timed out",
+    });
+    expect(
+      hindsightGatewayErrorDetails(failure as HindsightGatewayError),
+    ).toEqual({
+      error_kind: "timeout",
+      status: 504,
+      operation: "health",
+      method: "GET",
+      timeout_ms: 10,
     });
   });
 
