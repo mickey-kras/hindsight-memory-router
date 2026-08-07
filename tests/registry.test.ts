@@ -214,4 +214,59 @@ describe("registry", () => {
       ),
     ).not.toThrow();
   });
+
+  it.each([
+    [
+      {
+        writers: {},
+        defaults: {
+          unknown_writer_action: "allow",
+          suspicious_content_action: "review_queue",
+        },
+      },
+      "registry.defaults.unknown_writer_action must be review_queue",
+    ],
+    [
+      {
+        writers: {},
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "allow",
+        },
+      },
+      "registry.defaults.suspicious_content_action must be review_queue",
+    ],
+    [
+      {
+        writers: {
+          ops: {
+            role: "ops",
+            source: "test",
+            write_bank: "ops",
+            read_banks: [1],
+          },
+        },
+        defaults: {
+          unknown_writer_action: "review_queue",
+          suspicious_content_action: "review_queue",
+        },
+      },
+      "writer ops has invalid read_bank",
+    ],
+  ])("preserves registry rejection contracts", (value, message) => {
+    expect(() => validateRegistry(value as unknown as WriterRegistry)).toThrow(
+      message,
+    );
+  });
+
+  it("does not coerce writer policy values", () => {
+    const value = structuredClone(DEFAULT_REGISTRY) as unknown as {
+      writers: Record<string, Record<string, unknown>>;
+    };
+    value.writers.ops!.write_bank = 1;
+
+    expect(() => validateRegistry(value as unknown as WriterRegistry)).toThrow(
+      "writer ops missing write_bank",
+    );
+  });
 });

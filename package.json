@@ -28,7 +28,8 @@
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "dependencies": {
-    "postgres": "3.4.9"
+    "postgres": "3.4.9",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { HttpError } from "./httpError.js";
 import type { RecallBody, RecallResponse, RetainBody } from "./types.js";
 
@@ -30,6 +31,23 @@ const GATEWAY_ERROR_MESSAGES: Record<HindsightGatewayErrorKind, string> = {
   "invalid-response": "Upstream memory service returned an invalid response",
   network: "Upstream memory service is unavailable",
 };
+
+const recallResponseSchema = z
+  .object({
+    results: z.array(
+      z
+        .object({
+          id: z.string(),
+          text: z.string(),
+        })
+        .passthrough(),
+    ),
+    chunks: z.record(z.string(), z.unknown()).nullable().optional(),
+    entities: z.record(z.string(), z.unknown()).nullable().optional(),
+    source_facts: z.record(z.string(), z.unknown()).nullable().optional(),
+    trace: z.record(z.string(), z.unknown()).nullable().optional(),
+  })
+  .passthrough();
 
 export class HindsightGatewayError extends HttpError {
   readonly upstreamStatus?: number;
@@ -220,38 +238,8 @@ export class FetchHindsightGateway implements HindsightGateway {
 }
 
 export function parseRecallResponse(value: unknown): RecallResponse {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!recallResponseSchema.safeParse(value).success) {
     throw invalidRecallResponse();
-  }
-  const response = value as Record<string, unknown>;
-  if (!Array.isArray(response.results)) {
-    throw invalidRecallResponse();
-  }
-  for (const result of response.results) {
-    if (
-      !result ||
-      typeof result !== "object" ||
-      Array.isArray(result) ||
-      typeof (result as Record<string, unknown>).id !== "string" ||
-      typeof (result as Record<string, unknown>).text !== "string"
-    ) {
-      throw invalidRecallResponse();
-    }
-  }
-  for (const field of [
-    "chunks",
-    "entities",
-    "source_facts",
-    "trace",
-  ] as const) {
-    const fieldValue = response[field];
-    if (
-      fieldValue !== undefined &&
-      fieldValue !== null &&
-      (typeof fieldValue !== "object" || Array.isArray(fieldValue))
-    ) {
-      throw invalidRecallResponse();
-    }
   }
   return value as RecallResponse;
 }

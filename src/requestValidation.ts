@@ -1,177 +1,125 @@
+import { z } from "zod";
 import { HttpError } from "./httpError.js";
-import type { MemoryItem, RecallBody, RetainBody } from "./types.js";
+import type { RecallBody, RetainBody } from "./types.js";
+
+const nonEmptyStringSchema = z
+  .string()
+  .refine((value) => value.trim().length > 0);
+
+const memoryItemSchema = z
+  .object({
+    content: nonEmptyStringSchema,
+    context: z.string().nullable().optional(),
+    document_id: z.string().nullable().optional(),
+    metadata: z.record(z.string(), z.string()).nullable().optional(),
+    tags: z.array(z.string()).nullable().optional(),
+    timestamp: z.string().nullable().optional(),
+    update_mode: z.enum(["replace", "append"]).nullable().optional(),
+  })
+  .passthrough();
+
+const retainBodySchema = z
+  .object({
+    items: z.array(memoryItemSchema).min(1),
+    async: z.boolean().optional(),
+    document_tags: z.array(z.string()).optional(),
+  })
+  .passthrough();
+
+const recallBodySchema = z
+  .object({
+    query: nonEmptyStringSchema,
+    max_tokens: z
+      .number()
+      .refine((value) => Number.isSafeInteger(value) && value > 0)
+      .optional(),
+    budget: z.enum(["low", "mid", "high"]).optional(),
+    types: z.array(z.string()).nullable().optional(),
+    tags: z.array(z.string()).nullable().optional(),
+    tags_match: z.string().optional(),
+    trace: z.boolean().optional(),
+  })
+  .passthrough();
 
 export function parseRetainBody(value: unknown): RetainBody {
-  const object = requireObject(value, "retain body", "invalid_retain_body");
-  if (!Array.isArray(object.items) || object.items.length === 0) {
-    throw invalidRetain("retain body requires at least one memory item");
+  const parsed = retainBodySchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidRetain(retainValidationMessage(value, parsed.error.issues[0]));
   }
-
-  const items = object.items.map((item, index) => parseMemoryItem(item, index));
-  optionalBoolean(object.async, "async", invalidRetain);
-  optionalStringArray(object.document_tags, "document_tags", invalidRetain);
-
-  const result: RetainBody = { items };
-  for (const [key, entry] of Object.entries(object)) {
-    if (key !== "items") result[key] = entry;
-  }
-  return result;
+  return parsed.data;
 }
 
 export function parseRecallBody(value: unknown): RecallBody {
-  const object = requireObject(value, "recall body", "invalid_recall_body");
-  const query = requireNonEmptyString(
-    object.query,
-    "recall query",
-    invalidRecall,
-  );
-
-  if (
-    object.max_tokens !== undefined &&
-    (!Number.isSafeInteger(object.max_tokens) || Number(object.max_tokens) <= 0)
-  ) {
-    throw invalidRecall("max_tokens must be a positive integer");
+  const parsed = recallBodySchema.safeParse(value);
+  if (!parsed.success) {
+    throw invalidRecall(recallValidationMessage(value, parsed.error.issues[0]));
   }
-  if (
-    object.budget !== undefined &&
-    object.budget !== "low" &&
-    object.budget !== "mid" &&
-    object.budget !== "high"
-  ) {
-    throw invalidRecall("budget must be low, mid, or high");
-  }
-  optionalNullableStringArray(object.types, "types", invalidRecall);
-  optionalNullableStringArray(object.tags, "tags", invalidRecall);
-  optionalString(object.tags_match, "tags_match", invalidRecall);
-  optionalBoolean(object.trace, "trace", invalidRecall);
-
-  const result: RecallBody = { query };
-  for (const [key, entry] of Object.entries(object)) {
-    if (key !== "query") result[key] = entry;
-  }
-  return result;
+  return parsed.data;
 }
 
-function parseMemoryItem(value: unknown, index: number): MemoryItem {
-  const object = requireObject(
-    value,
-    `memory item ${index}`,
-    "invalid_retain_body",
-  );
-  const content = requireNonEmptyString(
-    object.content,
-    `memory item ${index} content`,
-    invalidRetain,
-  );
-
-  optionalNullableString(object.context, "context", invalidRetain);
-  optionalNullableString(object.document_id, "document_id", invalidRetain);
-  optionalNullableString(object.timestamp, "timestamp", invalidRetain);
-  optionalNullableStringArray(object.tags, "tags", invalidRetain);
-  optionalNullableStringRecord(object.metadata, "metadata", invalidRetain);
-  if (
-    object.update_mode !== undefined &&
-    object.update_mode !== null &&
-    object.update_mode !== "replace" &&
-    object.update_mode !== "append"
-  ) {
-    throw invalidRetain("update_mode must be replace or append");
-  }
-
-  const result: MemoryItem = { content };
-  for (const [key, entry] of Object.entries(object)) {
-    if (key !== "content") result[key] = entry;
-  }
-  return result;
-}
-
-function requireObject(
+function retainValidationMessage(
   value: unknown,
-  label: string,
-  code: string,
-): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, code, `${label} must be an object`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function requireNonEmptyString(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
+  issue: z.core.$ZodIssue | undefined,
 ): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw error(`${label} must be a non-empty string`);
+  if (!isObject(value)) return "retain body must be an object";
+  const path = issue?.path ?? [];
+  if (path[0] === "items") {
+    if (path.length === 1) {
+      return "retain body requires at least one memory item";
+    }
+    const index = typeof path[1] === "number" ? path[1] : 0;
+    if (path.length === 2) return `memory item ${index} must be an object`;
+    switch (path[2]) {
+      case "content":
+        return `memory item ${index} content must be a non-empty string`;
+      case "context":
+        return "context must be a string or null";
+      case "document_id":
+        return "document_id must be a string or null";
+      case "timestamp":
+        return "timestamp must be a string or null";
+      case "tags":
+        return "tags must contain strings";
+      case "metadata":
+        return "metadata must map strings to strings";
+      case "update_mode":
+        return "update_mode must be replace or append";
+    }
   }
-  return value;
+  if (path[0] === "async") return "async must be a boolean";
+  if (path[0] === "document_tags") {
+    return "document_tags must contain strings";
+  }
+  return "retain body is invalid";
 }
 
-function optionalString(
+function recallValidationMessage(
   value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (value !== undefined && typeof value !== "string") {
-    throw error(`${label} must be a string`);
+  issue: z.core.$ZodIssue | undefined,
+): string {
+  if (!isObject(value)) return "recall body must be an object";
+  switch (issue?.path[0]) {
+    case "query":
+      return "recall query must be a non-empty string";
+    case "max_tokens":
+      return "max_tokens must be a positive integer";
+    case "budget":
+      return "budget must be low, mid, or high";
+    case "types":
+      return "types must contain strings";
+    case "tags":
+      return "tags must contain strings";
+    case "tags_match":
+      return "tags_match must be a string";
+    case "trace":
+      return "trace must be a boolean";
+    default:
+      return "recall body is invalid";
   }
 }
 
-function optionalNullableString(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (value !== undefined && value !== null && typeof value !== "string") {
-    throw error(`${label} must be a string or null`);
-  }
-}
-
-function optionalBoolean(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (value !== undefined && typeof value !== "boolean") {
-    throw error(`${label} must be a boolean`);
-  }
-}
-
-function optionalStringArray(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (
-    value !== undefined &&
-    (!Array.isArray(value) || value.some((entry) => typeof entry !== "string"))
-  ) {
-    throw error(`${label} must contain strings`);
-  }
-}
-
-function optionalNullableStringArray(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (value === null) return;
-  optionalStringArray(value, label, error);
-}
-
-function optionalNullableStringRecord(
-  value: unknown,
-  label: string,
-  error: (message: string) => HttpError,
-): void {
-  if (value === undefined || value === null) return;
-  if (
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.values(value).some((entry) => typeof entry !== "string")
-  ) {
-    throw error(`${label} must map strings to strings`);
-  }
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function invalidRetain(message: string): HttpError {
