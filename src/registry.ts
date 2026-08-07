@@ -151,7 +151,9 @@ function writerValidationMessage(
     case "write_bank":
       return `writer ${writerId} missing write_bank`;
     case "read_banks":
-      return `writer ${writerId} missing read_banks`;
+      return issue.path.length > 1
+        ? `writer ${writerId} has invalid read_bank`
+        : `writer ${writerId} missing read_banks`;
     default:
       return `writer ${writerId} must be an object`;
   }
