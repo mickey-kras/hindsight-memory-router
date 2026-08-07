@@ -1,0 +1,719 @@
+# Curated Semgrep rules for this repository.
+# Scope: Node/JavaScript core APIs, Node crypto, GitHub Actions, Docker Compose, and Dockerfile.
+# Update intentionally: resolve Semgrep auto with the pinned Semgrep version, select only rules for technologies used here, review the diff, and commit it.
+rules:
+  - id: javascript.lang.security.detect-eval-with-expression.detect-eval-with-expression
+    message:
+      Detected use of dynamic execution of JavaScript which may come from user-input,
+      which can lead to Cross-Site-Scripting (XSS). Where possible avoid including user-input
+      in functions which dynamically execute user-input.
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $PROP = new URLSearchParams($WINDOW. ... .location.search).get('...')
+                    ...
+              - pattern-inside: |
+                  $PROP = new URLSearchParams(location.search).get('...')
+                    ...
+              - pattern-inside: |
+                  $PROP = new URLSearchParams($WINDOW. ... .location.hash.substring(1)).get('...')
+                    ...
+              - pattern-inside: |
+                  $PROP = new URLSearchParams(location.hash.substring(1)).get('...')
+                    ...
+          - focus-metavariable: "$PROP"
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $PROPS = new URLSearchParams($WINDOW. ... .location.search)
+                    ...
+              - pattern-inside: |
+                  $PROPS = new URLSearchParams(location.search)
+                    ...
+              - pattern-inside: |
+                  $PROPS = new
+                  URLSearchParams($WINDOW. ... .location.hash.substring(1))
+                    ...
+              - pattern-inside: |
+                  $PROPS = new URLSearchParams(location.hash.substring(1))
+                  ...
+          - pattern: "$PROPS.get('...')"
+          - focus-metavariable: "$PROPS"
+      - patterns:
+          - pattern-either:
+              - pattern: location.href
+              - pattern: location.hash
+              - pattern: location.search
+              - pattern: "$WINDOW. ... .location.href"
+              - pattern: "$WINDOW. ... .location.hash"
+              - pattern: "$WINDOW. ... .location.search"
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval(<... $SINK ...>)
+              - pattern: window.eval(<... $SINK ...>)
+              - pattern: new Function(<... $SINK ...>)
+              - pattern: new Function(<... $SINK ...>)(...)
+              - pattern: setTimeout(<... $SINK ...>,...)
+              - pattern: setInterval(<... $SINK ...>,...)
+          - focus-metavariable: "$SINK"
+    pattern-sanitizers:
+      - patterns:
+          - pattern-either:
+              - pattern: location.href = $FUNC(...)
+              - pattern: location.hash = $FUNC(...)
+              - pattern: location.search = $FUNC(...)
+              - pattern: "$WINDOW. ... .location.href = $FUNC(...)"
+              - pattern: "$WINDOW. ... .location.hash = $FUNC(...)"
+              - pattern: "$WINDOW. ... .location.search = $FUNC(...)"
+  - id: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+    message:
+      Detected possible user input going into a `path.join` or `path.resolve`
+      function. This could possibly lead to a path traversal vulnerability,  where the
+      attacker can access arbitrary files stored in the file system. Instead, be sure
+      to sanitize or validate user input first.
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - focus-metavariable: "$X"
+          - pattern-either:
+              - pattern-inside: "function ... (...,$X,...) {...}
+
+                  "
+              - pattern-inside: "function ... (...,{...,$X,...},...) {...}
+
+                  "
+    pattern-sinks:
+      - patterns:
+          - focus-metavariable: "$SINK"
+          - pattern-either:
+              - pattern-inside: |
+                  $PATH = require('path');
+                  ...
+              - pattern-inside: |
+                  import $PATH from 'path';
+                  ...
+          - pattern-either:
+              - pattern: "$PATH.join(...,$SINK,...)"
+              - pattern: "$PATH.resolve(...,$SINK,...)"
+      - patterns:
+          - focus-metavariable: "$SINK"
+          - pattern-inside: |
+              import 'path';
+              ...
+          - pattern-either:
+              - pattern-inside: path.join(...,$SINK,...)
+              - pattern-inside: path.resolve(...,$SINK,...)
+    pattern-sanitizers:
+      - pattern: "$Y.replace(...)"
+      - pattern: "$Y.indexOf(...)"
+      - pattern: |
+          function ... (...) {
+              ...
+              <... $Y.indexOf(...) ...>
+              ...
+          }
+      - patterns:
+          - pattern: "$FUNC(...)"
+          - metavariable-regex:
+              metavariable: "$FUNC"
+              regex: sanitize
+  - id: problem-based-packs.insecure-transport.js-node.bypass-tls-verification.bypass-tls-verification
+    message:
+      Checks for setting the environment variable NODE_TLS_REJECT_UNAUTHORIZED
+      to 0, which disables TLS verification. This should only be used for debugging
+      purposes. Setting the option rejectUnauthorized to false bypasses verification
+      against the list of trusted CAs, which also leads to insecure transport. These
+      options lead to vulnerability to MTM attacks, and should not be used.
+    severity: WARNING
+    languages:
+      - javascript
+      - typescript
+    pattern-either:
+      - pattern: 'process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
+
+          '
+      - pattern: "{rejectUnauthorized:false}\n"
+  - id: javascript.lang.security.audit.dangerous-spawn-shell.dangerous-spawn-shell
+    message:
+      Detected non-literal calls to $EXEC(). This could lead to a command injection
+      vulnerability.
+    languages:
+      - javascript
+      - typescript
+    severity: ERROR
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: |
+              function ... (...,$FUNC,...) {
+                ...
+              }
+          - focus-metavariable: "$FUNC"
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  require('child_process')
+                  ...
+              - pattern-inside: |
+                  import 'child_process'
+                  ...
+          - pattern-either:
+              - pattern: spawn(...)
+              - pattern: spawnSync(...)
+              - pattern: "$CP.spawn(...)"
+              - pattern: "$CP.spawnSync(...)"
+          - pattern-either:
+              - pattern:
+                  '$EXEC("=~/(sh|bash|ksh|csh|tcsh|zsh)/",["-c", $ARG, ...],...)
+
+                  '
+              - patterns:
+                  - pattern: $EXEC($CMD,["-c", $ARG, ...],...)
+                  - pattern-inside: |
+                      $CMD = "=~/(sh|bash|ksh|csh|tcsh|zsh)/"
+                      ...
+              - pattern:
+                  '$EXEC("=~/(sh|bash|ksh|csh|tcsh|zsh)/",[$ARG, ...],...)
+
+                  '
+              - patterns:
+                  - pattern: "$EXEC($CMD,[$ARG, ...],...)"
+                  - pattern-inside: |
+                      $CMD = "=~/(sh|bash|ksh|csh|tcsh|zsh)/"
+                      ...
+          - focus-metavariable: "$ARG"
+  - id: javascript.lang.security.audit.spawn-shell-true.spawn-shell-true
+    message:
+      "Found '$SPAWN' with '{shell: $SHELL}'. This is dangerous because this
+      call will spawn the command using a shell process. Doing so propagates current
+      shell settings and variables, which makes it much easier for a malicious actor
+      to execute commands. Use '{shell: false}' instead."
+    languages:
+      - javascript
+      - typescript
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: "spawn(...,{shell: $SHELL})
+
+              "
+          - pattern: "spawnSync(...,{shell: $SHELL})
+
+              "
+          - pattern: "$CP.spawn(...,{shell: $SHELL})\n"
+          - pattern: "$CP.spawnSync(...,{shell: $SHELL})\n"
+      - pattern-not: "spawn(...,{shell: false})
+
+          "
+      - pattern-not: "spawnSync(...,{shell: false})
+
+          "
+      - pattern-not: "$CP.spawn(...,{shell: false})\n"
+      - pattern-not: "$CP.spawnSync(...,{shell: false})\n"
+  - id: yaml.docker-compose.security.privileged-service.privileged-service
+    patterns:
+      - pattern-inside: |
+          version: ...
+          ...
+          services:
+            ...
+            $SERVICE:
+              ...
+              privileged: $TRUE
+      - focus-metavariable: "$TRUE"
+      - metavariable-regex:
+          metavariable: "$TRUE"
+          regex: "(true)"
+    fix: "false
+
+      "
+    message:
+      Service '$SERVICE' is running in privileged mode. This grants the container
+      the equivalent of root capabilities on the host machine. This can lead to container
+      escapes, privilege escalation, and other security concerns. Remove the 'privileged'
+      key to disable this capability.
+    languages:
+      - yaml
+    severity: WARNING
+  - id: yaml.docker-compose.security.exposing-docker-socket-volume.exposing-docker-socket-volume
+    patterns:
+      - pattern-inside: |
+          version: ...
+          ...
+      - pattern-either:
+          - pattern: |
+              volumes:
+                - ...
+                - /var/run/docker.sock:/var/run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - /run/docker.sock:/run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - /var/run/docker.sock:/run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - /run/docker.sock:/var/run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - /var/run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - /run/docker.sock
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - ...
+                  source: /var/run/docker.sock
+                  ...
+                - ...
+          - pattern: |
+              volumes:
+                - ...
+                - ...
+                  source: /run/docker.sock
+                  ...
+                - ...
+    message:
+      Exposing host's Docker socket to containers via a volume. The owner of
+      this socket is root. Giving someone access to it is equivalent to giving unrestricted
+      root access to your host. Remove 'docker.sock' from volumes to prevent this.
+    languages:
+      - yaml
+    severity: WARNING
+  - id: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp
+    message:
+      RegExp() called with a `$ARG` function argument, this might allow an attacker
+      to cause a Regular Expression Denial-of-Service (ReDoS) within your application
+      as RegExP blocks the main thread. For this reason, it is recommended to use hardcoded
+      regexes instead. If your regex is run on user-controlled input, consider performing
+      input validation or use a regex checking/sanitization library such as https://www.npmjs.com/package/recheck
+      to verify that the regex does not appear vulnerable to ReDoS.
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern-inside: "function ... (...,$ARG,...) {...}
+
+              "
+          - focus-metavariable: "$ARG"
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new RegExp($ARG, ...)
+              - pattern: RegExp($ARG, ...)
+          - pattern-not: RegExp("...", ...)
+          - pattern-not: new RegExp("...", ...)
+          - pattern-not: RegExp(/.../, ...)
+          - pattern-not: new RegExp(/.../, ...)
+  - id: javascript.lang.security.insecure-object-assign.insecure-object-assign
+    message:
+      Depending on the context, user control data in `Object.assign` can cause
+      web response to include data that it should not have or can lead to a mass assignment
+      vulnerability.
+    languages:
+      - javascript
+      - typescript
+    severity: WARNING
+    mode: taint
+    pattern-sources:
+      - patterns:
+          - pattern: JSON.parse(...)
+          - pattern-not: JSON.parse("...",...)
+    pattern-sinks:
+      - pattern: Object.assign(...)
+  - id: yaml.github-actions.security.run-shell-injection.run-shell-injection
+    languages:
+      - yaml
+    message:
+      'Using variable interpolation `${{...}}` with `github` context data in
+      a `run:` step could allow an attacker to inject their own code into the runner.
+      This would allow them to steal secrets and code. `github` context data can have
+      arbitrary user input and should be treated as untrusted. Instead, use an intermediate
+      environment variable with `env:` to store the data and use the environment variable
+      in the `run:` script. Be sure to use double-quotes the environment variable, like
+      this: "$ENVVAR".'
+    patterns:
+      - pattern-inside: "steps: [...]"
+      - pattern-inside: |
+          - run: ...
+            ...
+      - pattern: "run: $SHELL"
+      - metavariable-pattern:
+          language: generic
+          metavariable: "$SHELL"
+          patterns:
+            - pattern-either:
+                - pattern: "${{ ... github.event.issue.title ... }}"
+                - pattern: "${{ ... github.event.issue.body ... }}"
+                - pattern: "${{ ... github.event.pull_request.title ... }}"
+                - pattern: "${{ ... github.event.pull_request.body ... }}"
+                - pattern: "${{ ... github.event.comment.body ... }}"
+                - pattern: "${{ ... github.event.review.body ... }}"
+                - pattern: "${{ ... github.event.review_comment.body ... }}"
+                - pattern: "${{ ... github.event.pages ... .page_name ... }}"
+                - pattern: "${{ ... github.event.head_commit.message ... }}"
+                - pattern: "${{ ... github.event.head_commit.author.email ... }}"
+                - pattern: "${{ ... github.event.head_commit.author.name ... }}"
+                - pattern: "${{ ... github.event.commits ... .author.email ... }}"
+                - pattern: "${{ ... github.event.commits ... .author.name ... }}"
+                - pattern: "${{ ... github.event.commits ... .message ... }}"
+                - pattern: "${{ ... github.event.pull_request.head.ref ... }}"
+                - pattern: "${{ ... github.event.pull_request.head.label ... }}"
+                - pattern:
+                    "${{ ... github.event.pull_request.head.repo.default_branch ...
+                    }}"
+                - pattern: "${{ ... github.ref ... }}"
+                - pattern: "${{ ... github.base_ref ... }}"
+                - pattern: "${{ ... github.head_ref ... }}"
+                - pattern: "${{ ... github.ref_name ... }}"
+                - pattern: "${{ ... github.event.inputs ... }}"
+                - pattern: "${{ ... github.event.discussion.title ... }}"
+                - pattern: "${{ ... github.event.discussion.body ... }}"
+                - pattern: "${{ ... github.event.workflow_run.head_branch ... }}"
+                - pattern: "${{ ... github.event.workflow_run.head_commit.message ... }}"
+                - pattern: "${{ ... github.event.milestone.title ... }}"
+                - pattern: "${{ ... github.event.milestone.description ... }}"
+                - pattern: "${{ ... github.event.project_card.note ... }}"
+                - pattern: "${{ ... github.event.project.name ... }}"
+                - pattern: "${{ ... github.event.project_column.name ... }}"
+                - pattern: "${{ ... github.event.release.name ... }}"
+                - pattern: "${{ ... github.event.release.body ... }}"
+                - pattern: "${{ ... github.event.deployment.ref ... }}"
+                - pattern: "${{ ... inputs ... }}"
+            - pattern-not: "${{ ... github.event.issue.title && ... }}"
+            - pattern-not: "${{ ... github.event.issue.body && ... }}"
+            - pattern-not: "${{ ... github.event.pull_request.title && ... }}"
+            - pattern-not: "${{ ... github.event.pull_request.body && ... }}"
+            - pattern-not: "${{ ... github.event.comment.body && ... }}"
+            - pattern-not: "${{ ... github.event.review.body && ... }}"
+            - pattern-not: "${{ ... github.event.review_comment.body && ... }}"
+            - pattern-not: "${{ ... github.event.pages ... .page_name && ... }}"
+            - pattern-not: "${{ ... github.event.head_commit.message && ... }}"
+            - pattern-not: "${{ ... github.event.head_commit.author.email && ... }}"
+            - pattern-not: "${{ ... github.event.head_commit.author.name && ... }}"
+            - pattern-not: "${{ ... github.event.commits ... .author.email && ... }}"
+            - pattern-not: "${{ ... github.event.commits ... .author.name && ... }}"
+            - pattern-not: "${{ ... github.event.commits ... .message && ... }}"
+            - pattern-not: "${{ ... github.event.pull_request.head.ref && ... }}"
+            - pattern-not: "${{ ... github.event.pull_request.head.label && ... }}"
+            - pattern-not:
+                "${{ ... github.event.pull_request.head.repo.default_branch &&
+                ... }}"
+            - pattern-not:
+                "${{ ... github.event.workflow_run.head_commit.message && ...
+                }}"
+            - pattern-not: "${{ ... github.ref && ... }}"
+            - pattern-not: "${{ ... github.base_ref && ... }}"
+            - pattern-not: "${{ ... github.head_ref && ... }}"
+            - pattern-not: "${{ ... github.ref_name && ... }}"
+            - pattern-not: "${{ ... github.event.inputs && ... }}"
+            - pattern-not: "${{ ... github.event.discussion.title && ... }}"
+            - pattern-not: "${{ ... github.event.discussion.body && ... }}"
+            - pattern-not: "${{ ... github.event.workflow_run.head_branch && ... }}"
+            - pattern-not: "${{ ... github.event.milestone.title && ... }}"
+            - pattern-not: "${{ ... github.event.milestone.description && ... }}"
+            - pattern-not: "${{ ... github.event.project_card.note && ... }}"
+            - pattern-not: "${{ ... github.event.project.name && ... }}"
+            - pattern-not: "${{ ... github.event.project_column.name && ... }}"
+            - pattern-not: "${{ ... github.event.release.name && ... }}"
+            - pattern-not: "${{ ... github.event.release.body && ... }}"
+            - pattern-not: "${{ ... github.event.deployment.ref && ... }}"
+    severity: ERROR
+  - id: yaml.github-actions.security.pull-request-target-code-checkout.pull-request-target-code-checkout
+    languages:
+      - yaml
+    message:
+      This GitHub Actions workflow file uses `pull_request_target` and checks
+      out code from the incoming pull request. When using `pull_request_target`, the
+      Action runs in the context of the target repository, which includes access to
+      all repository secrets. Normally, this is safe because the Action only runs code
+      from the target repository, not the incoming PR. However, by checking out the
+      incoming PR code, you're now using the incoming code for the rest of the action.
+      You may be inadvertently executing arbitrary code from the incoming PR with access
+      to repository secrets, which would let an attacker steal repository secrets. This
+      normally happens by running build scripts (e.g., `npm build` and `make`) or dependency
+      installation scripts (e.g., `python setup.py install`). Audit your workflow file
+      to make sure no code from the incoming PR is executed. Please see https://securitylab.github.com/research/github-actions-preventing-pwn-requests/
+      for additional mitigations.
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              on:
+                ...
+                pull_request_target: ...
+                ...
+              ...
+          - pattern-inside: |
+              on: [..., pull_request_target, ...]
+              ...
+          - pattern-inside: |
+              on: pull_request_target
+              ...
+      - pattern-inside: |
+          jobs:
+            ...
+            $JOBNAME:
+              ...
+              steps:
+                ...
+      - pattern: |
+          ...
+          uses: "$ACTION"
+          with:
+            ...
+            ref: $EXPR
+      - metavariable-regex:
+          metavariable: "$ACTION"
+          regex: actions/checkout@.*
+      - metavariable-pattern:
+          language: generic
+          metavariable: "$EXPR"
+          patterns:
+            - pattern-inside: "${{ ... }}"
+            - pattern-either:
+                - pattern: github.event.pull_request ...
+                - pattern: github.head_ref ...
+    severity: ERROR
+  - id: javascript.lang.security.audit.prototype-pollution.prototype-pollution-loop.prototype-pollution-loop
+    message:
+      "Possibility of prototype polluting function detected. By adding or modifying
+      attributes of an object prototype, it is possible to create attributes that exist
+      on every object, or replace critical attributes with malicious ones. This can
+      be problematic if the software depends on existence or non-existence of certain
+      attributes, or uses pre-defined attributes of object prototype (such as hasOwnProperty,
+      toString or valueOf). Possible mitigations might be: freezing the object prototype,
+      using an object without prototypes (via Object.create(null) ), blocking modifications
+      of attributes that resolve to object prototype, using Map instead of object."
+    languages:
+      - typescript
+      - javascript
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: "$SMTH = $SMTH[$A]\n"
+          - pattern: "$SMTH = $SMTH[$A] = ...\n"
+          - pattern: "$SMTH = $SMTH[$A] && $Z\n"
+          - pattern: "$SMTH = $SMTH[$A] || $Z\n"
+      - pattern-either:
+          - pattern-inside: |
+              for(...) {
+                ...
+              }
+          - pattern-inside: |
+              while(...) {
+                ...
+              }
+          - pattern-inside: |
+              $X.forEach(function $NAME(...) {
+                ...
+              })
+      - pattern-not-inside: "for(var $A = $S; ...; ...) {...}
+
+          "
+      - pattern-not-inside: "for($A = $S; ...; ...) {...}
+
+          "
+      - pattern-not-inside: "$X.forEach(function $NAME($OBJ, $A,...) {...})\n"
+      - metavariable-pattern:
+          patterns:
+            - pattern-not: '"..."'
+            - pattern-not: "`...${...}...`\n"
+            - pattern-not: "($A: float)\n"
+          metavariable: "$A"
+  - id: dockerfile.security.missing-user.missing-user
+    patterns:
+      - pattern: "CMD $...VARS
+
+          "
+      - pattern-not-inside: |
+          USER $USER
+          ...
+      - pattern-not-inside: "HEALTHCHECK ... CMD ...
+
+          "
+    fix: |
+      USER non-root
+      CMD $...VARS
+    message:
+      By not specifying a USER, a program in the container may run as 'root'.
+      This is a security hazard. If an attacker can control a process running as root,
+      they may have control over the container. Ensure that the last USER in a Dockerfile
+      is a USER other than 'root'.
+    severity: ERROR
+    languages:
+      - dockerfile
+  - id: dockerfile.security.no-sudo-in-dockerfile.no-sudo-in-dockerfile
+    patterns:
+      - pattern: "RUN sudo ...
+
+          "
+    message:
+      Avoid using sudo in Dockerfiles. Running processes as a non-root user can
+      help  reduce the potential impact of configuration errors and security vulnerabilities.
+    languages:
+      - dockerfile
+    severity: WARNING
+  - id: dockerfile.security.dockerd-socket-mount.dockerfile-dockerd-socket-mount
+    message:
+      The Dockerfile(image) mounts docker.sock to the container which may allow
+      an attacker already inside of the container to escape container and execute arbitrary
+      commands on the host machine.
+    languages:
+      - dockerfile
+      - yaml
+    severity: ERROR
+    pattern-either:
+      - patterns:
+          - pattern: VOLUME $X
+          - metavariable-regex:
+              metavariable: "$X"
+              regex: "/var/run/docker.sock"
+      - patterns:
+          - pattern-regex: '- "/var/run/docker.sock:.*"'
+          - pattern-inside: |
+              volumes:
+                ...
+  - id: javascript.node-crypto.security.aead-no-final.aead-no-final
+    message:
+      The 'final' call of a Decipher object checks the authentication tag in
+      a mode for authenticated encryption. Failing to call 'final' will invalidate all
+      integrity guarantees of the released ciphertext.
+    languages:
+      - javascript
+      - typescript
+    severity: ERROR
+    patterns:
+      - pattern: |
+          $DECIPHER = $CRYPTO.createDecipheriv('$ALGO', ...)
+          ...
+          $DECIPHER.update(...)
+      - pattern-not-inside: |
+          $DECIPHER = $CRYPTO.createDecipheriv('$ALGO', ...)
+          ...
+          $DECIPHER.final(...)
+      - metavariable-regex:
+          metavariable: "$ALGO"
+          regex: ".*(-gcm|-ccm|-ocb|chacha20-poly1305)$"
+  - id: javascript.node-crypto.security.create-de-cipher-no-iv.create-de-cipher-no-iv
+    message:
+      The deprecated functions 'createCipher' and 'createDecipher' generate the
+      same initialization vector every time. For counter modes such as CTR, GCM, or
+      CCM this leads to break of both confidentiality and integrity, if the key is used
+      more than once. Other modes are still affected in their strength, though they're
+      not completely broken. Use 'createCipheriv' or 'createDecipheriv' instead.
+    languages:
+      - javascript
+      - typescript
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: "$CRYPTO.createCipher(...)\n"
+          - pattern: "$CRYPTO.createDecipher(...)\n"
+  - id: javascript.node-crypto.security.gcm-no-tag-length.gcm-no-tag-length
+    message:
+      The call to 'createDecipheriv' with the Galois Counter Mode (GCM) mode
+      of operation is missing an expected authentication tag length. If the expected
+      authentication tag length is not specified or otherwise checked, the application
+      might be tricked into verifying a shorter-than-expected authentication tag. This
+      can be abused by an attacker to spoof ciphertexts or recover the implicit authentication
+      key of GCM, allowing arbitrary forgeries.
+    languages:
+      - javascript
+      - typescript
+    severity: ERROR
+    patterns:
+      - pattern: "$CRYPTO.createDecipheriv('$ALGO', $KEY, $IV)\n"
+      - metavariable-regex:
+          metavariable: "$ALGO"
+          regex: ".*(-gcm)$"
+  - id: yaml.github-actions.security.github-actions-mutable-action-tag.github-actions-mutable-action-tag
+    message:
+      "GitHub Actions step uses a mutable tag or branch reference. Tags and branch
+      names can be silently repointed by the action owner, enabling supply-chain attacks
+      — as seen in the trivy-action and kics-github-action compromises. Pin the reference
+      to a full 40-character commit SHA instead, e.g. `uses: actions/checkout@8ade135a41bc03ea155e62e844d188df1ea18608`."
+    severity: WARNING
+    languages:
+      - yaml
+    patterns:
+      - pattern-inside: "{steps: ...}"
+      - pattern: 'uses: "$ACTION"
+
+          '
+      - metavariable-pattern:
+          metavariable: "$ACTION"
+          language: generic
+          patterns:
+            - pattern-not-regex: "^\\./"
+            - pattern-not-regex: "^docker://"
+            - pattern-not-regex: "@[0-9a-f]{40}(\\s|$)"
+  - id: yaml.github-actions.security.secrets-inherit.secrets-inherit
+    languages:
+      - yaml
+    severity: ERROR
+    message:
+      "This workflow uses `secrets: inherit` to pass all of the calling workflow's
+      secrets to a reusable workflow. This violates the principle of least privilege
+      because the called workflow receives access to every secret in the repository,
+      not just the ones it needs. If the called workflow is compromised or sourced from
+      a third party, an attacker gains access to all repository secrets. Instead, explicitly
+      pass only the secrets that the called workflow requires using the `secrets:` map,
+      e.g. `secrets: { MY_SECRET: ${{ secrets.MY_SECRET }} }`."
+    patterns:
+      - pattern-inside: |
+          jobs:
+            ...
+      - pattern: "secrets: inherit"
+  - id: yaml.github-actions.security.gha-curl-pipe-shell.gha-curl-pipe-shell
+    languages:
+      - yaml
+    message:
+      A `run:` step pipes the output of `curl` or `wget` directly into a shell
+      interpreter. This is the "curl | bash" install pattern — if the remote server
+      is compromised or the URL is hijacked, an attacker can execute arbitrary code
+      in your CI runner. Consider downloading the file first, verifying its checksum
+      or signature, and then executing it.
+    patterns:
+      - pattern-inside: "steps: [...]"
+      - pattern-inside: |
+          - run: ...
+            ...
+      - pattern: "run: $SHELL"
+      - metavariable-pattern:
+          language: bash
+          metavariable: "$SHELL"
+          patterns:
+            - pattern-either:
+                - pattern: curl ... | $CMD ...
+                - pattern: wget ... | $CMD ...
+            - metavariable-regex:
+                metavariable: "$CMD"
+                regex: "^(bash|sh|python3?|ruby|perl)$"
+    severity: ERROR

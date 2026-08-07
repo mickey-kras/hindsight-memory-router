@@ -33,9 +33,21 @@ describe("CI dependency trust", () => {
     }
   });
 
-  it("pins the Semgrep container by version and digest", () => {
+  it("pins the Semgrep container and uses only the vendored config", () => {
     const source = workflow("ci.yml");
+    const semgrepConfig = readFileSync(join(root, ".semgrep.yml"), "utf8");
     const references = source.match(/semgrep\/semgrep:[^\s"']+/gu) ?? [];
+    const ruleIds = [...semgrepConfig.matchAll(/^\s*-\s+id:\s+(.+)$/gmu)].map(
+      (match) => match[1],
+    );
+    const allowedRulePrefixes = [
+      "javascript.lang.security.",
+      "javascript.node-crypto.security.",
+      "problem-based-packs.insecure-transport.js-node.",
+      "yaml.github-actions.security.",
+      "yaml.docker-compose.security.",
+      "dockerfile.security.",
+    ];
 
     expect(references).not.toHaveLength(0);
     for (const reference of references) {
@@ -43,7 +55,37 @@ describe("CI dependency trust", () => {
         /^semgrep\/semgrep:\d+\.\d+\.\d+@sha256:[a-f0-9]{64}$/u,
       );
     }
+    expect(source).toContain(
+      "semgrep scan --config .semgrep.yml --exclude .semgrep.yml --error",
+    );
     expect(source).not.toContain("semgrep/semgrep:latest");
+    expect(source).not.toMatch(
+      /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
+    );
+    expect(semgrepConfig).toContain(
+      "Curated Semgrep rules for this repository",
+    );
+    expect(semgrepConfig).toContain("rules:");
+    expect(semgrepConfig).not.toMatch(/https?:\/\/semgrep\.dev\/c\//u);
+    expect(ruleIds.length).toBeGreaterThan(0);
+    expect(ruleIds.length).toBeLessThanOrEqual(25);
+    for (const ruleId of ruleIds) {
+      expect(
+        allowedRulePrefixes.some((prefix) => ruleId.startsWith(prefix)),
+      ).toBe(true);
+    }
+  });
+
+  it("keeps ci permissions least-privilege by job", () => {
+    const source = workflow("ci.yml");
+
+    expect(source).toContain("permissions:\n  contents: read\n");
+    expect(source).toContain(
+      "checks:\n    permissions:\n      contents: write\n      pull-requests: read\n",
+    );
+    expect(source).toContain(
+      "aislop:\n    name: aislop status\n    permissions:\n      contents: read\n      security-events: write\n",
+    );
   });
 
   it("does not execute mutable latest references in repository workflows", () => {
@@ -54,6 +96,9 @@ describe("CI dependency trust", () => {
       expect(source).not.toMatch(/\buses:\s+\S+@latest\b/u);
       expect(source).not.toMatch(/\bnpx\b[^\n]*@latest\b/u);
       expect(source).not.toMatch(/\bdocker\s+(?:pull|run)\b[^\n]*:latest\b/u);
+      expect(source).not.toMatch(
+        /--config\s+(?:auto|https?:\/\/|[pr]\/[\w.-]+)/u,
+      );
     }
   });
 });
