@@ -5,17 +5,10 @@ export const DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000;
 const MAX_UPSTREAM_ERROR_BODY_BYTES = 1_024;
 
 export type HindsightGatewayErrorKind =
-  | "timeout"
-  | "http"
-  | "invalid-response"
-  | "network";
+  "timeout" | "http" | "invalid-response" | "network";
 
 type HindsightOperation =
-  | "health"
-  | "version"
-  | "retain"
-  | "recall"
-  | "invalidate_memory";
+  "health" | "version" | "retain" | "recall" | "invalidate_memory";
 
 type HindsightMethod = "GET" | "POST" | "PATCH";
 
@@ -263,10 +256,12 @@ function invalidRecallResponse(): HindsightGatewayError {
 
 async function readBoundedErrorBody(
   response: Response,
-): Promise<Pick<
-  HindsightGatewayErrorContext,
-  "errorBodyBytesRead" | "errorBodyTruncated"
->> {
+): Promise<
+  Pick<
+    HindsightGatewayErrorContext,
+    "errorBodyBytesRead" | "errorBodyTruncated"
+  >
+> {
   if (!response.body) {
     return { errorBodyBytesRead: 0, errorBodyTruncated: false };
   }

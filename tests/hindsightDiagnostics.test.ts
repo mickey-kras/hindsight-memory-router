@@ -32,7 +32,9 @@ describe("Hindsight diagnostics", () => {
       "fetch",
       vi.fn(async () => new Response(upstreamBody, { status: 503 })),
     );
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation(() => true);
     const quarantine = memoryQuarantine();
     const policy = new RouterPolicy({
       registry,
