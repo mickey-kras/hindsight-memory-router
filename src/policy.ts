@@ -1,5 +1,6 @@
 import { sha256Hex } from "./canonicalJson.js";
 import {
+  hindsightGatewayErrorDetails,
   HindsightGatewayError,
   type HindsightGateway,
 } from "./hindsightClient.js";
@@ -58,18 +59,6 @@ function isQuarantineUnavailable(error: unknown): error is HttpError {
 
 function quarantineErrorDetails(error: HttpError): Record<string, unknown> {
   return { status: error.status, code: error.code };
-}
-
-function gatewayErrorDetails(
-  error: HindsightGatewayError,
-): Record<string, unknown> {
-  return {
-    error_kind: error.kind,
-    status: error.status,
-    ...(error.upstreamStatus === undefined
-      ? {}
-      : { upstream_status: error.upstreamStatus }),
-  };
 }
 
 export class RouterPolicy {
@@ -221,7 +210,7 @@ export class RouterPolicy {
       this.logRecallDegradation("bank_unavailable", {
         writer_id: writerId,
         bank_id: readBanks[index],
-        ...gatewayErrorDetails(outcome.reason),
+        ...hindsightGatewayErrorDetails(outcome.reason),
       });
     }
     return responses;
