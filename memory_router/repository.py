@@ -141,7 +141,7 @@ class QuarantineRepository:
         return stored(row)
 
     async def _insert(self, tx: Tx, item: dict[str, Any]) -> None:
-        envelope = json.dumps(item["encrypted"], separators=(",", ":"))
+        envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         await tx.execute(
             """INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             _params(item, envelope),
@@ -155,7 +155,7 @@ class QuarantineRepository:
         )
 
     async def _refresh(self, tx: Tx, quarantine_id: str, item: dict[str, Any], count: int) -> None:
-        envelope = json.dumps(item["encrypted"], separators=(",", ":"))
+        envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         params = _params(item, envelope)
         await tx.execute(
             """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,expires_at=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1 WHERE quarantine_id=?""",
@@ -198,7 +198,9 @@ class QuarantineRepository:
         )
         next_pending = int(totals.get("pending_count") or 0) - int(existing_pending) + 1
         existing_bytes = int(existing_live.get("encrypted_bytes") or 0) if existing_live else 0
-        item_bytes = len(json.dumps(item["encrypted"], separators=(",", ":")).encode())
+        item_bytes = len(
+            json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
         next_bytes = int(totals.get("encrypted_bytes") or 0) - existing_bytes + item_bytes
         if next_pending > capacity.max_pending_items or next_bytes > capacity.max_encrypted_bytes:
             raise HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted")
@@ -218,9 +220,15 @@ async def _scoped_pending_count(tx: Tx, item: dict[str, Any], at: str) -> int:
     if item.get("reason") == "unknown_writer":
         row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "reason='unknown_writer'", (at,))
     elif item.get("writer_id") is not None:
-        row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "writer_id=?", (at, item["writer_id"]))
+        row = await tx.fetchone(
+            _PENDING_SCOPE_PREFIX + "reason <> 'unknown_writer' AND writer_id=?",
+            (at, item["writer_id"]),
+        )
     else:
-        row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "kind=?", (at, item["kind"]))
+        row = await tx.fetchone(
+            _PENDING_SCOPE_PREFIX + "reason <> 'unknown_writer' AND writer_id IS NULL AND kind=?",
+            (at, item["kind"]),
+        )
     return int((row or {}).get("count") or 0)
 
 
@@ -239,7 +247,7 @@ def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
         item.get("dedupe_key"),
         item["sha256"],
         envelope,
-        len(envelope.encode()),
+        len(envelope.encode("utf-8")),
         item["status"],
         item["postpone_count"],
         item.get("requarantine_count", 0),
