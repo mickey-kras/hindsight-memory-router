@@ -12,9 +12,9 @@ Credentials intentionally have no shared defaults. With no router token configur
 
 ## Registry
 
-If `MEMORY_ROUTER_REGISTRY` is absent, the built-in registry is used. Its writers are framework-neutral and use `source: application`.
+If `MEMORY_ROUTER_REGISTRY` is absent, the built-in registry contains one framework-neutral writer named `main`. It reads and writes only the `main` bank and uses `source: application`.
 
-Set `MEMORY_ROUTER_REGISTRY` only when you need a custom writer-to-bank policy.
+Set `MEMORY_ROUTER_REGISTRY` only when you need additional writers or a richer writer-to-bank policy. `writer_registry.example.json` shows the default minimal shape and can be extended for custom deployments.
 
 ## Storage
 
