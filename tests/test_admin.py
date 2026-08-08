@@ -50,6 +50,7 @@ def exact_item(
         "status": "pending",
         "postpone_count": 0,
         "encrypted": {"v": 1},
+        "encrypted_bytes": 123,
         "sha256": sha256_hex(canonical_decrypted(decrypted)),
     }
     item.pop("payload")
@@ -92,7 +93,7 @@ async def test_list_read_stats_and_require_reviewable() -> None:
     assert (
         "encrypted" in read
         and "encrypted" not in read["record"]
-        and "encrypted_bytes" not in read["record"]
+        and read["record"]["encrypted_bytes"] == 123
     )
     stats = await svc.stats()
     assert stats["event_count"] == 6 and "expired_items" not in stats
