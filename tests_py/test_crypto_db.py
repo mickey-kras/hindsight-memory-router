@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -65,7 +66,7 @@ def test_authenticated_metadata_tampering_fails() -> None:
     public, private = keypair()
     envelope = create_envelope(decrypted(), public)
     envelope["reason"] = "unknown_writer"
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidTag):
         decrypt_envelope(envelope, private)
 
 
