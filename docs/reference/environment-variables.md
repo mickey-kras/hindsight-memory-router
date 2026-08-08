@@ -17,7 +17,7 @@ All tuning/deployment values below have built-in defaults. Environment variables
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX` |                          `30` | Admin write requests/window                                     |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS` |                       `60000` | Admin rate-limit window                                         |
 | `MEMORY_ROUTER_MAX_BODY_BYTES`             |                     `1048576` | Maximum JSON request body                                       |
-| `MEMORY_ROUTER_REGISTRY`                   |      `main` -> `main` registry | Optional registry JSON path                                     |
+| `MEMORY_ROUTER_REGISTRY`                   |     `main` -> `main` registry | Optional registry JSON path                                     |
 | `HINDSIGHT_BASE_URL`                       |       `http://hindsight:8888` | Hindsight endpoint                                              |
 | `HINDSIGHT_API_KEY`                        |                          none | Optional Hindsight API key                                      |
 | `HINDSIGHT_TIMEOUT_MS`                     |                       `10000` | Hindsight request timeout                                       |
@@ -41,7 +41,7 @@ All tuning/deployment values below have built-in defaults. Environment variables
 | `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`         |                         `300` | Global quarantine writes/window                                 |
 | `QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX`     |                          `10` | Distinct request families per writer/window                     |
 | `QUARANTINE_REQUARANTINE_OPS_MAX`          |                        `1000` | Requarantine operations/window                                  |
-| `QUARANTINE_RATE_LIMIT_WINDOW_MS`           |                       `60000` | Quarantine rate-limit window                                    |
+| `QUARANTINE_RATE_LIMIT_WINDOW_MS`          |                       `60000` | Quarantine rate-limit window                                    |
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
