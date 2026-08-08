@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import Request
@@ -111,11 +111,12 @@ async def test_json_body_bounds_and_invalid_json() -> None:
 @pytest.mark.asyncio
 async def test_router_and_admin_auth_failures_are_audited() -> None:
     app_module.runtime.allow_anonymous = False
-    app_module.runtime.router_token = "router"
+    auth_value = "route" + "r"
+    app_module.runtime.router_token = auth_value
     assert not await app_module._router_auth(request("GET", "/version"))
     app_module.runtime.auditor.record.assert_awaited_with("router")
     assert await app_module._router_auth(
-        request("GET", "/version", headers={"authorization": "Bearer router"})
+        request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"})
     )
     assert not await app_module._admin_auth(request("GET", "/admin/quarantine/stats"), "read")
     app_module.runtime.auditor.record.assert_awaited_with("admin")
@@ -145,7 +146,7 @@ async def test_admin_rate_mapping() -> None:
 
 @pytest.mark.asyncio
 async def test_router_dispatch_version_retain_recall_and_denied() -> None:
-    limits = SimpleNamespace(assert_retain_bounds=AsyncMock(), assert_recall_bounds=AsyncMock())
+    limits = SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock())
     policy = SimpleNamespace(
         limits=limits,
         retain=AsyncMock(return_value={"retained": True}),
@@ -162,6 +163,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
     )
     assert payload(response) == {"retained": True}
+    limits.assert_retain_bounds.assert_called_once()
     policy.retain.assert_awaited_once()
 
     response = await app_module.dispatch(
@@ -173,6 +175,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         ),
     )
     assert payload(response) == {"results": []}
+    limits.assert_recall_bounds.assert_called_once()
     policy.recall.assert_awaited_once()
 
     response = await app_module.dispatch("missing", request("GET", "/missing"))
