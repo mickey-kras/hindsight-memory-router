@@ -155,4 +155,4 @@ def _cleanup_query(select: str, where: str, *, for_update: bool = False) -> str:
     # `select` and `where` are assembled only from this module's fixed SQL fragments and generated
     # placeholders; all user-provided values remain bound parameters.
     suffix = " FOR UPDATE" if for_update else ""
-    return f"SELECT {select} FROM quarantine_items WHERE {where}{suffix}"  # noqa: S608
+    return f"SELECT {select} FROM quarantine_items WHERE {where}{suffix}"  # nosec B608  # noqa: S608
