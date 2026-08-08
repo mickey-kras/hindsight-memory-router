@@ -5,12 +5,6 @@
       "source": "application",
       "write_bank": "main",
       "read_banks": ["main"]
-    },
-    "research": {
-      "role": "research",
-      "source": "application",
-      "write_bank": "research",
-      "read_banks": ["research", "core"]
     }
   },
   "defaults": {
