@@ -5,7 +5,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import Request
 from pydantic import ValidationError
 
 from memory_router import app as app_module
@@ -15,28 +14,7 @@ from memory_router.models import RecallResponse
 from memory_router.rate_limit import InMemoryRateLimiter
 from memory_router.security import scan_content
 from memory_router.validation import parse_recall_body, parse_retain_body
-
-
-def _request(method: str, path: str, body: object | None = None) -> Request:
-    raw = b"" if body is None else json.dumps(body).encode()
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": path,
-        "raw_path": path.encode(),
-        "headers": [],
-        "query_string": b"",
-    }
-    sent = False
-
-    async def receive() -> dict[str, object]:
-        nonlocal sent
-        if sent:
-            return {"type": "http.disconnect"}
-        sent = True
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    return Request(scope, receive)
+from tests.request_helpers import request
 
 
 def _payload(response: object) -> object:
@@ -110,12 +88,12 @@ async def test_dispatch_auth_precedes_malformed_path_fallback() -> None:
         app_module.runtime.policy = SimpleNamespace(
             deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
         )
-        response = await app_module.dispatch("unused", _request("GET", "/bad%ZZ"))
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
         assert response.status_code == 401
 
         app_module.runtime.router_token = None
         app_module.runtime.allow_anonymous = True
-        response = await app_module.dispatch("unused", _request("GET", "/bad%ZZ"))
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
         assert response.status_code == 404
         app_module.runtime.policy.deny_endpoint.assert_awaited_with("GET", "/bad%ZZ")
     finally:
@@ -136,7 +114,7 @@ async def test_dot_segments_and_trace_reach_normalized_deny_endpoint() -> None:
             deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
         )
         app_module.runtime.policy = policy
-        response = await app_module.dispatch("unused", _request("TRACE", "/a/../blocked"))
+        response = await app_module.dispatch("unused", request("TRACE", "/a/../blocked"))
         assert response.status_code == 404
         policy.deny_endpoint.assert_awaited_with("TRACE", "/blocked")
     finally:
