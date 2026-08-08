@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 
+from memory_router import __main__ as main_module
 from memory_router import app as app_module
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.key_bootstrap import bootstrap_keys
@@ -211,6 +212,23 @@ def test_app_scope_and_now() -> None:
     assert app_module._scope("POST", "/admin/quarantine/cleanup") == "cleanup"
     assert app_module._scope("POST", "/x") == "review"
     assert app_module._now().endswith("Z")
+
+
+def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_PORT", "8891")
+    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def fake_run(*args: object, **kwargs: object) -> None:
+        calls.append((args, kwargs))
+
+    monkeypatch.setattr(main_module.uvicorn, "run", fake_run)
+    main_module.main()
+    assert calls == [
+        (
+            ("memory_router.app:app",),
+            {"host": "0.0.0.0", "port": 8891, "access_log": False},
+        )
+    ]
 
 
 @pytest.mark.asyncio
