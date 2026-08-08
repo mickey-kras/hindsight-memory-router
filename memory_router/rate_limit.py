@@ -11,6 +11,7 @@ from .errors import HttpError
 T = TypeVar("T")
 Bucket = tuple[str, int, int]
 Distinct = tuple[str, str, int, int]
+_SWEEP_EVERY = 128
 
 
 def rate_limited() -> HttpError:
@@ -20,9 +21,12 @@ def rate_limited() -> HttpError:
 class InMemoryRateLimiter:
     def __init__(self) -> None:
         self.events: dict[str, deque[int]] = defaultdict(deque)
+        self.event_windows: dict[str, int] = {}
         self.distinct: dict[str, dict[str, int]] = defaultdict(dict)
+        self.distinct_windows: dict[str, int] = {}
         self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
+        self.consume_count = 0
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -32,10 +36,14 @@ class InMemoryRateLimiter:
     ) -> None:
         now = at_ms if at_ms is not None else int(time.time() * 1000)
         async with self.guard:
+            self.consume_count += 1
+            if self.consume_count % _SWEEP_EVERY == 0:
+                self._sweep_stale(now)
             live: list[tuple[str, deque[int]]] = []
             for key, maximum, window in buckets:
                 if maximum <= 0 or window <= 0:
                     continue
+                self.event_windows[key] = window
                 queue = self.events[key]
                 cutoff = now - window
                 while queue and queue[0] <= cutoff:
@@ -47,6 +55,7 @@ class InMemoryRateLimiter:
             for scope, identity, maximum, window in identities:
                 if maximum <= 0 or window <= 0:
                     continue
+                self.distinct_windows[scope] = window
                 cutoff = now - window
                 current = self.distinct[scope]
                 for key, timestamp in list(current.items()):
@@ -62,12 +71,35 @@ class InMemoryRateLimiter:
             for scope, identity, maximum, window in identities:
                 if maximum > 0 and window > 0:
                     self.distinct[scope][identity] = now
-            for key, queue in list(self.events.items()):
-                if not queue:
-                    self.events.pop(key, None)
-            for scope, values in list(self.distinct.items()):
-                if not values:
-                    self.distinct.pop(scope, None)
+            self._drop_empty()
+
+    def _sweep_stale(self, now: int) -> None:
+        for key, queue in list(self.events.items()):
+            window = self.event_windows.get(key)
+            if window is None:
+                continue
+            cutoff = now - window
+            while queue and queue[0] <= cutoff:
+                queue.popleft()
+        for scope, values in list(self.distinct.items()):
+            window = self.distinct_windows.get(scope)
+            if window is None:
+                continue
+            cutoff = now - window
+            for identity, timestamp in list(values.items()):
+                if timestamp <= cutoff:
+                    del values[identity]
+        self._drop_empty()
+
+    def _drop_empty(self) -> None:
+        for key, queue in list(self.events.items()):
+            if not queue:
+                self.events.pop(key, None)
+                self.event_windows.pop(key, None)
+        for scope, values in list(self.distinct.items()):
+            if not values:
+                self.distinct.pop(scope, None)
+                self.distinct_windows.pop(scope, None)
 
     async def with_identity_lock(
         self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
