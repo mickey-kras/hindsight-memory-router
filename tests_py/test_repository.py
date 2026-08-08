@@ -167,7 +167,7 @@ async def test_capacity_global_bytes_writer_and_expired_replacement(
         )
     assert bytes_cap.value.code == "quarantine_capacity_exceeded"
 
-    expired = item("expired", writer="w", expires="2025-01-01T00:00:00.000Z")
+    expired = item("expired", writer="expired-w", expires="2025-01-01T00:00:00.000Z")
     await repository.store(expired, roomy, mode="id", at="2024-01-01T00:00:00.000Z")
     await repository.store(
         expired, Capacity(2, 1, 100_000), mode="id", at="2026-01-01T00:00:00.000Z"
