@@ -112,6 +112,8 @@ async def test_dispatch_auth_precedes_malformed_path_fallback() -> None:
         )
         response = await app_module.dispatch("unused", _request("GET", "/bad%ZZ"))
         assert response.status_code == 401
+
+        app_module.runtime.router_token = None
         app_module.runtime.allow_anonymous = True
         response = await app_module.dispatch("unused", _request("GET", "/bad%ZZ"))
         assert response.status_code == 404
