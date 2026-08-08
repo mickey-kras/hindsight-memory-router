@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
@@ -30,8 +30,15 @@ class MemoryItem(PassthroughModel):
 
 class RetainBody(PassthroughModel):
     items: list[MemoryItem] = Field(min_length=1)
-    async_: StrictBool = Field(default=False, alias="async")
-    document_tags: list[str] = Field(default_factory=list)
+    async_: StrictBool | None = Field(default=None, alias="async")
+    document_tags: list[str] | None = None
+
+    @field_validator("async_", "document_tags", mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("null is not allowed")
+        return value
 
 
 class RecallBody(PassthroughModel):
@@ -50,6 +57,13 @@ class RecallBody(PassthroughModel):
             raise ValueError("empty")
         return value
 
+    @field_validator("max_tokens", "budget", "tags_match", "trace", mode="before")
+    @classmethod
+    def reject_explicit_null(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("null is not allowed")
+        return value
+
 
 class RecallResult(PassthroughModel):
     id: str
@@ -58,10 +72,10 @@ class RecallResult(PassthroughModel):
 
 class RecallResponse(PassthroughModel):
     results: list[RecallResult]
-    chunks: dict[str, object] | None = None
-    entities: dict[str, object] | None = None
-    source_facts: dict[str, object] | None = None
-    trace: dict[str, object] | None = None
+    chunks: dict[str, Any] | None = None
+    entities: dict[str, Any] | None = None
+    source_facts: dict[str, Any] | None = None
+    trace: dict[str, Any] | None = None
 
 
 class WriterRule(PassthroughModel):
