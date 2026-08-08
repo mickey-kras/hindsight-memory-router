@@ -38,20 +38,11 @@ jobs:
       - run: python -m pip install -r requirements.lock
       - run: python -m pip install -e '.[dev]'
 
-      - name: Generate Python runtime lock
-        run: >-
-          pip-compile --generate-hashes --strip-extras --no-header --no-annotate
-          --output-file requirements.generated.lock pyproject.toml
-
-      - name: Upload generated Python runtime lock
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: python-runtime-lock
-          path: requirements.generated.lock
-          if-no-files-found: error
-
       - name: Python runtime lock is current
-        run: diff -u requirements.lock requirements.generated.lock
+        run: |
+          pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
+            --output-file requirements.generated.lock pyproject.toml
+          diff -u requirements.lock requirements.generated.lock
 
       - run: npm ci
 
