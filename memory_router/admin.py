@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import hmac
-import re
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any, cast
 
 from .canonical import sha256_hex
-from .envelope import canonical_decrypted, parse_decrypted
+from .envelope import QUARANTINE_ID_RE, canonical_decrypted, parse_decrypted
 from .errors import HttpError
 from .maintenance import cleanup, preview_cleanup
 from .review_repository import (
@@ -18,13 +17,8 @@ from .review_repository import (
     postpone,
     remove,
 )
+from .timestamps import iso_now
 from .validation import parse_retain_body
-
-_QID = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
-
-
-def iso_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 class QuarantineAdminService:
@@ -211,7 +205,7 @@ class QuarantineAdminService:
         return {"dry_run": False, **result}
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
-        if not _QID.fullmatch(quarantine_id):
+        if not QUARANTINE_ID_RE.fullmatch(quarantine_id):
             raise HttpError(400, "invalid_quarantine_id", "invalid quarantine_id")
         item = await self.repository.get(quarantine_id)
         if item is None:
