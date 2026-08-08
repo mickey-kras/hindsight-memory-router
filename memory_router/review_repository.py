@@ -89,7 +89,7 @@ async def interrupt_review(
             "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
             (status, at, claimed["quarantine_id"]),
         )
-        error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unexpected"
+        error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unknown"
         await insert_event(
             tx,
             claimed["quarantine_id"],
