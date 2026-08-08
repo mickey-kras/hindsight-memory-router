@@ -10,9 +10,7 @@ from memory_router.hindsight import HindsightGateway
 from memory_router.observability import RequestIdMiddleware, current_request_id
 
 
-async def _respond_with_request_id(
-    scope: dict[str, Any], receive: Any, send: Any
-) -> None:
+async def _respond_with_request_id(scope: dict[str, Any], receive: Any, send: Any) -> None:
     del scope, receive
     value = current_request_id()
     assert value is not None
