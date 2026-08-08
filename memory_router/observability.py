@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
-from typing import Any
+
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _REQUEST_ID = ContextVar[str | None]("memory_router_request_id", default=None)
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -15,7 +15,7 @@ def current_request_id() -> str | None:
     return _REQUEST_ID.get()
 
 
-def _resolve_request_id(scope: dict[str, Any]) -> str:
+def _resolve_request_id(scope: Scope) -> str:
     for name, value in scope.get("headers", []):
         if name.lower() != _HEADER:
             continue
@@ -30,15 +30,10 @@ def _resolve_request_id(scope: dict[str, Any]) -> str:
 
 
 class RequestIdMiddleware:
-    def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(
-        self,
-        scope: dict[str, Any],
-        receive: Callable[..., Awaitable[dict[str, Any]]],
-        send: Callable[[dict[str, Any]], Awaitable[None]],
-    ) -> None:
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
@@ -46,7 +41,7 @@ class RequestIdMiddleware:
         request_id = _resolve_request_id(scope)
         token: Token[str | None] = _REQUEST_ID.set(request_id)
 
-        async def send_with_request_id(message: dict[str, Any]) -> None:
+        async def send_with_request_id(message: Message) -> None:
             if message.get("type") == "http.response.start":
                 headers = list(message.get("headers", []))
                 headers.append((_HEADER, request_id.encode("ascii")))
