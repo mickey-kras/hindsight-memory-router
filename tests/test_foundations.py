@@ -9,7 +9,7 @@ import pytest
 
 from memory_router import auth, config, dedupe, validation
 from memory_router.errors import HttpError
-from memory_router.limits import HindsightLimitConfig, HindsightLimits, InMemorySlidingWindow
+from memory_router.limits import HindsightLimitConfig, HindsightLimits
 from memory_router.rate_limit import InMemoryRateLimiter, PostgresRateLimiter, _PostgresSession
 
 
@@ -274,7 +274,7 @@ def test_hindsight_bounds() -> None:
         max_recall_query_bytes=3,
         max_recall_max_tokens=2,
     )
-    limits = HindsightLimits(cfg, InMemorySlidingWindow())
+    limits = HindsightLimits(cfg, InMemoryRateLimiter())
     limits.assert_retain_bounds({"items": [{"content": "1234"}]})
     with pytest.raises(HttpError) as too_many:
         limits.assert_retain_bounds({"items": [{"content": "a"}, {"content": "b"}]})
@@ -293,7 +293,7 @@ def test_hindsight_bounds() -> None:
 
 @pytest.mark.asyncio
 async def test_hindsight_quota_buckets_and_mapping() -> None:
-    limiter = InMemorySlidingWindow()
+    limiter = InMemoryRateLimiter()
     cfg = HindsightLimitConfig(
         retain_writer_max=1,
         retain_global_max=2,
@@ -319,7 +319,7 @@ async def test_hindsight_quota_buckets_and_mapping() -> None:
 
 @pytest.mark.asyncio
 async def test_in_memory_sliding_window_expiry_and_disabled_buckets() -> None:
-    limiter = InMemorySlidingWindow()
+    limiter = InMemoryRateLimiter()
     await limiter.consume_many([("off", 0, 1), ("x", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
         await limiter.consume_many([("x", 1, 10)], at_ms=10)
