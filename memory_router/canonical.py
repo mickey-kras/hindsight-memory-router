@@ -23,26 +23,28 @@ def canonical_json(value: Any) -> str:
 
 
 def _rfc8785_safe(value: Any) -> Any:
-    if value is None or isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        value.encode("utf-8", errors="strict")
-        return value
-    if isinstance(value, int):
-        if not -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER:
-            raise ValueError("non-finite JSON number")
-        return value
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("non-finite JSON number")
-        return value
-    if isinstance(value, list):
-        return [_rfc8785_safe(entry) for entry in value]
-    if isinstance(value, dict):
-        if any(not isinstance(key, str) for key in value):
+    match value:
+        case None | bool():
+            return value
+        case str():
+            value.encode("utf-8", errors="strict")
+            return value
+        case int():
+            if not -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER:
+                raise ValueError("non-finite JSON number")
+            return value
+        case float():
+            if not math.isfinite(value):
+                raise ValueError("non-finite JSON number")
+            return value
+        case list():
+            return [_rfc8785_safe(entry) for entry in value]
+        case dict():
+            if any(not isinstance(key, str) for key in value):
+                raise ValueError("value must contain JSON values only")
+            return {key: _rfc8785_safe(entry) for key, entry in value.items()}
+        case _:
             raise ValueError("value must contain JSON values only")
-        return {key: _rfc8785_safe(entry) for key, entry in value.items()}
-    raise ValueError("value must contain JSON values only")
 
 
 def sha256_hex(value: str) -> str:
