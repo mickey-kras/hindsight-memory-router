@@ -11,15 +11,8 @@ RUN apk upgrade --no-cache \
 
 COPY requirements.lock ./
 RUN python -m pip install --no-cache-dir --disable-pip-version-check --upgrade pip==26.2.1 \
-    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock
-
-# Temporary image-inventory diagnostics for PR #105; remove after the stale Trivy source is identified.
-RUN python -c 'import msgpack; print(msgpack.__version__, msgpack.__file__)' \
-    && python -c 'import setuptools; print(setuptools.__version__, setuptools.__file__)' \
-    && python -m pip show msgpack setuptools \
-    && python -m pip list \
-    && find /usr/local/lib/python3.12 -type f \( -name '*.spdx' -o -name '*.spdx.json' -o -name '*.cdx' -o -name '*.cdx.json' \) -print \
-    && (grep -RInE 'msgpack.{0,80}1\.1\.2|1\.1\.2.{0,80}msgpack|setuptools.{0,80}70\.3\.0|70\.3\.0.{0,80}setuptools' /usr/local/lib/python3.12 || true)
+    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock \
+    && python -m pip uninstall --yes pip
 
 COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
