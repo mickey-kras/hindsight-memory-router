@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Awaitable, Callable
 from contextvars import ContextVar, Token
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 _REQUEST_ID = ContextVar[str | None]("memory_router_request_id", default=None)
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
