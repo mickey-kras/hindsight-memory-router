@@ -35,7 +35,9 @@ async def preview_cleanup(
     async with repository.db.transaction() as tx:
         row = (
             await tx.fetchone(
-                f"SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes FROM quarantine_items WHERE {where}",
+                _cleanup_query(
+                    "COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes", where
+                ),
                 params,
             )
             or {}
@@ -56,9 +58,12 @@ async def cleanup(
 ) -> dict[str, int]:
     where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
         rows = await tx.fetchall(
-            f"SELECT quarantine_id, encrypted_bytes FROM quarantine_items WHERE {where}{suffix}",
+            _cleanup_query(
+                "quarantine_id, encrypted_bytes",
+                where,
+                for_update=tx.dialect == "postgres",
+            ),
             params,
         )
         if len(rows) != expected_count:
@@ -144,3 +149,10 @@ def cleanup_params(
         clauses.append("created_at < ?")
         params.append(older_than)
     return " AND ".join(clauses), params
+
+
+def _cleanup_query(select: str, where: str, *, for_update: bool = False) -> str:
+    # `select` and `where` are assembled only from this module's fixed SQL fragments and generated
+    # placeholders; all user-provided values remain bound parameters.
+    suffix = " FOR UPDATE" if for_update else ""
+    return f"SELECT {select} FROM quarantine_items WHERE {where}{suffix}"  # noqa: S608
