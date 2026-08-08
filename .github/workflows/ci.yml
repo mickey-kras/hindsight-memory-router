@@ -54,7 +54,7 @@ jobs:
             exit 1
           fi
 
-      - run: ruff format --check memory_router tests
+      - run: ruff format --diff memory_router tests
       - run: ruff check memory_router tests
       - run: mypy memory_router
 
