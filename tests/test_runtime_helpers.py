@@ -252,6 +252,83 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://db")
+    monkeypatch.setenv("QUARANTINE_SWEEP_INTERVAL_SECONDS", "0")
+    monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
+    monkeypatch.setattr(app_module, "assert_auth_environment", lambda: None)
+
+    primary_db = SimpleNamespace()
+    create_database = AsyncMock(return_value=primary_db)
+    validate_storage = AsyncMock()
+    recover_interrupted = AsyncMock()
+    repository = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(app_module, "create_database", create_database)
+    monkeypatch.setattr(app_module, "validate_storage", validate_storage)
+    monkeypatch.setattr(app_module, "recover_interrupted", recover_interrupted)
+    monkeypatch.setattr(app_module, "QuarantineRepository", lambda database: repository)
+
+    rate_db = SimpleNamespace(initialize=AsyncMock(), close=AsyncMock())
+    postgres_database_calls: list[tuple[str, int]] = []
+
+    def postgres_database(database_url: str, *, max_size: int = 5) -> object:
+        postgres_database_calls.append((database_url, max_size))
+        return rate_db
+
+    rate_limiter = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(app_module, "PostgresDatabase", postgres_database)
+    monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda database: rate_limiter)
+
+    store = object()
+    hindsight = SimpleNamespace(close=AsyncMock())
+    registry = object()
+    hindsight_limits = object()
+    policy = object()
+    admin = object()
+    auditor = object()
+    hindsight_limiter_calls: list[object] = []
+
+    monkeypatch.setattr(app_module, "QuarantineStore", lambda *args: store)
+    monkeypatch.setattr(app_module, "HindsightGateway", lambda *args: hindsight)
+    monkeypatch.setattr(app_module, "load_registry", lambda path: registry)
+
+    def make_hindsight_limits(config: object, limiter: object) -> object:
+        hindsight_limiter_calls.append(limiter)
+        return hindsight_limits
+
+    monkeypatch.setattr(app_module, "HindsightLimits", make_hindsight_limits)
+    monkeypatch.setattr(app_module, "RouterPolicy", lambda *args: policy)
+    monkeypatch.setattr(app_module, "QuarantineAdminService", lambda *args: admin)
+    monkeypatch.setattr(app_module, "AuthFailureAuditor", lambda value: auditor)
+
+    runtime = app_module.Runtime()
+    await runtime.start()
+
+    create_database.assert_awaited_once_with("postgresql://db")
+    validate_storage.assert_awaited_once_with(primary_db, "postgresql://db")
+    recover_interrupted.assert_awaited_once()
+    assert postgres_database_calls == [("postgresql://db", 2)]
+    rate_db.initialize.assert_awaited_once()
+    rate_limiter.initialize.assert_awaited_once()
+    assert runtime.database is primary_db
+    assert runtime.rate_limit_database is rate_db
+    assert runtime.quarantine_limiter is rate_limiter
+    assert hindsight_limiter_calls == [rate_limiter]
+    assert runtime.hindsight is hindsight
+    assert runtime.policy is policy
+    assert runtime.admin is admin
+    assert runtime.auditor is auditor
+    assert runtime.sweeper is None
+
+    await runtime.stop()
+    hindsight.close.assert_awaited_once()
+    rate_db.close.assert_awaited_once()
+    repository.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_runtime_stop_and_sweep(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
