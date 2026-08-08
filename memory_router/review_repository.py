@@ -4,8 +4,10 @@ from datetime import datetime
 from typing import Any
 
 from .errors import HttpError
+from .hindsight import HindsightGatewayError
 from .repository import QuarantineRepository, insert_event, stored
 
+_REVIEW_STALE_SECONDS = 60
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
@@ -14,6 +16,15 @@ _SELECT_IN_PROGRESS_FOR_UPDATE = _SELECT_IN_PROGRESS + " FOR UPDATE"
 
 def _item_query(tx: Any) -> str:
     return _SELECT_ITEM_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_ITEM
+
+
+def _stale(updated_at: str, at: str, stale_seconds: int = _REVIEW_STALE_SECONDS) -> bool:
+    try:
+        updated = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+        current = datetime.fromisoformat(at.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (current - updated).total_seconds() >= stale_seconds
 
 
 async def postpone(repository: QuarantineRepository, quarantine_id: str, at: str) -> dict[str, Any]:
@@ -48,6 +59,9 @@ async def claim_review(
         item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+        if item["status"] == "review_in_progress" and _stale(str(item["updated_at"]), at):
+            await _restore_stale_claim(tx, item, at)
+            item = {**item, "status": "postponed", "updated_at": at}
         if item["status"] not in {"pending", "postponed"}:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
@@ -68,16 +82,20 @@ async def interrupt_review(
         current = stored(await tx.fetchone(_item_query(tx), (claimed["quarantine_id"],)))
         if not current or current["status"] != "review_in_progress" or current["updated_at"] != at:
             return
+        status = str(claimed["status"])
+        if status not in {"pending", "postponed"}:
+            raise RuntimeError(f"cannot restore review to {status}")
         await tx.execute(
             "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
-            (claimed["status"], at, claimed["quarantine_id"]),
+            (status, at, claimed["quarantine_id"]),
         )
+        error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unexpected"
         await insert_event(
             tx,
             claimed["quarantine_id"],
             "review_interrupted",
             at,
-            {"outcome": claimed["status"], "error": type(error).__name__},
+            {"outcome": "restored", "status": status, "error_kind": error_kind},
         )
 
 
@@ -112,27 +130,29 @@ async def remove(
 
 
 async def recover_interrupted(
-    repository: QuarantineRepository, at: str, stale_seconds: int = 300
+    repository: QuarantineRepository, at: str, stale_seconds: int = _REVIEW_STALE_SECONDS
 ) -> None:
-    now = datetime.fromisoformat(at.replace("Z", "+00:00"))
     async with repository.db.transaction() as tx:
         query = _SELECT_IN_PROGRESS_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_IN_PROGRESS
         rows = await tx.fetchall(query)
         for row in rows:
-            updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))
-            if (now - updated).total_seconds() < stale_seconds:
+            if not _stale(str(row["updated_at"]), at, stale_seconds):
                 continue
-            await tx.execute(
-                "UPDATE quarantine_items SET status='postponed',updated_at=? WHERE quarantine_id=? AND status='review_in_progress'",
-                (at, row["quarantine_id"]),
-            )
-            await insert_event(
-                tx,
-                row["quarantine_id"],
-                "review_interrupted",
-                at,
-                {"outcome": "postponed", "recovered": True},
-            )
+            await _restore_stale_claim(tx, row, at)
+
+
+async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
+    await tx.execute(
+        "UPDATE quarantine_items SET status='postponed',updated_at=? WHERE quarantine_id=? AND status='review_in_progress'",
+        (at, item["quarantine_id"]),
+    )
+    await insert_event(
+        tx,
+        item["quarantine_id"],
+        "review_interrupted",
+        at,
+        {"outcome": "postponed", "recovered": True},
+    )
 
 
 async def require_reviewable(tx: Any, quarantine_id: str) -> dict[str, Any]:
