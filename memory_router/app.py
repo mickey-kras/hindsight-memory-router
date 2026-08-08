@@ -43,6 +43,7 @@ from .review_repository import recover_interrupted
 from .validation import parse_recall_body, parse_retain_body
 
 _PERCENT_DOT = re.compile(r"%2e", re.I)
+_INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def _now() -> str:
@@ -94,6 +95,12 @@ def _normalize_dot_segments(path: str) -> str:
 
 
 def _decode_path_segment(value: str) -> str:
+    if _INVALID_PERCENT.search(value):
+        raise HttpError(
+            400,
+            "invalid_path_encoding",
+            "path segment contains malformed percent-encoding",
+        )
     try:
         return unquote(value, encoding="utf-8", errors="strict")
     except (UnicodeDecodeError, ValueError) as exc:
