@@ -81,13 +81,12 @@ class InMemoryRateLimiter:
         finally:
             async with self.guard:
                 current = self.locks.get(identity)
-                if current is None or current[0] is not lock:
-                    return
-                remaining = current[1] - 1
-                if remaining == 0:
-                    self.locks.pop(identity, None)
-                else:
-                    self.locks[identity] = (lock, remaining)
+                if current is not None and current[0] is lock:
+                    remaining = current[1] - 1
+                    if remaining == 0:
+                        self.locks.pop(identity, None)
+                    else:
+                        self.locks[identity] = (lock, remaining)
 
 
 class _PostgresSession:
