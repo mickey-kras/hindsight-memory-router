@@ -41,10 +41,14 @@ async def import_legacy_quarantine(
     key_text: str,
 ) -> dict[str, int]:
     key = decode_private_key(key_text)
-    public_key = key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_key = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     records = _parse_queue(queue_path.read_text(encoding="utf-8"))
     summary = {
         "imported": 0,
