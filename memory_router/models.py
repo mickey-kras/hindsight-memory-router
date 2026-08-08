@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
 BankId = Literal["core", "main", "personal", "dev", "creative", "ops", "research"]
 
 
 class PassthroughModel(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", strict=True)
 
 
 class MemoryItem(PassthroughModel):
@@ -36,7 +36,7 @@ class RetainBody(PassthroughModel):
 
 class RecallBody(PassthroughModel):
     query: str
-    max_tokens: int | None = Field(default=None, gt=0)
+    max_tokens: StrictInt | None = Field(default=None, gt=0)
     budget: Literal["low", "mid", "high"] | None = None
     types: list[str] | None = None
     tags: list[str] | None = None
@@ -55,7 +55,7 @@ class RecallResult(PassthroughModel):
     id: str
     text: str
     type: str | None = None
-    metadata: dict[str, str] | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class RecallResponse(PassthroughModel):
@@ -67,8 +67,8 @@ class RecallResponse(PassthroughModel):
 
 
 class WriterRule(PassthroughModel):
-    role: str
-    source: str
+    role: str = Field(min_length=1)
+    source: str = Field(min_length=1)
     write_bank: BankId
     read_banks: list[BankId]
 
