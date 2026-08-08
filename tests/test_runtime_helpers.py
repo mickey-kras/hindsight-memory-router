@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from pytest_httpx import HTTPXMock
 
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
@@ -22,80 +23,70 @@ from memory_router.maintenance import (
 )
 
 
-class FakeResponse:
-    def __init__(
-        self,
-        status: int = 200,
-        value: object = None,
-        *,
-        content: bytes | None = None,
-        error: Exception | None = None,
-    ) -> None:
-        self.status_code = status
-        self.is_success = 200 <= status < 300
-        self._value = value
-        self.content = content if content is not None else (b"x" if value is not None else b"")
-        self.error = error
-        self.closed = False
-
-    async def aclose(self) -> None:
-        self.closed = True
-
-    def json(self) -> object:
-        if self.error:
-            raise self.error
-        return self._value
-
-
 @pytest.mark.asyncio
-async def test_hindsight_gateway_success_and_error_paths() -> None:
+async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) -> None:
     with pytest.raises(RuntimeError):
         HindsightGateway("http://x", None, 0)
     gateway = HindsightGateway("http://x/", "key", 100)
-    request = AsyncMock(return_value=FakeResponse(value={"ok": True}))
-    gateway.client.request = request
-    assert await gateway.health() == {"ok": True}
-    assert await gateway.version() == {"ok": True}
-    await gateway.retain("a/b", {"items": []})
-    request.assert_awaited()
-    assert request.await_args.kwargs["headers"]["authorization"] == "Bearer key"
-    assert "%2F" in request.await_args.args[1]
 
-    request.return_value = FakeResponse(value={"results": [{"id": "1", "text": "x"}]})
+    httpx_mock.add_response(url="http://x/health", json={"ok": True})
+    assert await gateway.health() == {"ok": True}
+    request = httpx_mock.get_request(url="http://x/health")
+    assert request is not None
+    assert request.headers["authorization"] == "Bearer key"
+
+    httpx_mock.add_response(url="http://x/version", json={"ok": True})
+    assert await gateway.version() == {"ok": True}
+
+    httpx_mock.add_response(url="http://x/v1/default/banks/a%2Fb/memories", json={"ok": True})
+    await gateway.retain("a/b", {"items": []})
+    request = httpx_mock.get_request(url="http://x/v1/default/banks/a%2Fb/memories")
+    assert request is not None
+    assert request.url.path.endswith("/a/b/memories")
+    assert "%2F" in str(request.url)
+
+    recall_url = "http://x/v1/default/banks/main/memories/recall"
+    httpx_mock.add_response(url=recall_url, json={"results": [{"id": "1", "text": "x"}]})
     assert (await gateway.recall("main", {"query": "x"}))["results"][0]["text"] == "x"
-    request.return_value = FakeResponse(value={"bad": True})
+
+    httpx_mock.add_response(url=recall_url, json={"bad": True})
     with pytest.raises(HindsightGatewayError) as invalid_schema:
         await gateway.recall("main", {"query": "x"})
     assert invalid_schema.value.code == "hindsight_invalid_response"
 
-    request.return_value = FakeResponse(status=500, value={})
+    httpx_mock.add_response(url="http://x/health", status_code=500, json={})
     with pytest.raises(HindsightGatewayError) as http_error:
         await gateway.health()
-    assert http_error.value.upstream_status == 500 and request.return_value.closed
+    assert http_error.value.upstream_status == 500
 
-    request.side_effect = httpx.ReadTimeout("late")
+    httpx_mock.add_exception(httpx.ReadTimeout("late"), url="http://x/health")
     with pytest.raises(HindsightGatewayError) as timeout:
         await gateway.health()
     assert timeout.value.status == 504
-    request.side_effect = httpx.ConnectError("down")
+
+    httpx_mock.add_exception(httpx.ConnectError("down"), url="http://x/health")
     with pytest.raises(HindsightGatewayError) as network:
         await gateway.health()
     assert network.value.code == "hindsight_unavailable"
 
-    request.side_effect = None
-    request.return_value = FakeResponse(value=None, content=b"")
+    httpx_mock.add_response(url="http://x/health", content=b"")
     assert await gateway.health() is None
-    request.return_value = FakeResponse(value=None, content=b"x", error=ValueError("bad"))
+
+    httpx_mock.add_response(
+        url="http://x/health", content=b"not-json", headers={"content-type": "application/json"}
+    )
     with pytest.raises(HindsightGatewayError) as malformed:
         await gateway.health()
     assert malformed.value.code == "hindsight_invalid_response"
 
-    request.return_value = FakeResponse(value={"ok": True})
+    invalidate_url = "http://x/v1/default/banks/a%2Fb/memories/m%2F1"
+    httpx_mock.add_response(url=invalidate_url, json={"ok": True})
     await gateway.invalidate_memory("a/b", "m/1", "reason")
-    assert "%2F" in request.await_args.args[1]
-    gateway.client.aclose = AsyncMock()
+    request = httpx_mock.get_request(url=invalidate_url)
+    assert request is not None
+    assert "%2F" in str(request.url)
+
     await gateway.close()
-    gateway.client.aclose.assert_awaited_once()
 
 
 def test_hindsight_error_details_variants() -> None:
@@ -245,7 +236,7 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     main_module.main()
     assert calls == [
         (
-            ("memory_router.app:app",),
+            (main_module.app,),
             {"host": str(IPv4Address(0)), "port": 8891, "access_log": False},
         )
     ]
