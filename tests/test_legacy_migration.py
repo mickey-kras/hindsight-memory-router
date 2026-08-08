@@ -15,10 +15,14 @@ from memory_router.repository import QuarantineRepository
 @pytest.mark.asyncio
 async def test_legacy_quarantine_migration(tmp_path) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     private_pem = key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
@@ -53,9 +57,7 @@ async def test_legacy_quarantine_migration(tmp_path) -> None:
     )
     database_url = f"sqlite:{tmp_path / 'quarantine.db'}"
 
-    summary = await migrate_legacy_quarantine(
-        str(queue), str(objects), database_url, private_pem
-    )
+    summary = await migrate_legacy_quarantine(str(queue), str(objects), database_url, private_pem)
     assert summary == {
         "imported": 1,
         "skipped_existing": 0,
