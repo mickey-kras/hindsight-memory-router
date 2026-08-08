@@ -38,7 +38,9 @@ def test_decrypt_quarantine_cli(tmp_path, monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out) == decrypted
 
 
-def test_decrypt_quarantine_cli_requires_stdin_key(tmp_path, monkeypatch, capsys) -> None:
+def test_decrypt_quarantine_cli_requires_stdin_key(
+    tmp_path, monkeypatch, capsys
+) -> None:
     response = tmp_path / "response.json"
     response.write_text("{}")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
