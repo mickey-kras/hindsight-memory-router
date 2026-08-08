@@ -21,7 +21,7 @@ class InMemoryRateLimiter:
     def __init__(self) -> None:
         self.events: dict[str, deque[int]] = defaultdict(deque)
         self.distinct: dict[str, dict[str, int]] = defaultdict(dict)
-        self.locks: dict[str, asyncio.Lock] = {}
+        self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
@@ -32,7 +32,7 @@ class InMemoryRateLimiter:
     ) -> None:
         now = at_ms if at_ms is not None else int(time.time() * 1000)
         async with self.guard:
-            live: list[deque[int]] = []
+            live: list[tuple[str, deque[int]]] = []
             for key, maximum, window in buckets:
                 if maximum <= 0 or window <= 0:
                     continue
@@ -42,7 +42,7 @@ class InMemoryRateLimiter:
                     queue.popleft()
                 if len(queue) >= maximum:
                     raise rate_limited()
-                live.append(queue)
+                live.append((key, queue))
             additions: dict[str, set[str]] = defaultdict(set)
             for scope, identity, maximum, window in identities:
                 if maximum <= 0 or window <= 0:
@@ -57,19 +57,37 @@ class InMemoryRateLimiter:
             for scope, _, maximum, _ in identities:
                 if maximum > 0 and len(self.distinct[scope]) + len(additions[scope]) > maximum:
                     raise rate_limited()
-            for queue in live:
+            for _, queue in live:
                 queue.append(now)
             for scope, identity, maximum, window in identities:
                 if maximum > 0 and window > 0:
                     self.distinct[scope][identity] = now
+            for key, queue in list(self.events.items()):
+                if not queue:
+                    self.events.pop(key, None)
+            for scope, values in list(self.distinct.items()):
+                if not values:
+                    self.distinct.pop(scope, None)
 
     async def with_identity_lock(
         self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
     ) -> T:
         async with self.guard:
-            lock = self.locks.setdefault(identity, asyncio.Lock())
-        async with lock:
-            return await operation(self)
+            lock, users = self.locks.get(identity, (asyncio.Lock(), 0))
+            self.locks[identity] = (lock, users + 1)
+        try:
+            async with lock:
+                return await operation(self)
+        finally:
+            async with self.guard:
+                current = self.locks.get(identity)
+                if current is None or current[0] is not lock:
+                    return
+                remaining = current[1] - 1
+                if remaining == 0:
+                    self.locks.pop(identity, None)
+                else:
+                    self.locks[identity] = (lock, remaining)
 
 
 class _PostgresSession:
@@ -104,6 +122,16 @@ class _PostgresSession:
         ):
             await self.tx.execute("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
         now = at_ms if at_ms is not None else await self._database_now_ms()
+        windows = [window for _, _, window in normalized_buckets] + [
+            window for _, _, _, window in normalized_identities
+        ]
+        global_cutoff = now - max(windows)
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?", (global_cutoff,)
+        )
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (global_cutoff,)
+        )
         for key, maximum, window in normalized_buckets:
             cutoff = now - window
             await self.tx.execute(
