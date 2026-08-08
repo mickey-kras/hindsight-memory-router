@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-import os
 import re
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
@@ -228,7 +228,7 @@ class QuarantineStore:
             digest = sha256_hex(f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
             return f"q_memory{digest[:48]}_{digest[48:]}"
         stamp = re.sub(r"[^0-9A-Za-z]", "", input_["timestamp"])
-        return f"q_{stamp}_{os.urandom(8).hex()}"
+        return f"q_{stamp}_{secrets.token_hex(8)}"
 
 
 def _effective_writer_limit(limits: QuarantineLimits) -> int:
