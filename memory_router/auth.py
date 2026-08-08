@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import sys
+import logging
 import time
-from datetime import UTC
 from typing import Any
+
+from .timestamps import iso_now
+
+logger = logging.getLogger(__name__)
 
 
 def bearer_matches(authorization: str | None, token: str | None) -> bool:
@@ -43,14 +46,11 @@ class AuthFailureAuditor:
         event_key = f"event:{route_group}"
         if now - self.last.get(event_key, 0) >= 60_000:
             self.last[event_key] = now
-            sys.stderr.write(f'{{"event":"auth_failed","route_group":"{route_group}"}}\n')
+            logger.warning("auth failed route_group=%s", route_group)
         try:
-            from datetime import datetime
-
-            at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             await self.store.put(
                 {
-                    "timestamp": at,
+                    "timestamp": iso_now(),
                     "kind": "security_event",
                     "reason": "auth_failed",
                     "source": "http",
@@ -58,10 +58,8 @@ class AuthFailureAuditor:
                     "payload": {"action": "auth_failed", "route_group": route_group},
                 }
             )
-        except Exception as exc:
+        except Exception:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
-                sys.stderr.write(
-                    f"memory-router could not record an auth_failed security event: {type(exc).__name__}\n"
-                )
+                logger.exception("could not record auth_failed security event route_group=%s", route_group)
