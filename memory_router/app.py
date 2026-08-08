@@ -71,27 +71,23 @@ def _raw_pathname(request: Request) -> str:
 
 
 def _normalize_dot_segments(path: str) -> str:
-    absolute = path.startswith("/")
-    trailing = path.endswith("/")
+    segments = path.split("/")
     output: list[str] = []
-    for segment in path.split("/"):
+    last_index = len(segments) - 1
+    for index, segment in enumerate(segments):
         dot_segment = _PERCENT_DOT.sub(".", segment)
         if dot_segment == ".":
-            trailing = True
+            if index == last_index:
+                output.append("")
             continue
         if dot_segment == "..":
-            if output:
+            if output and not (len(output) == 1 and output[0] == ""):
                 output.pop()
-            trailing = True
+            if index == last_index:
+                output.append("")
             continue
-        if segment or not absolute:
-            output.append(segment)
-    normalized = "/".join(output)
-    if absolute:
-        normalized = "/" + normalized
-    if trailing and normalized != "/" and not normalized.endswith("/"):
-        normalized += "/"
-    return normalized or ("/" if absolute else "")
+        output.append(segment)
+    return "/".join(output)
 
 
 def _decode_path_segment(value: str) -> str:
