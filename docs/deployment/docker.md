@@ -35,6 +35,40 @@ No `.env` file is required. If present, Compose loads `.env` as an override file
 MEMORY_ROUTER_PORT=9000 docker compose up -d
 ```
 
-## Image verification
+## Published images
 
-Production deployments should pin the published image by digest. GHCR is canonical and Docker Hub is a mirror. The publish workflow records registry digests and signs published images with the repository workflow identity.
+GHCR is canonical; Docker Hub is a mirror.
+
+```text
+ghcr.io/mickey-kras/hindsight-memory-router:<git-sha>
+ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+docker.io/mickeykrasilnikov/hindsight-memory-router:<git-sha>
+docker.io/mickeykrasilnikov/hindsight-memory-router@sha256:<digest>
+```
+
+Pin production deployments by digest rather than a mutable tag:
+
+```yaml
+services:
+  memory-router:
+    image: ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
+
+`latest` remains available for convenience but is mutable. The publish workflow records both registry digests in the job summary and an `image-digests-<commit>` artifact.
+
+Record the running digest after deployment:
+
+```bash
+docker inspect --format='{{index .RepoDigests 0}}' <container>
+```
+
+Verify a pinned GHCR image with the repository workflow identity:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@.*' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
+```
+
+The long-running container runs as the non-root `node` user.
