@@ -9,7 +9,7 @@ services:
       - /bin/sh
       - -ec
       - |
-        chown app:app /app/data
+        chown -R app:app /app/data
         exec python -m memory_router.key_bootstrap \
           --public-key /app/bootstrap/public/quarantine-public.pem \
           --private-key /app/bootstrap/private/quarantine-private.pem
