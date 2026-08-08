@@ -193,10 +193,14 @@ async def test_unknown_writer_rows_do_not_consume_registered_writer_scope(
 async def test_encrypted_bytes_use_unescaped_utf8(repository: QuarantineRepository) -> None:
     value = item("unicode")
     value["encrypted"] = {"v": 1, "data": "é"}
-    await repository.store(value, Capacity(10, 10, 100_000), mode="id", at="2026-01-01T00:00:00.000Z")
+    await repository.store(
+        value, Capacity(10, 10, 100_000), mode="id", at="2026-01-01T00:00:00.000Z"
+    )
     loaded = await repository.get("unicode")
     assert loaded is not None
-    expected = len(json.dumps(value["encrypted"], separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    expected = len(
+        json.dumps(value["encrypted"], separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
     assert loaded["encrypted_bytes"] == expected
 
 
