@@ -14,8 +14,8 @@ def test_database_url_helpers(tmp_path: Path) -> None:
     assert db_module.is_postgres("postgresql://x")
     assert not db_module.is_postgres("sqlite:x")
     assert db_module.sqlite_path("sqlite::memory:") == ":memory:"
-    assert db_module.sqlite_path("sqlite:///tmp/x") == "/tmp/x"
-    assert db_module.sqlite_path("sqlite:/tmp/x") == "/tmp/x"
+    assert db_module.sqlite_path("sqlite:///srv/quarantine.db") == "/srv/quarantine.db"
+    assert db_module.sqlite_path("sqlite:/srv/quarantine.db") == "/srv/quarantine.db"
     assert Path(db_module.sqlite_path("sqlite:relative.db")).is_absolute()
     with pytest.raises(RuntimeError, match="path is required"):
         db_module.sqlite_path("sqlite:")
