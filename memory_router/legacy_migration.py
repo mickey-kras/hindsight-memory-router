@@ -65,7 +65,9 @@ async def import_legacy_quarantine(
             summary["skipped_existing"] += 1
             continue
 
-        envelope = json.loads(_object_path(object_directory, quarantine_id).read_text(encoding="utf-8"))
+        envelope = json.loads(
+            _object_path(object_directory, quarantine_id).read_text(encoding="utf-8")
+        )
         decrypted = decrypt_envelope(envelope, key_text)
         if decrypted["quarantine_id"] != quarantine_id:
             raise ValueError(f"legacy queue/envelope mismatch for {quarantine_id}")
@@ -111,7 +113,12 @@ def _parse_queue(raw: str) -> list[dict[str, Any]]:
         value = json.loads(line)
         if not isinstance(value, dict):
             raise ValueError(f"legacy queue line {line_number} must be an object")
-        if value.get("decision") not in {"pending", "postponed", "rejected", "promoted"}:
+        if value.get("decision") not in {
+            "pending",
+            "postponed",
+            "rejected",
+            "promoted",
+        }:
             raise ValueError(f"legacy queue line {line_number} has an invalid decision")
         if not isinstance(value.get("timestamp"), str) or not value["timestamp"]:
             raise ValueError(f"legacy queue line {line_number} has no timestamp")
