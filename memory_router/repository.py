@@ -8,6 +8,13 @@ from typing import Any
 from .db import Database, Tx
 from .errors import HttpError
 
+_MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
+_MEMORY_SELECT_FOR_UPDATE = _MEMORY_SELECT + " FOR UPDATE"
+_REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
+_REQUEST_SELECT_FOR_UPDATE = _REQUEST_SELECT + " FOR UPDATE"
+_ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
+_ID_SELECT_FOR_UPDATE = _ID_SELECT + " FOR UPDATE"
+
 
 @dataclass(slots=True)
 class Capacity:
@@ -54,20 +61,11 @@ class QuarantineRepository:
 
     async def get(self, quarantine_id: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:
-            return stored(
-                await tx.fetchone(
-                    "SELECT * FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,)
-                )
-            )
+            return stored(await tx.fetchone(_ID_SELECT, (quarantine_id,)))
 
     async def find_memory_state(self, bank_id: str, memory_id: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:
-            return stored(
-                await tx.fetchone(
-                    "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?",
-                    (bank_id, memory_id),
-                )
-            )
+            return stored(await tx.fetchone(_MEMORY_SELECT, (bank_id, memory_id)))
 
     async def list_reviewable(self, limit: int, offset: int) -> list[dict[str, Any]]:
         async with self.db.transaction() as tx:
@@ -125,21 +123,16 @@ class QuarantineRepository:
     async def _find_existing(
         self, tx: Tx, item: dict[str, Any], mode: str
     ) -> dict[str, Any] | None:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
+        locked = tx.dialect == "postgres"
         if mode == "memory":
-            row = await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?{suffix}",
-                (item["source_bank"], item["source_memory_id"]),
-            )
+            query = _MEMORY_SELECT_FOR_UPDATE if locked else _MEMORY_SELECT
+            row = await tx.fetchone(query, (item["source_bank"], item["source_memory_id"]))
         elif mode == "request":
-            row = await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE dedupe_key=?{suffix}", (item["dedupe_key"],)
-            )
+            query = _REQUEST_SELECT_FOR_UPDATE if locked else _REQUEST_SELECT
+            row = await tx.fetchone(query, (item["dedupe_key"],))
         else:
-            row = await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}",
-                (item["quarantine_id"],),
-            )
+            query = _ID_SELECT_FOR_UPDATE if locked else _ID_SELECT
+            row = await tx.fetchone(query, (item["quarantine_id"],))
         return stored(row)
 
     async def _insert(self, tx: Tx, item: dict[str, Any]) -> None:
