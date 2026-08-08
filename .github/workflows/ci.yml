@@ -54,10 +54,7 @@ jobs:
             exit 1
           fi
 
-      - name: Ruff formatting diagnostics
-        run: |
-          ruff format --diff memory_router tests
-          exit 1
+      - run: ruff format --check memory_router tests
       - run: ruff check memory_router tests
       - run: mypy memory_router
 
