@@ -6,36 +6,7 @@ from .errors import HttpError
 from .repository import QuarantineRepository, insert_event
 
 BATCH_LIMIT = 1000
-MAX_REASON_FILTERS = 6
 
-_PREVIEW_CLEANUP_SQL = """
-SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes
-FROM quarantine_items
-WHERE
-  ((? = 'pending' AND status IN ('pending','postponed'))
-    OR (? = 'all' AND status <> 'review_in_progress'))
-  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
-  AND (? = 0 OR created_at < ?)
-"""
-_CLEANUP_SQL = """
-SELECT quarantine_id, encrypted_bytes
-FROM quarantine_items
-WHERE
-  ((? = 'pending' AND status IN ('pending','postponed'))
-    OR (? = 'all' AND status <> 'review_in_progress'))
-  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
-  AND (? = 0 OR created_at < ?)
-"""
-_CLEANUP_SQL_FOR_UPDATE = """
-SELECT quarantine_id, encrypted_bytes
-FROM quarantine_items
-WHERE
-  ((? = 'pending' AND status IN ('pending','postponed'))
-    OR (? = 'all' AND status <> 'review_in_progress'))
-  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
-  AND (? = 0 OR created_at < ?)
-FOR UPDATE
-"""
 _SWEEP_SQL = """
 SELECT quarantine_id, expires_at
 FROM quarantine_items
@@ -60,9 +31,12 @@ FOR UPDATE
 async def preview_cleanup(
     repository: QuarantineRepository, scope: str, reasons: list[str] | None, older_than: str | None
 ) -> dict[str, int]:
-    params = cleanup_params(scope, reasons, older_than)
+    where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        row = await tx.fetchone(_PREVIEW_CLEANUP_SQL, params) or {}
+        row = await tx.fetchone(
+            f"SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes FROM quarantine_items WHERE {where}",
+            params,
+        ) or {}
     return {
         "count": int(row.get("count") or 0),
         "encrypted_bytes": int(row.get("encrypted_bytes") or 0),
@@ -77,10 +51,13 @@ async def cleanup(
     expected_count: int,
     at: str,
 ) -> dict[str, int]:
-    params = cleanup_params(scope, reasons, older_than)
+    where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        query = _CLEANUP_SQL_FOR_UPDATE if tx.dialect == "postgres" else _CLEANUP_SQL
-        rows = await tx.fetchall(query, params)
+        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
+        rows = await tx.fetchall(
+            f"SELECT quarantine_id, encrypted_bytes FROM quarantine_items WHERE {where}{suffix}",
+            params,
+        )
         if len(rows) != expected_count:
             raise HttpError(
                 409,
@@ -88,18 +65,17 @@ async def cleanup(
                 "quarantine cleanup selection changed after preview",
             )
         total = 0
+        details: dict[str, Any] = {"scope": scope}
+        if reasons:
+            details["reasons"] = reasons
+        if older_than is not None:
+            details["older_than"] = older_than
         for row in rows:
             total += int(row["encrypted_bytes"])
             await tx.execute(
                 "DELETE FROM quarantine_items WHERE quarantine_id=?", (row["quarantine_id"],)
             )
-            await insert_event(
-                tx,
-                row["quarantine_id"],
-                "cleanup",
-                at,
-                {"scope": scope, "reasons": reasons, "older_than": older_than},
-            )
+            await insert_event(tx, row["quarantine_id"], "cleanup", at, details)
         return {"count": len(rows), "encrypted_bytes": total}
 
 
@@ -140,18 +116,26 @@ async def prune_events_before(repository: QuarantineRepository, cutoff: str, at:
         return len(rows)
 
 
-def cleanup_params(scope: str, reasons: list[str] | None, older_than: str | None) -> list[Any]:
+def cleanup_params(
+    scope: str, reasons: list[str] | None, older_than: str | None
+) -> tuple[str, list[Any]]:
     if scope not in {"pending", "all"}:
-        raise ValueError("cleanup scope must be pending or all")
-    selected = list(reasons or [])
-    if len(selected) > MAX_REASON_FILTERS:
-        raise ValueError("too many cleanup reasons")
-    padded: list[str | None] = selected + [None] * (MAX_REASON_FILTERS - len(selected))
-    return [
-        scope,
-        scope,
-        1 if selected else 0,
-        *padded,
-        1 if older_than else 0,
-        older_than,
+        raise HttpError(400, "invalid_cleanup", "cleanup scope must be pending or all")
+    if reasons is not None and not isinstance(reasons, list):
+        raise HttpError(400, "invalid_cleanup", "cleanup reasons must be an array")
+    selected = reasons or []
+    if any(not isinstance(reason, str) for reason in selected):
+        raise HttpError(400, "invalid_cleanup", "cleanup reasons must contain strings")
+    clauses = [
+        "status IN ('pending','postponed')" if scope == "pending" else "status <> 'review_in_progress'"
     ]
+    params: list[Any] = []
+    if selected:
+        clauses.append("reason IN (" + ",".join("?" for _ in selected) + ")")
+        params.extend(selected)
+    if older_than is not None:
+        if not isinstance(older_than, str):
+            raise HttpError(400, "invalid_cleanup", "older_than must be a string")
+        clauses.append("created_at < ?")
+        params.append(older_than)
+    return " AND ".join(clauses), params
