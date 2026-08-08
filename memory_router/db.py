@@ -149,7 +149,34 @@ class PostgresTx(Tx):
 
     @staticmethod
     def sql(statement: str) -> str:
-        return statement.replace("?", "%s")
+        output: list[str] = []
+        index = 0
+        in_single = False
+        in_double = False
+        while index < len(statement):
+            char = statement[index]
+            if char == "'" and not in_double:
+                output.append(char)
+                if in_single and index + 1 < len(statement) and statement[index + 1] == "'":
+                    output.append("'")
+                    index += 2
+                    continue
+                in_single = not in_single
+            elif char == '"' and not in_single:
+                output.append(char)
+                if in_double and index + 1 < len(statement) and statement[index + 1] == '"':
+                    output.append('"')
+                    index += 2
+                    continue
+                in_double = not in_double
+            elif char == "?" and not in_single and not in_double:
+                output.append("%s")
+            else:
+                output.append(char)
+            index += 1
+        if in_single or in_double:
+            raise ValueError("unterminated SQL quoted literal")
+        return "".join(output)
 
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         await self.connection.execute(self.sql(sql), tuple(params))
@@ -167,9 +194,9 @@ class PostgresTx(Tx):
 class PostgresDatabase(Database):
     dialect = "postgres"
 
-    def __init__(self, url: str) -> None:
+    def __init__(self, url: str, *, max_size: int = 5) -> None:
         self.pool = AsyncConnectionPool(
-            url, min_size=1, max_size=5, kwargs={"row_factory": dict_row}, open=False
+            url, min_size=1, max_size=max_size, kwargs={"row_factory": dict_row}, open=False
         )
 
     async def initialize(self) -> None:
