@@ -14,7 +14,32 @@ Credentials intentionally have no shared defaults. With no router token configur
 
 If `MEMORY_ROUTER_REGISTRY` is absent, the built-in registry contains one framework-neutral writer named `main`. It reads and writes only the `main` bank and uses `source: application`.
 
-Set `MEMORY_ROUTER_REGISTRY` only when you need additional writers or a richer writer-to-bank policy. `writer_registry.example.json` shows the default minimal shape and can be extended for custom deployments.
+Set `MEMORY_ROUTER_REGISTRY` only when you need additional writers or a richer writer-to-bank policy. `writer_registry.example.json` matches the default minimal shape and can be extended for custom deployments.
+
+Example custom topology:
+
+```json
+{
+  "writers": {
+    "main": {
+      "role": "default",
+      "source": "application",
+      "write_bank": "main",
+      "read_banks": ["main"]
+    },
+    "research": {
+      "role": "research",
+      "source": "application",
+      "write_bank": "research",
+      "read_banks": ["research", "core"]
+    }
+  },
+  "defaults": {
+    "unknown_writer_action": "review_queue",
+    "suspicious_content_action": "review_queue"
+  }
+}
+```
 
 ## Storage
 
