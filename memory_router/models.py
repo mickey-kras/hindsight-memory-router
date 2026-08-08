@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
@@ -30,8 +30,8 @@ class MemoryItem(PassthroughModel):
 
 class RetainBody(PassthroughModel):
     items: list[MemoryItem] = Field(min_length=1)
-    async_: StrictBool | None = Field(default=None, alias="async")
-    document_tags: list[str] | None = None
+    async_: StrictBool = Field(default=False, alias="async")
+    document_tags: list[str] = Field(default_factory=list)
 
 
 class RecallBody(PassthroughModel):
@@ -54,16 +54,14 @@ class RecallBody(PassthroughModel):
 class RecallResult(PassthroughModel):
     id: str
     text: str
-    type: str | None = None
-    metadata: dict[str, Any] | None = None
 
 
 class RecallResponse(PassthroughModel):
     results: list[RecallResult]
-    chunks: dict[str, Any] | None = None
-    entities: dict[str, Any] | None = None
-    source_facts: dict[str, Any] | None = None
-    trace: dict[str, Any] | None = None
+    chunks: dict[str, object] | None = None
+    entities: dict[str, object] | None = None
+    source_facts: dict[str, object] | None = None
+    trace: dict[str, object] | None = None
 
 
 class WriterRule(PassthroughModel):
