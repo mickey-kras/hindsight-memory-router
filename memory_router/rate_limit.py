@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import defaultdict, deque
-from typing import Any, Awaitable, Callable, TypeVar
+from collections.abc import Awaitable, Callable
+from typing import Any, TypeVar
 
 from .errors import HttpError
 
@@ -63,7 +64,7 @@ class InMemoryRateLimiter:
                     self.distinct[scope][identity] = now
 
     async def with_identity_lock(
-        self, identity: str, operation: Callable[["InMemoryRateLimiter"], Awaitable[T]]
+        self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
     ) -> T:
         async with self.guard:
             lock = self.locks.setdefault(identity, asyncio.Lock())
@@ -82,7 +83,11 @@ class _PostgresSession:
         self, buckets: list[Bucket], identities: list[Distinct], at_ms: int | None = None
     ) -> None:
         normalized_buckets = sorted(
-            {key: (key, maximum, window) for key, maximum, window in buckets if maximum > 0 and window > 0}.values()
+            {
+                key: (key, maximum, window)
+                for key, maximum, window in buckets
+                if maximum > 0 and window > 0
+            }.values()
         )
         normalized_identities = sorted(
             {
@@ -105,9 +110,12 @@ class _PostgresSession:
                 "DELETE FROM quarantine_rate_limit_events WHERE bucket=? AND occurred_at_ms<=?",
                 (key, cutoff),
             )
-            row = await self.tx.fetchone(
-                "SELECT COUNT(*) count FROM quarantine_rate_limit_events WHERE bucket=?", (key,)
-            ) or {}
+            row = (
+                await self.tx.fetchone(
+                    "SELECT COUNT(*) count FROM quarantine_rate_limit_events WHERE bucket=?", (key,)
+                )
+                or {}
+            )
             if int(row.get("count") or 0) >= maximum:
                 raise rate_limited()
         by_scope: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
@@ -120,9 +128,13 @@ class _PostgresSession:
                 "DELETE FROM quarantine_rate_limit_identities WHERE scope=? AND occurred_at_ms<=?",
                 (scope, cutoff),
             )
-            row = await self.tx.fetchone(
-                "SELECT COUNT(*) count FROM quarantine_rate_limit_identities WHERE scope=?", (scope,)
-            ) or {}
+            row = (
+                await self.tx.fetchone(
+                    "SELECT COUNT(*) count FROM quarantine_rate_limit_identities WHERE scope=?",
+                    (scope,),
+                )
+                or {}
+            )
             existing = 0
             for identity, _, _ in values:
                 found = await self.tx.fetchone(
@@ -135,7 +147,8 @@ class _PostgresSession:
                 raise rate_limited()
         for key, _, _ in normalized_buckets:
             await self.tx.execute(
-                "INSERT INTO quarantine_rate_limit_events(bucket,occurred_at_ms) VALUES(?,?)", (key, now)
+                "INSERT INTO quarantine_rate_limit_events(bucket,occurred_at_ms) VALUES(?,?)",
+                (key, now),
             )
         for scope, identity, _, _ in normalized_identities:
             await self.tx.execute(
@@ -145,9 +158,12 @@ class _PostgresSession:
             )
 
     async def _database_now_ms(self) -> int:
-        row = await self.tx.fetchone(
-            "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
-        ) or {}
+        row = (
+            await self.tx.fetchone(
+                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
+            )
+            or {}
+        )
         return int(row["now_ms"])
 
 

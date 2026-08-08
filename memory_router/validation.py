@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+
 from pydantic import ValidationError
+
 from .errors import HttpError
 from .models import RecallBody, RetainBody
 

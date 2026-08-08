@@ -2,35 +2,38 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterable
+from typing import Any
+
 import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
 from .config import assert_deployment_mode
 
 CAPACITY_LOCK_ID = 72_499_123
 DEFAULT_DATABASE_URL = "sqlite:./data/quarantine.db"
 
 SCHEMA = [
-"""CREATE TABLE IF NOT EXISTS quarantine_items (
+    """CREATE TABLE IF NOT EXISTS quarantine_items (
  quarantine_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
  kind TEXT NOT NULL, reason TEXT NOT NULL, writer_id TEXT, source TEXT,
  source_bank TEXT, source_memory_id TEXT, source_content_sha256 TEXT, dedupe_key TEXT,
  sha256 TEXT NOT NULL, encrypted_envelope TEXT, encrypted_bytes INTEGER NOT NULL DEFAULT 0,
  status TEXT NOT NULL, postpone_count INTEGER NOT NULL DEFAULT 0,
  requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT)""",
-"CREATE INDEX IF NOT EXISTS idx_quarantine_items_review ON quarantine_items(status, created_at)",
-"CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason ON quarantine_items(reason, status, created_at)",
-"CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory ON quarantine_items(source_bank, source_memory_id) WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL",
-"""CREATE TABLE IF NOT EXISTS quarantine_events (
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_items_review ON quarantine_items(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason ON quarantine_items(reason, status, created_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory ON quarantine_items(source_bank, source_memory_id) WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL",
+    """CREATE TABLE IF NOT EXISTS quarantine_events (
  event_id TEXT PRIMARY KEY, quarantine_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
  event_type TEXT NOT NULL, details TEXT NOT NULL)""",
-"CREATE INDEX IF NOT EXISTS idx_quarantine_events_item ON quarantine_events(quarantine_id, occurred_at)",
-"CREATE INDEX IF NOT EXISTS idx_quarantine_events_type ON quarantine_events(event_type, occurred_at)",
-"CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
-"CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_events_item ON quarantine_events(quarantine_id, occurred_at)",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_events_type ON quarantine_events(event_type, occurred_at)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
 ]
 
 
@@ -39,7 +42,7 @@ def is_postgres(url: str) -> bool:
 
 
 def sqlite_path(url: str) -> str:
-    value = url[len("sqlite:"):]
+    value = url[len("sqlite:") :]
     if not value:
         raise RuntimeError("SQLite database path is required")
     if value == ":memory:":
@@ -53,6 +56,7 @@ def sqlite_path(url: str) -> str:
 
 class Tx:
     dialect: str
+
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None: ...
     async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None: ...
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]: ...
@@ -60,11 +64,13 @@ class Tx:
 
 class Database:
     dialect: str
+
     async def initialize(self) -> None: ...
     async def close(self) -> None: ...
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         raise NotImplementedError
+
     async def ping(self) -> None:
         async with self.transaction() as tx:
             await tx.fetchone("SELECT 1 AS ready")
@@ -72,14 +78,18 @@ class Database:
 
 class SqliteTx(Tx):
     dialect = "sqlite"
+
     def __init__(self, connection: aiosqlite.Connection) -> None:
         self.connection = connection
+
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         await self.connection.execute(sql, tuple(params))
+
     async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
         cursor = await self.connection.execute(sql, tuple(params))
         row = await cursor.fetchone()
         return dict(row) if row else None
+
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         cursor = await self.connection.execute(sql, tuple(params))
         return [dict(row) for row in await cursor.fetchall()]
@@ -87,10 +97,12 @@ class SqliteTx(Tx):
 
 class SqliteDatabase(Database):
     dialect = "sqlite"
+
     def __init__(self, path: str) -> None:
         self.path = path
         self.connection: aiosqlite.Connection | None = None
         self.lock = asyncio.Lock()
+
     async def initialize(self) -> None:
         if self.path != ":memory:":
             Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -99,9 +111,11 @@ class SqliteDatabase(Database):
         await self.connection.execute("PRAGMA journal_mode = WAL")
         await self.connection.execute("PRAGMA foreign_keys = ON")
         await self.connection.commit()
+
     async def close(self) -> None:
         if self.connection:
             await self.connection.close()
+
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         del capacity_lock
@@ -121,17 +135,22 @@ class SqliteDatabase(Database):
 
 class PostgresTx(Tx):
     dialect = "postgres"
+
     def __init__(self, connection: Any) -> None:
         self.connection = connection
+
     @staticmethod
     def sql(statement: str) -> str:
         return statement.replace("?", "%s")
+
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         await self.connection.execute(self.sql(sql), tuple(params))
+
     async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
         cursor = await self.connection.execute(self.sql(sql), tuple(params))
         row = await cursor.fetchone()
         return dict(row) if row else None
+
     async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
         cursor = await self.connection.execute(self.sql(sql), tuple(params))
         return [dict(row) for row in await cursor.fetchall()]
@@ -139,13 +158,19 @@ class PostgresTx(Tx):
 
 class PostgresDatabase(Database):
     dialect = "postgres"
+
     def __init__(self, url: str) -> None:
-        self.pool = AsyncConnectionPool(url, min_size=1, max_size=5, kwargs={"row_factory": dict_row}, open=False)
+        self.pool = AsyncConnectionPool(
+            url, min_size=1, max_size=5, kwargs={"row_factory": dict_row}, open=False
+        )
+
     async def initialize(self) -> None:
         await self.pool.open()
         await self.pool.wait()
+
     async def close(self) -> None:
         await self.pool.close()
+
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         async with self.pool.connection() as connection:
@@ -163,7 +188,9 @@ async def create_database(url: str) -> Database:
     elif url.startswith("sqlite:"):
         db = SqliteDatabase(sqlite_path(url))
     else:
-        raise RuntimeError("QUARANTINE_DATABASE_URL must use sqlite:, postgres://, or postgresql://")
+        raise RuntimeError(
+            "QUARANTINE_DATABASE_URL must use sqlite:, postgres://, or postgresql://"
+        )
     await db.initialize()
     await initialize_schema(db)
     return db
@@ -178,9 +205,15 @@ async def initialize_schema(db: Database) -> None:
             ("expires_at", "expires_at TEXT"),
         ):
             if tx.dialect == "postgres":
-                present = await tx.fetchone("SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?", ("quarantine_items", name))
+                present = await tx.fetchone(
+                    "SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?",
+                    ("quarantine_items", name),
+                )
             else:
-                present = await tx.fetchone("SELECT 1 present FROM pragma_table_info('quarantine_items') WHERE name=?", (name,))
+                present = await tx.fetchone(
+                    "SELECT 1 present FROM pragma_table_info('quarantine_items') WHERE name=?",
+                    (name,),
+                )
             if not present:
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")
         for statement in SCHEMA[1:]:
@@ -197,5 +230,7 @@ async def validate_storage(db: Database, url: str) -> None:
     path = sqlite_path(url)
     if path == ":memory:":
         return
-    if not os.access(Path(path).parent, os.W_OK) or (Path(path).exists() and not os.access(path, os.W_OK)):
+    if not os.access(Path(path).parent, os.W_OK) or (
+        Path(path).exists() and not os.access(path, os.W_OK)
+    ):
         raise RuntimeError(f"quarantine storage at {path} is not writable")

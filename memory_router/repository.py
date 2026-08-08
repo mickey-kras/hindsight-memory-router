@@ -4,14 +4,17 @@ import json
 import uuid
 from dataclasses import dataclass
 from typing import Any
+
 from .db import Database, Tx
 from .errors import HttpError
+
 
 @dataclass(slots=True)
 class Capacity:
     max_pending_items: int
     max_pending_items_per_writer: int
     max_encrypted_bytes: int
+
 
 def stored(row: dict[str, Any] | None) -> dict[str, Any] | None:
     if row is None:
@@ -23,8 +26,21 @@ def stored(row: dict[str, Any] | None) -> dict[str, Any] | None:
     result["requarantine_count"] = int(result.get("requarantine_count") or 0)
     return result
 
-async def insert_event(tx: Tx, quarantine_id: str, event_type: str, at: str, details: dict[str, Any] | None = None) -> None:
-    await tx.execute("INSERT INTO quarantine_events(event_id,quarantine_id,occurred_at,event_type,details) VALUES(?,?,?,?,?)", (str(uuid.uuid4()), quarantine_id, at, event_type, json.dumps(details or {}, separators=(",", ":"))))
+
+async def insert_event(
+    tx: Tx, quarantine_id: str, event_type: str, at: str, details: dict[str, Any] | None = None
+) -> None:
+    await tx.execute(
+        "INSERT INTO quarantine_events(event_id,quarantine_id,occurred_at,event_type,details) VALUES(?,?,?,?,?)",
+        (
+            str(uuid.uuid4()),
+            quarantine_id,
+            at,
+            event_type,
+            json.dumps(details or {}, separators=(",", ":")),
+        ),
+    )
+
 
 class QuarantineRepository:
     def __init__(self, db: Database) -> None:
@@ -38,29 +54,57 @@ class QuarantineRepository:
 
     async def get(self, quarantine_id: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:
-            return stored(await tx.fetchone("SELECT * FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,)))
+            return stored(
+                await tx.fetchone(
+                    "SELECT * FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,)
+                )
+            )
 
     async def find_memory_state(self, bank_id: str, memory_id: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:
-            return stored(await tx.fetchone("SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?", (bank_id, memory_id)))
+            return stored(
+                await tx.fetchone(
+                    "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?",
+                    (bank_id, memory_id),
+                )
+            )
 
     async def list_reviewable(self, limit: int, offset: int) -> list[dict[str, Any]]:
         async with self.db.transaction() as tx:
-            rows = await tx.fetchall("SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') ORDER BY created_at ASC LIMIT ? OFFSET ?", (limit, offset))
+            rows = await tx.fetchall(
+                "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') ORDER BY created_at ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
         return [_summary(stored(row) or {}) for row in rows]
 
     async def stats(self, at: str) -> dict[str, int]:
         async with self.db.transaction() as tx:
-            row = await tx.fetchone("""SELECT COUNT(*) total_items,
+            row = (
+                await tx.fetchone(
+                    """SELECT COUNT(*) total_items,
               SUM(CASE WHEN status='pending' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) pending_items,
               SUM(CASE WHEN status='postponed' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) postponed_items,
               SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 1 ELSE 0 END) expired_items,
               SUM(CASE WHEN status='reviewed_allowed' THEN 1 ELSE 0 END) reviewed_allowed_items,
               SUM(CASE WHEN status='reviewed_blocked' THEN 1 ELSE 0 END) reviewed_blocked_items,
-              COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes FROM quarantine_items""", (at, at, at, at)) or {}
+              COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes FROM quarantine_items""",
+                    (at, at, at, at),
+                )
+                or {}
+            )
             events = await tx.fetchone("SELECT COUNT(*) event_count FROM quarantine_events") or {}
-        keys = ("total_items","pending_items","postponed_items","expired_items","reviewed_allowed_items","reviewed_blocked_items","encrypted_bytes")
-        return {key:int(row.get(key) or 0) for key in keys} | {"event_count":int(events.get("event_count") or 0)}
+        keys = (
+            "total_items",
+            "pending_items",
+            "postponed_items",
+            "expired_items",
+            "reviewed_allowed_items",
+            "reviewed_blocked_items",
+            "encrypted_bytes",
+        )
+        return {key: int(row.get(key) or 0) for key in keys} | {
+            "event_count": int(events.get("event_count") or 0)
+        }
 
     async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
@@ -69,57 +113,168 @@ class QuarantineRepository:
             if existing:
                 if mode == "request" and existing["status"] not in {"pending", "postponed"}:
                     return
-                await self._refresh(tx, existing["quarantine_id"], item, int(existing.get("requarantine_count") or 0) + 1)
+                await self._refresh(
+                    tx,
+                    existing["quarantine_id"],
+                    item,
+                    int(existing.get("requarantine_count") or 0) + 1,
+                )
             else:
                 await self._insert(tx, item)
 
-    async def _find_existing(self, tx: Tx, item: dict[str, Any], mode: str) -> dict[str, Any] | None:
+    async def _find_existing(
+        self, tx: Tx, item: dict[str, Any], mode: str
+    ) -> dict[str, Any] | None:
         suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
         if mode == "memory":
-            row = await tx.fetchone(f"SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?{suffix}", (item["source_bank"], item["source_memory_id"]))
+            row = await tx.fetchone(
+                f"SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?{suffix}",
+                (item["source_bank"], item["source_memory_id"]),
+            )
         elif mode == "request":
-            row = await tx.fetchone(f"SELECT * FROM quarantine_items WHERE dedupe_key=?{suffix}", (item["dedupe_key"],))
+            row = await tx.fetchone(
+                f"SELECT * FROM quarantine_items WHERE dedupe_key=?{suffix}", (item["dedupe_key"],)
+            )
         else:
-            row = await tx.fetchone(f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}", (item["quarantine_id"],))
+            row = await tx.fetchone(
+                f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}",
+                (item["quarantine_id"],),
+            )
         return stored(row)
 
     async def _insert(self, tx: Tx, item: dict[str, Any]) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"))
-        await tx.execute("""INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", _params(item, envelope))
-        await insert_event(tx, item["quarantine_id"], "quarantined", item["created_at"], {"kind":item["kind"],"reason":item["reason"],"sha256":item["sha256"]})
+        await tx.execute(
+            """INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            _params(item, envelope),
+        )
+        await insert_event(
+            tx,
+            item["quarantine_id"],
+            "quarantined",
+            item["created_at"],
+            {"kind": item["kind"], "reason": item["reason"], "sha256": item["sha256"]},
+        )
 
     async def _refresh(self, tx: Tx, quarantine_id: str, item: dict[str, Any], count: int) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"))
         params = _params(item, envelope)
-        await tx.execute("""UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,expires_at=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1 WHERE quarantine_id=?""", (*params[1:14], item.get("expires_at"), quarantine_id))
-        await insert_event(tx, quarantine_id, "requarantined", item["created_at"], {"kind":item["kind"],"reason":item["reason"],"sha256":item["sha256"],"requarantine_count":count})
+        await tx.execute(
+            """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,expires_at=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1 WHERE quarantine_id=?""",
+            (*params[1:14], item.get("expires_at"), quarantine_id),
+        )
+        await insert_event(
+            tx,
+            quarantine_id,
+            "requarantined",
+            item["created_at"],
+            {
+                "kind": item["kind"],
+                "reason": item["reason"],
+                "sha256": item["sha256"],
+                "requarantine_count": count,
+            },
+        )
 
-    async def _assert_capacity(self, tx: Tx, item: dict[str, Any], existing: dict[str, Any] | None, capacity: Capacity, at: str) -> None:
-        rows = [stored(row) or {} for row in await tx.fetchall("SELECT * FROM quarantine_items WHERE NOT(status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=?)", (at,))]
-        reviewable = [row for row in rows if row.get("status") in {"pending","postponed"}]
+    async def _assert_capacity(
+        self,
+        tx: Tx,
+        item: dict[str, Any],
+        existing: dict[str, Any] | None,
+        capacity: Capacity,
+        at: str,
+    ) -> None:
+        rows = [
+            stored(row) or {}
+            for row in await tx.fetchall(
+                "SELECT * FROM quarantine_items WHERE NOT(status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=?)",
+                (at,),
+            )
+        ]
+        reviewable = [row for row in rows if row.get("status") in {"pending", "postponed"}]
         existing_live = existing if existing and not _expired(existing, at) else None
-        next_pending = len(reviewable) - (1 if existing_live and existing_live.get("status") in {"pending","postponed"} else 0) + 1
+        next_pending = (
+            len(reviewable)
+            - (
+                1
+                if existing_live and existing_live.get("status") in {"pending", "postponed"}
+                else 0
+            )
+            + 1
+        )
         existing_bytes = int(existing_live.get("encrypted_bytes") or 0) if existing_live else 0
         item_bytes = len(json.dumps(item["encrypted"], separators=(",", ":")).encode())
-        next_bytes = sum(int(row.get("encrypted_bytes") or 0) for row in rows) - existing_bytes + item_bytes
+        next_bytes = (
+            sum(int(row.get("encrypted_bytes") or 0) for row in rows) - existing_bytes + item_bytes
+        )
         if next_pending > capacity.max_pending_items or next_bytes > capacity.max_encrypted_bytes:
             raise HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted")
         if capacity.max_pending_items_per_writer > 0:
             scoped = sum(1 for row in reviewable if _same_scope(item, row))
-            if existing_live and existing_live.get("status") in {"pending","postponed"} and _same_scope(item, existing_live):
+            if (
+                existing_live
+                and existing_live.get("status") in {"pending", "postponed"}
+                and _same_scope(item, existing_live)
+            ):
                 scoped -= 1
             if scoped + 1 > capacity.max_pending_items_per_writer:
-                raise HttpError(507, "quarantine_writer_capacity_exceeded", "writer quarantine capacity is exhausted")
+                raise HttpError(
+                    507,
+                    "quarantine_writer_capacity_exceeded",
+                    "writer quarantine capacity is exhausted",
+                )
+
 
 def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
-    return (item["quarantine_id"],item["created_at"],item["updated_at"],item["kind"],item["reason"],item.get("writer_id"),item.get("source"),item.get("source_bank"),item.get("source_memory_id"),item.get("source_content_sha256"),item.get("dedupe_key"),item["sha256"],envelope,len(envelope.encode()),item["status"],item["postpone_count"],item.get("requarantine_count",0),item.get("expires_at"))
+    return (
+        item["quarantine_id"],
+        item["created_at"],
+        item["updated_at"],
+        item["kind"],
+        item["reason"],
+        item.get("writer_id"),
+        item.get("source"),
+        item.get("source_bank"),
+        item.get("source_memory_id"),
+        item.get("source_content_sha256"),
+        item.get("dedupe_key"),
+        item["sha256"],
+        envelope,
+        len(envelope.encode()),
+        item["status"],
+        item["postpone_count"],
+        item.get("requarantine_count", 0),
+        item.get("expires_at"),
+    )
+
 
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
-    keys = ("quarantine_id","created_at","updated_at","kind","reason","writer_id","source","source_bank","source_memory_id","dedupe_key","sha256","status","postpone_count","requarantine_count")
-    return {key:item[key] for key in keys if item.get(key) is not None}
+    keys = (
+        "quarantine_id",
+        "created_at",
+        "updated_at",
+        "kind",
+        "reason",
+        "writer_id",
+        "source",
+        "source_bank",
+        "source_memory_id",
+        "dedupe_key",
+        "sha256",
+        "status",
+        "postpone_count",
+        "requarantine_count",
+    )
+    return {key: item[key] for key in keys if item.get(key) is not None}
+
 
 def _expired(item: dict[str, Any], at: str) -> bool:
-    return item.get("status") in {"pending","postponed"} and item.get("expires_at") is not None and item["expires_at"] <= at
+    return (
+        item.get("status") in {"pending", "postponed"}
+        and item.get("expires_at") is not None
+        and item["expires_at"] <= at
+    )
+
 
 def _same_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
     if left.get("kind") == "security_event" or right.get("kind") == "security_event":

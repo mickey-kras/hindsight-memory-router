@@ -4,16 +4,23 @@ import asyncio
 import json
 import os
 import sys
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
-from typing import Any, AsyncIterator
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, router_authorized
-from .config import assert_auth_environment, assert_no_private_key_environment, boolean_env, integer_env, load_registry
+from .config import (
+    assert_auth_environment,
+    assert_no_private_key_environment,
+    boolean_env,
+    integer_env,
+    load_registry,
+)
 from .db import DEFAULT_DATABASE_URL, create_database, is_postgres, validate_storage
 from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
@@ -28,7 +35,7 @@ from .validation import parse_recall_body, parse_retain_body
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
 def _scope(method: str, path: str) -> str:
@@ -54,14 +61,18 @@ class Runtime:
         self.router_token = os.environ.get("MEMORY_ROUTER_TOKEN")
         self.allow_anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
         self.admin_tokens = {
-            "legacy":os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN"),
-            "read":os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN"),
-            "review":os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"),
-            "cleanup":os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"),
+            "legacy": os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN"),
+            "read": os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN"),
+            "review": os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"),
+            "cleanup": os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"),
         }
         self.admin_read_max = integer_env("MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX", 120, minimum=1)
-        self.admin_write_max = integer_env("MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX", 30, minimum=1)
-        self.admin_window = integer_env("MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1)
+        self.admin_write_max = integer_env(
+            "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX", 30, minimum=1
+        )
+        self.admin_window = integer_env(
+            "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1
+        )
 
     async def start(self) -> None:
         assert_no_private_key_environment()
@@ -97,24 +108,34 @@ class Runtime:
         )
         self.hindsight = hindsight
         hconfig = HindsightLimitConfig(
-            retain_writer_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX",30,minimum=1),
-            retain_global_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX",300,minimum=1),
-            recall_writer_max=integer_env("HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX",120,minimum=1),
-            recall_global_max=integer_env("HINDSIGHT_RECALL_RATE_LIMIT_GLOBAL_MAX",1200,minimum=1),
-            rate_limit_window_ms=integer_env("HINDSIGHT_RATE_LIMIT_WINDOW_MS",60_000,minimum=1),
-            max_retain_items=integer_env("HINDSIGHT_RETAIN_MAX_ITEMS",100,minimum=1),
-            max_retain_content_bytes=integer_env("HINDSIGHT_RETAIN_MAX_CONTENT_BYTES",524_288,minimum=1),
-            max_recall_query_bytes=integer_env("HINDSIGHT_RECALL_MAX_QUERY_BYTES",32_768,minimum=1),
-            max_recall_max_tokens=integer_env("HINDSIGHT_RECALL_MAX_TOKENS",8192,minimum=1),
+            retain_writer_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX", 30, minimum=1),
+            retain_global_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX", 300, minimum=1),
+            recall_writer_max=integer_env("HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX", 120, minimum=1),
+            recall_global_max=integer_env(
+                "HINDSIGHT_RECALL_RATE_LIMIT_GLOBAL_MAX", 1200, minimum=1
+            ),
+            rate_limit_window_ms=integer_env("HINDSIGHT_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1),
+            max_retain_items=integer_env("HINDSIGHT_RETAIN_MAX_ITEMS", 100, minimum=1),
+            max_retain_content_bytes=integer_env(
+                "HINDSIGHT_RETAIN_MAX_CONTENT_BYTES", 524_288, minimum=1
+            ),
+            max_recall_query_bytes=integer_env(
+                "HINDSIGHT_RECALL_MAX_QUERY_BYTES", 32_768, minimum=1
+            ),
+            max_recall_max_tokens=integer_env("HINDSIGHT_RECALL_MAX_TOKENS", 8192, minimum=1),
         )
         registry = load_registry(os.environ.get("MEMORY_ROUTER_REGISTRY"))
-        hindsight_limiter = self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
+        hindsight_limiter = (
+            self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
+        )
         hindsight_limits = HindsightLimits(hconfig, hindsight_limiter)
         self.policy = RouterPolicy(registry, hindsight, hindsight_limits, store, self.repository)
-        self.admin = QuarantineAdminService(self.repository, hindsight, registry, integer_env("QUARANTINE_MAX_POSTPONES",3))
+        self.admin = QuarantineAdminService(
+            self.repository, hindsight, registry, integer_env("QUARANTINE_MAX_POSTPONES", 3)
+        )
         self.auditor = AuthFailureAuditor(store)
-        interval = integer_env("QUARANTINE_SWEEP_INTERVAL_SECONDS",3600)
-        retention = integer_env("QUARANTINE_EVENT_RETENTION_DAYS",90)
+        interval = integer_env("QUARANTINE_SWEEP_INTERVAL_SECONDS", 3600)
+        retention = integer_env("QUARANTINE_EVENT_RETENTION_DAYS", 90)
         if interval > 0:
             self.sweeper = asyncio.create_task(self._sweep_loop(interval, retention))
 
@@ -138,12 +159,18 @@ class Runtime:
             try:
                 await sweep_expired(self.repository, at)
                 if retention_days > 0:
-                    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                    cutoff = (
+                        (datetime.now(UTC) - timedelta(days=retention_days))
+                        .isoformat(timespec="milliseconds")
+                        .replace("+00:00", "Z")
+                    )
                     await prune_events_before(self.repository, cutoff, at)
             except Exception:
                 sys.stderr.write("memory-router quarantine sweeper failed\n")
 
+
 runtime = Runtime()
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -153,19 +180,29 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     finally:
         await runtime.stop()
 
+
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
 
 @app.exception_handler(HttpError)
 async def http_error_handler(_: Request, exc: HttpError) -> JSONResponse:
     return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
 
+
 @app.exception_handler(Exception)
 async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
     if isinstance(exc, HindsightGatewayError):
-        sys.stderr.write("memory-router upstream request failed: " + json.dumps(exc.details(), separators=(",", ":")) + "\n")
+        sys.stderr.write(
+            "memory-router upstream request failed: "
+            + json.dumps(exc.details(), separators=(",", ":"))
+            + "\n"
+        )
         return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
     sys.stderr.write("memory-router request failed\n")
-    return JSONResponse({"error":"internal_error","message":"Internal server error"}, status_code=500)
+    return JSONResponse(
+        {"error": "internal_error", "message": "Internal server error"}, status_code=500
+    )
+
 
 async def _json_body(request: Request) -> Any:
     content_length = request.headers.get("content-length")
@@ -179,12 +216,16 @@ async def _json_body(request: Request) -> Any:
     except (ValueError, UnicodeError) as exc:
         raise HttpError(400, "invalid_json", "request body must be valid JSON") from exc
 
+
 async def _router_auth(request: Request) -> bool:
-    if router_authorized(request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous):
+    if router_authorized(
+        request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
+    ):
         return True
     assert runtime.auditor is not None
     await runtime.auditor.record("router")
     return False
+
 
 async def _admin_auth(request: Request, scope: str) -> bool:
     if admin_authorized(request.headers.get("authorization"), scope, runtime.admin_tokens):
@@ -193,55 +234,66 @@ async def _admin_auth(request: Request, scope: str) -> bool:
     await runtime.auditor.record("admin")
     return False
 
+
 async def _admin_rate(method: str) -> None:
-    request_class = "read" if method in {"GET","HEAD"} else "write"
+    request_class = "read" if method in {"GET", "HEAD"} else "write"
     maximum = runtime.admin_read_max if request_class == "read" else runtime.admin_write_max
     try:
-        await runtime.admin_limiter.consume_many([(f"admin:{request_class}", maximum, runtime.admin_window)])
+        await runtime.admin_limiter.consume_many(
+            [(f"admin:{request_class}", maximum, runtime.admin_window)]
+        )
     except HttpError as exc:
         if exc.status == 429:
-            raise HttpError(429, "admin_rate_limited", f"too many admin {request_class} requests") from exc
+            raise HttpError(
+                429, "admin_rate_limited", f"too many admin {request_class} requests"
+            ) from exc
         raise
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status":"healthy","service":"memory-router"}
+    return {"status": "healthy", "service": "memory-router"}
+
 
 @app.get("/ready")
 async def ready() -> Response:
     try:
         assert runtime.repository is not None
         await runtime.repository.ping()
-        return JSONResponse({"status":"ready","service":"memory-router"})
+        return JSONResponse({"status": "ready", "service": "memory-router"})
     except Exception:
-        return JSONResponse({"status":"not_ready","service":"memory-router"}, status_code=503)
+        return JSONResponse({"status": "not_ready", "service": "memory-router"}, status_code=503)
 
-@app.api_route("/{path:path}", methods=["GET","POST","PATCH","PUT","DELETE","HEAD","OPTIONS"])
+
+@app.api_route("/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"])
 async def dispatch(path: str, request: Request) -> Response:
     pathname = "/" + path
     method = request.method
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
-            return JSONResponse({"error":"unauthorized"}, status_code=401)
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
         await _admin_rate(method)
         assert runtime.admin is not None
         if method == "GET" and pathname == "/admin/quarantine/queue":
             params = request.query_params
             try:
-                limit = int(params.get("limit","100")); offset = int(params.get("offset","0"))
+                limit = int(params.get("limit", "100"))
+                offset = int(params.get("offset", "0"))
             except ValueError as exc:
-                raise HttpError(400,"invalid_query","invalid integer query parameter") from exc
+                raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
             if not 1 <= limit <= 500 or offset < 0:
-                raise HttpError(400,"invalid_query","integer query parameter out of range")
+                raise HttpError(400, "invalid_query", "integer query parameter out of range")
             return JSONResponse(await runtime.admin.list_queue(limit, offset))
         if method == "GET" and pathname == "/admin/quarantine/stats":
             return JSONResponse(await runtime.admin.stats())
         if method == "POST" and pathname == "/admin/quarantine/cleanup":
             body = await _json_body(request)
             if not isinstance(body, dict):
-                raise HttpError(400,"invalid_request","cleanup body must be an object")
+                raise HttpError(400, "invalid_request", "cleanup body must be an object")
             return JSONResponse(await runtime.admin.cleanup(body))
-        match = __import__("re").fullmatch(r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname)
+        match = __import__("re").fullmatch(
+            r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
+        )
         if match:
             item_id, action = match.group(1), match.group(2)
             if method == "GET" and action is None:
@@ -249,19 +301,32 @@ async def dispatch(path: str, request: Request) -> Response:
             if method == "POST" and action == "approve":
                 body = await _json_body(request)
                 if not isinstance(body, dict):
-                    raise HttpError(400,"invalid_request","approve body must be an object")
+                    raise HttpError(400, "invalid_request", "approve body must be an object")
                 return JSONResponse(await runtime.admin.approve(item_id, body))
             if method == "POST" and action == "reject":
                 return JSONResponse(await runtime.admin.reject(item_id))
             if method == "POST" and action == "postpone":
                 return JSONResponse(await runtime.admin.postpone(item_id))
-        return JSONResponse({"error":"admin_endpoint_not_found"}, status_code=404)
+        return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
 
     if not await _router_auth(request):
-        return JSONResponse({"error":"unauthorized"}, status_code=401)
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     if method == "GET" and pathname == "/version":
-        return JSONResponse({"api_version":"0.9.0","router":"memory-router","features":{"policy_facade":True,"encrypted_quarantine":True,"quarantine_admin_api":True,"quarantine_database":True}})
-    match = __import__("re").fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
+        return JSONResponse(
+            {
+                "api_version": "0.9.0",
+                "router": "memory-router",
+                "features": {
+                    "policy_facade": True,
+                    "encrypted_quarantine": True,
+                    "quarantine_admin_api": True,
+                    "quarantine_database": True,
+                },
+            }
+        )
+    match = __import__("re").fullmatch(
+        r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname
+    )
     if method == "POST" and match:
         writer_id, action = match.group(1), match.group(2)
         assert runtime.policy is not None

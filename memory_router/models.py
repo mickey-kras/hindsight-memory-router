@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from typing import Any, Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 BankId = Literal["core", "main", "personal", "dev", "creative", "ops", "research"]
 
+
 class PassthroughModel(BaseModel):
     model_config = ConfigDict(extra="allow")
+
 
 class MemoryItem(PassthroughModel):
     content: str
@@ -24,10 +27,12 @@ class MemoryItem(PassthroughModel):
             raise ValueError("empty")
         return value
 
+
 class RetainBody(PassthroughModel):
     items: list[MemoryItem] = Field(min_length=1)
     async_: bool | None = Field(default=None, alias="async")
     document_tags: list[str] | None = None
+
 
 class RecallBody(PassthroughModel):
     query: str
@@ -45,11 +50,13 @@ class RecallBody(PassthroughModel):
             raise ValueError("empty")
         return value
 
+
 class RecallResult(PassthroughModel):
     id: str
     text: str
     type: str | None = None
     metadata: dict[str, str] | None = None
+
 
 class RecallResponse(PassthroughModel):
     results: list[RecallResult]
@@ -58,15 +65,18 @@ class RecallResponse(PassthroughModel):
     source_facts: dict[str, Any] | None = None
     trace: dict[str, Any] | None = None
 
+
 class WriterRule(PassthroughModel):
     role: str
     source: str
     write_bank: BankId
     read_banks: list[BankId]
 
+
 class RegistryDefaults(PassthroughModel):
     unknown_writer_action: Literal["review_queue"]
     suspicious_content_action: Literal["review_queue"]
+
 
 class WriterRegistry(PassthroughModel):
     writers: dict[str, WriterRule]

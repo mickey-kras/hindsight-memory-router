@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import sys
 import time
+from datetime import UTC
 from typing import Any
 
 
@@ -44,14 +45,23 @@ class AuthFailureAuditor:
             self.last[event_key] = now
             sys.stderr.write(f'{{"event":"auth_failed","route_group":"{route_group}"}}\n')
         try:
-            from datetime import datetime, timezone
-            at = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-            await self.store.put({
-                "timestamp":at,"kind":"security_event","reason":"auth_failed","source":"http",
-                "dedupeKey":f"auth_failed:{route_group}","payload":{"action":"auth_failed","route_group":route_group},
-            })
+            from datetime import datetime
+
+            at = datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            await self.store.put(
+                {
+                    "timestamp": at,
+                    "kind": "security_event",
+                    "reason": "auth_failed",
+                    "source": "http",
+                    "dedupeKey": f"auth_failed:{route_group}",
+                    "payload": {"action": "auth_failed", "route_group": route_group},
+                }
+            )
         except Exception as exc:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
-                sys.stderr.write(f"memory-router could not record an auth_failed security event: {type(exc).__name__}\n")
+                sys.stderr.write(
+                    f"memory-router could not record an auth_failed security event: {type(exc).__name__}\n"
+                )

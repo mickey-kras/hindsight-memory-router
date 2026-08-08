@@ -1,0 +1,3 @@
+[console_scripts]
+memory-router = memory_router.__main__:main
+memory-router-bootstrap-keys = memory_router.key_bootstrap:main

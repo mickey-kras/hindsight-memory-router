@@ -136,9 +136,7 @@ async def test_safe_recalled_memory_reaches_caller() -> None:
 @pytest.mark.asyncio
 async def test_provider_failure_degrades_recall_per_existing_semantics() -> None:
     hindsight = FakeHindsight()
-    hindsight.recall_error = HindsightGatewayError(
-        "network", operation="recall", method="POST"
-    )
+    hindsight.recall_error = HindsightGatewayError("network", operation="recall", method="POST")
     router, limits, store, _ = policy(hindsight)
     response = await router.recall("main", {"query": "status"})
     assert response == {"results": []}

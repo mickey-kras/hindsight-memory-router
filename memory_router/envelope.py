@@ -6,14 +6,23 @@ import json
 import os
 import re
 from typing import Any
+
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 from .canonical import canonical_json, sha256_hex
 
 AAD_FORMAT = "metadata-v1"
 WRAPPED_KEY_FIELD = "wrapped_key_b64"
-_REASONS = {"unknown_writer","suspicious_content","suspicious_query","recalled_suspicious_memory","denied_endpoint","auth_failed"}
+_REASONS = {
+    "unknown_writer",
+    "suspicious_content",
+    "suspicious_query",
+    "recalled_suspicious_memory",
+    "denied_endpoint",
+    "auth_failed",
+}
 _QID = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
 
 
@@ -54,7 +63,11 @@ def decode_public_key(value: str) -> rsa.RSAPublicKey:
     if not trimmed:
         raise ValueError("QUARANTINE_PUBLIC_KEY is required")
     try:
-        pem = trimmed.replace("\\n", "\n").encode() if "BEGIN PUBLIC KEY" in trimmed else base64.b64decode(trimmed, validate=True)
+        pem = (
+            trimmed.replace("\\n", "\n").encode()
+            if "BEGIN PUBLIC KEY" in trimmed
+            else base64.b64decode(trimmed, validate=True)
+        )
         key = serialization.load_pem_public_key(pem)
     except Exception as exc:
         raise ValueError("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM") from exc
@@ -68,7 +81,11 @@ def decode_private_key(value: str) -> rsa.RSAPrivateKey:
     if not trimmed:
         raise ValueError("private key is required")
     try:
-        pem = trimmed.replace("\\n", "\n").encode() if "BEGIN " in trimmed else base64.b64decode(trimmed, validate=True)
+        pem = (
+            trimmed.replace("\\n", "\n").encode()
+            if "BEGIN " in trimmed
+            else base64.b64decode(trimmed, validate=True)
+        )
         key = serialization.load_pem_private_key(pem, password=None)
     except Exception as exc:
         raise ValueError("private key must be PEM or base64-encoded PEM") from exc
@@ -146,11 +163,15 @@ def parse_envelope(value: Any) -> dict[str, Any]:
         raise ValueError("unsupported quarantine key wrapping algorithm")
     if encryption.get("aad") not in (None, AAD_FORMAT):
         raise ValueError("unsupported quarantine AAD format")
-    if not isinstance(envelope.get("quarantine_id"), str) or not _QID.fullmatch(envelope["quarantine_id"]):
+    if not isinstance(envelope.get("quarantine_id"), str) or not _QID.fullmatch(
+        envelope["quarantine_id"]
+    ):
         raise ValueError("invalid quarantine_id")
     if envelope.get("reason") not in _REASONS:
         raise ValueError("invalid quarantine reason")
-    if not isinstance(envelope.get("sha256"), str) or not re.fullmatch(r"[0-9a-f]{64}", envelope["sha256"]):
+    if not isinstance(envelope.get("sha256"), str) or not re.fullmatch(
+        r"[0-9a-f]{64}", envelope["sha256"]
+    ):
         raise ValueError("invalid quarantine object digest")
     for field in (WRAPPED_KEY_FIELD, "iv_b64", "tag_b64"):
         if not isinstance(encryption.get(field), str):
@@ -175,9 +196,13 @@ def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:
     )
     if len(key) != 32:
         raise ValueError("invalid decrypted quarantine key length")
-    combined = base64.b64decode(envelope["ciphertext_b64"]) + base64.b64decode(encryption["tag_b64"])
+    combined = base64.b64decode(envelope["ciphertext_b64"]) + base64.b64decode(
+        encryption["tag_b64"]
+    )
     aad = _aad(envelope) if encryption.get("aad") == AAD_FORMAT else None
-    plaintext = AESGCM(key).decrypt(base64.b64decode(encryption["iv_b64"]), combined, aad).decode("utf-8")
+    plaintext = (
+        AESGCM(key).decrypt(base64.b64decode(encryption["iv_b64"]), combined, aad).decode("utf-8")
+    )
     if not hmac.compare_digest(sha256_hex(plaintext), envelope["sha256"]):
         raise ValueError("quarantine object digest mismatch")
     parsed = parse_decrypted(json.loads(plaintext))

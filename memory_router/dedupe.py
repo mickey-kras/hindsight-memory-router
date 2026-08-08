@@ -16,9 +16,7 @@ class TextShape:
     token_count_bucket: int
 
 
-def request_dedupe_key(
-    kind: str, writer_id: str | None, target: str | None, payload: Any
-) -> str:
+def request_dedupe_key(kind: str, writer_id: str | None, target: str | None, payload: Any) -> str:
     return sha256_hex(
         canonical_json(
             {
