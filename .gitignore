@@ -3,6 +3,14 @@ node_modules/
 dist/
 coverage/
 
+# Python
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+
 # Local files
 .env
 .env.*
