@@ -69,12 +69,12 @@ class DecryptedQuarantine(BaseModel):
 
 def _validation_message(exc: ValidationError) -> str:
     error = exc.errors()[0]
-    context = error.get("ctx")
-    if isinstance(context, dict) and isinstance(context.get("error"), ValueError):
-        return str(context["error"])
     location = error.get("loc", ())
     if location and location[-1] in {"writer_id", "source"}:
         return f"{location[-1]} must be a non-empty string"
+    context = error.get("ctx")
+    if isinstance(context, dict) and isinstance(context.get("error"), ValueError):
+        return str(context["error"])
     return "invalid decrypted quarantine object"
 
 
