@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterable
-from contextlib import asynccontextmanager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -57,18 +57,26 @@ def sqlite_path(url: str) -> str:
 class Tx:
     dialect: str
 
-    async def execute(self, sql: str, params: Iterable[Any] = ()) -> None: ...
-    async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None: ...
-    async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]: ...
+    async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
+        raise NotImplementedError
+
+    async def fetchone(self, sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
+        raise NotImplementedError
+
+    async def fetchall(self, sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
+        raise NotImplementedError
 
 
 class Database:
     dialect: str
 
-    async def initialize(self) -> None: ...
-    async def close(self) -> None: ...
-    @asynccontextmanager
-    async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
+    async def initialize(self) -> None:
+        raise NotImplementedError
+
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    def transaction(self, *, capacity_lock: bool = False) -> AbstractAsyncContextManager[Tx]:
         raise NotImplementedError
 
     async def ping(self) -> None:
@@ -123,7 +131,7 @@ class SqliteDatabase(Database):
             raise RuntimeError("database not initialized")
         async with self.lock:
             await self.connection.execute("BEGIN IMMEDIATE")
-            tx = SqliteTx(self.connection)
+            tx: Tx = SqliteTx(self.connection)
             try:
                 yield tx
             except Exception:
@@ -175,7 +183,7 @@ class PostgresDatabase(Database):
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         async with self.pool.connection() as connection:
             async with connection.transaction():
-                tx = PostgresTx(connection)
+                tx: Tx = PostgresTx(connection)
                 if capacity_lock:
                     await tx.execute(f"SELECT pg_advisory_xact_lock({CAPACITY_LOCK_ID})")
                 yield tx
