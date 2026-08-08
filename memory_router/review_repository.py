@@ -6,6 +6,15 @@ from typing import Any
 from .errors import HttpError
 from .repository import QuarantineRepository, insert_event, stored
 
+_SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
+_SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
+_SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
+_SELECT_IN_PROGRESS_FOR_UPDATE = _SELECT_IN_PROGRESS + " FOR UPDATE"
+
+
+def _item_query(tx: Any) -> str:
+    return _SELECT_ITEM_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_ITEM
+
 
 async def postpone(repository: QuarantineRepository, quarantine_id: str, at: str) -> dict[str, Any]:
     async with repository.db.transaction() as tx:
@@ -17,14 +26,7 @@ async def postpone(repository: QuarantineRepository, quarantine_id: str, at: str
         await insert_event(
             tx, quarantine_id, "postponed", at, {"postpone_count": int(item["postpone_count"]) + 1}
         )
-        return (
-            stored(
-                await tx.fetchone(
-                    "SELECT * FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,)
-                )
-            )
-            or {}
-        )
+        return stored(await tx.fetchone(_SELECT_ITEM, (quarantine_id,))) or {}
 
 
 async def mark_memory_reviewed(
@@ -43,12 +45,7 @@ async def claim_review(
     repository: QuarantineRepository, quarantine_id: str, kind: str, at: str
 ) -> dict[str, Any]:
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        item = stored(
-            await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}", (quarantine_id,)
-            )
-        )
+        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", "quarantine item not found")
         if item["status"] not in {"pending", "postponed"}:
@@ -68,13 +65,7 @@ async def interrupt_review(
     repository: QuarantineRepository, claimed: dict[str, Any], at: str, error: Exception
 ) -> None:
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        current = stored(
-            await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}",
-                (claimed["quarantine_id"],),
-            )
-        )
+        current = stored(await tx.fetchone(_item_query(tx), (claimed["quarantine_id"],)))
         if not current or current["status"] != "review_in_progress" or current["updated_at"] != at:
             return
         await tx.execute(
@@ -113,12 +104,7 @@ async def remove(
     repository: QuarantineRepository, quarantine_id: str, event_type: str, at: str
 ) -> None:
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        item = stored(
-            await tx.fetchone(
-                f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}", (quarantine_id,)
-            )
-        )
+        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", "quarantine item not found")
         await tx.execute("DELETE FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,))
@@ -130,10 +116,12 @@ async def recover_interrupted(
 ) -> None:
     now = datetime.fromisoformat(at.replace("Z", "+00:00"))
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        rows = await tx.fetchall(
-            "SELECT * FROM quarantine_items WHERE status='review_in_progress'" + suffix
+        query = (
+            _SELECT_IN_PROGRESS_FOR_UPDATE
+            if tx.dialect == "postgres"
+            else _SELECT_IN_PROGRESS
         )
+        rows = await tx.fetchall(query)
         for row in rows:
             updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))
             if (now - updated).total_seconds() < stale_seconds:
@@ -152,12 +140,7 @@ async def recover_interrupted(
 
 
 async def require_reviewable(tx: Any, quarantine_id: str) -> dict[str, Any]:
-    suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-    item = stored(
-        await tx.fetchone(
-            f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}", (quarantine_id,)
-        )
-    )
+    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
     if not item:
         raise HttpError(404, "quarantine_not_found", "quarantine item not found")
     if item["status"] not in {"pending", "postponed"}:
@@ -168,12 +151,7 @@ async def require_reviewable(tx: Any, quarantine_id: str) -> dict[str, Any]:
 
 
 async def require_in_progress(tx: Any, quarantine_id: str, at: str) -> dict[str, Any]:
-    suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-    item = stored(
-        await tx.fetchone(
-            f"SELECT * FROM quarantine_items WHERE quarantine_id=?{suffix}", (quarantine_id,)
-        )
-    )
+    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
     if not item or item["status"] != "review_in_progress" or item["updated_at"] != at:
         raise HttpError(
             409, "quarantine_review_changed", "quarantine item changed while review was in progress"
