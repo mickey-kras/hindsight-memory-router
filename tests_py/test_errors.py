@@ -18,9 +18,7 @@ def test_hindsight_gateway_error_initializes_typed_http_error() -> None:
 
 
 def test_hindsight_timeout_preserves_504_mapping() -> None:
-    error = HindsightGatewayError(
-        "timeout", operation="recall", method="POST", timeout_ms=10_000
-    )
+    error = HindsightGatewayError("timeout", operation="recall", method="POST", timeout_ms=10_000)
 
     assert error.status == 504
     assert error.code == "hindsight_timeout"
