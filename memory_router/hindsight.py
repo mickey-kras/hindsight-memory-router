@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from urllib.parse import quote
 
 import httpx
@@ -79,12 +79,12 @@ class HindsightGateway:
             "recall", "POST", f"/v1/default/banks/{quote(bank_id, safe='')}/memories/recall", body
         )
         try:
-            model = RecallResponse.model_validate(value)
+            RecallResponse.model_validate(value)
         except ValidationError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
-        return model.model_dump(by_alias=True, exclude_none=True)
+        return cast(dict[str, Any], value)
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
