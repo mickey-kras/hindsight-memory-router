@@ -1,3 +1,4 @@
+import { booleanEnv } from "./booleanEnv.js";
 import {
   DEFAULT_QUARANTINE_DATABASE_URL,
   isPostgresConnectionString,
@@ -29,8 +30,11 @@ export function deploymentModeConfigFromEnv(
   return {
     mode: rawMode,
     databaseUrl,
-    externalAdminRateLimit:
-      environment[EXTERNAL_ADMIN_RATE_LIMIT_ENV] === "true",
+    externalAdminRateLimit: booleanEnv(
+      environment,
+      EXTERNAL_ADMIN_RATE_LIMIT_ENV,
+      false,
+    ),
   };
 }
 
