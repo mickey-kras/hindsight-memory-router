@@ -58,6 +58,37 @@ describe("onboarding defaults", () => {
     });
   });
 
+  it("keeps the bundled richer registry backward-compatible", async () => {
+    const bundled = JSON.parse(
+      await readFile(
+        new URL("../writer_registry.example.json", import.meta.url),
+        "utf8",
+      ),
+    ) as {
+      writers: Record<
+        string,
+        { source: string; write_bank: string; read_banks: string[] }
+      >;
+    };
+
+    expect(Object.keys(bundled.writers)).toEqual([
+      "main",
+      "ops",
+      "dev",
+      "creative",
+      "personal",
+      "research",
+    ]);
+    expect(bundled.writers.main).toMatchObject({
+      source: "application",
+      write_bank: "main",
+      read_banks: ["main", "core", "ops", "dev", "creative", "personal"],
+    });
+    for (const writer of Object.values(bundled.writers)) {
+      expect(writer.source).toBe("application");
+    }
+  });
+
   it("rejects invalid explicitly supplied boolean configuration", () => {
     expect(() =>
       deploymentModeConfigFromEnv({
