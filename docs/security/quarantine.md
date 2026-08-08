@@ -10,7 +10,7 @@ payload -> canonical SHA-256 -> AES-256-GCM -> RSA-wrapped data key -> SQLite/Po
 
 The running router receives only the RSA public key. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail.
 
-Docker Compose generates the keypair with a one-shot initializer. The public key is mounted read-only into the router. The private key is stored separately in the `memory-router-quarantine-private-key` Docker volume and is never mounted into the router service.
+Docker Compose generates the keypair with a one-shot initializer. The public key is mounted read-only into the router. Private review material is stored separately in the project-scoped `memory-router-private-key` Compose volume and is never mounted into the router service. The initializer runs with networking disabled.
 
 There is no shared/default private key and quarantine encryption is not weakened for onboarding.
 
