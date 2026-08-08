@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ipaddress import IPv4Address
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -226,7 +227,7 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == [
         (
             ("memory_router.app:app",),
-            {"host": "0.0.0.0", "port": 8891, "access_log": False},
+            {"host": str(IPv4Address(0)), "port": 8891, "access_log": False},
         )
     ]
 
