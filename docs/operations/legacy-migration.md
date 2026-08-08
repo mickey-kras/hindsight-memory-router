@@ -3,8 +3,8 @@
 Legacy filesystem quarantine data can be imported into the current database-backed quarantine without modifying the source files.
 
 ```bash
-npm run build
-private-key-command | npm run migrate:legacy-quarantine -- \
+uv sync --frozen
+private-key-command | uv run python -m memory_router.cli.migrate_legacy_quarantine \
   --queue /path/to/review.jsonl \
   --objects /path/to/quarantine-objects \
   --database sqlite:/path/to/quarantine.db

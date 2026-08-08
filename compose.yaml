@@ -9,8 +9,8 @@ services:
       - /bin/sh
       - -ec
       - |
-        chown node:node /app/data
-        exec node dist/src/cli/bootstrapQuarantineKeys.js \
+        chown memoryrouter:memoryrouter /app/data
+        exec python -m memory_router.cli.bootstrap_quarantine_keys \
           --public-key /app/bootstrap/public/quarantine-public.pem \
           --private-key /app/bootstrap/private/quarantine-private.pem
     volumes:
@@ -35,7 +35,7 @@ services:
       - -c
       - |
         export QUARANTINE_PUBLIC_KEY="$$(cat /app/bootstrap/public/quarantine-public.pem)"
-        exec node dist/src/server.js
+        exec python -m memory_router.main
     ports:
       - "${MEMORY_ROUTER_PORT:-8890}:${MEMORY_ROUTER_PORT:-8890}"
     volumes:

@@ -2,6 +2,8 @@
 
 Unknown writers, suspicious requests, suspicious recalled memories, denied endpoints, and selected security events can be routed to encrypted quarantine.
 
+Before policy decisions, text passes through deterministic normalization/bounds and selected OWASP Agent Memory Guard detectors in-process. AMG is an additional detector layer; it does not own Memory Router storage, quarantine, or review state.
+
 Encryption boundary:
 
 ```text

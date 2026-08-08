@@ -17,6 +17,8 @@ It has two goals:
 
 Hindsight is the currently supported memory provider. Provider abstraction is not implemented yet.
 
+Security inspection runs in-process. Existing deterministic normalization/boundary defenses run first, followed by selected OWASP Agent Memory Guard detectors, then Memory Router policy. Memory Router remains the owner of routing, persistence, encrypted quarantine, and review state.
+
 ## Quick start
 
 The default deployment is single-node with embedded SQLite. Docker Compose also creates the quarantine keypair on first run and persists router data automatically.
@@ -34,6 +36,17 @@ Expected response:
 
 No `.env` file is required to start. Router and admin capabilities remain fail-closed until credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
 
+## Development
+
+Python 3.12+ and `uv` are used for the production service and tests. Node tooling remains only for repository-level OpenAPI formatting/linting and Aislop.
+
+```bash
+uv sync --frozen
+uv run pytest
+uv run ruff check memory_router scripts tests
+uv run mypy memory_router scripts
+```
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)
@@ -47,4 +60,4 @@ No `.env` file is required to start. Router and admin capabilities remain fail-c
 
 ## License
 
-MIT
+Memory Router remains MIT licensed. Third-party runtime notices are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

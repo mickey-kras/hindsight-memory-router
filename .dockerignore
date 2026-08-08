@@ -1,6 +1,13 @@
-node_modules
-dist
-coverage
 .git
+.github
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+coverage.json
+htmlcov
+node_modules
+tests
 npm-debug.log
 .DS_Store

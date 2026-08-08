@@ -1,4 +1,15 @@
-# Node
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.json
+htmlcov/
+
+# Node repository tooling
 node_modules/
 dist/
 coverage/

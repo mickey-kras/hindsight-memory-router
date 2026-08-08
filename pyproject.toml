@@ -1,0 +1,56 @@
+[project]
+name = "hindsight-memory-router"
+version = "0.0.0"
+description = "Policy facade for Hindsight memory with encrypted quarantine"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "agent-memory-guard==0.3.0",
+  "cryptography==50.0.0",
+  "fastapi==0.139.2",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.3.4",
+  "psycopg-pool==3.3.1",
+  "pydantic==2.13.4",
+  "rfc8785==0.1.4",
+  "uvicorn==0.51.0",
+]
+
+[dependency-groups]
+dev = [
+  "coverage==7.15.2",
+  "mypy==1.19.1",
+  "pip-audit==2.10.1",
+  "pytest==9.1.0",
+  "pytest-asyncio==1.4.0",
+  "ruff==0.15.14",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["memory_router"]
+omit = ["memory_router/main.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 90
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+exclude = ["tests/"]
