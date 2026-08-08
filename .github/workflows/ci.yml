@@ -137,3 +137,38 @@ jobs:
           name: real-smoke-diagnostics
           path: real-smoke.log
           if-no-files-found: error
+
+  aislop:
+    name: aislop status
+    permissions:
+      contents: read
+      security-events: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Aislop quality gate
+        run: npm run aislop:ci:human
+
+      - name: Aislop SARIF
+        if: always()
+        run: npm run --silent aislop:ci:sarif > aislop.sarif
+
+      - name: Upload Aislop SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
+        with:
+          sarif_file: aislop.sarif
