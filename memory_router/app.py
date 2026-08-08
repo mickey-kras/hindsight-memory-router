@@ -7,7 +7,7 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, TypeVar
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -33,6 +33,8 @@ from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .validation import parse_recall_body, parse_retain_body
 
+T = TypeVar("T")
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -44,6 +46,12 @@ def _scope(method: str, path: str) -> str:
     if method == "POST" and path == "/admin/quarantine/cleanup":
         return "cleanup"
     return "review"
+
+
+def _require_runtime(value: T | None, component: str) -> T:
+    if value is None:
+        raise RuntimeError(f"memory-router runtime {component} is not initialized")
+    return value
 
 
 class Runtime:
@@ -152,19 +160,19 @@ class Runtime:
             await self.repository.close()
 
     async def _sweep_loop(self, interval: int, retention_days: int) -> None:
-        assert self.repository is not None
+        repository = _require_runtime(self.repository, "repository")
         while True:
             await asyncio.sleep(interval)
             at = _now()
             try:
-                await sweep_expired(self.repository, at)
+                await sweep_expired(repository, at)
                 if retention_days > 0:
                     cutoff = (
                         (datetime.now(UTC) - timedelta(days=retention_days))
                         .isoformat(timespec="milliseconds")
                         .replace("+00:00", "Z")
                     )
-                    await prune_events_before(self.repository, cutoff, at)
+                    await prune_events_before(repository, cutoff, at)
             except Exception:
                 sys.stderr.write("memory-router quarantine sweeper failed\n")
 
@@ -222,16 +230,16 @@ async def _router_auth(request: Request) -> bool:
         request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
     ):
         return True
-    assert runtime.auditor is not None
-    await runtime.auditor.record("router")
+    auditor = _require_runtime(runtime.auditor, "auth auditor")
+    await auditor.record("router")
     return False
 
 
 async def _admin_auth(request: Request, scope: str) -> bool:
     if admin_authorized(request.headers.get("authorization"), scope, runtime.admin_tokens):
         return True
-    assert runtime.auditor is not None
-    await runtime.auditor.record("admin")
+    auditor = _require_runtime(runtime.auditor, "auth auditor")
+    await auditor.record("admin")
     return False
 
 
@@ -258,8 +266,8 @@ async def health() -> dict[str, str]:
 @app.get("/ready")
 async def ready() -> Response:
     try:
-        assert runtime.repository is not None
-        await runtime.repository.ping()
+        repository = _require_runtime(runtime.repository, "repository")
+        await repository.ping()
         return JSONResponse({"status": "ready", "service": "memory-router"})
     except Exception:
         return JSONResponse({"status": "not_ready", "service": "memory-router"}, status_code=503)
@@ -273,7 +281,7 @@ async def dispatch(path: str, request: Request) -> Response:
         if not await _admin_auth(request, _scope(method, pathname)):
             return JSONResponse({"error": "unauthorized"}, status_code=401)
         await _admin_rate(method)
-        assert runtime.admin is not None
+        admin = _require_runtime(runtime.admin, "admin service")
         if method == "GET" and pathname == "/admin/quarantine/queue":
             params = request.query_params
             try:
@@ -283,30 +291,30 @@ async def dispatch(path: str, request: Request) -> Response:
                 raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
             if not 1 <= limit <= 500 or offset < 0:
                 raise HttpError(400, "invalid_query", "integer query parameter out of range")
-            return JSONResponse(await runtime.admin.list_queue(limit, offset))
+            return JSONResponse(await admin.list_queue(limit, offset))
         if method == "GET" and pathname == "/admin/quarantine/stats":
-            return JSONResponse(await runtime.admin.stats())
+            return JSONResponse(await admin.stats())
         if method == "POST" and pathname == "/admin/quarantine/cleanup":
             body = await _json_body(request)
             if not isinstance(body, dict):
                 raise HttpError(400, "invalid_request", "cleanup body must be an object")
-            return JSONResponse(await runtime.admin.cleanup(body))
+            return JSONResponse(await admin.cleanup(body))
         match = __import__("re").fullmatch(
             r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
         )
         if match:
             item_id, action = match.group(1), match.group(2)
             if method == "GET" and action is None:
-                return JSONResponse(await runtime.admin.read_item(item_id))
+                return JSONResponse(await admin.read_item(item_id))
             if method == "POST" and action == "approve":
                 body = await _json_body(request)
                 if not isinstance(body, dict):
                     raise HttpError(400, "invalid_request", "approve body must be an object")
-                return JSONResponse(await runtime.admin.approve(item_id, body))
+                return JSONResponse(await admin.approve(item_id, body))
             if method == "POST" and action == "reject":
-                return JSONResponse(await runtime.admin.reject(item_id))
+                return JSONResponse(await admin.reject(item_id))
             if method == "POST" and action == "postpone":
-                return JSONResponse(await runtime.admin.postpone(item_id))
+                return JSONResponse(await admin.postpone(item_id))
         return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
 
     if not await _router_auth(request):
@@ -324,18 +332,17 @@ async def dispatch(path: str, request: Request) -> Response:
                 },
             }
         )
+    policy = _require_runtime(runtime.policy, "router policy")
     match = __import__("re").fullmatch(
         r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname
     )
     if method == "POST" and match:
         writer_id, action = match.group(1), match.group(2)
-        assert runtime.policy is not None
         if action == "recall":
             body = parse_recall_body(await _json_body(request))
-            runtime.policy.limits.assert_recall_bounds(body)
-            return JSONResponse(await runtime.policy.recall(writer_id, body))
+            policy.limits.assert_recall_bounds(body)
+            return JSONResponse(await policy.recall(writer_id, body))
         body = parse_retain_body(await _json_body(request))
-        runtime.policy.limits.assert_retain_bounds(body)
-        return JSONResponse(await runtime.policy.retain(writer_id, body))
-    assert runtime.policy is not None
-    return JSONResponse(await runtime.policy.deny_endpoint(method, pathname), status_code=404)
+        policy.limits.assert_retain_bounds(body)
+        return JSONResponse(await policy.retain(writer_id, body))
+    return JSONResponse(await policy.deny_endpoint(method, pathname), status_code=404)
