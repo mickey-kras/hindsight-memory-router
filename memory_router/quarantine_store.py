@@ -48,7 +48,9 @@ class QuarantineStore:
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
         quarantine_id = self._resolve_id(input_)
         encrypted = self._encrypt(input_, quarantine_id)
-        encrypted_bytes = len(json.dumps(encrypted, separators=(",", ":")).encode())
+        encrypted_bytes = len(
+            json.dumps(encrypted, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
         if encrypted_bytes > self.limits.max_item_bytes:
             raise HttpError(
                 413,
