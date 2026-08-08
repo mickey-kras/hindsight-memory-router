@@ -19,7 +19,7 @@ Compose defines three project-scoped named volumes:
 - `memory-router-public-key` for the public encryption key;
 - `memory-router-private-key` for review key material.
 
-Compose applies normal project namespacing; no global volume names are forced. Independent deployments on the same Docker host therefore receive separate data and key volumes.
+Compose applies normal project namespacing; no global volume names are forced. Independent deployments on the same Docker host therefore receive separate data and key volumes. The underlying Docker volume names are derived from the Compose project name rather than fixed by this repository.
 
 The router mounts the public-key volume read-only and does not mount the private-key volume. The initializer is the only service that mounts the private-key volume, and it runs with `network_mode: none`. The image owns `/app/data` as the non-root `node` user so SQLite and WAL files remain writable inside the named volume.
 
