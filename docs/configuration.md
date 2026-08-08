@@ -14,32 +14,13 @@ Credentials intentionally have no shared defaults. With no router token configur
 
 If `MEMORY_ROUTER_REGISTRY` is absent, the built-in registry contains one framework-neutral writer named `main`. It reads and writes only the `main` bank and uses `source: application`.
 
-Set `MEMORY_ROUTER_REGISTRY` only when you need additional writers or a richer writer-to-bank policy. `writer_registry.example.json` matches the default minimal shape and can be extended for custom deployments.
+`writer_registry.example.json` is intentionally different from the zero-config default. It preserves the historical bundled multi-writer topology (`main`, `ops`, `dev`, `creative`, `personal`, `research`) for deployments that already set:
 
-Example custom topology:
-
-```json
-{
-  "writers": {
-    "main": {
-      "role": "default",
-      "source": "application",
-      "write_bank": "main",
-      "read_banks": ["main"]
-    },
-    "research": {
-      "role": "research",
-      "source": "application",
-      "write_bank": "research",
-      "read_banks": ["research", "core"]
-    }
-  },
-  "defaults": {
-    "unknown_writer_action": "review_queue",
-    "suspicious_content_action": "review_queue"
-  }
-}
+```text
+MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 ```
+
+Those deployments keep their existing writer/bank behavior across upgrade; the example now uses framework-neutral `source: application` values. New deployments that want the minimal default should leave `MEMORY_ROUTER_REGISTRY` unset. Treat the bundled file as a richer custom-registry example that can be copied and edited for deployment-specific policy.
 
 ## Storage
 
