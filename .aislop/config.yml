@@ -9,10 +9,5 @@ exclude:
 
 rules:
   security/hardcoded-secret: error
-  # Replaced by the deterministic allowlist in tests/hardcodedUrls.test.ts.
-  # The heuristic's only hit was the inert WHATWG parsing base in
-  # httpHelpers.ts (never dereferenced; only pathname/searchParams escape),
-  # and attempts to appease that heuristic introduced parsing regressions.
-  # The test guards every HTTP(S) literal in src/ against an explicit,
-  # justified allowlist instead.
+  # Replaced by the deterministic allowlist in tests/test_hardcoded_urls.py.
   ai-slop/hardcoded-url: off

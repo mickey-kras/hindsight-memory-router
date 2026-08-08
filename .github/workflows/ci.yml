@@ -1,32 +1,23 @@
 name: ci
 
 on:
-  push:
-    branches:
-      - main
-      - 'release/**'
-      - 'feat/**'
-      - 'fix/**'
-      - 'refactor/**'
-      - 'docs/**'
-      - 'ci/**'
-      - 'security/**'
   pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   checks:
-    permissions:
-      contents: write
-      pull-requests: read
-      security-events: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
@@ -48,22 +39,23 @@ jobs:
       - run: python -m pip install -e '.[dev]'
       - run: npm ci
 
-      - name: Auto-fix before gates
+      - name: No legacy TypeScript runtime or tests
         run: |
-          ruff format memory_router tests_py
-          ruff check --fix memory_router tests_py || true
-          npm install --package-lock-only --ignore-scripts
-          npm run aislop:fix:safe
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Apply automated fixes"
-            git push
+          set -euo pipefail
+          for path in src tsconfig.json vitest.config.ts eslint.config.js; do
+            if [ -e "$path" ]; then
+              echo "obsolete TypeScript artifact remains: $path" >&2
+              exit 1
+            fi
+          done
+          if find tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print -quit | grep -q .; then
+            echo "obsolete TypeScript test remains under tests/" >&2
+            find tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print >&2
+            exit 1
           fi
 
-      - run: ruff format --check memory_router tests_py
-      - run: ruff check memory_router tests_py
+      - run: ruff format --check memory_router tests
+      - run: ruff check memory_router tests
       - run: mypy memory_router
 
       - name: OpenAPI contract
@@ -145,38 +137,3 @@ jobs:
           name: real-smoke-diagnostics
           path: real-smoke.log
           if-no-files-found: error
-
-  aislop:
-    name: aislop status
-    permissions:
-      contents: read
-      security-events: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
-        with:
-          egress-policy: audit
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Aislop quality gate
-        run: npm run aislop:ci:human
-
-      - name: Aislop SARIF
-        if: always()
-        run: npm run --silent aislop:ci:sarif > aislop.sarif
-
-      - name: Upload Aislop SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4
-        with:
-          sarif_file: aislop.sarif

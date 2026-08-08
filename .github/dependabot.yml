@@ -4,7 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
     open-pull-requests-limit: 3
+    groups:
+      pip-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -17,6 +25,7 @@ updates:
       npm-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
+
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -29,6 +38,7 @@ updates:
       docker-minor-patch:
         patterns: ["*"]
         update-types: [minor, patch]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
