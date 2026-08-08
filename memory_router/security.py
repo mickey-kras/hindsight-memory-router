@@ -38,14 +38,26 @@ _REASON_MAP = {
     "excessive_autonomy": "excessive_autonomy",
 }
 _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I), "ignore previous instructions", "prompt_injection"),
+    (
+        re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I),
+        "ignore previous instructions",
+        "prompt_injection",
+    ),
     (re.compile(r"system\s+prompt", re.I), "system prompt", "prompt_injection"),
     (re.compile(r"developer\s+message", re.I), "developer message", "prompt_injection"),
     (re.compile(r"new\s+instructions", re.I), "new instructions", "prompt_injection"),
     (re.compile(r"you\s+are\s+now", re.I), "you are now", "prompt_injection"),
     (re.compile(r"write\s+this\s+to\s+memory", re.I), "write this to memory", "prompt_injection"),
-    (re.compile(r"remember\s+this\s+as\s+truth", re.I), "remember this as truth", "prompt_injection"),
-    (re.compile(r"store\s+this\s+as\s+core\s+memory", re.I), "store this as core memory", "prompt_injection"),
+    (
+        re.compile(r"remember\s+this\s+as\s+truth", re.I),
+        "remember this as truth",
+        "prompt_injection",
+    ),
+    (
+        re.compile(r"store\s+this\s+as\s+core\s+memory", re.I),
+        "store this as core memory",
+        "prompt_injection",
+    ),
     (re.compile(r"overwrite\s+permissions", re.I), "overwrite permissions", "permission_rewrite"),
     (re.compile(r"reveal\s+(the\s+)?(secret|token|key)", re.I), "reveal secret", "secret_like"),
     (re.compile(r"\bapi[_ -]?key\b", re.I), "api key", "secret_like"),
@@ -201,7 +213,11 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
             continue
         for finding in _rule_scan(window):
             if finding.matched not in direct_rule_matches:
-                result.add(SafetyFinding(finding.matched, "split_instruction", finding.detector, finding.severity))
+                result.add(
+                    SafetyFinding(
+                        finding.matched, "split_instruction", finding.detector, finding.severity
+                    )
+                )
         for finding in _amg_scan(f"rolling.{key}", window, operation=operation):
             if any(_crosses_field_boundary(hit, window_fields) for hit in finding.hits):
                 result.add(
