@@ -64,12 +64,7 @@ class SafetyFinding:
     hits: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     def public(self) -> dict[str, str]:
-        result = {"matched": self.matched, "reason": self.reason}
-        if self.detector is not None:
-            result["detector"] = self.detector
-        if self.severity is not None:
-            result["severity"] = self.severity
-        return result
+        return {"matched": self.matched, "reason": self.reason}
 
 
 @dataclass(slots=True)
