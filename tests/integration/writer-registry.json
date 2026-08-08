@@ -1,0 +1,20 @@
+{
+  "writers": {
+    "main": {
+      "role": "default",
+      "source": "application",
+      "write_bank": "main",
+      "read_banks": ["main"]
+    },
+    "ops": {
+      "role": "ops",
+      "source": "application",
+      "write_bank": "ops",
+      "read_banks": ["ops", "core"]
+    }
+  },
+  "defaults": {
+    "unknown_writer_action": "review_queue",
+    "suspicious_content_action": "review_queue"
+  }
+}
