@@ -26,26 +26,22 @@ def _rfc8785_safe(value: Any) -> Any:
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, str):
-        return value.encode("utf-8", errors="replace").decode("utf-8")
+        value.encode("utf-8", errors="strict")
+        return value
     if isinstance(value, int):
-        if -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER:
-            return value
-        try:
-            converted = float(value)
-        except OverflowError:
-            return str(value)
-        return converted if math.isfinite(converted) else str(value)
+        if not -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER:
+            raise ValueError("non-finite JSON number")
+        return value
     if isinstance(value, float):
-        if math.isfinite(value):
-            return value
-        return str(value)
+        if not math.isfinite(value):
+            raise ValueError("non-finite JSON number")
+        return value
     if isinstance(value, list):
         return [_rfc8785_safe(entry) for entry in value]
     if isinstance(value, dict):
-        return {
-            str(key).encode("utf-8", errors="replace").decode("utf-8"): _rfc8785_safe(entry)
-            for key, entry in value.items()
-        }
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError("value must contain JSON values only")
+        return {key: _rfc8785_safe(entry) for key, entry in value.items()}
     raise ValueError("value must contain JSON values only")
 
 
