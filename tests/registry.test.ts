@@ -25,9 +25,15 @@ function registry(value: unknown): WriterRegistry {
 }
 
 describe("registry", () => {
-  it("uses the default registry and resolves known writers", () => {
+  it("uses the minimal default registry and resolves known writers", () => {
     expect(loadRegistry()).toBe(DEFAULT_REGISTRY);
-    expect(getWriter(DEFAULT_REGISTRY, "ops")?.write_bank).toBe("ops");
+    expect(getWriter(DEFAULT_REGISTRY, "main")).toEqual({
+      role: "default",
+      source: "application",
+      write_bank: "main",
+      read_banks: ["main"],
+    });
+    expect(getWriter(DEFAULT_REGISTRY, "ops")).toBeUndefined();
     expect(getWriter(DEFAULT_REGISTRY, "missing")).toBeUndefined();
   });
 
@@ -263,10 +269,10 @@ describe("registry", () => {
     const value = structuredClone(DEFAULT_REGISTRY) as unknown as {
       writers: Record<string, Record<string, unknown>>;
     };
-    value.writers.ops!.write_bank = 1;
+    value.writers.main!.write_bank = 1;
 
     expect(() => validateRegistry(value as unknown as WriterRegistry)).toThrow(
-      "writer ops missing write_bank",
+      "writer main missing write_bank",
     );
   });
 });
