@@ -19,7 +19,9 @@ def request(
         raw = b""
     else:
         raw = json.dumps(body).encode()
-    header_values = [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()]
+    header_values = [
+        (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
+    ]
     scope = {
         "type": "http",
         "method": method,
