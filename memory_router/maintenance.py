@@ -6,20 +6,41 @@ from .errors import HttpError
 from .repository import QuarantineRepository, insert_event
 
 BATCH_LIMIT = 1000
+MAX_REASON_FILTERS = 6
+
+_CLEANUP_PREDICATE = """
+WHERE
+  ((? = 'pending' AND status IN ('pending','postponed'))
+    OR (? = 'all' AND status <> 'review_in_progress'))
+  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
+  AND (? = 0 OR created_at < ?)
+"""
+_PREVIEW_CLEANUP_SQL = (
+    "SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes "
+    "FROM quarantine_items " + _CLEANUP_PREDICATE
+)
+_CLEANUP_SQL = (
+    "SELECT quarantine_id, encrypted_bytes FROM quarantine_items " + _CLEANUP_PREDICATE
+)
+_CLEANUP_SQL_FOR_UPDATE = _CLEANUP_SQL + " FOR UPDATE"
+_SWEEP_SQL = """
+SELECT quarantine_id, expires_at
+FROM quarantine_items
+WHERE status IN ('pending','postponed')
+  AND expires_at IS NOT NULL
+  AND expires_at <= ?
+ORDER BY expires_at
+LIMIT ?
+"""
+_SWEEP_SQL_FOR_UPDATE = _SWEEP_SQL + " FOR UPDATE"
 
 
 async def preview_cleanup(
     repository: QuarantineRepository, scope: str, reasons: list[str] | None, older_than: str | None
 ) -> dict[str, int]:
-    where, params = cleanup_where(scope, reasons, older_than)
+    params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        row = (
-            await tx.fetchone(
-                f"SELECT COUNT(*) count,COALESCE(SUM(encrypted_bytes),0) encrypted_bytes FROM quarantine_items {where}",
-                params,
-            )
-            or {}
-        )
+        row = await tx.fetchone(_PREVIEW_CLEANUP_SQL, params) or {}
     return {
         "count": int(row.get("count") or 0),
         "encrypted_bytes": int(row.get("encrypted_bytes") or 0),
@@ -34,12 +55,10 @@ async def cleanup(
     expected_count: int,
     at: str,
 ) -> dict[str, int]:
-    where, params = cleanup_where(scope, reasons, older_than)
+    params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        rows = await tx.fetchall(
-            f"SELECT quarantine_id,encrypted_bytes FROM quarantine_items {where}{suffix}", params
-        )
+        query = _CLEANUP_SQL_FOR_UPDATE if tx.dialect == "postgres" else _CLEANUP_SQL
+        rows = await tx.fetchall(query, params)
         if len(rows) != expected_count:
             raise HttpError(
                 409,
@@ -64,12 +83,8 @@ async def cleanup(
 
 async def sweep_expired(repository: QuarantineRepository, at: str) -> int:
     async with repository.db.transaction() as tx:
-        suffix = " FOR UPDATE" if tx.dialect == "postgres" else ""
-        rows = await tx.fetchall(
-            "SELECT quarantine_id,expires_at FROM quarantine_items WHERE status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? ORDER BY expires_at LIMIT ?"
-            + suffix,
-            (at, BATCH_LIMIT),
-        )
+        query = _SWEEP_SQL_FOR_UPDATE if tx.dialect == "postgres" else _SWEEP_SQL
+        rows = await tx.fetchall(query, (at, BATCH_LIMIT))
         for row in rows:
             await tx.execute(
                 "DELETE FROM quarantine_items WHERE quarantine_id=?", (row["quarantine_id"],)
@@ -103,19 +118,20 @@ async def prune_events_before(repository: QuarantineRepository, cutoff: str, at:
         return len(rows)
 
 
-def cleanup_where(
+def cleanup_params(
     scope: str, reasons: list[str] | None, older_than: str | None
-) -> tuple[str, list[Any]]:
-    conditions = [
-        "status IN ('pending','postponed')"
-        if scope == "pending"
-        else "status<>'review_in_progress'"
+) -> list[Any]:
+    if scope not in {"pending", "all"}:
+        raise ValueError("cleanup scope must be pending or all")
+    selected = list(reasons or [])
+    if len(selected) > MAX_REASON_FILTERS:
+        raise ValueError("too many cleanup reasons")
+    padded: list[str | None] = selected + [None] * (MAX_REASON_FILTERS - len(selected))
+    return [
+        scope,
+        scope,
+        1 if selected else 0,
+        *padded,
+        1 if older_than else 0,
+        older_than,
     ]
-    params: list[Any] = []
-    if reasons:
-        conditions.append("reason IN (" + ",".join("?" for _ in reasons) + ")")
-        params.extend(reasons)
-    if older_than:
-        conditions.append("created_at<?")
-        params.append(older_than)
-    return "WHERE " + " AND ".join(conditions), params
