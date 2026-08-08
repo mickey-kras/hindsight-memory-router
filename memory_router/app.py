@@ -18,6 +18,7 @@ from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, router_authorized
 from .config import (
     assert_auth_environment,
+    assert_deployment_mode,
     assert_no_private_key_environment,
     boolean_env,
     integer_env,
@@ -41,7 +42,7 @@ from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .validation import parse_recall_body, parse_retain_body
 
-_HEX = frozenset("0123456789abcdefABCDEF")
+_PERCENT_DOT = re.compile(r"%2e", re.I)
 
 
 def _now() -> str:
@@ -64,30 +65,32 @@ def _require_runtime[T](value: T | None, component: str) -> T:
 
 def _raw_pathname(request: Request) -> str:
     raw = request.scope.get("raw_path")
-    if isinstance(raw, bytes):
-        try:
-            path = raw.decode("ascii")
-        except UnicodeDecodeError as exc:
-            raise HttpError(
-                400,
-                "invalid_path_encoding",
-                "path segment contains malformed percent-encoding",
-            ) from exc
-    else:
-        path = request.url.path
-    index = 0
-    while index < len(path):
-        if path[index] != "%":
-            index += 1
+    path = raw.decode("latin-1") if isinstance(raw, bytes) else request.url.path
+    return _normalize_dot_segments(path)
+
+
+def _normalize_dot_segments(path: str) -> str:
+    absolute = path.startswith("/")
+    trailing = path.endswith("/")
+    output: list[str] = []
+    for segment in path.split("/"):
+        dot_segment = _PERCENT_DOT.sub(".", segment)
+        if dot_segment == ".":
+            trailing = True
             continue
-        if index + 2 >= len(path) or path[index + 1] not in _HEX or path[index + 2] not in _HEX:
-            raise HttpError(
-                400,
-                "invalid_path_encoding",
-                "path segment contains malformed percent-encoding",
-            )
-        index += 3
-    return path
+        if dot_segment == "..":
+            if output:
+                output.pop()
+            trailing = True
+            continue
+        if segment or not absolute:
+            output.append(segment)
+    normalized = "/".join(output)
+    if absolute:
+        normalized = "/" + normalized
+    if trailing and normalized != "/" and not normalized.endswith("/"):
+        normalized += "/"
+    return normalized or ("/" if absolute else "")
 
 
 def _decode_path_segment(value: str) -> str:
@@ -134,6 +137,7 @@ class Runtime:
         assert_no_private_key_environment()
         assert_auth_environment()
         database_url = os.environ.get("QUARANTINE_DATABASE_URL", DEFAULT_DATABASE_URL)
+        assert_deployment_mode(database_url)
         self.database = await create_database(database_url)
         self.repository = QuarantineRepository(self.database)
         await validate_storage(self.database, database_url)
@@ -326,7 +330,10 @@ async def ready() -> Response:
         return JSONResponse({"status": "not_ready", "service": "memory-router"}, status_code=503)
 
 
-@app.api_route("/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"])
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
+)
 async def dispatch(path: str, request: Request) -> Response:
     del path
     pathname = _raw_pathname(request)
