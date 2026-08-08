@@ -29,8 +29,8 @@ dev = [
   "coverage==7.9.2",
   "mypy==1.17.0",
   "pip-audit==2.9.0",
-  "pytest==8.4.1",
-  "pytest-asyncio==1.1.0",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
   "ruff==0.12.4",
 ]
 
