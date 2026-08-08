@@ -20,7 +20,8 @@ def test_prompt_injection_is_owned_by_amg() -> None:
 
 
 def test_sensitive_data_is_owned_by_amg() -> None:
-    result = scan_content("temporary key sk-abcdefghijklmnopqrstuvwxyz012345")
+    fake_key = "sk-" + ("a" * 24)
+    result = scan_content(f"temporary key {fake_key}")
     assert not result.safe
     assert "sensitive_data" in detectors(result)
     assert "secret_like" in {finding.reason for finding in result.findings}
