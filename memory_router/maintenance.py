@@ -73,11 +73,12 @@ async def cleanup(
                 "quarantine cleanup selection changed after preview",
             )
         total = 0
-        details: dict[str, Any] = {"scope": scope}
+        filter_details: dict[str, Any] = {"scope": scope}
         if reasons:
-            details["reasons"] = reasons
+            filter_details["reasons"] = reasons
         if older_than is not None:
-            details["older_than"] = older_than
+            filter_details["older_than"] = older_than
+        details = {"filter": filter_details}
         for row in rows:
             total += int(row["encrypted_bytes"])
             await tx.execute(
