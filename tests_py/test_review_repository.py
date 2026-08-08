@@ -57,7 +57,10 @@ async def add(repo: QuarantineRepository, item: dict[str, object]) -> None:
     await repo.store(item, Capacity(50, 50, 1_000_000), mode="id", at="2026-01-01T00:00:00.000Z")
     if item["status"] != "pending":
         async with repo.db.transaction() as tx:
-            await tx.execute("UPDATE quarantine_items SET status=? WHERE quarantine_id=?", (item["status"], item["quarantine_id"]))
+            await tx.execute(
+                "UPDATE quarantine_items SET status=? WHERE quarantine_id=?",
+                (item["status"], item["quarantine_id"]),
+            )
 
 
 @pytest.mark.asyncio

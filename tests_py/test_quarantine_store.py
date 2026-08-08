@@ -8,25 +8,38 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.errors import HttpError
-from memory_router.quarantine_store import QuarantineLimits, QuarantineStore, _effective_writer_limit
+from memory_router.quarantine_store import (
+    QuarantineLimits,
+    QuarantineStore,
+    _effective_writer_limit,
+)
 
 
 def public_key() -> str:
     private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    return private.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+    return (
+        private.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
 
 
 class Session:
     def __init__(self) -> None:
         self.count_calls: list[object] = []
         self.distinct_calls: list[object] = []
-    async def consume_many(self, buckets: object) -> None: self.count_calls.append(buckets)
-    async def consume_many_distinct(self, buckets: object, identities: object) -> None: self.distinct_calls.append((buckets, identities))
+
+    async def consume_many(self, buckets: object) -> None:
+        self.count_calls.append(buckets)
+
+    async def consume_many_distinct(self, buckets: object, identities: object) -> None:
+        self.distinct_calls.append((buckets, identities))
 
 
 class Limiter:
     def __init__(self) -> None:
         self.session = Session()
+
     async def with_identity_lock(self, identity: str, operation: object) -> object:
         return await operation(self.session)  # type: ignore[operator]
 
@@ -44,21 +57,39 @@ def base_input(kind: str = "retain_request", **extra: object) -> dict[str, objec
     return value
 
 
-def store_fixture(limits: QuarantineLimits | None = None) -> tuple[QuarantineStore, SimpleNamespace, Limiter]:
+def store_fixture(
+    limits: QuarantineLimits | None = None,
+) -> tuple[QuarantineStore, SimpleNamespace, Limiter]:
     repository = SimpleNamespace(
         get=AsyncMock(return_value=None),
         find_memory_state=AsyncMock(return_value=None),
-        stats=AsyncMock(return_value={"pending_items": 0, "postponed_items": 0, "encrypted_bytes": 0}),
+        stats=AsyncMock(
+            return_value={"pending_items": 0, "postponed_items": 0, "encrypted_bytes": 0}
+        ),
         store=AsyncMock(),
     )
     limiter = Limiter()
-    return QuarantineStore(public_key(), repository, limits or QuarantineLimits(), limiter), repository, limiter
+    return (
+        QuarantineStore(public_key(), repository, limits or QuarantineLimits(), limiter),
+        repository,
+        limiter,
+    )
 
 
 def test_effective_writer_limit() -> None:
     assert _effective_writer_limit(QuarantineLimits(max_pending_items_per_writer=0)) == 0
     assert _effective_writer_limit(QuarantineLimits(max_pending_items=1)) == 0
-    assert _effective_writer_limit(QuarantineLimits(max_pending_items=10, max_pending_items_per_writer=5, max_encrypted_bytes=100, max_item_bytes=20)) == 4
+    assert (
+        _effective_writer_limit(
+            QuarantineLimits(
+                max_pending_items=10,
+                max_pending_items_per_writer=5,
+                max_encrypted_bytes=100,
+                max_item_bytes=20,
+            )
+        )
+        == 4
+    )
 
 
 def test_resolve_id_modes_and_ttl() -> None:
@@ -67,7 +98,12 @@ def test_resolve_id_modes_and_ttl() -> None:
     request = store._resolve_id(base_input("recall_request", dedupeKey="k"))
     memory = store._resolve_id(base_input("recalled_memory", sourceBank="main", sourceMemoryId="m"))
     random_id = store._resolve_id(base_input("retain_request"))
-    assert security.startswith("q_security") and request.startswith("q_request") and memory.startswith("q_memory") and random_id.startswith("q_20260808")
+    assert (
+        security.startswith("q_security")
+        and request.startswith("q_request")
+        and memory.startswith("q_memory")
+        and random_id.startswith("q_20260808")
+    )
     encrypted = {"sha256": "x"}
     built = store._build_item(base_input(), "q", encrypted)
     assert built["expires_at"] == "2026-08-09T00:00:00.000Z"
@@ -115,7 +151,9 @@ async def test_known_identity_variants() -> None:
     store, repository, _ = store_fixture()
     assert await store._known_identity(base_input("security_event", dedupeKey="x"), True)
     repository.find_memory_state.return_value = {"status": "pending"}
-    assert await store._known_identity(base_input("recalled_memory", sourceBank="main", sourceMemoryId="m"), False)
+    assert await store._known_identity(
+        base_input("recalled_memory", sourceBank="main", sourceMemoryId="m"), False
+    )
     assert not await store._known_identity(base_input("retain_request"), False)
 
 
@@ -132,7 +170,11 @@ async def test_charge_known_capacity_disabled_auth_and_family() -> None:
     await disabled._charge(base_input(), False, limiter2.session)
     assert not limiter2.session.distinct_calls
 
-    repository.stats.return_value = {"pending_items": 1000, "postponed_items": 0, "encrypted_bytes": 0}
+    repository.stats.return_value = {
+        "pending_items": 1000,
+        "postponed_items": 0,
+        "encrypted_bytes": 0,
+    }
     await store._charge(base_input(), False, session)
     calls_before = len(session.distinct_calls)
     assert calls_before == 0
@@ -147,10 +189,16 @@ async def test_charge_known_capacity_disabled_auth_and_family() -> None:
 
 @pytest.mark.asyncio
 async def test_capacity_exhausted_by_bytes_or_counts() -> None:
-    store, repository, _ = store_fixture(QuarantineLimits(max_pending_items=2, max_encrypted_bytes=10))
+    store, repository, _ = store_fixture(
+        QuarantineLimits(max_pending_items=2, max_encrypted_bytes=10)
+    )
     repository.stats.return_value = {"pending_items": 1, "postponed_items": 1, "encrypted_bytes": 0}
     assert await store._capacity_exhausted("now")
-    repository.stats.return_value = {"pending_items": 0, "postponed_items": 0, "encrypted_bytes": 10}
+    repository.stats.return_value = {
+        "pending_items": 0,
+        "postponed_items": 0,
+        "encrypted_bytes": 10,
+    }
     assert await store._capacity_exhausted("now")
     repository.stats.return_value = {"pending_items": 0, "postponed_items": 0, "encrypted_bytes": 9}
     assert not await store._capacity_exhausted("now")

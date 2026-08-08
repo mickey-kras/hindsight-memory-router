@@ -6,10 +6,27 @@ import pytest
 
 from memory_router.db import SqliteDatabase, initialize_schema
 from memory_router.errors import HttpError
-from memory_router.repository import Capacity, QuarantineRepository, _expired, _same_scope, _summary, stored
+from memory_router.repository import (
+    Capacity,
+    QuarantineRepository,
+    _expired,
+    _same_scope,
+    _summary,
+    stored,
+)
 
 
-def item(qid: str, *, writer: str | None = "main", reason: str = "suspicious_content", status: str = "pending", dedupe: str | None = None, bank: str | None = None, memory: str | None = None, expires: str | None = None) -> dict[str, object]:
+def item(
+    qid: str,
+    *,
+    writer: str | None = "main",
+    reason: str = "suspicious_content",
+    status: str = "pending",
+    dedupe: str | None = None,
+    bank: str | None = None,
+    memory: str | None = None,
+    expires: str | None = None,
+) -> dict[str, object]:
     return {
         "quarantine_id": qid,
         "created_at": "2026-01-01T00:00:00.000Z",
@@ -43,14 +60,30 @@ async def repository(tmp_path: Path) -> QuarantineRepository:
 
 def test_stored_summary_scope_and_expiry_helpers() -> None:
     assert stored(None) is None
-    row = {"encrypted_envelope": '{"v":1}', "postpone_count": None, "requarantine_count": "2", "quarantine_id": "q", "status": "pending"}
+    row = {
+        "encrypted_envelope": '{"v":1}',
+        "postpone_count": None,
+        "requarantine_count": "2",
+        "quarantine_id": "q",
+        "status": "pending",
+    }
     converted = stored(row)
-    assert converted and converted["encrypted"] == {"v": 1} and converted["postpone_count"] == 0 and converted["requarantine_count"] == 2
-    assert _summary({"quarantine_id": "q", "status": "pending", "reason": None}) == {"quarantine_id": "q", "status": "pending"}
+    assert (
+        converted
+        and converted["encrypted"] == {"v": 1}
+        and converted["postpone_count"] == 0
+        and converted["requarantine_count"] == 2
+    )
+    assert _summary({"quarantine_id": "q", "status": "pending", "reason": None}) == {
+        "quarantine_id": "q",
+        "status": "pending",
+    }
     assert _expired({"status": "pending", "expires_at": "a"}, "b")
     assert not _expired({"status": "reviewed_allowed", "expires_at": "a"}, "b")
     assert not _same_scope({"kind": "security_event"}, {"kind": "security_event"})
-    assert _same_scope({"kind": "x", "reason": "unknown_writer"}, {"kind": "y", "reason": "unknown_writer"})
+    assert _same_scope(
+        {"kind": "x", "reason": "unknown_writer"}, {"kind": "y", "reason": "unknown_writer"}
+    )
     assert not _same_scope({"reason": "unknown_writer"}, {"reason": "other"})
     assert _same_scope({"writer_id": "a"}, {"writer_id": "a"})
     assert not _same_scope({"writer_id": "a"}, {"writer_id": "b"})
@@ -58,7 +91,9 @@ def test_stored_summary_scope_and_expiry_helpers() -> None:
 
 
 @pytest.mark.asyncio
-async def test_repository_store_get_refresh_list_stats_and_memory_lookup(repository: QuarantineRepository) -> None:
+async def test_repository_store_get_refresh_list_stats_and_memory_lookup(
+    repository: QuarantineRepository,
+) -> None:
     capacity = Capacity(10, 10, 100_000)
     first = item("q1", dedupe="d1")
     await repository.store(first, capacity, mode="request", at="2026-01-01T00:00:00.000Z")
@@ -94,7 +129,9 @@ async def test_reviewed_request_dedupe_does_not_reopen(repository: QuarantineRep
     original = item("q", dedupe="d")
     await repository.store(original, capacity, mode="request", at="now")
     async with repository.db.transaction() as tx:
-        await tx.execute("UPDATE quarantine_items SET status='reviewed_allowed' WHERE quarantine_id='q'")
+        await tx.execute(
+            "UPDATE quarantine_items SET status='reviewed_allowed' WHERE quarantine_id='q'"
+        )
     replacement = item("new", dedupe="d")
     replacement["sha256"] = "changed"
     await repository.store(replacement, capacity, mode="request", at="later")
@@ -103,22 +140,38 @@ async def test_reviewed_request_dedupe_does_not_reopen(repository: QuarantineRep
 
 
 @pytest.mark.asyncio
-async def test_capacity_global_bytes_writer_and_expired_replacement(repository: QuarantineRepository) -> None:
+async def test_capacity_global_bytes_writer_and_expired_replacement(
+    repository: QuarantineRepository,
+) -> None:
     roomy = Capacity(10, 10, 100_000)
     await repository.store(item("a", writer="w"), roomy, mode="id", at="2026-01-01T00:00:00.000Z")
     with pytest.raises(HttpError) as global_cap:
-        await repository.store(item("b", writer="x"), Capacity(1, 10, 100_000), mode="id", at="2026-01-01T00:00:01.000Z")
+        await repository.store(
+            item("b", writer="x"),
+            Capacity(1, 10, 100_000),
+            mode="id",
+            at="2026-01-01T00:00:01.000Z",
+        )
     assert global_cap.value.code == "quarantine_capacity_exceeded"
     with pytest.raises(HttpError) as writer_cap:
-        await repository.store(item("b", writer="w"), Capacity(10, 1, 100_000), mode="id", at="2026-01-01T00:00:01.000Z")
+        await repository.store(
+            item("b", writer="w"),
+            Capacity(10, 1, 100_000),
+            mode="id",
+            at="2026-01-01T00:00:01.000Z",
+        )
     assert writer_cap.value.code == "quarantine_writer_capacity_exceeded"
     with pytest.raises(HttpError) as bytes_cap:
-        await repository.store(item("b", writer="x"), Capacity(10, 10, 1), mode="id", at="2026-01-01T00:00:01.000Z")
+        await repository.store(
+            item("b", writer="x"), Capacity(10, 10, 1), mode="id", at="2026-01-01T00:00:01.000Z"
+        )
     assert bytes_cap.value.code == "quarantine_capacity_exceeded"
 
     expired = item("expired", writer="w", expires="2025-01-01T00:00:00.000Z")
     await repository.store(expired, roomy, mode="id", at="2024-01-01T00:00:00.000Z")
-    await repository.store(expired, Capacity(2, 1, 100_000), mode="id", at="2026-01-01T00:00:00.000Z")
+    await repository.store(
+        expired, Capacity(2, 1, 100_000), mode="id", at="2026-01-01T00:00:00.000Z"
+    )
 
 
 @pytest.mark.asyncio
@@ -133,7 +186,9 @@ async def test_stats_classifies_statuses_and_expiry(repository: QuarantineReposi
         value = item(qid, writer=qid, expires=expires)
         await repository.store(value, cap, mode="id", at="2019-01-01T00:00:00.000Z")
         async with repository.db.transaction() as tx:
-            await tx.execute("UPDATE quarantine_items SET status=? WHERE quarantine_id=?", (status, qid))
+            await tx.execute(
+                "UPDATE quarantine_items SET status=? WHERE quarantine_id=?", (status, qid)
+            )
     stats = await repository.stats("2026-01-01T00:00:00.000Z")
     assert stats["postponed_items"] == 1
     assert stats["expired_items"] == 1

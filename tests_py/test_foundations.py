@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from pydantic import ValidationError
 
 from memory_router import auth, config, dedupe, validation
 from memory_router.errors import HttpError
@@ -30,7 +29,9 @@ def test_auth_helpers_and_scopes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_failure_auditor_records_and_survives_store_failure(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_auth_failure_auditor_records_and_survives_store_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     store = SimpleNamespace(put=AsyncMock())
     auditor = auth.AuthFailureAuditor(store)
     await auditor.record("router")
@@ -104,8 +105,13 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
     blank.write_text(
         json.dumps(
             {
-                "writers": {" ": {"role": "x", "source": "x", "write_bank": "main", "read_banks": ["main"]}},
-                "defaults": {"unknown_writer_action": "review_queue", "suspicious_content_action": "review_queue"},
+                "writers": {
+                    " ": {"role": "x", "source": "x", "write_bank": "main", "read_banks": ["main"]}
+                },
+                "defaults": {
+                    "unknown_writer_action": "review_queue",
+                    "suspicious_content_action": "review_queue",
+                },
             }
         )
     )
@@ -116,8 +122,18 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
     cross.write_text(
         json.dumps(
             {
-                "writers": {"main": {"role": "x", "source": "x", "write_bank": "main", "read_banks": ["main", "research"]}},
-                "defaults": {"unknown_writer_action": "review_queue", "suspicious_content_action": "review_queue"},
+                "writers": {
+                    "main": {
+                        "role": "x",
+                        "source": "x",
+                        "write_bank": "main",
+                        "read_banks": ["main", "research"],
+                    }
+                },
+                "defaults": {
+                    "unknown_writer_action": "review_queue",
+                    "suspicious_content_action": "review_queue",
+                },
             }
         )
     )
@@ -125,7 +141,9 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
         config.load_registry(str(cross))
 
 
-def test_environment_assertions(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+def test_environment_assertions(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     for name in list(config.os.environ):
         if name.startswith("QUARANTINE_PRIVATE_KEY") or name.startswith("MEMORY_ROUTER_"):
             monkeypatch.delenv(name, raising=False)
@@ -171,8 +189,14 @@ def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
         ({"items": [{"content": "x", "document_id": 1}]}, "document_id must be a string or null"),
         ({"items": [{"content": "x", "timestamp": 1}]}, "timestamp must be a string or null"),
         ({"items": [{"content": "x", "tags": [1]}]}, "tags must contain strings"),
-        ({"items": [{"content": "x", "metadata": {"a": 1}}]}, "metadata must map strings to strings"),
-        ({"items": [{"content": "x", "update_mode": "bad"}]}, "update_mode must be replace or append"),
+        (
+            {"items": [{"content": "x", "metadata": {"a": 1}}]},
+            "metadata must map strings to strings",
+        ),
+        (
+            {"items": [{"content": "x", "update_mode": "bad"}]},
+            "update_mode must be replace or append",
+        ),
         ({"items": [{"content": "x"}], "async": "x"}, "async must be a boolean"),
         ({"items": [{"content": "x"}], "document_tags": [1]}, "document_tags must contain strings"),
     ],
@@ -183,7 +207,9 @@ def test_retain_validation_errors(value: object, message: str) -> None:
 
 
 def test_retain_validation_success_and_passthrough() -> None:
-    parsed = validation.parse_retain_body({"items": [{"content": "x", "extra": 1}], "async": True, "extra": "ok"})
+    parsed = validation.parse_retain_body(
+        {"items": [{"content": "x", "extra": 1}], "async": True, "extra": "ok"}
+    )
     assert parsed["async"] is True and parsed["items"][0]["extra"] == 1 and parsed["extra"] == "ok"
 
 
@@ -208,7 +234,9 @@ def test_recall_validation_errors(value: object, message: str) -> None:
 
 def test_recall_validation_success() -> None:
     assert validation.parse_recall_body({"query": "hello", "max_tokens": 5, "trace": True}) == {
-        "query": "hello", "max_tokens": 5, "trace": True
+        "query": "hello",
+        "max_tokens": 5,
+        "trace": True,
     }
 
 
@@ -224,14 +252,28 @@ def test_dedupe_helpers_and_shapes() -> None:
         cap.resolve("w", str(i))
     assert cap.resolve("overflow", "x") == "aggregate"
     assert dedupe.request_family_identity("other", "x", None, {}) is None
-    a = dedupe.request_family_identity("retain_request", "unknown_writer", "x", {"tags": ["B", "a"], "content": "  HELLO   world "})
-    b = dedupe.request_family_identity("retain_request", "unknown_writer", "y", {"tags": ["a", "b"], "content": "hello world"})
+    a = dedupe.request_family_identity(
+        "retain_request", "unknown_writer", "x", {"tags": ["B", "a"], "content": "  HELLO   world "}
+    )
+    b = dedupe.request_family_identity(
+        "retain_request", "unknown_writer", "y", {"tags": ["a", "b"], "content": "hello world"}
+    )
     assert a == b
-    assert dedupe.request_family_identity("recall_request", "suspicious", None, {"query": None, "trace": True, "n": 1}) is not None
+    assert (
+        dedupe.request_family_identity(
+            "recall_request", "suspicious", None, {"query": None, "trace": True, "n": 1}
+        )
+        is not None
+    )
 
 
 def test_hindsight_bounds() -> None:
-    cfg = HindsightLimitConfig(max_retain_items=1, max_retain_content_bytes=4, max_recall_query_bytes=3, max_recall_max_tokens=2)
+    cfg = HindsightLimitConfig(
+        max_retain_items=1,
+        max_retain_content_bytes=4,
+        max_recall_query_bytes=3,
+        max_recall_max_tokens=2,
+    )
     limits = HindsightLimits(cfg, InMemorySlidingWindow())
     limits.assert_retain_bounds({"items": [{"content": "1234"}]})
     with pytest.raises(HttpError) as too_many:
@@ -252,7 +294,13 @@ def test_hindsight_bounds() -> None:
 @pytest.mark.asyncio
 async def test_hindsight_quota_buckets_and_mapping() -> None:
     limiter = InMemorySlidingWindow()
-    cfg = HindsightLimitConfig(retain_writer_max=1, retain_global_max=2, recall_writer_max=1, recall_global_max=2, rate_limit_window_ms=1500)
+    cfg = HindsightLimitConfig(
+        retain_writer_max=1,
+        retain_global_max=2,
+        recall_writer_max=1,
+        recall_global_max=2,
+        rate_limit_window_ms=1500,
+    )
     limits = HindsightLimits(cfg, limiter)
     await limits.consume_retain("a")
     with pytest.raises(HttpError) as exc:
@@ -281,7 +329,9 @@ async def test_in_memory_sliding_window_expiry_and_disabled_buckets() -> None:
 @pytest.mark.asyncio
 async def test_in_memory_rate_limiter_count_distinct_expiry_and_lock() -> None:
     limiter = InMemoryRateLimiter()
-    await limiter.consume_many_distinct([("b", 1, 10), ("off", 0, 1)], [("s", "a", 1, 10), ("off", "x", 0, 1)], at_ms=10)
+    await limiter.consume_many_distinct(
+        [("b", 1, 10), ("off", 0, 1)], [("s", "a", 1, 10), ("off", "x", 0, 1)], at_ms=10
+    )
     with pytest.raises(HttpError):
         await limiter.consume_many([("b", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
@@ -303,7 +353,9 @@ class FakeTx:
     async def execute(self, sql: str, params: tuple[object, ...] | None = None) -> None:
         self.executed.append((sql, params))
 
-    async def fetchone(self, sql: str, params: tuple[object, ...] | None = None) -> dict[str, int] | None:
+    async def fetchone(
+        self, sql: str, params: tuple[object, ...] | None = None
+    ) -> dict[str, int] | None:
         self.executed.append((sql, params))
         return self.rows.pop(0) if self.rows else None
 
@@ -331,16 +383,22 @@ class FakeDatabase:
 async def test_postgres_rate_limiter_paths() -> None:
     tx = FakeTx([{"count": 0}, {"count": 0}, None, {"now_ms": 100}])
     session = _PostgresSession(tx)
-    await session.consume_many_distinct([("b", 2, 10), ("b", 2, 10), ("off", 0, 1)], [("s", "a", 2, 10)], at_ms=50)
+    await session.consume_many_distinct(
+        [("b", 2, 10), ("b", 2, 10), ("off", 0, 1)], [("s", "a", 2, 10)], at_ms=50
+    )
     assert any("advisory_xact_lock" in sql for sql, _ in tx.executed)
 
     assert await _PostgresSession(FakeTx([{"now_ms": 123}]))._database_now_ms() == 123
     await _PostgresSession(FakeTx()).consume_many_distinct([], [])
 
     with pytest.raises(HttpError):
-        await _PostgresSession(FakeTx([{"count": 1}])).consume_many_distinct([("b", 1, 10)], [], at_ms=20)
+        await _PostgresSession(FakeTx([{"count": 1}])).consume_many_distinct(
+            [("b", 1, 10)], [], at_ms=20
+        )
     with pytest.raises(HttpError):
-        await _PostgresSession(FakeTx([{"count": 1}, None])).consume_many_distinct([], [("s", "new", 1, 10)], at_ms=20)
+        await _PostgresSession(FakeTx([{"count": 1}, None])).consume_many_distinct(
+            [], [("s", "new", 1, 10)], at_ms=20
+        )
 
     tx2 = FakeTx()
     limiter = PostgresRateLimiter(FakeDatabase(tx2))

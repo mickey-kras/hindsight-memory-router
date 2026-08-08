@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -12,11 +10,24 @@ import pytest
 from memory_router import app as app_module
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.key_bootstrap import bootstrap_keys
-from memory_router.maintenance import cleanup, cleanup_params, preview_cleanup, prune_events_before, sweep_expired
+from memory_router.maintenance import (
+    cleanup,
+    cleanup_params,
+    preview_cleanup,
+    prune_events_before,
+    sweep_expired,
+)
 
 
 class FakeResponse:
-    def __init__(self, status: int = 200, value: object = None, *, content: bytes | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        status: int = 200,
+        value: object = None,
+        *,
+        content: bytes | None = None,
+        error: Exception | None = None,
+    ) -> None:
         self.status_code = status
         self.is_success = 200 <= status < 300
         self._value = value
@@ -85,8 +96,15 @@ async def test_hindsight_gateway_success_and_error_paths() -> None:
 
 
 def test_hindsight_error_details_variants() -> None:
-    for kind, status in (("timeout", 504), ("http", 502), ("invalid-response", 502), ("network", 502)):
-        err = HindsightGatewayError(kind, upstream_status=503, operation="x", method="GET", timeout_ms=1)  # type: ignore[arg-type]
+    for kind, status in (
+        ("timeout", 504),
+        ("http", 502),
+        ("invalid-response", 502),
+        ("network", 502),
+    ):
+        err = HindsightGatewayError(
+            kind, upstream_status=503, operation="x", method="GET", timeout_ms=1
+        )  # type: ignore[arg-type]
         assert err.status == status and err.details()["upstream_status"] == 503
 
 
@@ -109,7 +127,13 @@ def test_key_bootstrap_create_existing_repair_and_mismatch(tmp_path: Path) -> No
 
 
 class Tx:
-    def __init__(self, *, dialect: str = "sqlite", one: dict[str, object] | None = None, many: list[dict[str, object]] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        dialect: str = "sqlite",
+        one: dict[str, object] | None = None,
+        many: list[dict[str, object]] | None = None,
+    ) -> None:
         self.dialect = dialect
         self.one = one
         self.many = list(many or [])
@@ -130,8 +154,12 @@ class Tx:
 class Ctx:
     def __init__(self, tx: Tx) -> None:
         self.tx = tx
-    async def __aenter__(self) -> Tx: return self.tx
-    async def __aexit__(self, *args: object) -> None: return None
+
+    async def __aenter__(self) -> Tx:
+        return self.tx
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
 
 
 class Repo:
@@ -142,18 +170,29 @@ class Repo:
 def test_cleanup_params_validation() -> None:
     assert cleanup_params("pending", ["a"], "2020")[0] == "pending"
     assert cleanup_params("all", None, None)[2] == 0
-    with pytest.raises(ValueError): cleanup_params("bad", None, None)
-    with pytest.raises(ValueError): cleanup_params("all", [str(i) for i in range(7)], None)
+    with pytest.raises(ValueError):
+        cleanup_params("bad", None, None)
+    with pytest.raises(ValueError):
+        cleanup_params("all", [str(i) for i in range(7)], None)
 
 
 @pytest.mark.asyncio
 async def test_maintenance_preview_cleanup_sweep_and_prune() -> None:
     tx = Tx(one={"count": 2, "encrypted_bytes": 9})
-    assert await preview_cleanup(Repo(tx), "pending", None, None) == {"count": 2, "encrypted_bytes": 9}
+    assert await preview_cleanup(Repo(tx), "pending", None, None) == {
+        "count": 2,
+        "encrypted_bytes": 9,
+    }
 
-    rows = [{"quarantine_id": "a", "encrypted_bytes": 4}, {"quarantine_id": "b", "encrypted_bytes": 5}]
+    rows = [
+        {"quarantine_id": "a", "encrypted_bytes": 4},
+        {"quarantine_id": "b", "encrypted_bytes": 5},
+    ]
     tx = Tx(many=rows)
-    assert await cleanup(Repo(tx), "all", ["x"], None, 2, "now") == {"count": 2, "encrypted_bytes": 9}
+    assert await cleanup(Repo(tx), "all", ["x"], None, 2, "now") == {
+        "count": 2,
+        "encrypted_bytes": 9,
+    }
     assert any("DELETE FROM quarantine_items" in sql for sql, _ in tx.calls)
     with pytest.raises(Exception) as changed:
         await cleanup(Repo(Tx(many=rows)), "all", None, None, 1, "now")
@@ -175,7 +214,9 @@ def test_app_scope_and_now() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_stop_and_sweep(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+async def test_runtime_stop_and_sweep(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     rt = app_module.Runtime()
     rt.hindsight = SimpleNamespace(close=AsyncMock())
     rt.repository = SimpleNamespace(close=AsyncMock())
@@ -186,11 +227,13 @@ async def test_runtime_stop_and_sweep(monkeypatch: pytest.MonkeyPatch, capsys: p
     repo = SimpleNamespace()
     rt.repository = repo
     sleep_calls = 0
+
     async def fake_sleep(_: int) -> None:
         nonlocal sleep_calls
         sleep_calls += 1
         if sleep_calls > 1:
             raise RuntimeError("stop")
+
     monkeypatch.setattr(app_module.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(app_module, "sweep_expired", AsyncMock(side_effect=RuntimeError("boom")))
     with pytest.raises(RuntimeError, match="stop"):

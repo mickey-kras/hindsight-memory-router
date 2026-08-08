@@ -15,13 +15,27 @@ QID = "q_item_0123456789abcdef"
 
 
 def registry() -> WriterRegistry:
-    return WriterRegistry.model_validate({
-        "writers": {"main": {"role": "default", "source": "application", "write_bank": "main", "read_banks": ["main"]}},
-        "defaults": {"unknown_writer_action": "review_queue", "suspicious_content_action": "review_queue"},
-    })
+    return WriterRegistry.model_validate(
+        {
+            "writers": {
+                "main": {
+                    "role": "default",
+                    "source": "application",
+                    "write_bank": "main",
+                    "read_banks": ["main"],
+                }
+            },
+            "defaults": {
+                "unknown_writer_action": "review_queue",
+                "suspicious_content_action": "review_queue",
+            },
+        }
+    )
 
 
-def exact_item(kind: str, payload: object, **extra: object) -> tuple[dict[str, object], dict[str, object]]:
+def exact_item(
+    kind: str, payload: object, **extra: object
+) -> tuple[dict[str, object], dict[str, object]]:
     decrypted: dict[str, object] = {
         "quarantine_id": QID,
         "created_at": "2026-08-08T00:00:00.000Z",
@@ -43,18 +57,30 @@ def exact_item(kind: str, payload: object, **extra: object) -> tuple[dict[str, o
     return item, decrypted
 
 
-def service(item: dict[str, object] | None) -> tuple[admin_module.QuarantineAdminService, SimpleNamespace, SimpleNamespace]:
+def service(
+    item: dict[str, object] | None,
+) -> tuple[admin_module.QuarantineAdminService, SimpleNamespace, SimpleNamespace]:
     repository = SimpleNamespace(
         get=AsyncMock(return_value=item),
         list_reviewable=AsyncMock(return_value=[]),
-        stats=AsyncMock(return_value={
-            "total_items": 1, "pending_items": 1, "postponed_items": 2,
-            "reviewed_allowed_items": 3, "reviewed_blocked_items": 4,
-            "encrypted_bytes": 5, "event_count": 6,
-        }),
+        stats=AsyncMock(
+            return_value={
+                "total_items": 1,
+                "pending_items": 1,
+                "postponed_items": 2,
+                "reviewed_allowed_items": 3,
+                "reviewed_blocked_items": 4,
+                "encrypted_bytes": 5,
+                "event_count": 6,
+            }
+        ),
     )
     hindsight = SimpleNamespace(retain=AsyncMock(), invalidate_memory=AsyncMock())
-    return admin_module.QuarantineAdminService(repository, hindsight, registry(), 2), repository, hindsight
+    return (
+        admin_module.QuarantineAdminService(repository, hindsight, registry(), 2),
+        repository,
+        hindsight,
+    )
 
 
 @pytest.mark.asyncio
@@ -63,7 +89,11 @@ async def test_list_read_stats_and_require_reviewable() -> None:
     svc, repo, _ = service(item)
     assert (await svc.list_queue(10, 0))["total"] == 3
     read = await svc.read_item(QID)
-    assert "encrypted" in read and "encrypted" not in read["record"] and "encrypted_bytes" not in read["record"]
+    assert (
+        "encrypted" in read
+        and "encrypted" not in read["record"]
+        and "encrypted_bytes" not in read["record"]
+    )
     stats = await svc.stats()
     assert stats["event_count"] == 6 and "expired_items" not in stats
     with pytest.raises(HttpError) as bad_id:
@@ -117,7 +147,14 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     hindsight.retain.assert_awaited_once()
     finish.assert_awaited_once()
 
-    for bad_payload, code in (({}, "invalid_quarantine_payload"), ({"action": "retain", "body": {"items": [{"content": "x"}]}}, "invalid_request"), ({"action": "retain", "writer_id": "unknown", "body": {"items": [{"content": "x"}]}}, "writer_not_registered")):
+    for bad_payload, code in (
+        ({}, "invalid_quarantine_payload"),
+        ({"action": "retain", "body": {"items": [{"content": "x"}]}}, "invalid_request"),
+        (
+            {"action": "retain", "writer_id": "unknown", "body": {"items": [{"content": "x"}]}},
+            "writer_not_registered",
+        ),
+    ):
         bad_item, bad_decrypted = exact_item("retain_request", bad_payload)
         repo.get.return_value = bad_item
         with pytest.raises(HttpError) as exc:
@@ -132,9 +169,13 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_approve_recalled_memory_success_mismatch_and_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_approve_recalled_memory_success_mismatch_and_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = {"action": "recalled_memory", "bank_id": "main", "result": {"id": "m1", "text": "ok"}}
-    item, decrypted = exact_item("recalled_memory", payload, source_bank="main", source_memory_id="m1")
+    item, decrypted = exact_item(
+        "recalled_memory", payload, source_bank="main", source_memory_id="m1"
+    )
     svc, repo, _ = service(item)
     mark = AsyncMock()
     monkeypatch.setattr(admin_module, "mark_memory_reviewed", mark)
@@ -142,12 +183,16 @@ async def test_approve_recalled_memory_success_mismatch_and_invalid(monkeypatch:
     assert result["allowed"] is True and result["source_memory_id"] == "m1"
     mark.assert_awaited_once()
 
-    bad_item, bad_decrypted = exact_item("recalled_memory", {"action": "wrong"}, source_bank="main", source_memory_id="m1")
+    bad_item, bad_decrypted = exact_item(
+        "recalled_memory", {"action": "wrong"}, source_bank="main", source_memory_id="m1"
+    )
     repo.get.return_value = bad_item
     with pytest.raises(HttpError) as invalid:
         await svc.approve(QID, {"decrypted": bad_decrypted})
     assert invalid.value.code == "invalid_quarantine_payload"
-    mismatch_item, mismatch_dec = exact_item("recalled_memory", payload, source_bank="other", source_memory_id="m1")
+    mismatch_item, mismatch_dec = exact_item(
+        "recalled_memory", payload, source_bank="other", source_memory_id="m1"
+    )
     repo.get.return_value = mismatch_item
     with pytest.raises(HttpError) as mismatch:
         await svc.approve(QID, {"decrypted": mismatch_dec})
@@ -217,7 +262,16 @@ async def test_cleanup_dry_run_commit_and_validation(monkeypatch: pytest.MonkeyP
     monkeypatch.setattr(admin_module, "preview_cleanup", preview)
     monkeypatch.setattr(admin_module, "cleanup", perform)
     assert await svc.cleanup({}) == {"dry_run": True, "count": 2, "encrypted_bytes": 10}
-    assert (await svc.cleanup({"scope": "all", "dry_run": False, "expected_count": 2, "older_than": "2026-01-01T00:00:00Z"}))["dry_run"] is False
+    assert (
+        await svc.cleanup(
+            {
+                "scope": "all",
+                "dry_run": False,
+                "expected_count": 2,
+                "older_than": "2026-01-01T00:00:00Z",
+            }
+        )
+    )["dry_run"] is False
     perform.assert_awaited_once()
     with pytest.raises(HttpError, match="scope"):
         await svc.cleanup({"scope": "bad"})
