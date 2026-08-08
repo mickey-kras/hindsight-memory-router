@@ -43,6 +43,7 @@ class SafetyFinding:
     reason: str
     detector: str | None = None
     severity: str | None = None
+    hits: tuple[str, ...] = ()
 
     def public(self) -> dict[str, str]:
         result = {"matched": self.matched, "reason": self.reason}
@@ -124,7 +125,6 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
     canonical_fields: list[tuple[str, str]] = []
     decoded_total = 0
     span_count = 0
-    direct_hits: set[str] = set()
     for key, raw in fields:
         canonical, transformations = canonicalize_content(raw)
         result.transformations.update(transformations)
@@ -132,7 +132,6 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
         if "invisible" in transformations:
             result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
         for finding in _amg_scan(key, canonical, operation=operation):
-            direct_hits.add(finding.detector or finding.matched)
             result.add(finding)
         for match in _BASE64_RUN.finditer(canonical):
             candidate = match.group(0)
@@ -170,14 +169,23 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
                 for finding in decoded_hits:
                     result.add(finding)
     window = ""
+    window_fields: list[str] = []
     for key, canonical in canonical_fields:
         window = _bounded_append(window, canonical)
+        window_fields.append(canonical)
+        if len(window_fields) < 2:
+            continue
         for finding in _amg_scan(f"rolling.{key}", window, operation=operation):
-            detector = finding.detector or finding.matched
-            if detector not in direct_hits:
+            if finding.detector != "prompt_injection":
+                continue
+            if any(_crosses_field_boundary(hit, window_fields) for hit in finding.hits):
                 result.add(
                     SafetyFinding(
-                        finding.matched, "split_instruction", finding.detector, finding.severity
+                        finding.matched,
+                        "split_instruction",
+                        finding.detector,
+                        finding.severity,
+                        finding.hits,
                     )
                 )
     return result
@@ -193,15 +201,23 @@ def _amg_scan(key: str, value: str, *, operation: str) -> list[SafetyFinding]:
             continue
         name = str(detection.detector)
         severity = getattr(detection.severity, "value", detection.severity)
+        metadata = detection.metadata if isinstance(detection.metadata, dict) else {}
+        raw_hits = metadata.get("hits", [])
+        hits = tuple(str(hit) for hit in raw_hits if isinstance(hit, str))
         findings.append(
             SafetyFinding(
                 name,
                 _REASON_MAP.get(name, name),
                 name,
                 str(severity) if severity is not None else None,
+                hits,
             )
         )
     return findings
+
+
+def _crosses_field_boundary(hit: str, fields: Iterable[str]) -> bool:
+    return bool(hit) and not any(hit in field for field in fields)
 
 
 def _looks_like_base64(candidate: str) -> bool:
