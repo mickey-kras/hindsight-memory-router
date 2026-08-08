@@ -43,7 +43,7 @@ class SafetyFinding:
     reason: str
     detector: str | None = None
     severity: str | None = None
-    hits: tuple[str, ...] = ()
+    hits: tuple[str, ...] = field(default=(), compare=False, repr=False)
 
     def public(self) -> dict[str, str]:
         result = {"matched": self.matched, "reason": self.reason}
