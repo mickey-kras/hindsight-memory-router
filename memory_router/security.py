@@ -20,13 +20,9 @@ MAX_CANONICAL_BYTES = 64 * 1024
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
 _BASE64_RUN = re.compile(r"[A-Za-z0-9+/=]{16,}")
-_CANONICAL_BASE64 = re.compile(
-    r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
-)
+_CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
-_CARD_CONTEXT = re.compile(
-    r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I
-)
+_CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
 _DETECTORS = (
     PromptInjectionDetector(),
     SensitiveDataDetector(),
@@ -144,9 +140,7 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
     return "".join(chars), transformations
 
 
-def scan_content(
-    content: str, *, operation: str = "read", key: str = "content"
-) -> SafetyResult:
+def scan_content(content: str, *, operation: str = "read", key: str = "content") -> SafetyResult:
     return _scan_fields([(key, content)], operation=operation)
 
 
@@ -161,8 +155,7 @@ def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
             (f"items.{index}.document_id", item.get("document_id")),
         ]
         values.extend(
-            (f"items.{index}.tags.{i}", value)
-            for i, value in enumerate(item.get("tags") or [])
+            (f"items.{index}.tags.{i}", value) for i, value in enumerate(item.get("tags") or [])
         )
         values.extend(
             (f"items.{index}.metadata.{name}", value)
@@ -173,9 +166,7 @@ def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
 
 
 def scan_recall_result(result: dict[str, Any]) -> SafetyResult:
-    return _scan_fields(
-        [("recalled_memory.text", str(result.get("text", "")))], operation="read"
-    )
+    return _scan_fields([("recalled_memory.text", str(result.get("text", "")))], operation="read")
 
 
 def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> SafetyResult:
@@ -300,9 +291,7 @@ def _keep_sensitive_detection(value: str, hits: tuple[str, ...]) -> bool:
         return True
     for match in card_matches:
         digits = re.sub(r"\D", "", match.group(0))
-        context = value[
-            max(0, match.start() - 32) : min(len(value), match.end() + 32)
-        ]
+        context = value[max(0, match.start() - 32) : min(len(value), match.end() + 32)]
         if _CARD_CONTEXT.search(context) or _luhn_valid(digits):
             return True
     return False
@@ -328,9 +317,7 @@ def _crosses_field_boundary(hit: str, fields: Iterable[str]) -> bool:
 
 
 def _looks_like_base64(candidate: str) -> bool:
-    mixed_case = bool(
-        re.search(r"[a-z]", candidate) and re.search(r"[A-Z]", candidate)
-    )
+    mixed_case = bool(re.search(r"[a-z]", candidate) and re.search(r"[A-Z]", candidate))
     return bool(re.search(r"[=+/]", candidate) or (mixed_case and re.search(r"\d", candidate)))
 
 
