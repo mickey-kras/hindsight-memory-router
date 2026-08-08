@@ -39,6 +39,7 @@ jobs:
             ${{ env.IMAGE_GHCR }}:${{ github.sha }}
 
       - name: Trivy image report
+        if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_GHCR }}:${{ github.sha }}
@@ -46,6 +47,18 @@ jobs:
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
           ignore-unfixed: true
+          exit-code: 0
+          version: v0.71.2
+
+      - name: Trivy PR image report
+        if: github.event_name == 'pull_request'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE_GHCR }}:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
           exit-code: 0
           version: v0.71.2
 
@@ -57,7 +70,20 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
 
+      - name: Trivy PR gate (fixable medium, high, critical; supported OS)
+        if: github.event_name == 'pull_request'
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+        run: >-
+          trivy image
+          --exit-code 1
+          --exit-on-eol 1
+          --severity MEDIUM,HIGH,CRITICAL
+          --ignore-unfixed
+          "${IMAGE_GHCR}:${GITHUB_SHA}"
+
       - name: Trivy critical gate (high and critical)
+        if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_GHCR }}:${{ github.sha }}
