@@ -1,17 +1,16 @@
+from __future__ import annotations
+
 import hashlib
-import json
 from typing import Any
+import rfc8785
 
 
 def canonical_json(value: Any) -> str:
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    if isinstance(value, list):
-        return "[" + ",".join(canonical_json(item) for item in value) + "]"
-    if isinstance(value, dict):
-        return "{" + ",".join(json.dumps(key) + ":" + canonical_json(value[key]) for key in sorted(value)) + "}"
-    raise ValueError("value must contain JSON values only")
+    try:
+        return rfc8785.dumps(value).decode("utf-8")
+    except (rfc8785.CanonicalizationError, UnicodeError, TypeError, ValueError) as exc:
+        raise ValueError("value must contain JSON values only") from exc
 
 
 def sha256_hex(value: str) -> str:
-    return hashlib.sha256(value.encode()).hexdigest()
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
