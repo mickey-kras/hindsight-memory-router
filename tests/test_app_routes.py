@@ -214,16 +214,15 @@ async def test_encoded_writer_segment_preserves_routing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_percent_encoding_is_rejected_before_denied_endpoint() -> None:
+async def test_malformed_percent_encoding_falls_through_after_auth() -> None:
     policy = SimpleNamespace(
         deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
     )
     app_module.runtime.policy = policy
-    with pytest.raises(HttpError) as invalid:
-        await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
-    assert invalid.value.status == 400
-    assert invalid.value.code == "invalid_path_encoding"
-    policy.deny_endpoint.assert_not_awaited()
+    response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+    assert response.status_code == 404
+    assert payload(response)["error"] == "endpoint_not_allowed"
+    policy.deny_endpoint.assert_awaited_with("GET", "/bad%ZZ")
 
 
 @pytest.mark.asyncio
