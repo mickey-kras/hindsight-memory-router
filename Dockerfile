@@ -9,15 +9,15 @@ RUN apk upgrade --no-cache \
     && addgroup -S -g 10001 app \
     && adduser -S -D -H -u 10001 -G app app
 
-COPY requirements.lock ./
+COPY requirements.lock pyproject.toml ./
 RUN python -m pip install --no-cache-dir --disable-pip-version-check --upgrade pip==26.2.1 \
-    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock \
-    && python -m pip uninstall --yes pip
+    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock
 
 COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
-
-RUN mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
+RUN python -m pip install --no-cache-dir --disable-pip-version-check --no-deps . \
+    && python -m pip uninstall --yes pip \
+    && mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
     && chown -R app:app /app/data /app/bootstrap
 
 USER app
