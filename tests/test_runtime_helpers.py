@@ -10,6 +10,7 @@ import pytest
 
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
+from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.key_bootstrap import bootstrap_keys
 from memory_router.maintenance import (
@@ -170,12 +171,30 @@ class Repo:
 
 
 def test_cleanup_params_validation() -> None:
-    assert cleanup_params("pending", ["a"], "2020")[0] == "pending"
-    assert cleanup_params("all", None, None)[2] == 0
-    with pytest.raises(ValueError):
+    where, params = cleanup_params("pending", ["a"], "2020")
+    assert where == "status IN ('pending','postponed') AND reason IN (?) AND created_at < ?"
+    assert params == ["a", "2020"]
+
+    where, params = cleanup_params("all", None, None)
+    assert where == "status <> 'review_in_progress'"
+    assert params == []
+
+    with pytest.raises(HttpError) as invalid_scope:
         cleanup_params("bad", None, None)
-    with pytest.raises(ValueError):
-        cleanup_params("all", [str(i) for i in range(7)], None)
+    assert invalid_scope.value.status == 400
+
+    with pytest.raises(HttpError) as invalid_reasons:
+        cleanup_params("all", "a", None)  # type: ignore[arg-type]
+    assert invalid_reasons.value.status == 400
+
+    with pytest.raises(HttpError) as invalid_reason_item:
+        cleanup_params("all", ["a", 1], None)  # type: ignore[list-item]
+    assert invalid_reason_item.value.status == 400
+
+    reasons = [str(i) for i in range(7)]
+    where, params = cleanup_params("all", reasons, None)
+    assert where == "status <> 'review_in_progress' AND reason IN (?,?,?,?,?,?,?)"
+    assert params == reasons
 
 
 @pytest.mark.asyncio
