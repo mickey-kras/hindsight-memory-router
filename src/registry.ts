@@ -5,40 +5,10 @@ import { BANK_IDS, type WriterRegistry, type WriterRule } from "./types.js";
 export const DEFAULT_REGISTRY: WriterRegistry = {
   writers: {
     main: {
-      role: "orchestrator",
+      role: "default",
       source: "application",
       write_bank: "main",
-      read_banks: ["main", "core", "ops", "dev", "creative", "personal"],
-    },
-    ops: {
-      role: "ops",
-      source: "application",
-      write_bank: "ops",
-      read_banks: ["ops", "core"],
-    },
-    dev: {
-      role: "dev",
-      source: "application",
-      write_bank: "dev",
-      read_banks: ["dev", "core"],
-    },
-    creative: {
-      role: "creative",
-      source: "application",
-      write_bank: "creative",
-      read_banks: ["creative", "core"],
-    },
-    personal: {
-      role: "personal",
-      source: "application",
-      write_bank: "personal",
-      read_banks: ["personal", "core"],
-    },
-    research: {
-      role: "research",
-      source: "application",
-      write_bank: "research",
-      read_banks: ["research", "core"],
+      read_banks: ["main"],
     },
   },
   defaults: {
