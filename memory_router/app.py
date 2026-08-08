@@ -23,7 +23,13 @@ from .config import (
     integer_env,
     load_registry,
 )
-from .db import DEFAULT_DATABASE_URL, PostgresDatabase, create_database, is_postgres, validate_storage
+from .db import (
+    DEFAULT_DATABASE_URL,
+    PostgresDatabase,
+    create_database,
+    is_postgres,
+    validate_storage,
+)
 from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -177,7 +183,9 @@ class Runtime:
             max_recall_max_tokens=integer_env("HINDSIGHT_RECALL_MAX_TOKENS", 8192, minimum=1),
         )
         registry = load_registry(os.environ.get("MEMORY_ROUTER_REGISTRY"))
-        hindsight_limiter = self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
+        hindsight_limiter = (
+            self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
+        )
         hindsight_limits = HindsightLimits(hconfig, hindsight_limiter)
         self.policy = RouterPolicy(registry, hindsight, hindsight_limits, store, self.repository)
         self.admin = QuarantineAdminService(
