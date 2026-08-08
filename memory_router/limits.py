@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import asyncio
-import time
-from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,31 +17,6 @@ class HindsightLimitConfig:
     max_retain_content_bytes: int = 524_288
     max_recall_query_bytes: int = 32_768
     max_recall_max_tokens: int = 8192
-
-
-class InMemorySlidingWindow:
-    def __init__(self) -> None:
-        self._events: dict[str, deque[int]] = defaultdict(deque)
-        self._lock = asyncio.Lock()
-
-    async def consume_many(
-        self, buckets: list[tuple[str, int, int]], at_ms: int | None = None
-    ) -> None:
-        now = at_ms if at_ms is not None else int(time.time() * 1000)
-        async with self._lock:
-            normalized: list[deque[int]] = []
-            for key, maximum, window_ms in buckets:
-                if maximum <= 0 or window_ms <= 0:
-                    continue
-                queue = self._events[key]
-                cutoff = now - window_ms
-                while queue and queue[0] <= cutoff:
-                    queue.popleft()
-                if len(queue) >= maximum:
-                    raise HttpError(429, "quarantine_rate_limited", "too many quarantine writes")
-                normalized.append(queue)
-            for queue in normalized:
-                queue.append(now)
 
 
 class HindsightLimits:
