@@ -38,26 +38,14 @@ _REASON_MAP = {
     "excessive_autonomy": "excessive_autonomy",
 }
 _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (
-        re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I),
-        "ignore previous instructions",
-        "prompt_injection",
-    ),
+    (re.compile(r"ignore\s+(all\s+)?previous\s+instructions", re.I), "ignore previous instructions", "prompt_injection"),
     (re.compile(r"system\s+prompt", re.I), "system prompt", "prompt_injection"),
     (re.compile(r"developer\s+message", re.I), "developer message", "prompt_injection"),
     (re.compile(r"new\s+instructions", re.I), "new instructions", "prompt_injection"),
     (re.compile(r"you\s+are\s+now", re.I), "you are now", "prompt_injection"),
     (re.compile(r"write\s+this\s+to\s+memory", re.I), "write this to memory", "prompt_injection"),
-    (
-        re.compile(r"remember\s+this\s+as\s+truth", re.I),
-        "remember this as truth",
-        "prompt_injection",
-    ),
-    (
-        re.compile(r"store\s+this\s+as\s+core\s+memory", re.I),
-        "store this as core memory",
-        "prompt_injection",
-    ),
+    (re.compile(r"remember\s+this\s+as\s+truth", re.I), "remember this as truth", "prompt_injection"),
+    (re.compile(r"store\s+this\s+as\s+core\s+memory", re.I), "store this as core memory", "prompt_injection"),
     (re.compile(r"overwrite\s+permissions", re.I), "overwrite permissions", "permission_rewrite"),
     (re.compile(r"reveal\s+(the\s+)?(secret|token|key)", re.I), "reveal secret", "secret_like"),
     (re.compile(r"\bapi[_ -]?key\b", re.I), "api key", "secret_like"),
@@ -135,13 +123,8 @@ def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
             (f"items.{index}.context", item.get("context")),
             (f"items.{index}.document_id", item.get("document_id")),
         ]
-        values.extend(
-            (f"items.{index}.tags.{i}", value) for i, value in enumerate(item.get("tags") or [])
-        )
-        values.extend(
-            (f"items.{index}.metadata.{name}", value)
-            for name, value in (item.get("metadata") or {}).items()
-        )
+        values.extend((f"items.{index}.tags.{i}", value) for i, value in enumerate(item.get("tags") or []))
+        values.extend((f"items.{index}.metadata.{name}", value) for name, value in (item.get("metadata") or {}).items())
         fields.extend((name, value) for name, value in values if isinstance(value, str))
     return _scan_fields(fields, operation="write")
 
@@ -183,10 +166,7 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
             except (binascii.Error, ValueError):
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
                 continue
-            if (
-                len(decoded) > MAX_BASE64_DECODED_BYTES
-                or decoded_total + len(decoded) > MAX_BASE64_DECODED_BYTES
-            ):
+            if len(decoded) > MAX_BASE64_DECODED_BYTES or decoded_total + len(decoded) > MAX_BASE64_DECODED_BYTES:
                 result.add(SafetyFinding("decoded_size_limit", "encoded_payload"))
                 continue
             decoded_total += len(decoded)
@@ -197,9 +177,7 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
                 continue
             decoded_canonical, decoded_transformations = canonicalize_content(decoded_text)
             result.transformations.update(decoded_transformations)
-            decoded_hits = _rule_scan(decoded_canonical) + _amg_scan(
-                f"{key}.base64", decoded_canonical, operation=operation
-            )
+            decoded_hits = _rule_scan(decoded_canonical) + _amg_scan(f"{key}.base64", decoded_canonical, operation=operation)
             if decoded_hits:
                 result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
                 for finding in decoded_hits:
@@ -213,31 +191,15 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
             continue
         for finding in _rule_scan(window):
             if finding.matched not in direct_rule_matches:
-                result.add(
-                    SafetyFinding(
-                        finding.matched, "split_instruction", finding.detector, finding.severity
-                    )
-                )
+                result.add(SafetyFinding(finding.matched, "split_instruction"))
         for finding in _amg_scan(f"rolling.{key}", window, operation=operation):
             if any(_crosses_field_boundary(hit, window_fields) for hit in finding.hits):
-                result.add(
-                    SafetyFinding(
-                        finding.matched,
-                        "split_instruction",
-                        finding.detector,
-                        finding.severity,
-                        finding.hits,
-                    )
-                )
+                result.add(SafetyFinding(finding.matched, "split_instruction", finding.detector, finding.severity, finding.hits))
     return result
 
 
 def _rule_scan(value: str) -> list[SafetyFinding]:
-    return [
-        SafetyFinding(matched, reason, "router_rule", None, (match.group(0),))
-        for pattern, matched, reason in _RULES
-        if (match := pattern.search(value)) is not None
-    ]
+    return [SafetyFinding(matched, reason, hits=(match.group(0),)) for pattern, matched, reason in _RULES if (match := pattern.search(value)) is not None]
 
 
 def _amg_scan(key: str, value: str, *, operation: str) -> list[SafetyFinding]:
@@ -255,17 +217,7 @@ def _amg_scan(key: str, value: str, *, operation: str) -> list[SafetyFinding]:
         hits = tuple(str(hit) for hit in raw_hits if isinstance(hit, str))
         if name == "sensitive_data" and not _keep_sensitive_detection(value, hits):
             continue
-        matched_values = hits or (name,)
-        for matched in matched_values:
-            findings.append(
-                SafetyFinding(
-                    matched,
-                    _REASON_MAP.get(name, name),
-                    name,
-                    str(severity) if severity is not None else None,
-                    hits,
-                )
-            )
+        findings.append(SafetyFinding(hits[0] if hits else name, _REASON_MAP.get(name, name), name, str(severity) if severity is not None else None, hits))
     return findings
 
 
