@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from pydantic import ValidationError
@@ -15,17 +14,14 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
     try:
         parsed = RetainBody.model_validate(value)
     except ValidationError as exc:
-        errors = exc.errors()
-        issue: Mapping[str, Any] = errors[0] if errors else {}
-        raw_loc = issue.get("loc", ())
-        loc = tuple(raw_loc) if isinstance(raw_loc, (tuple, list)) else ()
+        loc = _first_error_location(exc)
         if loc and loc[0] == "items":
             if len(loc) == 1:
                 message = "retain body requires at least one memory item"
             elif len(loc) == 2:
                 message = f"memory item {loc[1]} must be an object"
             else:
-                field = loc[2] if isinstance(loc[2], str) else None
+                field = loc[2] if isinstance(loc[2], str) else ""
                 mapping = {
                     "content": f"memory item {loc[1]} content must be a non-empty string",
                     "context": "context must be a string or null",
@@ -52,11 +48,8 @@ def parse_recall_body(value: Any) -> dict[str, Any]:
     try:
         parsed = RecallBody.model_validate(value)
     except ValidationError as exc:
-        errors = exc.errors()
-        issue: Mapping[str, Any] = errors[0] if errors else {}
-        raw_loc = issue.get("loc", ())
-        loc = tuple(raw_loc) if isinstance(raw_loc, (tuple, list)) else ()
-        field = loc[0] if loc and isinstance(loc[0], str) else None
+        loc = _first_error_location(exc)
+        field = loc[0] if loc and isinstance(loc[0], str) else ""
         mapping = {
             "query": "recall query must be a non-empty string",
             "max_tokens": "max_tokens must be a positive integer",
@@ -68,6 +61,13 @@ def parse_recall_body(value: Any) -> dict[str, Any]:
         }
         raise _invalid_recall(mapping.get(field, "recall body is invalid")) from exc
     return parsed.model_dump(by_alias=True, exclude_none=True)
+
+
+def _first_error_location(exc: ValidationError) -> tuple[Any, ...]:
+    errors = exc.errors()
+    if not errors:
+        return ()
+    return tuple(errors[0]["loc"])
 
 
 def _invalid_retain(message: str) -> HttpError:
