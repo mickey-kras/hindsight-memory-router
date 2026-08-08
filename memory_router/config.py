@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-import sys
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from .models import WriterRegistry
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_REGISTRY = WriterRegistry.model_validate(
     {
@@ -81,33 +83,23 @@ def assert_auth_environment() -> None:
     anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
     if not router_token:
         if anonymous:
-            sys.stderr.write(
-                "memory-router WARNING: MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only\n"
-            )
+            logger.warning("MEMORY_ROUTER_ALLOW_ANONYMOUS=true; development only")
         else:
-            sys.stderr.write(
-                "memory-router WARNING: MEMORY_ROUTER_TOKEN is not set; router endpoints fail-closed\n"
-            )
+            logger.warning("MEMORY_ROUTER_TOKEN is not set; router endpoints fail-closed")
     legacy = os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN")
     if legacy:
-        sys.stderr.write(
-            "memory-router WARNING: legacy admin migration superuser is active; migrate clients to scoped tokens and unset MEMORY_ROUTER_ADMIN_TOKEN\n"
+        logger.warning(
+            "legacy admin migration superuser is active; migrate clients to scoped tokens and unset MEMORY_ROUTER_ADMIN_TOKEN"
         )
         return
     if not os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN") and not os.environ.get(
         "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"
     ):
-        sys.stderr.write(
-            "memory-router WARNING: admin read token is not set; admin read endpoints fail-closed\n"
-        )
+        logger.warning("admin read token is not set; admin read endpoints fail-closed")
     if not os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"):
-        sys.stderr.write(
-            "memory-router WARNING: admin review token is not set; review endpoints fail-closed\n"
-        )
+        logger.warning("admin review token is not set; review endpoints fail-closed")
     if not os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"):
-        sys.stderr.write(
-            "memory-router WARNING: admin cleanup token is not set; cleanup endpoint fails-closed\n"
-        )
+        logger.warning("admin cleanup token is not set; cleanup endpoint fails-closed")
 
 
 def assert_deployment_mode(database_url: str) -> None:
