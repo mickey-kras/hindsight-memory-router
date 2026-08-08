@@ -8,19 +8,34 @@ from .repository import QuarantineRepository, insert_event
 BATCH_LIMIT = 1000
 MAX_REASON_FILTERS = 6
 
-_CLEANUP_PREDICATE = """
+_PREVIEW_CLEANUP_SQL = """
+SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes
+FROM quarantine_items
 WHERE
   ((? = 'pending' AND status IN ('pending','postponed'))
     OR (? = 'all' AND status <> 'review_in_progress'))
   AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
   AND (? = 0 OR created_at < ?)
 """
-_PREVIEW_CLEANUP_SQL = (
-    "SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes "
-    "FROM quarantine_items " + _CLEANUP_PREDICATE
-)
-_CLEANUP_SQL = "SELECT quarantine_id, encrypted_bytes FROM quarantine_items " + _CLEANUP_PREDICATE
-_CLEANUP_SQL_FOR_UPDATE = _CLEANUP_SQL + " FOR UPDATE"
+_CLEANUP_SQL = """
+SELECT quarantine_id, encrypted_bytes
+FROM quarantine_items
+WHERE
+  ((? = 'pending' AND status IN ('pending','postponed'))
+    OR (? = 'all' AND status <> 'review_in_progress'))
+  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
+  AND (? = 0 OR created_at < ?)
+"""
+_CLEANUP_SQL_FOR_UPDATE = """
+SELECT quarantine_id, encrypted_bytes
+FROM quarantine_items
+WHERE
+  ((? = 'pending' AND status IN ('pending','postponed'))
+    OR (? = 'all' AND status <> 'review_in_progress'))
+  AND (? = 0 OR reason IN (?, ?, ?, ?, ?, ?))
+  AND (? = 0 OR created_at < ?)
+FOR UPDATE
+"""
 _SWEEP_SQL = """
 SELECT quarantine_id, expires_at
 FROM quarantine_items
@@ -30,7 +45,16 @@ WHERE status IN ('pending','postponed')
 ORDER BY expires_at
 LIMIT ?
 """
-_SWEEP_SQL_FOR_UPDATE = _SWEEP_SQL + " FOR UPDATE"
+_SWEEP_SQL_FOR_UPDATE = """
+SELECT quarantine_id, expires_at
+FROM quarantine_items
+WHERE status IN ('pending','postponed')
+  AND expires_at IS NOT NULL
+  AND expires_at <= ?
+ORDER BY expires_at
+LIMIT ?
+FOR UPDATE
+"""
 
 
 async def preview_cleanup(
