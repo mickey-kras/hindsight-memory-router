@@ -321,7 +321,7 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
 
 @pytest.mark.asyncio
 async def test_runtime_stop_and_sweep(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     rt = app_module.Runtime()
     rt.hindsight = SimpleNamespace(close=AsyncMock())
@@ -344,4 +344,4 @@ async def test_runtime_stop_and_sweep(
     monkeypatch.setattr(app_module, "sweep_expired", AsyncMock(side_effect=RuntimeError("boom")))
     with pytest.raises(RuntimeError, match="stop"):
         await rt._sweep_loop(1, 0)
-    assert "sweeper failed" in capsys.readouterr().err
+    assert "sweeper failed" in caplog.text
