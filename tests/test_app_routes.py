@@ -86,7 +86,7 @@ async def test_health_ready_and_exception_handlers(capsys: pytest.CaptureFixture
     response = await app_module.http_error_handler(request("GET", "/"), gateway)
     assert response.status_code == 502 and payload(response)["error"] == "hindsight_unavailable"
     assert "upstream request failed" in capsys.readouterr().err
-    response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("secret"))
+    response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("failure"))
     assert response.status_code == 500 and payload(response) == {"error": "internal error"}
     assert "request failed" in capsys.readouterr().err
 
@@ -215,7 +215,9 @@ async def test_encoded_writer_segment_preserves_routing() -> None:
 
 @pytest.mark.asyncio
 async def test_malformed_percent_encoding_is_rejected_before_denied_endpoint() -> None:
-    policy = SimpleNamespace(deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}))
+    policy = SimpleNamespace(
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
+    )
     app_module.runtime.policy = policy
     with pytest.raises(HttpError) as invalid:
         await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
