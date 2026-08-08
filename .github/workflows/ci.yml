@@ -1,13 +1,17 @@
 name: ci
 
 on:
-  pull_request:
   push:
-    branches: [main]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+    branches:
+      - main
+      - 'release/**'
+      - 'feat/**'
+      - 'fix/**'
+      - 'refactor/**'
+      - 'docs/**'
+      - 'ci/**'
+      - 'security/**'
+  pull_request:
 
 permissions:
   contents: read
@@ -17,20 +21,21 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
+      security-events: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
         with:
           egress-policy: audit
 
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: "3.12"
+          python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements.lock
 
@@ -44,9 +49,6 @@ jobs:
       - run: npm ci
 
       - name: Auto-fix before gates
-        if: >-
-          github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         run: |
           ruff format memory_router tests_py
           ruff check --fix memory_router tests_py || true
@@ -96,7 +98,7 @@ jobs:
 
       - name: Semgrep
         run: |
-          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b455cd9865de9b19f7f627a6fbb7e0559bd466bedc44d7b"
+          SEMGREP_IMAGE="semgrep/semgrep:1.172.0@sha256:65dcd4408adda7c183a6b4550cb1e9b19f7f627a6fbb7e0559bd466bedc44d7b"
           docker pull "$SEMGREP_IMAGE"
           docker run --rm \
             -v "${PWD}:/src" \
