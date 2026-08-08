@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 BankId = Literal["core", "main", "personal", "dev", "creative", "ops", "research"]
 
@@ -30,7 +30,7 @@ class MemoryItem(PassthroughModel):
 
 class RetainBody(PassthroughModel):
     items: list[MemoryItem] = Field(min_length=1)
-    async_: bool | None = Field(default=None, alias="async")
+    async_: StrictBool | None = Field(default=None, alias="async")
     document_tags: list[str] | None = None
 
 
@@ -41,7 +41,7 @@ class RecallBody(PassthroughModel):
     types: list[str] | None = None
     tags: list[str] | None = None
     tags_match: str | None = None
-    trace: bool | None = None
+    trace: StrictBool | None = None
 
     @field_validator("query")
     @classmethod
