@@ -224,7 +224,7 @@ class QuarantineAdminService:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
-        return item
+        return cast(dict[str, Any], item)
 
     @staticmethod
     def _verify_exact(item: dict[str, Any], value: Any) -> dict[str, Any]:
@@ -250,4 +250,4 @@ class QuarantineAdminService:
                     "quarantine_metadata_mismatch",
                     "decrypted quarantine metadata differs from the stored item",
                 )
-        return cast(dict[str, Any], decrypted)
+        return decrypted
