@@ -14,7 +14,9 @@ def run(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Import legacy filesystem quarantine state.")
     parser.add_argument("--queue", required=True)
     parser.add_argument("--objects", required=True)
-    parser.add_argument("--database", default=os.environ.get("QUARANTINE_DATABASE_URL", DEFAULT_DATABASE_URL))
+    parser.add_argument(
+        "--database", default=os.environ.get("QUARANTINE_DATABASE_URL", DEFAULT_DATABASE_URL)
+    )
     args = parser.parse_args(argv)
     try:
         key_text = sys.stdin.read().strip()
