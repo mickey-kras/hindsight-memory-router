@@ -14,7 +14,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .canonical import canonical_json, sha256_hex
 
 AAD_FORMAT = "metadata-v1"
-WRAPPED_KEY_FIELD = "wrapped_key_b64"
+ENVELOPE_WRAPPED_FIELD = "wrapped_key_b64"
 _REASONS = {
     "unknown_writer",
     "suspicious_content",
@@ -111,7 +111,7 @@ def _aad(envelope: dict[str, Any]) -> bytes:
         "algorithm": encryption["algorithm"],
         "key_wrap": encryption["key_wrap"],
         "aad": AAD_FORMAT,
-        WRAPPED_KEY_FIELD: encryption[WRAPPED_KEY_FIELD],
+        ENVELOPE_WRAPPED_FIELD: encryption[ENVELOPE_WRAPPED_FIELD],
         "iv_b64": encryption["iv_b64"],
     }
     return canonical_json(result).encode("utf-8")
@@ -141,7 +141,7 @@ def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, A
         "algorithm": "AES-256-GCM",
         "key_wrap": "RSA-OAEP-SHA256",
         "aad": AAD_FORMAT,
-        WRAPPED_KEY_FIELD: base64.b64encode(wrapped).decode("ascii"),
+        ENVELOPE_WRAPPED_FIELD: base64.b64encode(wrapped).decode("ascii"),
         "iv_b64": base64.b64encode(iv).decode("ascii"),
     }
     ciphertext_tag = AESGCM(key).encrypt(iv, plaintext, _aad(envelope))
@@ -173,7 +173,7 @@ def parse_envelope(value: Any) -> dict[str, Any]:
         r"[0-9a-f]{64}", envelope["sha256"]
     ):
         raise ValueError("invalid quarantine object digest")
-    for field in (WRAPPED_KEY_FIELD, "iv_b64", "tag_b64"):
+    for field in (ENVELOPE_WRAPPED_FIELD, "iv_b64", "tag_b64"):
         if not isinstance(encryption.get(field), str):
             raise ValueError(f"{field} must be valid base64")
         base64.b64decode(encryption[field], validate=True)
@@ -191,7 +191,7 @@ def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:
     envelope = parse_envelope(value)
     encryption = envelope["encryption"]
     key = decode_private_key(private_key_input).decrypt(
-        base64.b64decode(encryption[WRAPPED_KEY_FIELD]),
+        base64.b64decode(encryption[ENVELOPE_WRAPPED_FIELD]),
         padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
     )
     if len(key) != 32:
