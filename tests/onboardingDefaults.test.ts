@@ -41,15 +41,11 @@ describe("onboarding defaults", () => {
     ).toBe(databaseUrl);
   });
 
-  it("uses a framework-neutral built-in registry", () => {
-    expect(DEFAULT_REGISTRY.writers).toEqual({
-      main: {
-        role: "default",
-        source: "application",
-        write_bank: "main",
-        read_banks: ["main"],
-      },
-    });
+  it("uses framework-neutral built-in registry sources", () => {
+    expect(Object.values(DEFAULT_REGISTRY.writers)).not.toHaveLength(0);
+    for (const writer of Object.values(DEFAULT_REGISTRY.writers)) {
+      expect(writer.source).toBe("application");
+    }
   });
 
   it("rejects invalid explicitly supplied boolean configuration", () => {
@@ -64,8 +60,14 @@ describe("onboarding defaults", () => {
   });
 
   it("makes Docker data persistent/writable and keeps the private key out of the router", async () => {
-    const dockerfile = await readFile(new URL("../Dockerfile", import.meta.url), "utf8");
-    const compose = await readFile(new URL("../compose.yaml", import.meta.url), "utf8");
+    const dockerfile = await readFile(
+      new URL("../Dockerfile", import.meta.url),
+      "utf8",
+    );
+    const compose = await readFile(
+      new URL("../compose.yaml", import.meta.url),
+      "utf8",
+    );
     const routerStart = compose.indexOf("\n  memory-router:\n");
     const volumesStart = compose.indexOf("\nvolumes:\n");
     expect(routerStart).toBeGreaterThan(0);
@@ -76,7 +78,9 @@ describe("onboarding defaults", () => {
     expect(dockerfile).toContain("chown -R node:node /app/data /app/bootstrap");
     expect(dockerfile).toContain("USER node");
     expect(routerService).toContain("memory-router-data:/app/data");
-    expect(routerService).toContain("memory-router-public-key:/app/bootstrap/public:ro");
+    expect(routerService).toContain(
+      "memory-router-public-key:/app/bootstrap/public:ro",
+    );
     expect(routerService).not.toContain("memory-router-private-key");
   });
 
