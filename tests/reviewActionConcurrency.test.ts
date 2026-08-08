@@ -2,8 +2,23 @@ import { describe, expect, it } from "vitest";
 import { FakeHindsightGateway } from "../src/hindsightClient.js";
 import { QuarantineAdminService } from "../src/quarantine/quarantineAdmin.js";
 import { decryptQuarantineEnvelope } from "../src/quarantine/envelopeCrypto.js";
-import { DEFAULT_REGISTRY } from "../src/registry.js";
+import type { WriterRegistry } from "../src/types.js";
 import { memoryQuarantine } from "./quarantineTestUtils.js";
+
+const REVIEW_REGISTRY: WriterRegistry = {
+  writers: {
+    ops: {
+      role: "ops",
+      source: "application",
+      write_bank: "ops",
+      read_banks: ["ops", "core"],
+    },
+  },
+  defaults: {
+    unknown_writer_action: "review_queue",
+    suspicious_content_action: "review_queue",
+  },
+};
 
 class SlowHindsightGateway extends FakeHindsightGateway {
   override async retain(
@@ -47,7 +62,7 @@ describe("quarantine review action locking", () => {
     const admin = new QuarantineAdminService({
       repository: quarantine.repository,
       hindsight,
-      registry: DEFAULT_REGISTRY,
+      registry: REVIEW_REGISTRY,
     });
 
     const results = await Promise.allSettled([
@@ -73,7 +88,7 @@ describe("quarantine review action locking", () => {
     const admin = new QuarantineAdminService({
       repository: quarantine.repository,
       hindsight: new FailingHindsightGateway(),
-      registry: DEFAULT_REGISTRY,
+      registry: REVIEW_REGISTRY,
     });
 
     await expect(
@@ -101,7 +116,7 @@ describe("quarantine review action locking", () => {
     const admin = new QuarantineAdminService({
       repository: quarantine.repository,
       hindsight,
-      registry: DEFAULT_REGISTRY,
+      registry: REVIEW_REGISTRY,
     });
 
     const completions: string[] = [];
@@ -193,7 +208,7 @@ async function putRetain(
     kind: "retain_request",
     reason: "unknown_writer",
     writerId: "ops",
-    source: "openclaw",
+    source: "application",
     payload: {
       action: "retain",
       writer_id: "ops",
