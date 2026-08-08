@@ -13,10 +13,14 @@ from memory_router.envelope import create_envelope
 
 def test_decrypt_quarantine_cli(tmp_path, monkeypatch, capsys) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
     private_pem = key.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
@@ -38,9 +42,7 @@ def test_decrypt_quarantine_cli(tmp_path, monkeypatch, capsys) -> None:
     assert json.loads(capsys.readouterr().out) == decrypted
 
 
-def test_decrypt_quarantine_cli_requires_stdin_key(
-    tmp_path, monkeypatch, capsys
-) -> None:
+def test_decrypt_quarantine_cli_requires_stdin_key(tmp_path, monkeypatch, capsys) -> None:
     response = tmp_path / "response.json"
     response.write_text("{}")
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
