@@ -12,7 +12,13 @@ _MAX_SAFE_INTEGER = (1 << 53) - 1
 def canonical_json(value: Any) -> str:
     try:
         return rfc8785.dumps(_rfc8785_safe(value)).decode("utf-8")
-    except (rfc8785.CanonicalizationError, UnicodeError, TypeError, ValueError, OverflowError) as exc:
+    except (
+        rfc8785.CanonicalizationError,
+        UnicodeError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ) as exc:
         raise ValueError("value must contain JSON values only") from exc
 
 
