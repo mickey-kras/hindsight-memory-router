@@ -4,6 +4,7 @@ services:
     image: memory-router:local
     restart: "no"
     user: "0:0"
+    network_mode: none
     command:
       - /bin/sh
       - -ec
@@ -27,6 +28,8 @@ services:
     env_file:
       - path: .env
         required: false
+    environment:
+      MEMORY_ROUTER_PORT: "${MEMORY_ROUTER_PORT:-8890}"
     command:
       - /bin/sh
       - -c
@@ -41,8 +44,5 @@ services:
 
 volumes:
   memory-router-data:
-    name: memory-router-data
   memory-router-public-key:
-    name: memory-router-quarantine-public-key
   memory-router-private-key:
-    name: memory-router-quarantine-private-key
