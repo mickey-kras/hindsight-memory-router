@@ -2,7 +2,7 @@
 
 Quarantine decryption happens outside the running router. The router has only the public key.
 
-With the default Compose deployment, the private review key is `quarantine-private.pem` inside the Docker volume `memory-router-quarantine-private-key`. Back up that volume according to your recovery requirements.
+With the default Compose deployment, private review material is stored in the project-scoped `memory-router-private-key` Compose volume. Compose applies its normal project prefix to the underlying Docker volume, so separate deployments do not share review keys. Back up the volume according to your recovery requirements.
 
 Review flow:
 
