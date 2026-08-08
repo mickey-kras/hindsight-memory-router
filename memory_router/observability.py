@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import re
 import secrets
 from contextvars import ContextVar, Token
@@ -9,8 +8,6 @@ from typing import Any, Awaitable, Callable
 _REQUEST_ID = ContextVar[str | None]("memory_router_request_id", default=None)
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _HEADER = b"x-request-id"
-
-logger = logging.getLogger(__name__)
 
 
 def current_request_id() -> str | None:
