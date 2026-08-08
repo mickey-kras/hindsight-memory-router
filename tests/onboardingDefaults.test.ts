@@ -68,15 +68,20 @@ describe("onboarding defaults", () => {
       new URL("../compose.yaml", import.meta.url),
       "utf8",
     );
+    const initStart = compose.indexOf("\n  quarantine-key-init:\n");
     const routerStart = compose.indexOf("\n  memory-router:\n");
     const volumesStart = compose.indexOf("\nvolumes:\n");
-    expect(routerStart).toBeGreaterThan(0);
+    expect(initStart).toBeGreaterThan(0);
+    expect(routerStart).toBeGreaterThan(initStart);
     expect(volumesStart).toBeGreaterThan(routerStart);
+    const initService = compose.slice(initStart, routerStart);
     const routerService = compose.slice(routerStart, volumesStart);
 
     expect(dockerfile).toContain("mkdir -p /app/data");
     expect(dockerfile).toContain("chown -R node:node /app/data /app/bootstrap");
     expect(dockerfile).toContain("USER node");
+    expect(initService).toContain("chown node:node /app/data");
+    expect(initService).toContain("memory-router-data:/app/data");
     expect(routerService).toContain("memory-router-data:/app/data");
     expect(routerService).toContain(
       "memory-router-public-key:/app/bootstrap/public:ro",
