@@ -31,6 +31,7 @@ def request(
         "type": "http",
         "method": method,
         "path": path,
+        "raw_path": path.encode(),
         "headers": header_values,
         "query_string": query.encode(),
     }
@@ -82,29 +83,31 @@ async def test_health_ready_and_exception_handlers(capsys: pytest.CaptureFixture
     )
     assert response.status_code == 429 and response.headers["retry-after"] == "2"
     gateway = HindsightGatewayError("network", operation="recall", method="POST")
-    response = await app_module.unhandled_handler(request("GET", "/"), gateway)
+    response = await app_module.http_error_handler(request("GET", "/"), gateway)
     assert response.status_code == 502 and payload(response)["error"] == "hindsight_unavailable"
     assert "upstream request failed" in capsys.readouterr().err
     response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("secret"))
-    assert response.status_code == 500 and payload(response)["error"] == "internal_error"
+    assert response.status_code == 500 and payload(response) == {"error": "internal error"}
     assert "request failed" in capsys.readouterr().err
 
 
 @pytest.mark.asyncio
-async def test_json_body_bounds_and_invalid_json() -> None:
+async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     app_module.runtime.max_body_bytes = 3
     with pytest.raises(HttpError) as declared:
         await app_module._json_body(
             request("POST", "/", body=b"{}", headers={"content-length": "4"})
         )
     assert declared.value.status == 413
+    assert declared.value.code == "payload_too_large"
     with pytest.raises(HttpError) as actual:
         await app_module._json_body(request("POST", "/", body=b"1234"))
-    assert actual.value.code == "request_body_too_large"
+    assert actual.value.code == "payload_too_large"
     app_module.runtime.max_body_bytes = 100
     with pytest.raises(HttpError) as invalid:
         await app_module._json_body(request("POST", "/", body=b"{"))
     assert invalid.value.code == "invalid_json"
+    assert await app_module._json_body(request("POST", "/")) == {}
     assert await app_module._json_body(request("POST", "/", body={"x": 1})) == {"x": 1}
 
 
@@ -187,6 +190,41 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
 
 
 @pytest.mark.asyncio
+async def test_encoded_writer_segment_preserves_routing() -> None:
+    limits = SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock())
+    policy = SimpleNamespace(
+        limits=limits,
+        retain=AsyncMock(return_value={"retained": True}),
+        recall=AsyncMock(return_value={"results": []}),
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+    )
+    app_module.runtime.policy = policy
+
+    response = await app_module.dispatch(
+        "unused",
+        request(
+            "POST",
+            "/v1/default/banks/team%2Fwriter/memories",
+            body={"items": [{"content": "ok"}]},
+        ),
+    )
+    assert response.status_code == 200
+    policy.retain.assert_awaited_once()
+    assert policy.retain.await_args.args[0] == "team/writer"
+
+
+@pytest.mark.asyncio
+async def test_malformed_percent_encoding_is_rejected_before_denied_endpoint() -> None:
+    policy = SimpleNamespace(deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}))
+    app_module.runtime.policy = policy
+    with pytest.raises(HttpError) as invalid:
+        await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+    assert invalid.value.status == 400
+    assert invalid.value.code == "invalid_path_encoding"
+    policy.deny_endpoint.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_admin_dispatch_all_routes_and_validation() -> None:
     admin = SimpleNamespace(
         list_queue=AsyncMock(return_value={"items": []}),
@@ -217,6 +255,17 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
             "admin/quarantine/queue",
             request("GET", "/admin/quarantine/queue", headers=auth, query="limit=0"),
         )
+    with pytest.raises(HttpError) as duplicate:
+        await app_module.dispatch(
+            "admin/quarantine/queue",
+            request(
+                "GET",
+                "/admin/quarantine/queue",
+                headers=auth,
+                query="limit=1&limit=2",
+            ),
+        )
+    assert duplicate.value.code == "invalid_query"
 
     assert payload(
         await app_module.dispatch(
@@ -226,9 +275,10 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
     assert payload(
         await app_module.dispatch(
             "admin/quarantine/cleanup",
-            request("POST", "/admin/quarantine/cleanup", headers=auth, body={}),
+            request("POST", "/admin/quarantine/cleanup", headers=auth),
         )
     ) == {"count": 0}
+    admin.cleanup.assert_awaited_with({})
     with pytest.raises(HttpError):
         await app_module.dispatch(
             "admin/quarantine/cleanup",
