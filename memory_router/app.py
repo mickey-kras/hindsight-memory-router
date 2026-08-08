@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
-import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -35,19 +35,22 @@ from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
 from .maintenance import prune_events_before, sweep_expired
+from .observability import current_request_id
 from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
+from .timestamps import iso_now
 from .validation import parse_recall_body, parse_retain_body
 
+logger = logging.getLogger(__name__)
 _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 def _now() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    return iso_now()
 
 
 def _scope(method: str, path: str) -> str:
@@ -234,7 +237,7 @@ class Runtime:
                     )
                     await prune_events_before(repository, cutoff, at)
             except Exception:
-                sys.stderr.write("memory-router quarantine sweeper failed\n")
+                logger.exception("quarantine sweeper failed")
 
 
 runtime = Runtime()
@@ -255,18 +258,21 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 @app.exception_handler(HttpError)
 async def http_error_handler(_: Request, exc: HttpError) -> JSONResponse:
     if isinstance(exc, HindsightGatewayError):
-        sys.stderr.write(
-            "memory-router upstream request failed: "
-            + json.dumps(exc.details(), separators=(",", ":"))
-            + "\n"
+        logger.warning(
+            "upstream request failed request_id=%s details=%s",
+            current_request_id(),
+            exc.details(),
         )
     return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
 
 
 @app.exception_handler(Exception)
 async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
-    del exc
-    sys.stderr.write("memory-router request failed\n")
+    logger.error(
+        "request failed request_id=%s",
+        current_request_id(),
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
