@@ -7,7 +7,7 @@ import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any, TypeVar
+from typing import Any
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -33,8 +33,6 @@ from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .validation import parse_recall_body, parse_retain_body
 
-T = TypeVar("T")
-
 
 def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -48,7 +46,7 @@ def _scope(method: str, path: str) -> str:
     return "review"
 
 
-def _require_runtime(value: T | None, component: str) -> T:
+def _require_runtime[T](value: T | None, component: str) -> T:
     if value is None:
         raise RuntimeError(f"memory-router runtime {component} is not initialized")
     return value
