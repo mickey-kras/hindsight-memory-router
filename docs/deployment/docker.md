@@ -8,22 +8,32 @@ docker compose up -d
 
 Compose builds one Memory Router image and uses it for:
 
-- `quarantine-key-init`: a short-lived, idempotent key bootstrap;
+- `quarantine-key-init`: a short-lived, idempotent key bootstrap with networking disabled;
 - `memory-router`: the long-running non-root router process.
 
 ## Persistent volumes
 
+Compose defines three project-scoped named volumes:
+
 - `memory-router-data` -> `/app/data` for SQLite, WAL, and related database files;
-- `memory-router-quarantine-public-key` for the RSA public key;
-- `memory-router-quarantine-private-key` for the private review key.
+- `memory-router-public-key` for the public encryption key;
+- `memory-router-private-key` for review key material.
 
-The router mounts the public-key volume read-only and does not mount the private-key volume. The image owns `/app/data` as the non-root `node` user so SQLite and WAL files remain writable inside the named volume.
+Compose applies normal project namespacing; no global volume names are forced. Independent deployments on the same Docker host therefore receive separate data and key volumes.
 
-The private key is stored at `quarantine-private.pem` inside the Docker volume named `memory-router-quarantine-private-key`. It is needed only for authorized quarantine review/decryption. Back it up according to your recovery policy; losing it makes existing quarantine evidence undecryptable.
+The router mounts the public-key volume read-only and does not mount the private-key volume. The initializer is the only service that mounts the private-key volume, and it runs with `network_mode: none`. The image owns `/app/data` as the non-root `node` user so SQLite and WAL files remain writable inside the named volume.
+
+The review key file is stored in the project-scoped private-key volume and is needed only for authorized quarantine review. Back up that volume according to your recovery policy; losing it makes existing quarantine evidence undecryptable.
 
 ## Optional overrides
 
 No `.env` file is required. If present, Compose loads `.env` as an override file. Start from `.env.example` only when tuning behavior or configuring credentials/provider connectivity.
+
+`MEMORY_ROUTER_PORT` changes both the published host port and the router listener port. For example:
+
+```bash
+MEMORY_ROUTER_PORT=9000 docker compose up -d
+```
 
 ## Image verification
 
