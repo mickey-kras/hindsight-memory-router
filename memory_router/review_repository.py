@@ -116,11 +116,7 @@ async def recover_interrupted(
 ) -> None:
     now = datetime.fromisoformat(at.replace("Z", "+00:00"))
     async with repository.db.transaction() as tx:
-        query = (
-            _SELECT_IN_PROGRESS_FOR_UPDATE
-            if tx.dialect == "postgres"
-            else _SELECT_IN_PROGRESS
-        )
+        query = _SELECT_IN_PROGRESS_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_IN_PROGRESS
         rows = await tx.fetchall(query)
         for row in rows:
             updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))

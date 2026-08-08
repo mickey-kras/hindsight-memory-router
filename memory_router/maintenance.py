@@ -19,9 +19,7 @@ _PREVIEW_CLEANUP_SQL = (
     "SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes "
     "FROM quarantine_items " + _CLEANUP_PREDICATE
 )
-_CLEANUP_SQL = (
-    "SELECT quarantine_id, encrypted_bytes FROM quarantine_items " + _CLEANUP_PREDICATE
-)
+_CLEANUP_SQL = "SELECT quarantine_id, encrypted_bytes FROM quarantine_items " + _CLEANUP_PREDICATE
 _CLEANUP_SQL_FOR_UPDATE = _CLEANUP_SQL + " FOR UPDATE"
 _SWEEP_SQL = """
 SELECT quarantine_id, expires_at
@@ -118,9 +116,7 @@ async def prune_events_before(repository: QuarantineRepository, cutoff: str, at:
         return len(rows)
 
 
-def cleanup_params(
-    scope: str, reasons: list[str] | None, older_than: str | None
-) -> list[Any]:
+def cleanup_params(scope: str, reasons: list[str] | None, older_than: str | None) -> list[Any]:
     if scope not in {"pending", "all"}:
         raise ValueError("cleanup scope must be pending or all")
     selected = list(reasons or [])
