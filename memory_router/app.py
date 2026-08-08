@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -21,7 +23,7 @@ from .config import (
     integer_env,
     load_registry,
 )
-from .db import DEFAULT_DATABASE_URL, create_database, is_postgres, validate_storage
+from .db import DEFAULT_DATABASE_URL, PostgresDatabase, create_database, is_postgres, validate_storage
 from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -32,6 +34,8 @@ from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .validation import parse_recall_body, parse_retain_body
+
+_HEX = frozenset("0123456789abcdefABCDEF")
 
 
 def _now() -> str:
@@ -52,9 +56,49 @@ def _require_runtime[T](value: T | None, component: str) -> T:
     return value
 
 
+def _raw_pathname(request: Request) -> str:
+    raw = request.scope.get("raw_path")
+    if isinstance(raw, bytes):
+        try:
+            path = raw.decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise HttpError(
+                400,
+                "invalid_path_encoding",
+                "path segment contains malformed percent-encoding",
+            ) from exc
+    else:
+        path = request.url.path
+    index = 0
+    while index < len(path):
+        if path[index] != "%":
+            index += 1
+            continue
+        if index + 2 >= len(path) or path[index + 1] not in _HEX or path[index + 2] not in _HEX:
+            raise HttpError(
+                400,
+                "invalid_path_encoding",
+                "path segment contains malformed percent-encoding",
+            )
+        index += 3
+    return path
+
+
+def _decode_path_segment(value: str) -> str:
+    try:
+        return unquote(value, encoding="utf-8", errors="strict")
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise HttpError(
+            400,
+            "invalid_path_encoding",
+            "path segment contains malformed percent-encoding",
+        ) from exc
+
+
 class Runtime:
     def __init__(self) -> None:
         self.database: Any = None
+        self.rate_limit_database: PostgresDatabase | None = None
         self.repository: QuarantineRepository | None = None
         self.hindsight: HindsightGateway | None = None
         self.policy: RouterPolicy | None = None
@@ -89,7 +133,9 @@ class Runtime:
         await validate_storage(self.database, database_url)
         await recover_interrupted(self.repository, _now())
         if is_postgres(database_url):
-            self.quarantine_limiter = PostgresRateLimiter(self.database)
+            self.rate_limit_database = PostgresDatabase(database_url, max_size=2)
+            await self.rate_limit_database.initialize()
+            self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
@@ -131,9 +177,7 @@ class Runtime:
             max_recall_max_tokens=integer_env("HINDSIGHT_RECALL_MAX_TOKENS", 8192, minimum=1),
         )
         registry = load_registry(os.environ.get("MEMORY_ROUTER_REGISTRY"))
-        hindsight_limiter = (
-            self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
-        )
+        hindsight_limiter = self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
         hindsight_limits = HindsightLimits(hconfig, hindsight_limiter)
         self.policy = RouterPolicy(registry, hindsight, hindsight_limits, store, self.repository)
         self.admin = QuarantineAdminService(
@@ -154,6 +198,8 @@ class Runtime:
                 pass
         if self.hindsight:
             await self.hindsight.close()
+        if self.rate_limit_database:
+            await self.rate_limit_database.close()
         if self.repository:
             await self.repository.close()
 
@@ -163,6 +209,7 @@ class Runtime:
             await asyncio.sleep(interval)
             at = _now()
             try:
+                await recover_interrupted(repository, at)
                 await sweep_expired(repository, at)
                 if retention_days > 0:
                     cutoff = (
@@ -192,35 +239,35 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 @app.exception_handler(HttpError)
 async def http_error_handler(_: Request, exc: HttpError) -> JSONResponse:
-    return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
-
-
-@app.exception_handler(Exception)
-async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
     if isinstance(exc, HindsightGatewayError):
         sys.stderr.write(
             "memory-router upstream request failed: "
             + json.dumps(exc.details(), separators=(",", ":"))
             + "\n"
         )
-        return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
+    return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
+
+
+@app.exception_handler(Exception)
+async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
+    del exc
     sys.stderr.write("memory-router request failed\n")
-    return JSONResponse(
-        {"error": "internal_error", "message": "Internal server error"}, status_code=500
-    )
+    return JSONResponse({"error": "internal error"}, status_code=500)
 
 
 async def _json_body(request: Request) -> Any:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
-        raise HttpError(413, "request_body_too_large", "request body exceeds configured size limit")
+        raise HttpError(413, "payload_too_large", "payload too large")
     body = await request.body()
     if len(body) > runtime.max_body_bytes:
-        raise HttpError(413, "request_body_too_large", "request body exceeds configured size limit")
+        raise HttpError(413, "payload_too_large", "payload too large")
+    if not body:
+        return {}
     try:
         return json.loads(body)
     except (ValueError, UnicodeError) as exc:
-        raise HttpError(400, "invalid_json", "request body must be valid JSON") from exc
+        raise HttpError(400, "invalid_json", "invalid JSON body") from exc
 
 
 async def _router_auth(request: Request) -> bool:
@@ -273,7 +320,8 @@ async def ready() -> Response:
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"])
 async def dispatch(path: str, request: Request) -> Response:
-    pathname = "/" + path
+    del path
+    pathname = _raw_pathname(request)
     method = request.method
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
@@ -282,6 +330,8 @@ async def dispatch(path: str, request: Request) -> Response:
         admin = _require_runtime(runtime.admin, "admin service")
         if method == "GET" and pathname == "/admin/quarantine/queue":
             params = request.query_params
+            if len(params.getlist("limit")) > 1 or len(params.getlist("offset")) > 1:
+                raise HttpError(400, "invalid_query", "limit or offset is invalid")
             try:
                 limit = int(params.get("limit", "100"))
                 offset = int(params.get("offset", "0"))
@@ -297,11 +347,11 @@ async def dispatch(path: str, request: Request) -> Response:
             if not isinstance(body, dict):
                 raise HttpError(400, "invalid_request", "cleanup body must be an object")
             return JSONResponse(await admin.cleanup(body))
-        match = __import__("re").fullmatch(
+        match = re.fullmatch(
             r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
         )
         if match:
-            item_id, action = match.group(1), match.group(2)
+            item_id, action = _decode_path_segment(match.group(1)), match.group(2)
             if method == "GET" and action is None:
                 return JSONResponse(await admin.read_item(item_id))
             if method == "POST" and action == "approve":
@@ -331,11 +381,9 @@ async def dispatch(path: str, request: Request) -> Response:
             }
         )
     policy = _require_runtime(runtime.policy, "router policy")
-    match = __import__("re").fullmatch(
-        r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname
-    )
+    match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
     if method == "POST" and match:
-        writer_id, action = match.group(1), match.group(2)
+        writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
         if action == "recall":
             body = parse_recall_body(await _json_body(request))
             policy.limits.assert_recall_bounds(body)
