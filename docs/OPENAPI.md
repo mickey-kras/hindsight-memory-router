@@ -56,7 +56,7 @@ Admin credentials are for human-operated or tightly controlled service clients o
 When the HTTP surface changes:
 
 1. Update `openapi/openapi.json` in the same pull request.
-2. Update the route/auth contract test.
-3. Run `npm run openapi:lint` and `npm test`.
+2. Update the route/auth contract tests.
+3. Run `npm run openapi:lint` and `python -m pytest`.
 
 CI fails when documented paths, methods, authentication schemes, request constraints, malformed-request status codes, or the API version drift from the implementation.
