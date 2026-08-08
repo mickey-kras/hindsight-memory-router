@@ -83,7 +83,7 @@ def assert_auth_environment() -> None:
     anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
     if not router_token:
         if anonymous:
-            logger.warning("MEMORY_ROUTER_ALLOW_ANONYMOUS=true; development only")
+            logger.warning("MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only")
         else:
             logger.warning("MEMORY_ROUTER_TOKEN is not set; router endpoints fail-closed")
     legacy = os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN")
