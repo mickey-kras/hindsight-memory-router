@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from pydantic import ValidationError
@@ -14,15 +15,17 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
     try:
         parsed = RetainBody.model_validate(value)
     except ValidationError as exc:
-        issue = exc.errors()[0] if exc.errors() else {}
-        loc = issue.get("loc", ())
+        errors = exc.errors()
+        issue: Mapping[str, Any] = errors[0] if errors else {}
+        raw_loc = issue.get("loc", ())
+        loc = tuple(raw_loc) if isinstance(raw_loc, (tuple, list)) else ()
         if loc and loc[0] == "items":
             if len(loc) == 1:
                 message = "retain body requires at least one memory item"
             elif len(loc) == 2:
                 message = f"memory item {loc[1]} must be an object"
             else:
-                field = loc[2]
+                field = loc[2] if isinstance(loc[2], str) else None
                 mapping = {
                     "content": f"memory item {loc[1]} content must be a non-empty string",
                     "context": "context must be a string or null",
@@ -49,8 +52,11 @@ def parse_recall_body(value: Any) -> dict[str, Any]:
     try:
         parsed = RecallBody.model_validate(value)
     except ValidationError as exc:
-        issue = exc.errors()[0] if exc.errors() else {}
-        field = (issue.get("loc") or (None,))[0]
+        errors = exc.errors()
+        issue: Mapping[str, Any] = errors[0] if errors else {}
+        raw_loc = issue.get("loc", ())
+        loc = tuple(raw_loc) if isinstance(raw_loc, (tuple, list)) else ()
+        field = loc[0] if loc and isinstance(loc[0], str) else None
         mapping = {
             "query": "recall query must be a non-empty string",
             "max_tokens": "max_tokens must be a positive integer",
