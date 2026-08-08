@@ -4,7 +4,7 @@ import asyncio
 import json
 import sys
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
@@ -103,7 +103,7 @@ class RouterPolicy:
         )
         responses: list[tuple[str, dict[str, Any]]] = []
         for bank, outcome in zip(banks, outcomes, strict=False):
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException):
                 if not isinstance(outcome, HindsightGatewayError):
                     raise outcome
                 self._log_degradation(
@@ -111,7 +111,7 @@ class RouterPolicy:
                     {"writer_id": writer_id, "bank_id": bank, **outcome.details()},
                 )
                 continue
-            responses.append((bank, outcome))
+            responses.append((bank, cast(dict[str, Any], outcome)))
         return responses
 
     async def _allow_recalled_or_degrade(
@@ -257,7 +257,7 @@ class RouterPolicy:
             )
 
     async def _quarantine(self, values: dict[str, Any]) -> dict[str, str]:
-        return await self.store.put({"timestamp": iso_now(), **values})
+        return cast(dict[str, str], await self.store.put({"timestamp": iso_now(), **values}))
 
     @staticmethod
     def _with_transformations(payload: dict[str, Any], scan: SafetyResult | None) -> dict[str, Any]:
