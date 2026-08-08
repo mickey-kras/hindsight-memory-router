@@ -39,7 +39,7 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
         else:
             message = "retain body is invalid"
         raise _invalid_retain(message) from exc
-    return parsed.model_dump(by_alias=True, exclude_none=True)
+    return parsed.model_dump(by_alias=True, exclude_unset=True)
 
 
 def parse_recall_body(value: Any) -> dict[str, Any]:
@@ -60,7 +60,7 @@ def parse_recall_body(value: Any) -> dict[str, Any]:
             "trace": "trace must be a boolean",
         }
         raise _invalid_recall(mapping.get(field, "recall body is invalid")) from exc
-    return parsed.model_dump(by_alias=True, exclude_none=True)
+    return parsed.model_dump(by_alias=True, exclude_unset=True)
 
 
 def _first_error_location(exc: ValidationError) -> tuple[Any, ...]:
