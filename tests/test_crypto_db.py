@@ -50,29 +50,27 @@ def test_canonical_json_is_stable_across_key_order() -> None:
     assert canonical_json({"a": -0.0}) == '{"a":0}'
 
 
-def test_canonical_json_sanitizes_python_only_json_values() -> None:
-    value = {
-        1: "numeric-key",
-        "large": 2**53,
-        "huge": 10**400,
-        "nan": float("nan"),
-        "positive_infinity": float("inf"),
-        "negative_infinity": float("-inf"),
-        "surrogate": "before\ud800after",
-        "nested": [None, True, {"value": 1}],
-    }
-    parsed = json.loads(canonical_json(value))
-    assert parsed["1"] == "numeric-key"
-    assert parsed["large"] == 2**53
-    assert parsed["huge"] == str(10**400)
-    assert parsed["nan"] == "nan"
-    assert parsed["positive_infinity"] == "inf"
-    assert parsed["negative_infinity"] == "-inf"
-    assert parsed["surrogate"] == "before?after"
-    assert parsed["nested"] == [None, True, {"value": 1}]
-
+@pytest.mark.parametrize(
+    "value",
+    [
+        {1: "numeric-key"},
+        {"large": 2**53},
+        {"huge": 10**400},
+        {"nan": float("nan")},
+        {"positive_infinity": float("inf")},
+        {"negative_infinity": float("-inf")},
+        {"surrogate": "before\ud800after"},
+        {"invalid": (1, 2)},
+    ],
+)
+def test_canonical_json_rejects_python_only_or_lossy_values(value: object) -> None:
     with pytest.raises(ValueError, match="JSON values only"):
-        canonical_json({"invalid": (1, 2)})
+        canonical_json(value)
+
+
+def test_canonical_json_accepts_json_values() -> None:
+    value = {"nested": [None, True, {"value": 1}]}
+    assert json.loads(canonical_json(value)) == value
 
 
 def test_envelope_round_trip_preserves_existing_format() -> None:
