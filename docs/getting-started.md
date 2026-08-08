@@ -14,7 +14,7 @@ The first Compose run:
 - builds the Memory Router image;
 - generates an RSA quarantine keypair if one does not already exist;
 - starts the router in single-node mode;
-- stores SQLite state in the `memory-router-data` named volume.
+- stores SQLite state in a project-scoped `memory-router-data` named volume.
 
 No `.env` file is required for startup. Authentication still fails closed: configure a router token before sending retain/recall traffic and scoped admin tokens before using review operations.
 
@@ -27,7 +27,7 @@ Normal startup uses built-in defaults:
 - deployment mode: `single`;
 - quarantine database: `sqlite:./data/quarantine.db`;
 - listener port: `8890`;
-- built-in framework-neutral writer registry;
+- one neutral `main` writer that reads and writes only the `main` bank;
 - bounded retain/recall, quarantine, timeout, capacity, and retention settings.
 
 Use `.env.example` only as an override reference.
