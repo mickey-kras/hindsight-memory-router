@@ -14,6 +14,11 @@ _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
 _REQUEST_SELECT_FOR_UPDATE = _REQUEST_SELECT + " FOR UPDATE"
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _ID_SELECT_FOR_UPDATE = _ID_SELECT + " FOR UPDATE"
+_PENDING_SCOPE_PREFIX = (
+    "SELECT COUNT(*) count FROM quarantine_items "
+    "WHERE status IN ('pending','postponed') "
+    "AND NOT(expires_at IS NOT NULL AND expires_at<=?) AND "
+)
 
 
 @dataclass(slots=True)
@@ -198,16 +203,7 @@ class QuarantineRepository:
         if next_pending > capacity.max_pending_items or next_bytes > capacity.max_encrypted_bytes:
             raise HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted")
         if capacity.max_pending_items_per_writer > 0:
-            scope_sql, scope_params = _scope_predicate(item)
-            scoped_row = (
-                await tx.fetchone(
-                    "SELECT COUNT(*) count FROM quarantine_items WHERE status IN ('pending','postponed') AND NOT(expires_at IS NOT NULL AND expires_at<=?) AND "
-                    + scope_sql,
-                    (at, *scope_params),
-                )
-                or {}
-            )
-            scoped = int(scoped_row.get("count") or 0)
+            scoped = await _scoped_pending_count(tx, item, at)
             if existing_pending and existing_live and _same_scope(item, existing_live):
                 scoped -= 1
             if scoped + 1 > capacity.max_pending_items_per_writer:
@@ -218,12 +214,14 @@ class QuarantineRepository:
                 )
 
 
-def _scope_predicate(item: dict[str, Any]) -> tuple[str, tuple[Any, ...]]:
+async def _scoped_pending_count(tx: Tx, item: dict[str, Any], at: str) -> int:
     if item.get("reason") == "unknown_writer":
-        return "reason='unknown_writer'", ()
-    if item.get("writer_id") is not None:
-        return "writer_id=?", (item["writer_id"],)
-    return "kind=?", (item["kind"],)
+        row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "reason='unknown_writer'", (at,))
+    elif item.get("writer_id") is not None:
+        row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "writer_id=?", (at, item["writer_id"]))
+    else:
+        row = await tx.fetchone(_PENDING_SCOPE_PREFIX + "kind=?", (at, item["kind"]))
+    return int((row or {}).get("count") or 0)
 
 
 def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
