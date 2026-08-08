@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from .errors import HttpError
 from .models import RecallResponse
+from .observability import current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 
@@ -98,6 +99,9 @@ class HindsightGateway:
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
+        request_id = current_request_id()
+        if request_id:
+            headers["x-request-id"] = request_id
         try:
             response = await self.client.request(
                 method,
