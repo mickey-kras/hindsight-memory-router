@@ -4,6 +4,7 @@ import re
 import secrets
 from contextvars import ContextVar, Token
 
+from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _REQUEST_ID = ContextVar[str | None]("memory_router_request_id", default=None)
@@ -16,16 +17,9 @@ def current_request_id() -> str | None:
 
 
 def _resolve_request_id(scope: Scope) -> str:
-    for name, value in scope.get("headers", []):
-        if name.lower() != _HEADER:
-            continue
-        try:
-            candidate = value.decode("ascii")
-        except UnicodeDecodeError:
-            break
-        if _REQUEST_ID_RE.fullmatch(candidate):
-            return candidate
-        break
+    candidate = Headers(scope=scope).get("x-request-id")
+    if candidate is not None and _REQUEST_ID_RE.fullmatch(candidate):
+        return candidate
     return secrets.token_hex(16)
 
 
