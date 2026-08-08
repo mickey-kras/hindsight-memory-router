@@ -63,9 +63,7 @@ async def test_legacy_quarantine_migration(tmp_path) -> None:
     )
     database_url = f"sqlite:{tmp_path / 'quarantine.db'}"
 
-    summary = await migrate_legacy_quarantine(
-        str(queue), str(objects), database_url, private_pem
-    )
+    summary = await migrate_legacy_quarantine(str(queue), str(objects), database_url, private_pem)
     assert summary == {
         "imported": 1,
         "skipped_existing": 0,
