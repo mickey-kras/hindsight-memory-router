@@ -10,7 +10,8 @@ RUN apk upgrade --no-cache \
     && adduser -S -D -H -u 10001 -G app app
 
 COPY requirements.lock ./
-RUN python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock
+RUN python -m pip install --no-cache-dir --disable-pip-version-check --upgrade pip==26.2.1 \
+    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock
 
 COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
