@@ -1,9 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-npm run format:check
-npm run lint
-npm test
-npm run typecheck
-npm run security:audit
-npm run aislop:ci
+python -m ruff format --check memory_router tests
+python -m ruff check memory_router tests
+python -m mypy memory_router
+python -m pytest
+npm run check

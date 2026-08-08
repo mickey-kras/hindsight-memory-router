@@ -1,21 +1,24 @@
-FROM node:26.5.0-alpine3.24@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66 AS build
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY tsconfig.json ./
-COPY src ./src
-RUN npm run build
+FROM python:3.12-alpine3.24@sha256:f7fd610959cae736251523b54eb26cecb74f60ffa60bf39d9faccf128b526ab8
 
-FROM node:26.5.0-alpine3.24@sha256:e88a35be04478413b7c71c455cd9865de9b9360e1f43456be5951032d7ac1a66
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
-COPY package*.json ./
-RUN npm ci --omit=dev \
-    && npm cache clean --force \
-    && rm -rf /usr/local/lib/node_modules/npm \
-    && rm -f /usr/local/bin/npm /usr/local/bin/npx
-COPY --from=build /app/dist ./dist
+
+RUN apk upgrade --no-cache \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app app
+
+COPY requirements.lock pyproject.toml ./
+RUN python -m pip install --no-cache-dir --disable-pip-version-check --upgrade pip==26.2.1 \
+    && python -m pip install --no-cache-dir --disable-pip-version-check -r requirements.lock
+
+COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
-RUN mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
-    && chown -R node:node /app/data /app/bootstrap
-USER node
-CMD ["node", "dist/src/server.js"]
+RUN python -m pip install --no-cache-dir --disable-pip-version-check --no-deps . \
+    && python -m pip uninstall --yes pip \
+    && mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
+    && chown -R app:app /app/data /app/bootstrap
+
+USER app
+CMD ["python", "-m", "memory_router"]

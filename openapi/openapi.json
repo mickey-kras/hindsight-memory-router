@@ -863,15 +863,6 @@
           },
           "text": {
             "type": "string"
-          },
-          "type": {
-            "type": ["string", "null"]
-          },
-          "metadata": {
-            "type": ["object", "null"],
-            "additionalProperties": {
-              "type": "string"
-            }
           }
         },
         "additionalProperties": true
@@ -990,6 +981,10 @@
           "source_memory_id": {
             "type": "string"
           },
+          "source_content_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
           "dedupe_key": {
             "type": "string",
             "description": "Deterministic deduplication identity. Present on items created after request-item deduplication was introduced; repeated submissions with the same identity refresh this item instead of creating a new one."
@@ -1009,6 +1004,14 @@
             "type": "integer",
             "minimum": 0,
             "description": "How many times a repeated submission refreshed this item via its dedupe identity."
+          },
+          "encrypted_bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -1038,7 +1041,8 @@
           "key_wrap",
           "wrapped_key_b64",
           "iv_b64",
-          "tag_b64"
+          "tag_b64",
+          "aad"
         ],
         "properties": {
           "algorithm": {
@@ -1060,6 +1064,10 @@
           "tag_b64": {
             "type": "string",
             "contentEncoding": "base64"
+          },
+          "aad": {
+            "type": "string",
+            "const": "metadata-v1"
           }
         }
       },

@@ -14,43 +14,56 @@ permissions:
 
 jobs:
   checks:
-    permissions:
-      contents: write
-      pull-requests: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
           fetch-depth: 0
 
       - uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2
         with:
           egress-policy: audit
 
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.lock
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
 
+      - run: python -m pip install -r requirements.lock
+      - run: python -m pip install -e '.[dev]'
+
+      - name: Python runtime lock is current
+        run: |
+          pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
+            --output-file requirements.generated.lock pyproject.toml
+          diff -u requirements.lock requirements.generated.lock
+
       - run: npm ci
 
-      - name: Auto-fix before gates
-        if: >-
-          github.event_name == 'push' ||
-          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      - name: No legacy TypeScript runtime or tests
         run: |
-          npm run fix
-          if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add -A
-            git commit -m "Apply automated fixes"
-            git push
+          set -euo pipefail
+          for path in src tsconfig.json vitest.config.ts eslint.config.js; do
+            if [ -e "$path" ]; then
+              echo "obsolete TypeScript artifact remains: $path" >&2
+              exit 1
+            fi
+          done
+          if find tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print -quit | grep -q .; then
+            echo "obsolete TypeScript test remains under tests/" >&2
+            find tests -type f \( -name '*.ts' -o -name '*.tsx' \) -print >&2
+            exit 1
           fi
 
-      - run: npm run format:check
-      - run: npm run lint
+      - run: ruff format --diff memory_router tests
+      - run: ruff check memory_router tests
+      - run: mypy memory_router
 
       - name: OpenAPI contract
         id: openapi-lint
@@ -67,9 +80,16 @@ jobs:
           if-no-files-found: error
 
       - name: Tests and coverage
-        run: npm run test:coverage
-      - run: npm run typecheck
-      - run: npm run security:audit
+        run: coverage run -m pytest && coverage report --fail-under=90
+
+      - name: Python dependency audit
+        run: pip-audit -r requirements.lock
+
+      - name: Bandit
+        run: bandit -q -r memory_router
+
+      - name: Node tooling audit
+        run: npm audit --audit-level=moderate
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3

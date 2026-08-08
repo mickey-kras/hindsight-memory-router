@@ -37,9 +37,9 @@ services:
       test:
         [
           "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:8890/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+          "python",
+          "-c",
+          "import urllib.request; response=urllib.request.urlopen('http://127.0.0.1:8890/ready', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)",
         ]
       interval: 5s
       timeout: 5s

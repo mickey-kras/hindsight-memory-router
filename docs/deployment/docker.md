@@ -21,7 +21,7 @@ Compose defines three project-scoped named volumes:
 
 Compose applies normal project namespacing; no global volume names are forced. Independent deployments on the same Docker host therefore receive separate data and key volumes. The underlying Docker volume names are derived from the Compose project name rather than fixed by this repository.
 
-The router mounts the public-key volume read-only and does not mount the private-key volume. The initializer is the only service that mounts the private-key volume, and it runs with `network_mode: none`. The image owns `/app/data` as the non-root `node` user so SQLite and WAL files remain writable inside the named volume.
+The router mounts the public-key volume read-only and does not mount the private-key volume. The initializer is the only service that mounts the private-key volume, and it runs with `network_mode: none`. The image runs as `app` (uid/gid `10001`). On startup, the root key-init helper recursively changes `/app/data` ownership to `app:app`; this also migrates existing Compose data volumes created by the former Node image, which used uid `1000`.
 
 The review key file is stored in the project-scoped private-key volume and is needed only for authorized quarantine review. Back up that volume according to your recovery policy; losing it makes existing quarantine evidence undecryptable.
 
@@ -70,5 +70,3 @@ cosign verify \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 ```
-
-The long-running container runs as the non-root `node` user.
