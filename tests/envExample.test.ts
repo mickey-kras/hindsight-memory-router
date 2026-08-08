@@ -31,7 +31,7 @@ function envVarsReadByServer(): Set<string> {
 function envExampleEntries(): Set<string> {
   const names = new Set<string>();
   for (const line of readFileSync(".env.example", "utf8").split("\n")) {
-    const match = line.match(/^([A-Z0-9_]+)=/);
+    const match = line.match(/^\s*(?:#\s*)?([A-Z0-9_]+)=/);
     if (match) names.add(match[1]);
   }
   return names;
