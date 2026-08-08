@@ -33,10 +33,13 @@ async def preview_cleanup(
 ) -> dict[str, int]:
     where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
-        row = await tx.fetchone(
-            f"SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes FROM quarantine_items WHERE {where}",
-            params,
-        ) or {}
+        row = (
+            await tx.fetchone(
+                f"SELECT COUNT(*) count, COALESCE(SUM(encrypted_bytes), 0) encrypted_bytes FROM quarantine_items WHERE {where}",
+                params,
+            )
+            or {}
+        )
     return {
         "count": int(row.get("count") or 0),
         "encrypted_bytes": int(row.get("encrypted_bytes") or 0),
@@ -127,7 +130,9 @@ def cleanup_params(
     if any(not isinstance(reason, str) for reason in selected):
         raise HttpError(400, "invalid_cleanup", "cleanup reasons must contain strings")
     clauses = [
-        "status IN ('pending','postponed')" if scope == "pending" else "status <> 'review_in_progress'"
+        "status IN ('pending','postponed')"
+        if scope == "pending"
+        else "status <> 'review_in_progress'"
     ]
     params: list[Any] = []
     if selected:
