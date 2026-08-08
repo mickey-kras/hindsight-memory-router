@@ -232,38 +232,48 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
             request("POST", "/admin/quarantine/cleanup", headers=auth, body=[]),
         )
 
-    assert payload(
-        await app_module.dispatch(
-            "admin/quarantine/items/q",
-            request("GET", "/admin/quarantine/items/q", headers=auth),
-        )
-    )["quarantine_id"] == "q"
-    assert payload(
-        await app_module.dispatch(
-            "admin/quarantine/items/q/approve",
-            request("POST", "/admin/quarantine/items/q/approve", headers=auth, body={}),
-        )
-    )["approved"] is True
+    assert (
+        payload(
+            await app_module.dispatch(
+                "admin/quarantine/items/q",
+                request("GET", "/admin/quarantine/items/q", headers=auth),
+            )
+        )["quarantine_id"]
+        == "q"
+    )
+    assert (
+        payload(
+            await app_module.dispatch(
+                "admin/quarantine/items/q/approve",
+                request("POST", "/admin/quarantine/items/q/approve", headers=auth, body={}),
+            )
+        )["approved"]
+        is True
+    )
     with pytest.raises(HttpError):
         await app_module.dispatch(
             "admin/quarantine/items/q/approve",
             request("POST", "/admin/quarantine/items/q/approve", headers=auth, body=[]),
         )
-    assert payload(
-        await app_module.dispatch(
-            "admin/quarantine/items/q/reject",
-            request("POST", "/admin/quarantine/items/q/reject", headers=auth),
-        )
-    )["rejected"] is True
-    assert payload(
-        await app_module.dispatch(
-            "admin/quarantine/items/q/postpone",
-            request("POST", "/admin/quarantine/items/q/postpone", headers=auth),
-        )
-    )["postponed"] is True
-    response = await app_module.dispatch(
-        "admin/nope", request("GET", "/admin/nope", headers=auth)
+    assert (
+        payload(
+            await app_module.dispatch(
+                "admin/quarantine/items/q/reject",
+                request("POST", "/admin/quarantine/items/q/reject", headers=auth),
+            )
+        )["rejected"]
+        is True
     )
+    assert (
+        payload(
+            await app_module.dispatch(
+                "admin/quarantine/items/q/postpone",
+                request("POST", "/admin/quarantine/items/q/postpone", headers=auth),
+            )
+        )["postponed"]
+        is True
+    )
+    response = await app_module.dispatch("admin/nope", request("GET", "/admin/nope", headers=auth))
     assert response.status_code == 404 and payload(response)["error"] == "admin_endpoint_not_found"
 
     response = await app_module.dispatch(
