@@ -11,11 +11,8 @@ With the default Compose deployment, private review material is stored in the pr
 3. Supply the private key to the local decrypt CLI over stdin and inspect the complete decrypted object.
 4. Approve, reject, or postpone with the review token.
 
-Example after building the project:
-
 ```bash
-npm run build
-private-key-command | node dist/src/cli/decryptQuarantine.js encrypted-response.json
+private-key-command | memory-router-decrypt-quarantine encrypted-response.json
 ```
 
 Approval requires the complete decrypted object unchanged. Modified content returns `409 quarantine_hash_mismatch`.
