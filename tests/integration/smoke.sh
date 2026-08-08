@@ -227,12 +227,12 @@ pass_check
 
 if [[ "$mode" == "fake" ]]; then
   begin_check "recalled suspicious memory stays blocked until review and invalidates on reject"
-  first_recall="$(post_router "/v1/default/banks/ops/memories/recall" '{"query":"unsafe recalled result"}')"
-printf '%s' "$first_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
+  first_recall="$(post_router "/v1/default/banks/main/memories/recall" '{"query":"unsafe recalled result"}')"
+  printf '%s' "$first_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
   recall_item="$(admin_get "/admin/quarantine/queue" | python3 -c 'import json,sys; items=json.load(sys.stdin)["items"]; print(next(item["quarantine_id"] for item in items if item["kind"] == "recalled_memory"))')"
   reject_recall="$(admin_post "/admin/quarantine/items/${recall_item}/reject")"
   printf '%s' "$reject_recall" | grep -q '"allowed":false' || fail_check "recalled memory reject failed"
-  second_recall="$(post_router "/v1/default/banks/ops/memories/recall" '{"query":"unsafe recalled result"}')"
+  second_recall="$(post_router "/v1/default/banks/main/memories/recall" '{"query":"unsafe recalled result"}')"
   printf '%s' "$second_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
   grep -q '"kind":"invalidate"' "$state_file" || fail_check "fake Hindsight did not receive invalidation"
   pass_check

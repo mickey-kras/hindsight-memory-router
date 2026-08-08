@@ -1,0 +1,48 @@
+services:
+  quarantine-key-init:
+    build: .
+    image: memory-router:local
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        chown node:node /app/data
+        exec node dist/src/cli/bootstrapQuarantineKeys.js \
+          --public-key /app/bootstrap/public/quarantine-public.pem \
+          --private-key /app/bootstrap/private/quarantine-private.pem
+    volumes:
+      - memory-router-data:/app/data
+      - memory-router-public-key:/app/bootstrap/public
+      - memory-router-private-key:/app/bootstrap/private
+
+  memory-router:
+    build: .
+    image: memory-router:local
+    restart: unless-stopped
+    depends_on:
+      quarantine-key-init:
+        condition: service_completed_successfully
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEMORY_ROUTER_PORT: "${MEMORY_ROUTER_PORT:-8890}"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        export QUARANTINE_PUBLIC_KEY="$$(cat /app/bootstrap/public/quarantine-public.pem)"
+        exec node dist/src/server.js
+    ports:
+      - "${MEMORY_ROUTER_PORT:-8890}:${MEMORY_ROUTER_PORT:-8890}"
+    volumes:
+      - memory-router-data:/app/data
+      - memory-router-public-key:/app/bootstrap/public:ro
+
+volumes:
+  memory-router-data:
+  memory-router-public-key:
+  memory-router-private-key:

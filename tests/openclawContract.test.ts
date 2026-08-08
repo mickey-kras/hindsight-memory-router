@@ -73,7 +73,7 @@ describe("OpenClaw Hindsight plugin contract", () => {
   it("accepts the recall payload produced by HindsightClient.recall", async () => {
     await withServer(async ({ baseUrl, hindsight }) => {
       const response = await fetch(
-        `${baseUrl}/v1/default/banks/dev/memories/recall`,
+        `${baseUrl}/v1/default/banks/main/memories/recall`,
         {
           method: "POST",
           headers: {
@@ -92,10 +92,7 @@ describe("OpenClaw Hindsight plugin contract", () => {
       expect(response.status).toBe(200);
       const body = (await response.json()) as { results: unknown[] };
       expect(body.results.length).toBeGreaterThan(0);
-      expect(hindsight.recalled.map((item) => item.bankId)).toEqual([
-        "dev",
-        "core",
-      ]);
+      expect(hindsight.recalled.map((item) => item.bankId)).toEqual(["main"]);
     });
   });
 

@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
+    "bootstrap:quarantine-keys": "node dist/src/cli/bootstrapQuarantineKeys.js",
     "migrate:legacy-quarantine": "node dist/src/cli/migrateLegacyQuarantine.js",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

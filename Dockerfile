@@ -15,5 +15,7 @@ RUN npm ci --omit=dev \
     && rm -f /usr/local/bin/npm /usr/local/bin/npx
 COPY --from=build /app/dist ./dist
 COPY writer_registry.example.json ./writer_registry.example.json
+RUN mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
+    && chown -R node:node /app/data /app/bootstrap
 USER node
 CMD ["node", "dist/src/server.js"]
