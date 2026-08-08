@@ -52,6 +52,7 @@ jobs:
         run: |
           ruff format memory_router tests_py
           ruff check --fix memory_router tests_py || true
+          npm install --package-lock-only --ignore-scripts
           npm run aislop:fix:safe
           if ! git diff --quiet; then
             git config user.name "github-actions[bot]"
