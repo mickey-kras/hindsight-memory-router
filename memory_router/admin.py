@@ -3,7 +3,7 @@ from __future__ import annotations
 import hmac
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from .canonical import sha256_hex
 from .envelope import canonical_decrypted, parse_decrypted
@@ -250,4 +250,4 @@ class QuarantineAdminService:
                     "quarantine_metadata_mismatch",
                     "decrypted quarantine metadata differs from the stored item",
                 )
-        return decrypted
+        return cast(dict[str, Any], decrypted)
