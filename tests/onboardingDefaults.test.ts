@@ -41,11 +41,21 @@ describe("onboarding defaults", () => {
     ).toBe(databaseUrl);
   });
 
-  it("uses framework-neutral built-in registry sources", () => {
-    expect(Object.values(DEFAULT_REGISTRY.writers)).not.toHaveLength(0);
-    for (const writer of Object.values(DEFAULT_REGISTRY.writers)) {
-      expect(writer.source).toBe("application");
-    }
+  it("uses one neutral main-only built-in writer", () => {
+    expect(DEFAULT_REGISTRY).toEqual({
+      writers: {
+        main: {
+          role: "default",
+          source: "application",
+          write_bank: "main",
+          read_banks: ["main"],
+        },
+      },
+      defaults: {
+        unknown_writer_action: "review_queue",
+        suspicious_content_action: "review_queue",
+      },
+    });
   });
 
   it("rejects invalid explicitly supplied boolean configuration", () => {
@@ -59,7 +69,7 @@ describe("onboarding defaults", () => {
     ).toThrow("MEMORY_ROUTER_ALLOW_ANONYMOUS must be true or false");
   });
 
-  it("makes Docker data persistent/writable and keeps the private key out of the router", async () => {
+  it("keeps Compose storage project-scoped and the key initializer offline", async () => {
     const dockerfile = await readFile(
       new URL("../Dockerfile", import.meta.url),
       "utf8",
@@ -76,10 +86,12 @@ describe("onboarding defaults", () => {
     expect(volumesStart).toBeGreaterThan(routerStart);
     const initService = compose.slice(initStart, routerStart);
     const routerService = compose.slice(routerStart, volumesStart);
+    const volumeDefinitions = compose.slice(volumesStart);
 
     expect(dockerfile).toContain("mkdir -p /app/data");
     expect(dockerfile).toContain("chown -R node:node /app/data /app/bootstrap");
     expect(dockerfile).toContain("USER node");
+    expect(initService).toContain("network_mode: none");
     expect(initService).toContain("chown node:node /app/data");
     expect(initService).toContain("memory-router-data:/app/data");
     expect(routerService).toContain("memory-router-data:/app/data");
@@ -87,6 +99,10 @@ describe("onboarding defaults", () => {
       "memory-router-public-key:/app/bootstrap/public:ro",
     );
     expect(routerService).not.toContain("memory-router-private-key");
+    expect(routerService).toContain(
+      'MEMORY_ROUTER_PORT: "${MEMORY_ROUTER_PORT:-8890}"',
+    );
+    expect(volumeDefinitions).not.toMatch(/^\s+name:/m);
   });
 
   it("bootstraps quarantine keys idempotently with restrictive private-key permissions", async () => {
