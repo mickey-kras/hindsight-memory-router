@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any
 
+from .observability import current_request_id
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,9 @@ class AuthFailureAuditor:
         event_key = f"event:{route_group}"
         if now - self.last.get(event_key, 0) >= 60_000:
             self.last[event_key] = now
-            logger.warning("auth failed route_group=%s", route_group)
+            logger.warning(
+                "auth failed route_group=%s request_id=%s", route_group, current_request_id()
+            )
         try:
             await self.store.put(
                 {
@@ -62,4 +65,8 @@ class AuthFailureAuditor:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
-                logger.exception("could not record auth_failed security event route_group=%s", route_group)
+                logger.exception(
+                    "could not record auth_failed security event route_group=%s request_id=%s",
+                    route_group,
+                    current_request_id(),
+                )
