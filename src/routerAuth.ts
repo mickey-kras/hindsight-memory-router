@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { booleanEnv } from "./booleanEnv.js";
 import type { QuarantineStore } from "./quarantine/quarantineStore.js";
 
 const ROUTER_TOKEN = process.env.MEMORY_ROUTER_TOKEN;
@@ -150,7 +151,7 @@ export function assertRouterAuthEnvironment(
   const routerToken = overrides.router ?? environment.MEMORY_ROUTER_TOKEN;
   const allowAnonymous =
     overrides.allowAnonymous ??
-    environment.MEMORY_ROUTER_ALLOW_ANONYMOUS === "true";
+    booleanEnv(environment, "MEMORY_ROUTER_ALLOW_ANONYMOUS", false);
   const adminTokens: AdminTokens = {
     legacy: overrides.legacy ?? environment.MEMORY_ROUTER_ADMIN_TOKEN,
     read: overrides.read ?? environment.MEMORY_ROUTER_ADMIN_READ_TOKEN,
