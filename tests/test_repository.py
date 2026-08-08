@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -172,6 +173,31 @@ async def test_capacity_global_bytes_writer_and_expired_replacement(
     await repository.store(
         expired, Capacity(2, 1, 100_000), mode="id", at="2026-01-01T00:00:00.000Z"
     )
+
+
+@pytest.mark.asyncio
+async def test_unknown_writer_rows_do_not_consume_registered_writer_scope(
+    repository: QuarantineRepository,
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(10, 1, 100_000)
+    await repository.store(
+        item("unknown", writer="w", reason="unknown_writer"), capacity, mode="id", at=at
+    )
+    await repository.store(item("known", writer="w"), capacity, mode="id", at=at)
+    loaded = await repository.get("known")
+    assert loaded and loaded["reason"] == "suspicious_content"
+
+
+@pytest.mark.asyncio
+async def test_encrypted_bytes_use_unescaped_utf8(repository: QuarantineRepository) -> None:
+    value = item("unicode")
+    value["encrypted"] = {"v": 1, "data": "é"}
+    await repository.store(value, Capacity(10, 10, 100_000), mode="id", at="2026-01-01T00:00:00.000Z")
+    loaded = await repository.get("unicode")
+    assert loaded is not None
+    expected = len(json.dumps(value["encrypted"], separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    assert loaded["encrypted_bytes"] == expected
 
 
 @pytest.mark.asyncio
