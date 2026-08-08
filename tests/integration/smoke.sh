@@ -87,19 +87,19 @@ run_check "build memory-router image" docker build -t hindsight-memory-router:ci
 run_check "start compose stack" docker compose -p "$project" -f "$compose_file" up -d
 
 begin_check "router runtime does not receive quarantine private key"
-docker compose -p "$project" -f "$compose_file" exec -T memory-router node -e "process.exit(process.env.QUARANTINE_PRIVATE_KEY ? 1 : 0)" || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
 
 begin_check "router and internal Hindsight become reachable"
 for _ in {1..60}; do
   if curl -fsS "${router_url}/health" >/dev/null 2>&1 && \
-    docker compose -p "$project" -f "$compose_file" exec -T memory-router node -e "fetch('http://hindsight:8888/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null 2>&1; then
+    docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
 curl -fsS "${router_url}/health" >/dev/null
-docker compose -p "$project" -f "$compose_file" exec -T memory-router node -e "fetch('http://hindsight:8888/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))" >/dev/null
+docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
 begin_check "authentication and network boundaries hold"
@@ -151,6 +151,14 @@ retry_post_router() {
   post_router "$path" "$body"
 }
 
+decrypt_local() {
+  local input_file="$1"
+  printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i \
+    -v "${input_file}:/input.json:ro" \
+    hindsight-memory-router:ci \
+    python -c 'import base64,json,sys; from pathlib import Path; from memory_router.envelope import decrypt_envelope; private_key=base64.b64decode(sys.stdin.read()).decode(); value=json.loads(Path("/input.json").read_text()); print(json.dumps(decrypt_envelope(value["encrypted"], private_key), separators=(",", ":")))'
+}
+
 begin_check "known writer retain succeeds"
 known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":true}')"
 printf '%s' "$known_response" | grep -Eq 'success|ok' || fail_check "known retain failed: ${known_response}"
@@ -183,7 +191,7 @@ pass_check
 begin_check "local decryption recovers exact original outside router"
 encrypted_file="${root}/${tmp_dir}/encrypted-response.json"
 printf '%s' "$read_response" > "$encrypted_file"
-unknown_plaintext="$(printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i -v "${encrypted_file}:/input.json:ro" hindsight-memory-router:ci node dist/src/cli/decryptQuarantine.js /input.json)"
+unknown_plaintext="$(decrypt_local "$encrypted_file")"
 printf '%s' "$unknown_plaintext" | grep -q "$unknown_marker" || fail_check "local decryption did not recover unknown payload"
 pass_check
 
@@ -200,7 +208,7 @@ approval_response="$(retry_post_router "/v1/default/banks/main/memories" "{\"ite
 approval_id="$(printf '%s' "$approval_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quarantine_id"])')"
 approval_read="$(admin_get "/admin/quarantine/items/${approval_id}")"
 printf '%s' "$approval_read" > "$encrypted_file"
-approved_plaintext="$(printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i -v "${encrypted_file}:/input.json:ro" hindsight-memory-router:ci node dist/src/cli/decryptQuarantine.js /input.json)"
+approved_plaintext="$(decrypt_local "$encrypted_file")"
 approval_body="$(printf '%s' "$approved_plaintext" | python3 -c 'import json,sys; print(json.dumps({"decrypted": json.load(sys.stdin)}, separators=(",", ":")))')"
 approved_response="$(admin_post "/admin/quarantine/items/${approval_id}/approve" "$approval_body")"
 printf '%s' "$approved_response" | grep -q 'approved' || fail_check "exact approval failed"
@@ -211,7 +219,7 @@ tamper_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items"
 tamper_id="$(printf '%s' "$tamper_response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["quarantine_id"])')"
 tamper_read="$(admin_get "/admin/quarantine/items/${tamper_id}")"
 printf '%s' "$tamper_read" > "$encrypted_file"
-tamper_plaintext="$(printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i -v "${encrypted_file}:/input.json:ro" hindsight-memory-router:ci node dist/src/cli/decryptQuarantine.js /input.json)"
+tamper_plaintext="$(decrypt_local "$encrypted_file")"
 tamper_body="$(printf '%s' "$tamper_plaintext" | python3 -c 'import json,sys; value=json.load(sys.stdin); value["payload"]["body"]["items"][0]["content"]="changed"; print(json.dumps({"decrypted":value}, separators=(",", ":")))')"
 tamper_status="$(curl -sS -o /tmp/hmr-tamper-response -w '%{http_code}' -H "Authorization: Bearer ${admin_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/approve" -d "$tamper_body")"
 [[ "$tamper_status" == "409" ]] || fail_check "altered approval returned ${tamper_status}"
