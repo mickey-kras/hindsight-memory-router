@@ -29,7 +29,7 @@ curl --fail http://localhost:8890/health
 Expected response:
 
 ```json
-{"status":"healthy","service":"memory-router"}
+{ "status": "healthy", "service": "memory-router" }
 ```
 
 No `.env` file is required to start. Router and admin capabilities remain fail-closed until credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.

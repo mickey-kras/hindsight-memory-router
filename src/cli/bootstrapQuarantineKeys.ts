@@ -3,12 +3,7 @@ import {
   generateKeyPairSync,
   type KeyObject,
 } from "node:crypto";
-import {
-  chmod,
-  mkdir,
-  readFile,
-  writeFile,
-} from "node:fs/promises";
+import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import process from "node:process";
 import { parseArgs } from "node:util";
@@ -24,7 +19,10 @@ export async function bootstrapQuarantineKeys(
 ): Promise<"created" | "existing" | "repaired-public-key"> {
   const modulusLength = options.modulusLength ?? 4096;
   await mkdir(dirname(options.publicKeyPath), { recursive: true, mode: 0o755 });
-  await mkdir(dirname(options.privateKeyPath), { recursive: true, mode: 0o700 });
+  await mkdir(dirname(options.privateKeyPath), {
+    recursive: true,
+    mode: 0o700,
+  });
   await chmod(dirname(options.privateKeyPath), 0o700);
 
   const [publicKey, privateKey] = await Promise.all([
@@ -123,7 +121,8 @@ async function main(args: readonly string[]): Promise<number> {
     process.stdout.write(`quarantine key bootstrap: ${status}\n`);
     return 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "key bootstrap failed";
+    const message =
+      error instanceof Error ? error.message : "key bootstrap failed";
     process.stderr.write(`quarantine key bootstrap failed: ${message}\n`);
     return 1;
   }
