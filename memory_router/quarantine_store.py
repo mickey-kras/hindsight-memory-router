@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity
@@ -83,9 +83,11 @@ class QuarantineStore:
             if input_["kind"] == "security_event":
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes)
             await self.repository.store(item, capacity, mode=mode, at=input_["timestamp"])
-            return {"quarantine_id": quarantine_id, "sha256": encrypted["sha256"]}
+            return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
-        return await self.rate_limiter.with_identity_lock(quarantine_id, operation)
+        return cast(
+            dict[str, str], await self.rate_limiter.with_identity_lock(quarantine_id, operation)
+        )
 
     def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
         decrypted: dict[str, Any] = {
