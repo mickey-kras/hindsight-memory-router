@@ -1,6 +1,6 @@
 # Environment variables
 
-All tuning/deployment values below have built-in defaults. Environment variables are optional overrides unless marked as credentials/key material. Explicit invalid values fail startup validation.
+All tuning/deployment values below have built-in defaults. Authentication credentials remain optional and fail closed when absent. `QUARANTINE_PUBLIC_KEY` is the exception: it is required and has no default. Explicit invalid values fail startup validation.
 
 | Variable                                   |              Built-in default | Purpose                                                         |
 | ------------------------------------------ | ----------------------------: | --------------------------------------------------------------- |
@@ -41,13 +41,13 @@ All tuning/deployment values below have built-in defaults. Environment variables
 | `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`         |                         `300` | Global quarantine writes/window                                 |
 | `QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX`     |                          `10` | Distinct request families per writer/window                     |
 | `QUARANTINE_REQUARANTINE_OPS_MAX`          |                        `1000` | Requarantine operations/window                                  |
-| `QUARANTINE_RATE_LIMIT_WINDOW_MS`          |                       `60000` | Quarantine rate-limit window                                    |
+| `QUARANTINE_RATE_LIMIT_WINDOW_MS`           |                       `60000` | Quarantine rate-limit window                                    |
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
 
 Boolean overrides accept only `true` or `false`. Integer settings are validated as non-negative or positive according to their semantics.
 
-`QUARANTINE_PUBLIC_KEY` is required at startup and accepts PEM or base64-encoded PEM. Generate its matching private key on a trusted admin machine and never copy that private key to the router host.
+`QUARANTINE_PUBLIC_KEY` is required at startup and accepts PEM or base64-encoded PEM. For `.env`/Compose, use base64-encoded PEM; raw multi-line PEM is suitable only when injecting the value directly into a non-Compose process environment. Generate its matching private key on a trusted admin machine and never copy that private key to the router host.
 
 Any environment variable beginning with `QUARANTINE_PRIVATE_KEY` is forbidden in the running router and causes startup to fail.
