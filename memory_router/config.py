@@ -62,11 +62,9 @@ def load_registry(path: str | None = None) -> WriterRegistry:
         registry = WriterRegistry.model_validate(value)
     except ValidationError as exc:
         raise RuntimeError("invalid writer registry") from exc
-    for writer_id, rule in registry.writers.items():
+    for writer_id in registry.writers:
         if not writer_id.strip():
             raise RuntimeError("writer id cannot be empty")
-        if writer_id == "main" and "research" in rule.read_banks:
-            raise RuntimeError("main writer cannot read research")
     return registry
 
 
