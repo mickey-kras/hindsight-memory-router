@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import Any
 
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
+import memory_router.app as app_module
+from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway
 from memory_router.observability import RequestIdMiddleware, current_request_id
 
@@ -60,3 +64,65 @@ async def test_request_id_is_propagated_to_hindsight(httpx_mock: HTTPXMock) -> N
     assert request is not None
     assert request.headers["x-request-id"] == "req-upstream"
     await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_unhandled_failure_log_does_not_emit_exception_details(caplog: pytest.LogCaptureFixture) -> None:
+    secret = "sensitive-request-detail"
+    caplog.set_level(logging.ERROR, logger="memory_router.app")
+
+    response = await app_module.unhandled_handler(None, RuntimeError(secret))  # type: ignore[arg-type]
+
+    assert response.status_code == 500
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_auth_audit_failure_log_does_not_emit_exception_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    secret = "sensitive-auth-persistence-detail"
+
+    class FailingStore:
+        async def put(self, _: dict[str, Any]) -> None:
+            raise RuntimeError(secret)
+
+    caplog.set_level(logging.ERROR, logger="memory_router.auth")
+    await AuthFailureAuditor(FailingStore()).record("router")
+
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records if record.levelno >= logging.ERROR)
+
+
+@pytest.mark.asyncio
+async def test_sweeper_failure_log_does_not_emit_exception_details(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "sensitive-sweeper-detail"
+    sleep_calls = 0
+
+    async def fake_sleep(_: int) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError
+
+    async def fail_recovery(*_: Any) -> None:
+        raise RuntimeError(secret)
+
+    runtime = app_module.Runtime()
+    runtime.repository = object()  # type: ignore[assignment]
+    monkeypatch.setattr(app_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(app_module, "recover_interrupted", fail_recovery)
+    caplog.set_level(logging.ERROR, logger="memory_router.app")
+
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._sweep_loop(1, 0)
+
+    assert "RuntimeError" in caplog.text
+    assert secret not in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)
