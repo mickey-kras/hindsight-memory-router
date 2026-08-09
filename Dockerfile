@@ -20,5 +20,5 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check --no-deps .
     && mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
     && chown -R app:app /app/data /app/bootstrap
 
-USER app
+USER 10001
 CMD ["python", "-m", "memory_router"]
