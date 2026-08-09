@@ -40,13 +40,40 @@ docker run --rm -v <project>_memory-router-public-key:/k:ro alpine \
   sh -c 'base64 -w0 /k/quarantine-public.pem'
 ```
 
-Export `quarantine-private.pem` from `<project>_memory-router-private-key` to trusted off-host storage before deleting the old key volumes. After both keys are safely preserved, delete the old public/private key volumes.
+If the public-key volume is unavailable but the matching private key was preserved, re-derive the public key from it:
+
+```bash
+openssl pkey -in quarantine-private.pem -pubout
+```
+
+Export the existing private key directly to secure off-host storage. Do not leave a plaintext copy on the router host:
+
+```bash
+docker run --rm -v <project>_memory-router-private-key:/k:ro alpine \
+  cat /k/quarantine-private.pem > /secure-off-host-storage/quarantine-private.pem
+```
 
 Deployments whose data volume was created by the former Node runtime may still be owned by uid `1000`. The removed key-init service used to migrate that ownership automatically. Run this once before starting the new image:
 
 ```bash
 docker run --rm -v <project>_memory-router-data:/d alpine chown -R 10001:10001 /d
 ```
+
+Run the new stack's first startup with `--remove-orphans` so Compose removes the old `quarantine-key-init` container:
+
+```bash
+docker compose up -d --remove-orphans
+```
+
+After both keys are safely preserved and the old init container is gone, delete the obsolete key volumes:
+
+```bash
+docker volume rm \
+  <project>_memory-router-public-key \
+  <project>_memory-router-private-key
+```
+
+`docker compose down -v` with the new `compose.yaml` does not remove these old volumes because they are no longer declared by the project.
 
 ## Persistent volume
 
