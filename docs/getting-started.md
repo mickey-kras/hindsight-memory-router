@@ -7,6 +7,7 @@ Memory Router sits between an agent/application and Hindsight and applies writer
 Generate the quarantine keypair on a trusted admin machine, not on the router host:
 
 ```bash
+umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
 openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
 base64 < quarantine-public.pem | tr -d '\n'
@@ -27,6 +28,7 @@ curl --fail http://localhost:8890/health
 
 Compose:
 
+- requires the quarantine public key;
 - builds the Memory Router image;
 - starts the router in single-node mode;
 - stores SQLite state in a project-scoped `memory-router-data` named volume;
