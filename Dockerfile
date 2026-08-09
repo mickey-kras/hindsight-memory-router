@@ -17,8 +17,8 @@ COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
 RUN python -m pip install --no-cache-dir --disable-pip-version-check --no-deps . \
     && python -m pip uninstall --yes pip \
-    && mkdir -p /app/data /app/bootstrap/public /app/bootstrap/private \
-    && chown -R app:app /app/data /app/bootstrap
+    && mkdir -p /app/data \
+    && chown -R app:app /app/data
 
 USER app
 CMD ["python", "-m", "memory_router"]
