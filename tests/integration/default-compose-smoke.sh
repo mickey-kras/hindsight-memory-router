@@ -35,9 +35,11 @@ wait_for_health
 router_id="$("${compose[@]}" ps -q memory-router)"
 test -n "$router_id"
 test "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$router_id")" = "${COMPOSE_PROJECT_NAME}_memory-router-data"
-
 test -z "$(docker inspect -f '{{range .Mounts}}{{if or (eq .Destination "/app/bootstrap/private") (eq .Destination "/app/bootstrap/public")}}{{.Destination}}{{end}}{{end}}' "$router_id")"
-test -z "$(docker inspect -f '{{range .Config.Env}}{{if eq . "QUARANTINE_PRIVATE_KEY"}}{{.}}{{end}}{{end}}' "$router_id")"
+if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$router_id" | grep -q '^QUARANTINE_PRIVATE_KEY'; then
+  echo "router container contains quarantine private-key environment" >&2
+  exit 1
+fi
 
 "${compose[@]}" exec -T memory-router sh -ec '
   test "$(id -u)" -ne 0
