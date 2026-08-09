@@ -41,7 +41,7 @@ All tuning/deployment values below have built-in defaults. Environment variables
 | `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`         |                         `300` | Global quarantine writes/window                                 |
 | `QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX`     |                          `10` | Distinct request families per writer/window                     |
 | `QUARANTINE_REQUARANTINE_OPS_MAX`          |                        `1000` | Requarantine operations/window                                  |
-| `QUARANTINE_RATE_LIMIT_WINDOW_MS`           |                       `60000` | Quarantine rate-limit window                                    |
+| `QUARANTINE_RATE_LIMIT_WINDOW_MS`          |                       `60000` | Quarantine rate-limit window                                    |
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
