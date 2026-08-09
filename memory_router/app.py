@@ -236,8 +236,8 @@ class Runtime:
                         .replace("+00:00", "Z")
                     )
                     await prune_events_before(repository, cutoff, at)
-            except Exception:
-                logger.exception("quarantine sweeper failed")
+            except Exception as exc:
+                logger.error("quarantine sweeper failed error_type=%s", type(exc).__name__)
 
 
 runtime = Runtime()
@@ -269,9 +269,9 @@ async def http_error_handler(_: Request, exc: HttpError) -> JSONResponse:
 @app.exception_handler(Exception)
 async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
     logger.error(
-        "request failed request_id=%s",
+        "request failed request_id=%s error_type=%s",
         current_request_id(),
-        exc_info=(type(exc), exc, exc.__traceback__),
+        type(exc).__name__,
     )
     return JSONResponse({"error": "internal error"}, status_code=500)
 
