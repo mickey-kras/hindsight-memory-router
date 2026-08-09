@@ -27,7 +27,26 @@ Never copy, mount, generate, or persist the private key on the router host.
 docker compose up -d
 ```
 
-Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys.
+Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys. The `${QUARANTINE_PUBLIC_KEY:?...}` guard is evaluated by Compose itself, so commands such as `docker compose down`, `ps`, and `logs` also require the variable. Keep `QUARANTINE_PUBLIC_KEY` in `.env` as the canonical Compose location.
+
+## Upgrading from key-init deployments
+
+Preserve the existing keypair before removing the old key volumes. Replacing it with a new keypair makes all existing quarantine items undecryptable.
+
+Extract the existing public key and set the returned base64 value as `QUARANTINE_PUBLIC_KEY` in `.env`:
+
+```bash
+docker run --rm -v <project>_memory-router-public-key:/k:ro alpine \
+  sh -c 'base64 -w0 /k/quarantine-public.pem'
+```
+
+Export `quarantine-private.pem` from `<project>_memory-router-private-key` to trusted off-host storage before deleting the old key volumes. After both keys are safely preserved, delete the old public/private key volumes.
+
+Deployments whose data volume was created by the former Node runtime may still be owned by uid `1000`. The removed key-init service used to migrate that ownership automatically. Run this once before starting the new image:
+
+```bash
+docker run --rm -v <project>_memory-router-data:/d alpine chown -R 10001:10001 /d
+```
 
 ## Persistent volume
 
