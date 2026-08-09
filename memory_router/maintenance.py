@@ -107,22 +107,28 @@ async def sweep_expired(repository: QuarantineRepository, at: str) -> int:
 
 
 async def prune_events_before(repository: QuarantineRepository, cutoff: str, at: str) -> int:
-    async with repository.db.transaction() as tx:
-        rows = await tx.fetchall(
-            "SELECT event_id FROM quarantine_events WHERE occurred_at<? ORDER BY occurred_at LIMIT ?",
-            (cutoff, BATCH_LIMIT),
-        )
-        for row in rows:
-            await tx.execute("DELETE FROM quarantine_events WHERE event_id=?", (row["event_id"],))
-        if rows:
+    total = 0
+    while True:
+        async with repository.db.transaction() as tx:
+            rows = await tx.fetchall(
+                "SELECT event_id FROM quarantine_events WHERE occurred_at<? ORDER BY occurred_at LIMIT ?",
+                (cutoff, BATCH_LIMIT),
+            )
+            for row in rows:
+                await tx.execute("DELETE FROM quarantine_events WHERE event_id=?", (row["event_id"],))
+        total += len(rows)
+        if len(rows) < BATCH_LIMIT:
+            break
+    if total:
+        async with repository.db.transaction() as tx:
             await insert_event(
                 tx,
                 "quarantine_retention",
                 "retention_pruned",
                 at,
-                {"pruned_events": len(rows), "older_than": cutoff},
+                {"pruned_events": total, "older_than": cutoff},
             )
-        return len(rows)
+    return total
 
 
 def cleanup_params(
@@ -138,7 +144,7 @@ def cleanup_params(
     clauses = [
         "status IN ('pending','postponed')"
         if scope == "pending"
-        else "status <> 'review_in_progress'"
+        else "status NOT IN ('review_in_progress','reviewed_allowed','reviewed_blocked')"
     ]
     params: list[Any] = []
     if selected:
@@ -153,7 +159,5 @@ def cleanup_params(
 
 
 def _cleanup_query(select: str, where: str, *, for_update: bool = False) -> str:
-    # `select` and `where` are assembled only from this module's fixed SQL fragments and generated
-    # placeholders; all user-provided values remain bound parameters.
     suffix = " FOR UPDATE" if for_update else ""
     return f"SELECT {select} FROM quarantine_items WHERE {where}{suffix}"  # nosec B608  # noqa: S608
