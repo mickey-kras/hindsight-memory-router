@@ -1,3 +1,17 @@
 services:
   memory-router:
+    build: .
     image: memory-router:local
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      MEMORY_ROUTER_PORT: "${MEMORY_ROUTER_PORT:-8890}"
+    ports:
+      - "${MEMORY_ROUTER_PORT:-8890}:${MEMORY_ROUTER_PORT:-8890}"
+    volumes:
+      - memory-router-data:/app/data
+
+volumes:
+  memory-router-data:
