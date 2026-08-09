@@ -153,16 +153,6 @@ class _PostgresSession:
         ):
             await self.tx.execute("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
         now = at_ms if at_ms is not None else await self._database_now_ms()
-        windows = [window for _, _, window in normalized_buckets] + [
-            window for _, _, _, window in normalized_identities
-        ]
-        global_cutoff = now - max(windows)
-        await self.tx.execute(
-            "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?", (global_cutoff,)
-        )
-        await self.tx.execute(
-            "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (global_cutoff,)
-        )
         for key, maximum, window in normalized_buckets:
             cutoff = now - window
             await self.tx.execute(
