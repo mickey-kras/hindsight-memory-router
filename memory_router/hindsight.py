@@ -1,22 +1,25 @@
 from __future__ import annotations
 
+import json
 from typing import Any, Literal, cast
 from urllib.parse import quote
 
 import httpx
 from pydantic import ValidationError
 
+from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallResponse
 from .observability import current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
+DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
 class HindsightGatewayError(HttpError):
     def __init__(
         self,
-        kind: Literal["timeout", "http", "invalid-response", "network"],
+        kind: Literal["timeout", "http", "invalid-response", "network", "response-too-large"],
         *,
         upstream_status: int | None = None,
         operation: str | None = None,
@@ -28,12 +31,14 @@ class HindsightGatewayError(HttpError):
             "http": "hindsight_http_error",
             "invalid-response": "hindsight_invalid_response",
             "network": "hindsight_unavailable",
+            "response-too-large": "hindsight_response_too_large",
         }[kind]
         message = {
             "timeout": "Upstream memory service timed out",
             "http": "Upstream memory service request failed",
             "invalid-response": "Upstream memory service returned an invalid response",
             "network": "Upstream memory service is unavailable",
+            "response-too-large": "Upstream memory service response exceeded the size limit",
         }[kind]
         super().__init__(504 if kind == "timeout" else 502, code, message)
         self.kind = kind
@@ -52,13 +57,20 @@ class HindsightGatewayError(HttpError):
 
 class HindsightGateway:
     def __init__(
-        self, base_url: str, api_key: str | None, timeout_ms: int = DEFAULT_HINDSIGHT_TIMEOUT_MS
+        self,
+        base_url: str,
+        api_key: str | None,
+        timeout_ms: int = DEFAULT_HINDSIGHT_TIMEOUT_MS,
+        max_response_bytes: int = DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES,
     ) -> None:
         if timeout_ms <= 0:
             raise RuntimeError("Hindsight timeout must be a positive integer")
+        if max_response_bytes <= 0:
+            raise RuntimeError("Hindsight response size limit must be a positive integer")
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_ms = timeout_ms
+        self.max_response_bytes = max_response_bytes
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(timeout_ms / 1000.0))
 
     async def close(self) -> None:
@@ -81,7 +93,8 @@ class HindsightGateway:
         )
         try:
             RecallResponse.model_validate(value)
-        except ValidationError as exc:
+            canonical_json(value)
+        except (ValidationError, ValueError) as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
@@ -102,32 +115,63 @@ class HindsightGateway:
         request_id = current_request_id()
         if request_id:
             headers["x-request-id"] = request_id
+        request = self.client.build_request(
+            method,
+            self.base_url + path,
+            headers=headers,
+            json=body if body is not None else None,
+        )
         try:
-            response = await self.client.request(
-                method,
-                self.base_url + path,
-                headers=headers,
-                json=body if body is not None else None,
-            )
+            response = await self.client.send(request, stream=True)
         except httpx.TimeoutException as exc:
             raise HindsightGatewayError(
                 "timeout", operation=operation, method=method, timeout_ms=self.timeout_ms
             ) from exc
         except httpx.HTTPError as exc:
             raise HindsightGatewayError("network", operation=operation, method=method) from exc
-        if not response.is_success:
-            await response.aclose()
-            raise HindsightGatewayError(
-                "http", upstream_status=response.status_code, operation=operation, method=method
-            )
         try:
-            if not response.content:
+            if not response.is_success:
+                raise HindsightGatewayError(
+                    "http", upstream_status=response.status_code, operation=operation, method=method
+                )
+            content_length = response.headers.get("content-length")
+            if content_length and content_length.isdigit() and int(content_length) > self.max_response_bytes:
+                raise HindsightGatewayError(
+                    "response-too-large",
+                    upstream_status=response.status_code,
+                    operation=operation,
+                    method=method,
+                )
+            chunks: list[bytes] = []
+            size = 0
+            try:
+                async for chunk in response.aiter_bytes():
+                    size += len(chunk)
+                    if size > self.max_response_bytes:
+                        raise HindsightGatewayError(
+                            "response-too-large",
+                            upstream_status=response.status_code,
+                            operation=operation,
+                            method=method,
+                        )
+                    chunks.append(chunk)
+            except httpx.TimeoutException as exc:
+                raise HindsightGatewayError(
+                    "timeout", operation=operation, method=method, timeout_ms=self.timeout_ms
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise HindsightGatewayError("network", operation=operation, method=method) from exc
+            raw = b"".join(chunks)
+            if not raw:
                 return None
-            return response.json()
-        except (ValueError, UnicodeError) as exc:
-            raise HindsightGatewayError(
-                "invalid-response",
-                upstream_status=response.status_code,
-                operation=operation,
-                method=method,
-            ) from exc
+            try:
+                return json.loads(raw)
+            except (ValueError, UnicodeError) as exc:
+                raise HindsightGatewayError(
+                    "invalid-response",
+                    upstream_status=response.status_code,
+                    operation=operation,
+                    method=method,
+                ) from exc
+        finally:
+            await response.aclose()
