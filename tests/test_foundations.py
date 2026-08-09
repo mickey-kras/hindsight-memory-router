@@ -30,21 +30,21 @@ def test_auth_helpers_and_scopes() -> None:
 
 @pytest.mark.asyncio
 async def test_auth_failure_auditor_records_and_survives_store_failure(
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     store = SimpleNamespace(put=AsyncMock())
     auditor = auth.AuthFailureAuditor(store)
     await auditor.record("router")
     await auditor.record("router")
     assert store.put.await_count == 2
-    assert capsys.readouterr().err.count('"event":"auth_failed"') == 1
+    assert caplog.text.count("auth failed route_group=router") == 1
 
+    caplog.clear()
     store.put.side_effect = RuntimeError("down")
     auditor.last.clear()
     await auditor.record("admin")
     await auditor.record("admin")
-    stderr = capsys.readouterr().err
-    assert stderr.count("could not record an auth_failed") == 1
+    assert caplog.text.count("could not record auth_failed security event route_group=admin") == 1
 
 
 def test_environment_parsers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -142,7 +142,7 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
 
 
 def test_environment_assertions(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     for name in list(config.os.environ):
         if name.startswith("QUARANTINE_PRIVATE_KEY") or name.startswith("MEMORY_ROUTER_"):
@@ -154,12 +154,12 @@ def test_environment_assertions(
     monkeypatch.delenv("QUARANTINE_PRIVATE_KEY")
 
     config.assert_auth_environment()
-    assert "fail-closed" in capsys.readouterr().err
+    assert "fail-closed" in caplog.text
+    caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
     monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
     config.assert_auth_environment()
-    stderr = capsys.readouterr().err
-    assert "Development only" in stderr and "legacy admin" in stderr
+    assert "Development only" in caplog.text and "legacy admin" in caplog.text
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:

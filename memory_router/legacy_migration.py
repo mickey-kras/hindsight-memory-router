@@ -1,18 +1,15 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from cryptography.hazmat.primitives import serialization
 
 from .db import create_database
-from .envelope import create_envelope, decode_private_key, decrypt_envelope
+from .envelope import QUARANTINE_ID_RE, create_envelope, decode_private_key, decrypt_envelope
 from .repository import QuarantineRepository
 from .review_repository import postpone
-
-_QID = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
 
 
 async def migrate_legacy_quarantine(
@@ -143,7 +140,7 @@ def _legacy_kind(payload: Any) -> str:
 
 
 def _object_path(directory: Path, quarantine_id: str) -> Path:
-    if not _QID.fullmatch(quarantine_id):
+    if not QUARANTINE_ID_RE.fullmatch(quarantine_id):
         raise ValueError("invalid legacy quarantine_id")
     base = directory.resolve()
     path = (base / f"{quarantine_id}.enc.json").resolve()

@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 import asyncio
-import json
-import sys
-from datetime import UTC, datetime
+import logging
 from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
+from .observability import current_request_id
 from .security import SafetyResult, scan_content, scan_recall_result, scan_retain_body
+from .timestamps import iso_now
 
-
-def iso_now() -> str:
-    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+logger = logging.getLogger(__name__)
 
 
 class RouterPolicy:
@@ -273,8 +271,9 @@ class RouterPolicy:
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
-        sys.stderr.write(
-            "memory-router recall degraded: "
-            + json.dumps({"event": event, **details}, separators=(",", ":"))
-            + "\n"
+        logger.warning(
+            "recall degraded event=%s request_id=%s details=%s",
+            event,
+            current_request_id(),
+            details,
         )
