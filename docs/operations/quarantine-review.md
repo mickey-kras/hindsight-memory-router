@@ -2,14 +2,15 @@
 
 Quarantine decryption happens outside the running router. The router has only the public key.
 
-With the default Compose deployment, private review material is stored in the project-scoped `memory-router-private-key` Compose volume. Compose applies its normal project prefix to the underlying Docker volume, so separate deployments do not share review keys. Back up the volume according to your recovery requirements.
+Generate and retain the quarantine private key on a trusted admin machine. Store it in a password manager, secret manager, or encrypted offline storage. Never copy, mount, generate, or persist it on the router host.
 
 ## Review flow
 
 1. List pending items with the review token.
 2. Fetch the encrypted item with the review token.
-3. Supply the private key to the local decrypt CLI over stdin and inspect the complete decrypted object.
-4. Approve, reject, or postpone with the review token.
+3. Retrieve the private key on the trusted admin machine and supply it to the local decrypt CLI over stdin.
+4. Inspect the complete decrypted object.
+5. Approve, reject, or postpone with the review token.
 
 ```bash
 private-key-command | memory-router-decrypt-quarantine encrypted-response.json
