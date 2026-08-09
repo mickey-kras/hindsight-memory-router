@@ -29,7 +29,8 @@ wait_for_health() {
   return 1
 }
 
-if "${compose[@]}" config | grep -q 'QUARANTINE_PRIVATE_KEY'; then
+resolved_compose="$("${compose[@]}" config)"
+if grep -q 'QUARANTINE_PRIVATE_KEY' <<<"$resolved_compose"; then
   echo "resolved compose config contains quarantine private-key environment" >&2
   exit 1
 fi
