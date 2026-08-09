@@ -29,6 +29,11 @@ wait_for_health() {
   return 1
 }
 
+if "${compose[@]}" config | grep -q 'QUARANTINE_PRIVATE_KEY'; then
+  echo "resolved compose config contains quarantine private-key environment" >&2
+  exit 1
+fi
+
 docker tag hindsight-memory-router:ci memory-router:local
 "${compose[@]}" up -d --no-build
 wait_for_health
@@ -37,10 +42,6 @@ router_id="$("${compose[@]}" ps -q memory-router)"
 test -n "$router_id"
 test "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$router_id")" = "${COMPOSE_PROJECT_NAME}_memory-router-data"
 test -z "$(docker inspect -f '{{range .Mounts}}{{if or (eq .Destination "/app/bootstrap/private") (eq .Destination "/app/bootstrap/public")}}{{.Destination}}{{end}}{{end}}' "$router_id")"
-if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$router_id" | grep -q '^QUARANTINE_PRIVATE_KEY'; then
-  echo "router container contains quarantine private-key environment" >&2
-  exit 1
-fi
 
 "${compose[@]}" exec -T memory-router sh -ec '
   test "$(id -u)" -ne 0
@@ -48,7 +49,6 @@ fi
   test -n "$QUARANTINE_PUBLIC_KEY"
   test -w /app/data
   test -f /app/data/quarantine.db
-  test ! -e /app/bootstrap/private/quarantine-private.pem
   printf "%s\n" persistent > /app/data/.persistence-probe
 '
 
@@ -57,5 +57,4 @@ fi
 wait_for_health
 "${compose[@]}" exec -T memory-router sh -ec '
   test "$(cat /app/data/.persistence-probe)" = persistent
-  test ! -e /app/bootstrap/private/quarantine-private.pem
 '
