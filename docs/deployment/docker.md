@@ -7,6 +7,7 @@ The repository includes `compose.yaml` for the default single-node deployment.
 Generate the RSA quarantine keypair on a trusted admin machine, not on the router host:
 
 ```bash
+umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
 openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
 base64 < quarantine-public.pem | tr -d '\n'
@@ -26,7 +27,7 @@ Never copy, mount, generate, or persist the private key on the router host.
 docker compose up -d
 ```
 
-Compose starts one long-running non-root Memory Router service. It does not create quarantine keys.
+Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys.
 
 ## Persistent volume
 
