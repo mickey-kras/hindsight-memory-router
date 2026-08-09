@@ -47,16 +47,6 @@ class QuarantineStore:
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
         quarantine_id = self._resolve_id(input_)
-        encrypted = self._encrypt(input_, quarantine_id)
-        encrypted_bytes = len(
-            json.dumps(encrypted, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        )
-        if encrypted_bytes > self.limits.max_item_bytes:
-            raise HttpError(
-                413,
-                "quarantine_item_too_large",
-                "encrypted quarantine item exceeds configured size limit",
-            )
 
         async def operation(session: Any) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
@@ -71,8 +61,25 @@ class QuarantineStore:
                     "quarantine_request_in_review",
                     "matching quarantine request is already being reviewed",
                 )
+            if existing and existing["status"] == "review_in_progress":
+                raise HttpError(
+                    409,
+                    "quarantine_item_in_review",
+                    "matching quarantine item is already being reviewed",
+                )
             known = await self._known_identity(input_, existing is not None)
             await self._charge(input_, known, session)
+
+            encrypted = self._encrypt(input_, quarantine_id)
+            encrypted_bytes = len(
+                json.dumps(encrypted, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            )
+            if encrypted_bytes > self.limits.max_item_bytes:
+                raise HttpError(
+                    413,
+                    "quarantine_item_too_large",
+                    "encrypted quarantine item exceeds configured size limit",
+                )
             item = self._build_item(input_, quarantine_id, encrypted)
             mode = (
                 "memory"
@@ -173,7 +180,7 @@ class QuarantineStore:
             )
             await session.consume_many([(key, self.limits.requarantine_ops_max, window)])
             return
-        if self.limits.rate_limit_max <= 0 or await self._capacity_exhausted(input_["timestamp"]):
+        if self.limits.rate_limit_max <= 0:
             return
         if auth_audit:
             await session.consume_many(
@@ -204,13 +211,6 @@ class QuarantineStore:
                 ("quarantine-writes", self.limits.rate_limit_global_max, window),
             ],
             identities,
-        )
-
-    async def _capacity_exhausted(self, at: str) -> bool:
-        stats = await self.repository.stats(at)
-        return (
-            stats["pending_items"] + stats["postponed_items"] >= self.capacity.max_pending_items
-            or stats["encrypted_bytes"] >= self.capacity.max_encrypted_bytes
         )
 
     def _resolve_id(self, input_: dict[str, Any]) -> str:
