@@ -19,20 +19,22 @@ Hindsight is the currently supported memory provider. Provider abstraction is no
 
 ## Quick start
 
-The default deployment is single-node with embedded SQLite. Docker Compose also creates the quarantine keypair on first run and persists router data automatically.
+The default deployment is single-node with embedded SQLite. Generate the quarantine keypair on a trusted admin machine, keep the private key there, and provide only the public key to the router deployment.
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out quarantine-private.pem
+openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
+base64 < quarantine-public.pem | tr -d '\n'
+```
+
+Store `quarantine-private.pem` in your password manager, secret manager, or encrypted offline storage. Put the base64 public-key value in `.env` as `QUARANTINE_PUBLIC_KEY`, then start the router:
 
 ```bash
 docker compose up -d
 curl --fail http://localhost:8890/health
 ```
 
-Expected response:
-
-```json
-{ "status": "healthy", "service": "memory-router" }
-```
-
-No `.env` file is required to start. Router and admin capabilities remain fail-closed until credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
+Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
 
 ## Documentation
 
