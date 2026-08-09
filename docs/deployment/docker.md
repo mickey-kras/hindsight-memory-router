@@ -2,32 +2,45 @@
 
 The repository includes `compose.yaml` for the default single-node deployment.
 
+## Quarantine key material
+
+Generate the RSA quarantine keypair on a trusted admin machine, not on the router host:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
+openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
+base64 < quarantine-public.pem | tr -d '\n'
+```
+
+Store the private key in a password manager, secret manager, or encrypted offline storage. The router deployment receives only the public key, for example through `.env`:
+
+```text
+QUARANTINE_PUBLIC_KEY=<base64-public-key>
+```
+
+Never copy, mount, generate, or persist the private key on the router host.
+
+## Start
+
 ```bash
 docker compose up -d
 ```
 
-Compose builds one Memory Router image and uses it for:
+Compose starts one long-running non-root Memory Router service. It does not create quarantine keys.
 
-- `quarantine-key-init`: a short-lived, idempotent key bootstrap with networking disabled;
-- `memory-router`: the long-running non-root router process.
+## Persistent volume
 
-## Persistent volumes
+Compose defines one project-scoped named volume:
 
-Compose defines three project-scoped named volumes:
+- `memory-router-data` -> `/app/data` for SQLite, WAL, and related database files.
 
-- `memory-router-data` -> `/app/data` for SQLite, WAL, and related database files;
-- `memory-router-public-key` for the public encryption key;
-- `memory-router-private-key` for review key material.
+Compose applies normal project namespacing; no global volume name is forced. Independent deployments on the same Docker host therefore receive separate data volumes.
 
-Compose applies normal project namespacing; no global volume names are forced. Independent deployments on the same Docker host therefore receive separate data and key volumes. The underlying Docker volume names are derived from the Compose project name rather than fixed by this repository.
-
-The router mounts the public-key volume read-only and does not mount the private-key volume. The initializer is the only service that mounts the private-key volume, and it runs with `network_mode: none`. The image runs as `app` (uid/gid `10001`). On startup, the root key-init helper recursively changes `/app/data` ownership to `app:app`; this also migrates existing Compose data volumes created by the former Node image, which used uid `1000`.
-
-The review key file is stored in the project-scoped private-key volume and is needed only for authorized quarantine review. Back up that volume according to your recovery policy; losing it makes existing quarantine evidence undecryptable.
+The image runs as `app` (uid/gid `10001`). Ensure any replacement bind mount for `/app/data` is writable by that account.
 
 ## Optional overrides
 
-No `.env` file is required. If present, Compose loads `.env` as an override file. Start from `.env.example` only when tuning behavior or configuring credentials/provider connectivity.
+Use `.env` for credentials, the quarantine public key, provider connectivity, or settings that differ from built-in defaults. Start from `.env.example` when needed.
 
 `MEMORY_ROUTER_PORT` changes both the published host port and the router listener port. For example:
 
