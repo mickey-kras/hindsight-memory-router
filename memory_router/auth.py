@@ -61,12 +61,13 @@ class AuthFailureAuditor:
                     "payload": {"action": "auth_failed", "route_group": route_group},
                 }
             )
-        except Exception:
+        except Exception as exc:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
-                logger.exception(
-                    "could not record auth_failed security event route_group=%s request_id=%s",
+                logger.error(
+                    "could not record auth_failed security event route_group=%s request_id=%s error_type=%s",
                     route_group,
                     current_request_id(),
+                    type(exc).__name__,
                 )
