@@ -15,6 +15,7 @@ Generate the quarantine RSA keypair on a trusted admin machine. Keep the private
 Example key generation on the trusted admin machine:
 
 ```bash
+umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
 openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
 ```
@@ -39,7 +40,7 @@ Quarantine item size, pending-item count, per-writer capacity, encrypted-byte ca
 
 Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
 
-Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps them forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
+Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
 
 Limit failures remain fail-closed:
 
