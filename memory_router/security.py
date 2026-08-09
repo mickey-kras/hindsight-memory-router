@@ -4,7 +4,7 @@ import base64
 import binascii
 import re
 import unicodedata
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -19,7 +19,7 @@ from agent_memory_guard.detectors import (
 MAX_CANONICAL_BYTES = 64 * 1024
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
-_BASE64_RUN = re.compile(r"[A-Za-z0-9+/=]{16,}")
+_BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
@@ -44,49 +44,17 @@ _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = (
         "prompt_injection",
     ),
     (re.compile(r"system\s+prompt", re.I), "system prompt", "prompt_injection"),
-    (
-        re.compile(r"developer\s+message", re.I),
-        "developer message",
-        "prompt_injection",
-    ),
-    (
-        re.compile(r"new\s+instructions", re.I),
-        "new instructions",
-        "prompt_injection",
-    ),
+    (re.compile(r"developer\s+message", re.I), "developer message", "prompt_injection"),
+    (re.compile(r"new\s+instructions", re.I), "new instructions", "prompt_injection"),
     (re.compile(r"you\s+are\s+now", re.I), "you are now", "prompt_injection"),
-    (
-        re.compile(r"write\s+this\s+to\s+memory", re.I),
-        "write this to memory",
-        "prompt_injection",
-    ),
-    (
-        re.compile(r"remember\s+this\s+as\s+truth", re.I),
-        "remember this as truth",
-        "prompt_injection",
-    ),
-    (
-        re.compile(r"store\s+this\s+as\s+core\s+memory", re.I),
-        "store this as core memory",
-        "prompt_injection",
-    ),
-    (
-        re.compile(r"overwrite\s+permissions", re.I),
-        "overwrite permissions",
-        "permission_rewrite",
-    ),
-    (
-        re.compile(r"reveal\s+(the\s+)?(secret|token|key)", re.I),
-        "reveal secret",
-        "secret_like",
-    ),
+    (re.compile(r"write\s+this\s+to\s+memory", re.I), "write this to memory", "prompt_injection"),
+    (re.compile(r"remember\s+this\s+as\s+truth", re.I), "remember this as truth", "prompt_injection"),
+    (re.compile(r"store\s+this\s+as\s+core\s+memory", re.I), "store this as core memory", "prompt_injection"),
+    (re.compile(r"overwrite\s+permissions", re.I), "overwrite permissions", "permission_rewrite"),
+    (re.compile(r"reveal\s+(the\s+)?(secret|token|key)", re.I), "reveal secret", "secret_like"),
     (re.compile(r"\bapi[_ -]?key\b", re.I), "api key", "secret_like"),
     (re.compile(r"private\s+key", re.I), "private key", "secret_like"),
-    (
-        re.compile(r"BEGIN\s+OPENSSH\s+PRIVATE\s+KEY", re.I),
-        "private key block",
-        "secret_like",
-    ),
+    (re.compile(r"BEGIN\s+OPENSSH\s+PRIVATE\s+KEY", re.I), "private key block", "secret_like"),
     (re.compile(r"exfiltrate", re.I), "exfiltrate", "secret_like"),
 )
 
@@ -145,36 +113,40 @@ def scan_content(content: str, *, operation: str = "read", key: str = "content")
 
 
 def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
-    fields: list[tuple[str, str]] = []
-    for index, item in enumerate(body.get("items", [])):
-        if not isinstance(item, dict):
-            continue
-        values: list[tuple[str, Any]] = [
-            (f"items.{index}.content", item.get("content")),
-            (f"items.{index}.context", item.get("context")),
-            (f"items.{index}.document_id", item.get("document_id")),
-        ]
-        values.extend(
-            (f"items.{index}.tags.{i}", value) for i, value in enumerate(item.get("tags") or [])
-        )
-        values.extend(
-            (f"items.{index}.metadata.{name}", value)
-            for name, value in (item.get("metadata") or {}).items()
-        )
-        fields.extend((name, value) for name, value in values if isinstance(value, str))
-    return _scan_fields(fields, operation="write")
+    return _scan_fields(_walk_strings(body, "retain"), operation="write")
+
+
+def scan_recall_body(body: dict[str, Any]) -> SafetyResult:
+    return _scan_fields(_walk_strings(body, "recall"), operation="read")
 
 
 def scan_recall_result(result: dict[str, Any]) -> SafetyResult:
-    return _scan_fields([("recalled_memory.text", str(result.get("text", "")))], operation="read")
+    return _scan_fields(_walk_strings(result, "recalled_memory"), operation="read")
+
+
+def _walk_strings(value: Any, path: str) -> Iterator[tuple[str, str]]:
+    if isinstance(value, str):
+        yield path, value
+        return
+    if isinstance(value, list):
+        for index, entry in enumerate(value):
+            yield from _walk_strings(entry, f"{path}.{index}")
+        return
+    if isinstance(value, dict):
+        for key, entry in value.items():
+            if isinstance(key, str):
+                yield f"{path}.{key}.__key__", key
+                child = f"{path}.{key}"
+            else:
+                child = path
+            yield from _walk_strings(entry, child)
 
 
 def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> SafetyResult:
     result = SafetyResult()
     canonical_fields: list[tuple[str, str]] = []
     direct_rule_matches: set[str] = set()
-    decoded_total = 0
-    span_count = 0
+    encoded_state = [0, 0]
     for key, raw in fields:
         canonical, transformations = canonicalize_content(raw)
         result.transformations.update(transformations)
@@ -186,43 +158,8 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
             direct_rule_matches.add(finding.matched)
         for finding in _amg_scan(key, canonical, operation=operation):
             result.add(finding)
-        for match in _BASE64_RUN.finditer(canonical):
-            candidate = match.group(0)
-            if not _looks_like_base64(candidate):
-                continue
-            span_count += 1
-            if span_count > MAX_BASE64_SPANS:
-                result.add(SafetyFinding("span_limit", "encoded_payload"))
-                break
-            if len(candidate) % 4 or not _CANONICAL_BASE64.fullmatch(candidate):
-                result.add(SafetyFinding("invalid_base64", "encoded_payload"))
-                continue
-            try:
-                decoded = base64.b64decode(candidate, validate=True)
-            except (binascii.Error, ValueError):
-                result.add(SafetyFinding("invalid_base64", "encoded_payload"))
-                continue
-            if (
-                len(decoded) > MAX_BASE64_DECODED_BYTES
-                or decoded_total + len(decoded) > MAX_BASE64_DECODED_BYTES
-            ):
-                result.add(SafetyFinding("decoded_size_limit", "encoded_payload"))
-                continue
-            decoded_total += len(decoded)
-            try:
-                decoded_text = decoded.decode("utf-8", errors="strict")
-            except UnicodeDecodeError:
-                result.add(SafetyFinding("invalid_utf8", "encoded_payload"))
-                continue
-            decoded_canonical, decoded_transformations = canonicalize_content(decoded_text)
-            result.transformations.update(decoded_transformations)
-            decoded_hits = _rule_scan(decoded_canonical) + _amg_scan(
-                f"{key}.base64", decoded_canonical, operation=operation
-            )
-            if decoded_hits:
-                result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
-                for finding in decoded_hits:
-                    result.add(finding)
+        _scan_encoded(result, key, canonical, operation, encoded_state)
+
     window = ""
     window_fields: list[str] = []
     for key, canonical in canonical_fields:
@@ -244,7 +181,52 @@ def _scan_fields(fields: Iterable[tuple[str, str]], *, operation: str) -> Safety
                         finding.hits,
                     )
                 )
+        _scan_encoded(result, f"rolling.{key}", window, operation, encoded_state)
     return result
+
+
+def _scan_encoded(
+    result: SafetyResult,
+    key: str,
+    canonical: str,
+    operation: str,
+    state: list[int],
+) -> None:
+    for match in _BASE64_RUN.finditer(canonical):
+        candidate = match.group(0)
+        if not _looks_like_base64(candidate):
+            continue
+        state[0] += 1
+        if state[0] > MAX_BASE64_SPANS:
+            result.add(SafetyFinding("span_limit", "encoded_payload"))
+            return
+        if len(candidate) % 4 or not _CANONICAL_BASE64.fullmatch(candidate):
+            if _strong_base64_signal(candidate):
+                result.add(SafetyFinding("invalid_base64", "encoded_payload"))
+            continue
+        try:
+            decoded = base64.b64decode(candidate, validate=True)
+        except (binascii.Error, ValueError):
+            if _strong_base64_signal(candidate):
+                result.add(SafetyFinding("invalid_base64", "encoded_payload"))
+            continue
+        if len(decoded) > MAX_BASE64_DECODED_BYTES or state[1] + len(decoded) > MAX_BASE64_DECODED_BYTES:
+            result.add(SafetyFinding("decoded_size_limit", "encoded_payload"))
+            continue
+        state[1] += len(decoded)
+        try:
+            decoded_text = decoded.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            continue
+        decoded_canonical, decoded_transformations = canonicalize_content(decoded_text)
+        result.transformations.update(decoded_transformations)
+        decoded_hits = _rule_scan(decoded_canonical) + _amg_scan(
+            f"{key}.base64", decoded_canonical, operation=operation
+        )
+        if decoded_hits:
+            result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
+            for finding in decoded_hits:
+                result.add(finding)
 
 
 def _rule_scan(value: str) -> list[SafetyFinding]:
@@ -317,6 +299,21 @@ def _crosses_field_boundary(hit: str, fields: Iterable[str]) -> bool:
 
 
 def _looks_like_base64(candidate: str) -> bool:
+    if len(candidate) < 8:
+        return False
+    if _strong_base64_signal(candidate):
+        return True
+    if len(candidate) % 4:
+        return False
+    try:
+        decoded = base64.b64decode(candidate, validate=True)
+        text = decoded.decode("utf-8", errors="strict")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+    return bool(text and all(char.isprintable() or char.isspace() for char in text))
+
+
+def _strong_base64_signal(candidate: str) -> bool:
     mixed_case = bool(re.search(r"[a-z]", candidate) and re.search(r"[A-Z]", candidate))
     return bool(re.search(r"[=+/]", candidate) or (mixed_case and re.search(r"\d", candidate)))
 
