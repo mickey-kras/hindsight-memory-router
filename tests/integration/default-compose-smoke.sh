@@ -15,7 +15,8 @@ trap cleanup EXIT
 umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out "$key_dir/quarantine-private.pem" >/dev/null 2>&1
 openssl pkey -in "$key_dir/quarantine-private.pem" -pubout -out "$key_dir/quarantine-public.pem" >/dev/null 2>&1
-export QUARANTINE_PUBLIC_KEY="$(base64 -w 0 "$key_dir/quarantine-public.pem")"
+export QUARANTINE_PUBLIC_KEY="$(base64 < "$key_dir/quarantine-public.pem" | tr -d '\n')"
+export QUARANTINE_PRIVATE_KEY="ci-private-key-must-not-pass-through"
 
 wait_for_health() {
   for _ in {1..30}; do
