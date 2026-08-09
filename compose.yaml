@@ -8,6 +8,7 @@ services:
         required: false
     environment:
       MEMORY_ROUTER_PORT: "${MEMORY_ROUTER_PORT:-8890}"
+      QUARANTINE_PUBLIC_KEY: "${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}"
     ports:
       - "${MEMORY_ROUTER_PORT:-8890}:${MEMORY_ROUTER_PORT:-8890}"
     volumes:
