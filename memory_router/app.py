@@ -121,6 +121,7 @@ class Runtime:
         self.auditor: AuthFailureAuditor | None = None
         self.quarantine_limiter: Any = None
         self.admin_limiter = InMemoryRateLimiter()
+        self.auth_limiter = InMemoryRateLimiter()
         self.sweeper: asyncio.Task[None] | None = None
         self.max_body_bytes = integer_env("MEMORY_ROUTER_MAX_BODY_BYTES", 1_048_576, minimum=1)
         self.router_token = os.environ.get("MEMORY_ROUTER_TOKEN")
@@ -138,16 +139,25 @@ class Runtime:
         self.admin_window = integer_env(
             "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1
         )
+        self.auth_failure_max = integer_env(
+            "MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_MAX", 120, minimum=1
+        )
+        self.auth_failure_window = integer_env(
+            "MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1
+        )
+        self.review_stale_seconds = 60
 
     async def start(self) -> None:
         assert_no_private_key_environment()
         assert_auth_environment()
+        hindsight_timeout_ms = integer_env("HINDSIGHT_TIMEOUT_MS", 10_000, minimum=1)
+        self.review_stale_seconds = max(60, (hindsight_timeout_ms + 999) // 1000 + 30)
         database_url = os.environ.get("QUARANTINE_DATABASE_URL", DEFAULT_DATABASE_URL)
         assert_deployment_mode(database_url)
         self.database = await create_database(database_url)
         self.repository = QuarantineRepository(self.database)
         await validate_storage(self.database, database_url)
-        await recover_interrupted(self.repository, _now())
+        await recover_interrupted(self.repository, _now(), self.review_stale_seconds)
         if is_postgres(database_url):
             self.rate_limit_database = PostgresDatabase(database_url, max_size=2)
             await self.rate_limit_database.initialize()
@@ -172,7 +182,8 @@ class Runtime:
         hindsight = HindsightGateway(
             os.environ.get("HINDSIGHT_BASE_URL", "http://hindsight:8888"),
             os.environ.get("HINDSIGHT_API_KEY"),
-            integer_env("HINDSIGHT_TIMEOUT_MS", 10_000, minimum=1),
+            hindsight_timeout_ms,
+            integer_env("HINDSIGHT_MAX_RESPONSE_BYTES", 4 * 1024 * 1024, minimum=1),
         )
         self.hindsight = hindsight
         hconfig = HindsightLimitConfig(
@@ -199,7 +210,11 @@ class Runtime:
         hindsight_limits = HindsightLimits(hconfig, hindsight_limiter)
         self.policy = RouterPolicy(registry, hindsight, hindsight_limits, store, self.repository)
         self.admin = QuarantineAdminService(
-            self.repository, hindsight, registry, integer_env("QUARANTINE_MAX_POSTPONES", 3)
+            self.repository,
+            hindsight,
+            registry,
+            hindsight_limits,
+            integer_env("QUARANTINE_MAX_POSTPONES", 3),
         )
         self.auditor = AuthFailureAuditor(store)
         interval = integer_env("QUARANTINE_SWEEP_INTERVAL_SECONDS", 3600)
@@ -227,7 +242,7 @@ class Runtime:
             await asyncio.sleep(interval)
             at = _now()
             try:
-                await recover_interrupted(repository, at)
+                await recover_interrupted(repository, at, self.review_stale_seconds)
                 await sweep_expired(repository, at)
                 if retention_days > 0:
                     cutoff = (
@@ -280,15 +295,31 @@ async def _json_body(request: Request) -> Any:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
         raise HttpError(413, "payload_too_large", "payload too large")
-    body = await request.body()
-    if len(body) > runtime.max_body_bytes:
-        raise HttpError(413, "payload_too_large", "payload too large")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > runtime.max_body_bytes:
+            raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
         return {}
     try:
-        return json.loads(body)
+        return json.loads(
+            bytes(body),
+            parse_constant=lambda value: (_ for _ in ()).throw(ValueError(value)),
+        )
     except (ValueError, UnicodeError) as exc:
         raise HttpError(400, "invalid_json", "invalid JSON body") from exc
+
+
+async def _auth_failure_rate(route_group: str) -> None:
+    try:
+        await runtime.auth_limiter.consume_many(
+            [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
+        )
+    except HttpError as exc:
+        if exc.status == 429:
+            raise HttpError(429, "auth_rate_limited", "too many authentication failures") from exc
+        raise
 
 
 async def _router_auth(request: Request) -> bool:
@@ -296,6 +327,7 @@ async def _router_auth(request: Request) -> bool:
         request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
     ):
         return True
+    await _auth_failure_rate("router")
     auditor = _require_runtime(runtime.auditor, "auth auditor")
     await auditor.record("router")
     return False
@@ -304,6 +336,7 @@ async def _router_auth(request: Request) -> bool:
 async def _admin_auth(request: Request, scope: str) -> bool:
     if admin_authorized(request.headers.get("authorization"), scope, runtime.admin_tokens):
         return True
+    await _auth_failure_rate("admin")
     auditor = _require_runtime(runtime.auditor, "auth auditor")
     await auditor.record("admin")
     return False
