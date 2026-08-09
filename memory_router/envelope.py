@@ -5,16 +5,26 @@ import hmac
 import json
 import os
 import re
-from typing import Any
+from typing import Any, Literal
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from .canonical import canonical_json, sha256_hex
 
 AAD_FORMAT = "metadata-v1"
 ENVELOPE_WRAPPED_FIELD = "wrapped_key_b64"
+QUARANTINE_ID_RE = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
+QuarantineReason = Literal[
+    "unknown_writer",
+    "suspicious_content",
+    "suspicious_query",
+    "recalled_suspicious_memory",
+    "denied_endpoint",
+    "auth_failed",
+]
 _REASONS = {
     "unknown_writer",
     "suspicious_content",
@@ -23,24 +33,59 @@ _REASONS = {
     "denied_endpoint",
     "auth_failed",
 }
-_QID = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
+
+
+class DecryptedQuarantine(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    quarantine_id: str
+    created_at: str
+    reason: QuarantineReason
+    payload: Any
+    writer_id: str | None = None
+    source: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_required_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            raise ValueError("decrypted quarantine object must be an object")
+        for key in ("quarantine_id", "created_at", "reason"):
+            if not isinstance(value.get(key), str) or not value[key]:
+                raise ValueError(f"{key} must be a non-empty string")
+        if value["reason"] not in _REASONS:
+            raise ValueError("invalid quarantine reason")
+        if "payload" not in value:
+            raise ValueError("decrypted quarantine payload is missing")
+        return value
+
+    @field_validator("writer_id", "source")
+    @classmethod
+    def optional_strings_are_non_empty(cls, value: str | None) -> str | None:
+        if value is None or not value:
+            raise ValueError("must be a non-empty string")
+        return value
+
+
+def _validation_message(exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    location = error.get("loc", ())
+    if location and location[-1] in {"writer_id", "source"}:
+        return f"{location[-1]} must be a non-empty string"
+    context = error.get("ctx")
+    if isinstance(context, dict) and isinstance(context.get("error"), ValueError):
+        return str(context["error"])
+    return "invalid decrypted quarantine object"
 
 
 def parse_decrypted(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise ValueError("decrypted quarantine object must be an object")
-    for key in ("quarantine_id", "created_at", "reason"):
-        if not isinstance(value.get(key), str) or not value[key]:
-            raise ValueError(f"{key} must be a non-empty string")
-    if value["reason"] not in _REASONS:
-        raise ValueError("invalid quarantine reason")
-    if "payload" not in value:
-        raise ValueError("decrypted quarantine payload is missing")
-    for key in ("writer_id", "source"):
-        if key in value and (not isinstance(value[key], str) or not value[key]):
-            raise ValueError(f"{key} must be a non-empty string")
-    canonical_json(value["payload"])
-    return dict(value)
+    try:
+        parsed = DecryptedQuarantine.model_validate(value)
+    except ValidationError as exc:
+        raise ValueError(_validation_message(exc)) from exc
+    result = parsed.model_dump(mode="python", exclude_unset=True)
+    canonical_json(result["payload"])
+    return result
 
 
 def canonical_decrypted(value: dict[str, Any]) -> str:
@@ -163,7 +208,7 @@ def parse_envelope(value: Any) -> dict[str, Any]:
         raise ValueError("unsupported quarantine key wrapping algorithm")
     if encryption.get("aad") not in (None, AAD_FORMAT):
         raise ValueError("unsupported quarantine AAD format")
-    if not isinstance(envelope.get("quarantine_id"), str) or not _QID.fullmatch(
+    if not isinstance(envelope.get("quarantine_id"), str) or not QUARANTINE_ID_RE.fullmatch(
         envelope["quarantine_id"]
     ):
         raise ValueError("invalid quarantine_id")

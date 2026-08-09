@@ -5,46 +5,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from fastapi import Request
 
 from memory_router import app as app_module
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
-
-
-def request(
-    method: str,
-    path: str,
-    *,
-    body: object | bytes | None = None,
-    headers: dict[str, str] | None = None,
-    query: str = "",
-) -> Request:
-    if isinstance(body, bytes):
-        raw = body
-    elif body is None:
-        raw = b""
-    else:
-        raw = json.dumps(body).encode()
-    header_values = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
-    scope = {
-        "type": "http",
-        "method": method,
-        "path": path,
-        "raw_path": path.encode(),
-        "headers": header_values,
-        "query_string": query.encode(),
-    }
-    sent = False
-
-    async def receive() -> dict[str, object]:
-        nonlocal sent
-        if sent:
-            return {"type": "http.disconnect"}
-        sent = True
-        return {"type": "http.request", "body": raw, "more_body": False}
-
-    return Request(scope, receive)
+from tests.request_helpers import request
 
 
 def payload(response: object) -> object:
@@ -70,7 +35,7 @@ def runtime_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_ready_and_exception_handlers(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_health_ready_and_exception_handlers(caplog: pytest.LogCaptureFixture) -> None:
     assert await app_module.health() == {"status": "healthy", "service": "memory-router"}
     app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
     assert payload(await app_module.ready()) == {"status": "ready", "service": "memory-router"}
@@ -85,10 +50,11 @@ async def test_health_ready_and_exception_handlers(capsys: pytest.CaptureFixture
     gateway = HindsightGatewayError("network", operation="recall", method="POST")
     response = await app_module.http_error_handler(request("GET", "/"), gateway)
     assert response.status_code == 502 and payload(response)["error"] == "hindsight_unavailable"
-    assert "upstream request failed" in capsys.readouterr().err
+    assert "upstream request failed" in caplog.text
+    caplog.clear()
     response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("failure"))
     assert response.status_code == 500 and payload(response) == {"error": "internal error"}
-    assert "request failed" in capsys.readouterr().err
+    assert "request failed" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -63,7 +63,7 @@ def request_family_identity(
 
 def _normalize(value: Any, key: str | None = None) -> Any:
     if isinstance(value, str):
-        return " ".join(unicodedata.normalize("NFKC", value).strip().lower().split())
+        return " ".join(unicodedata.normalize("NFKC", value).strip().casefold().split())
     if isinstance(value, list):
         result = [_normalize(item) for item in value]
         return sorted(result, key=canonical_json) if key in ORDER_INSENSITIVE_ARRAY_KEYS else result
@@ -74,7 +74,7 @@ def _normalize(value: Any, key: str | None = None) -> Any:
 
 def _shape(value: Any, key: str | None = None) -> Any:
     if isinstance(value, str):
-        normalized = " ".join(unicodedata.normalize("NFKC", value).strip().lower().split())
+        normalized = " ".join(unicodedata.normalize("NFKC", value).strip().casefold().split())
         tokens = 0 if not normalized else len(normalized.split())
         return asdict(TextShape(len(normalized) // 32, tokens // 4))
     if isinstance(value, list):

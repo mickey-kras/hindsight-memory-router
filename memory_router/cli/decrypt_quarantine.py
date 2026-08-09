@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -90,10 +91,10 @@ def run(path: str) -> int:
 
 
 def main() -> None:
-    if len(sys.argv) != 2:
-        print("usage: memory-router-decrypt-quarantine <encrypted-response.json>", file=sys.stderr)
-        raise SystemExit(1)
-    raise SystemExit(run(sys.argv[1]))
+    parser = argparse.ArgumentParser(prog="memory-router-decrypt-quarantine")
+    parser.add_argument("encrypted_response", metavar="encrypted-response.json")
+    args = parser.parse_args()
+    raise SystemExit(run(args.encrypted_response))
 
 
 if __name__ == "__main__":
