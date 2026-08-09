@@ -8,6 +8,7 @@ from .canonical import sha256_hex
 from .envelope import QUARANTINE_ID_RE, canonical_decrypted, parse_decrypted
 from .errors import HttpError
 from .maintenance import cleanup, preview_cleanup
+from .policy import prepare_retain_body
 from .review_repository import (
     claim_review,
     finish_approve_retain,
@@ -23,16 +24,22 @@ from .validation import parse_retain_body
 
 class QuarantineAdminService:
     def __init__(
-        self, repository: Any, hindsight: Any, registry: Any, max_postpones: int = 3
+        self,
+        repository: Any,
+        hindsight: Any,
+        registry: Any,
+        limits: Any,
+        max_postpones: int = 3,
     ) -> None:
         self.repository = repository
         self.hindsight = hindsight
         self.registry = registry
+        self.limits = limits
         self.max_postpones = max_postpones
 
     async def list_queue(self, limit: int, offset: int) -> dict[str, Any]:
         at = iso_now()
-        items = await self.repository.list_reviewable(limit, offset)
+        items = await self.repository.list_reviewable(limit, offset, at)
         stats = await self.repository.stats(at)
         return {"items": items, "total": stats["pending_items"] + stats["postponed_items"]}
 
@@ -65,10 +72,16 @@ class QuarantineAdminService:
                     "register the writer before approving its original retain request",
                 )
             retain_body = parse_retain_body(payload.get("body"))
+            self.limits.assert_retain_bounds(retain_body)
+            source = str(item.get("source") or "quarantine_review")
+            approved_body = prepare_retain_body(
+                retain_body, writer_id, source, writer.write_bank, decision="approved"
+            )
             at = iso_now()
             claimed = await claim_review(self.repository, quarantine_id, "retain_request", at)
             try:
-                await self.hindsight.retain(writer.write_bank, retain_body)
+                await self.limits.consume_retain(writer_id)
+                await self.hindsight.retain(writer.write_bank, approved_body)
             except Exception as exc:
                 await interrupt_review(self.repository, claimed, at, exc)
                 raise
@@ -214,6 +227,9 @@ class QuarantineAdminService:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
+        expires_at = item.get("expires_at")
+        if expires_at is not None and str(expires_at) <= iso_now():
+            raise HttpError(409, "quarantine_expired", "quarantine item has expired")
         return cast(dict[str, Any], item)
 
     @staticmethod
