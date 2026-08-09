@@ -1,8 +1,8 @@
 # Configuration
 
-Memory Router is designed to start with safe built-in defaults. Environment variables are overrides, not required setup.
+Memory Router is designed to start with safe built-in defaults for tuning and deployment settings. Environment variables normally override those defaults, but `QUARANTINE_PUBLIC_KEY` is required and has no default.
 
-Use `.env.example` as the complete override reference. With Docker Compose, an optional `.env` file is loaded automatically when present.
+Use `.env.example` as the complete environment reference. With Docker Compose, `.env` is the canonical location for `QUARANTINE_PUBLIC_KEY` and any overrides you need.
 
 ## Credentials
 
