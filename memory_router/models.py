@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
 
-BankId = Literal["core", "main", "personal", "dev", "creative", "ops", "research"]
+BankId = str
 
 
 class PassthroughModel(BaseModel):
@@ -81,8 +81,22 @@ class RecallResponse(PassthroughModel):
 class WriterRule(PassthroughModel):
     role: str = Field(min_length=1)
     source: str = Field(min_length=1)
-    write_bank: BankId
-    read_banks: list[BankId]
+    write_bank: str = Field(min_length=1)
+    read_banks: list[str] = Field(min_length=1)
+
+    @field_validator("read_banks")
+    @classmethod
+    def non_empty_read_banks(cls, value: list[str]) -> list[str]:
+        if any(not bank.strip() for bank in value):
+            raise ValueError("bank id cannot be empty")
+        return value
+
+    @field_validator("write_bank")
+    @classmethod
+    def non_empty_write_bank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("bank id cannot be empty")
+        return value
 
 
 class RegistryDefaults(PassthroughModel):
