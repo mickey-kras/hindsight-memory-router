@@ -70,14 +70,16 @@ async def test_request_id_is_propagated_to_hindsight(httpx_mock: HTTPXMock) -> N
 async def test_unhandled_failure_log_does_not_emit_exception_details(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    secret = "sensitive-request-detail"
+    sensitive_detail = "sensitive-request-detail"
     caplog.set_level(logging.ERROR, logger="memory_router.app")
 
-    response = await app_module.unhandled_handler(None, RuntimeError(secret))  # type: ignore[arg-type]
+    response = await app_module.unhandled_handler(  # type: ignore[arg-type]
+        None, RuntimeError(sensitive_detail)
+    )
 
     assert response.status_code == 500
     assert "RuntimeError" in caplog.text
-    assert secret not in caplog.text
+    assert sensitive_detail not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
 
 
@@ -85,17 +87,17 @@ async def test_unhandled_failure_log_does_not_emit_exception_details(
 async def test_auth_audit_failure_log_does_not_emit_exception_details(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    secret = "sensitive-auth-persistence-detail"
+    sensitive_detail = "sensitive-auth-persistence-detail"
 
     class FailingStore:
         async def put(self, _: dict[str, Any]) -> None:
-            raise RuntimeError(secret)
+            raise RuntimeError(sensitive_detail)
 
     caplog.set_level(logging.ERROR, logger="memory_router.auth")
     await AuthFailureAuditor(FailingStore()).record("router")
 
     assert "RuntimeError" in caplog.text
-    assert secret not in caplog.text
+    assert sensitive_detail not in caplog.text
     assert all(
         record.exc_info is None for record in caplog.records if record.levelno >= logging.ERROR
     )
@@ -106,7 +108,7 @@ async def test_sweeper_failure_log_does_not_emit_exception_details(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    secret = "sensitive-sweeper-detail"
+    sensitive_detail = "sensitive-sweeper-detail"
     sleep_calls = 0
 
     async def fake_sleep(_: int) -> None:
@@ -116,7 +118,7 @@ async def test_sweeper_failure_log_does_not_emit_exception_details(
             raise asyncio.CancelledError
 
     async def fail_recovery(*_: Any) -> None:
-        raise RuntimeError(secret)
+        raise RuntimeError(sensitive_detail)
 
     runtime = app_module.Runtime()
     runtime.repository = object()  # type: ignore[assignment]
@@ -128,5 +130,5 @@ async def test_sweeper_failure_log_does_not_emit_exception_details(
         await runtime._sweep_loop(1, 0)
 
     assert "RuntimeError" in caplog.text
-    assert secret not in caplog.text
+    assert sensitive_detail not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
