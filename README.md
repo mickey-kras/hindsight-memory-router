@@ -22,6 +22,7 @@ Hindsight is the currently supported memory provider. Provider abstraction is no
 The default deployment is single-node with embedded SQLite. Generate the quarantine keypair on a trusted admin machine, keep the private key there, and provide only the public key to the router deployment.
 
 ```bash
+umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
 openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
 base64 < quarantine-public.pem | tr -d '\n'
