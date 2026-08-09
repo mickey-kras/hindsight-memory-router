@@ -10,7 +10,15 @@ payload -> canonical SHA-256 -> AES-256-GCM -> RSA-wrapped data key -> SQLite/Po
 
 The running router receives only the RSA public key. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail.
 
-Docker Compose generates the keypair with a one-shot initializer. The public key is mounted read-only into the router. Private review material is stored separately in the project-scoped `memory-router-private-key` Compose volume and is never mounted into the router service. The initializer runs with networking disabled.
+Generate the quarantine RSA keypair on a trusted admin machine. Keep the private key in a password manager, secret manager, or encrypted offline storage and provide only the public key to the router deployment. The default Docker Compose deployment never creates, mounts, or stores private review material.
+
+Example key generation on the trusted admin machine:
+
+```bash
+umask 077
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
+openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
+```
 
 There is no shared/default private key and quarantine encryption is not weakened for onboarding.
 
@@ -32,7 +40,7 @@ Quarantine item size, pending-item count, per-writer capacity, encrypted-byte ca
 
 Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
 
-Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps them forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
+Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
 
 Limit failures remain fail-closed:
 

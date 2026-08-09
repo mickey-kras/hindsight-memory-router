@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from ipaddress import IPv4Address
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -13,7 +12,6 @@ from memory_router import __main__ as main_module
 from memory_router import app as app_module
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
-from memory_router.key_bootstrap import bootstrap_keys
 from memory_router.maintenance import (
     cleanup,
     cleanup_params,
@@ -100,24 +98,6 @@ def test_hindsight_error_details_variants() -> None:
             kind, upstream_status=503, operation="x", method="GET", timeout_ms=1
         )  # type: ignore[arg-type]
         assert err.status == status and err.details()["upstream_status"] == 503
-
-
-def test_key_bootstrap_create_existing_repair_and_mismatch(tmp_path: Path) -> None:
-    public = tmp_path / "pub" / "key.pem"
-    private = tmp_path / "private" / "key.pem"
-    assert bootstrap_keys(str(public), str(private)) == "created"
-    assert bootstrap_keys(str(public), str(private)) == "existing"
-    public.unlink()
-    assert bootstrap_keys(str(public), str(private)) == "repaired-public-key"
-    public.write_text("wrong")
-    with pytest.raises(RuntimeError, match="do not match"):
-        bootstrap_keys(str(public), str(private))
-    public.unlink()
-    private.unlink()
-    public.parent.mkdir(exist_ok=True)
-    public.write_text("orphan")
-    with pytest.raises(RuntimeError, match="public key exists without"):
-        bootstrap_keys(str(public), str(private))
 
 
 class Tx:

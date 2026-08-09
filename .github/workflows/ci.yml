@@ -114,7 +114,7 @@ jobs:
       - name: Docker build
         run: docker build -t hindsight-memory-router:ci .
 
-      - name: Default Compose bootstrap smoke
+      - name: Default Compose smoke
         run: bash tests/integration/default-compose-smoke.sh
 
       - name: Fake Hindsight compose smoke
