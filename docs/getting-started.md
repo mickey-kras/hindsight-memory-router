@@ -2,6 +2,22 @@
 
 Memory Router sits between an agent/application and Hindsight and applies writer policy, request bounds, authentication, and encrypted quarantine around retain/recall traffic.
 
+## Quarantine key
+
+Generate the quarantine keypair on a trusted admin machine, not on the router host:
+
+```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
+openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
+base64 < quarantine-public.pem | tr -d '\n'
+```
+
+Store `quarantine-private.pem` in a password manager, secret manager, or encrypted offline storage. Do not copy it to the router host. Put only the base64 public-key value in `.env`:
+
+```text
+QUARANTINE_PUBLIC_KEY=<base64-public-key>
+```
+
 ## Docker Compose
 
 ```bash
@@ -9,16 +25,16 @@ docker compose up -d
 curl --fail http://localhost:8890/health
 ```
 
-The first Compose run:
+Compose:
 
 - builds the Memory Router image;
-- generates an RSA quarantine keypair if one does not already exist;
 - starts the router in single-node mode;
-- stores SQLite state in a project-scoped `memory-router-data` named volume.
+- stores SQLite state in a project-scoped `memory-router-data` named volume;
+- never creates, mounts, or stores the quarantine private key.
 
-No `.env` file is required for startup. Authentication still fails closed: configure a router token before sending retain/recall traffic and scoped admin tokens before using review operations.
+Authentication still fails closed: configure a router token before sending retain/recall traffic and scoped admin tokens before using review operations.
 
-The built-in provider endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in an optional `.env` file.
+The built-in provider endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
 
 ## Defaults
 
@@ -30,7 +46,7 @@ Normal startup uses built-in defaults:
 - one neutral `main` writer that reads and writes only the `main` bank;
 - bounded retain/recall, quarantine, timeout, capacity, and retention settings.
 
-Use `.env.example` only as an override reference.
+Use `.env.example` as an override reference.
 
 ## Next
 
