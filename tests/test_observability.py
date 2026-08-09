@@ -67,7 +67,9 @@ async def test_request_id_is_propagated_to_hindsight(httpx_mock: HTTPXMock) -> N
 
 
 @pytest.mark.asyncio
-async def test_unhandled_failure_log_does_not_emit_exception_details(caplog: pytest.LogCaptureFixture) -> None:
+async def test_unhandled_failure_log_does_not_emit_exception_details(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     secret = "sensitive-request-detail"
     caplog.set_level(logging.ERROR, logger="memory_router.app")
 
@@ -94,7 +96,9 @@ async def test_auth_audit_failure_log_does_not_emit_exception_details(
 
     assert "RuntimeError" in caplog.text
     assert secret not in caplog.text
-    assert all(record.exc_info is None for record in caplog.records if record.levelno >= logging.ERROR)
+    assert all(
+        record.exc_info is None for record in caplog.records if record.levelno >= logging.ERROR
+    )
 
 
 @pytest.mark.asyncio
