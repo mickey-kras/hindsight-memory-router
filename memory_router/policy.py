@@ -4,15 +4,36 @@ import asyncio
 import logging
 from typing import Any, cast
 
-from .canonical import sha256_hex
+from .canonical import canonical_json, sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .observability import current_request_id
-from .security import SafetyResult, scan_content, scan_recall_result, scan_retain_body
+from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
+
+
+def prepare_retain_body(
+    body: dict[str, Any], writer_id: str, source: str, target_bank: str, decision: str = "allowed"
+) -> dict[str, Any]:
+    rewritten = dict(body)
+    rewritten["items"] = []
+    for item in body["items"]:
+        copied = dict(item)
+        metadata = dict(copied.get("metadata") or {})
+        metadata.update(
+            {
+                "router_writer_id": writer_id,
+                "router_source": source,
+                "router_decision": decision,
+                "router_target_bank": target_bank,
+            }
+        )
+        copied["metadata"] = metadata
+        rewritten["items"].append(copied)
+    return rewritten
 
 
 class RouterPolicy:
@@ -35,21 +56,7 @@ class RouterPolicy:
             return await self._quarantine_retain(
                 writer_id, source, "suspicious_content", body, writer.write_bank, scan
             )
-        rewritten = dict(body)
-        rewritten["items"] = []
-        for item in body["items"]:
-            copied = dict(item)
-            metadata = dict(copied.get("metadata") or {})
-            metadata.update(
-                {
-                    "router_writer_id": writer_id,
-                    "router_source": source,
-                    "router_decision": "allowed",
-                    "router_target_bank": writer.write_bank,
-                }
-            )
-            copied["metadata"] = metadata
-            rewritten["items"].append(copied)
+        rewritten = prepare_retain_body(body, writer_id, source, writer.write_bank)
         await self.limits.consume_retain(writer_id)
         return await self.hindsight.retain(writer.write_bank, rewritten)
 
@@ -60,7 +67,7 @@ class RouterPolicy:
         if writer is None:
             await self._quarantine_recall_or_degrade(writer_id, source, "unknown_writer", body)
             return {"results": []}
-        scan = scan_content(body.get("query", ""), operation="read", key="recall.query")
+        scan = scan_recall_body(body)
         if not scan.safe:
             await self._quarantine_recall_or_degrade(
                 writer_id, source, "suspicious_query", body, list(writer.read_banks), scan
@@ -136,9 +143,9 @@ class RouterPolicy:
         self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
     ) -> bool:
         state = await self.repository.find_memory_state(bank_id, str(result["id"]))
-        digest = sha256_hex(str(result.get("text", "")))
+        digest = sha256_hex(canonical_json(result))
         scan = scan_recall_result(result)
-        if state and state["status"] == "reviewed_blocked":
+        if state and state["status"] in {"reviewed_blocked", "review_in_progress"}:
             return False
         if state and state["status"] == "reviewed_allowed":
             if state.get("source_content_sha256") == digest:
@@ -266,7 +273,8 @@ class RouterPolicy:
     @staticmethod
     def _quarantine_unavailable(error: HttpError) -> bool:
         return error.status in {507, 429} or (
-            error.status == 409 and error.code == "quarantine_request_in_review"
+            error.status == 409
+            and error.code in {"quarantine_request_in_review", "quarantine_item_in_review"}
         )
 
     @staticmethod
