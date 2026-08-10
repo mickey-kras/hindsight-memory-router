@@ -44,6 +44,16 @@ jobs:
             --output-file requirements.generated.txt pyproject.toml
           diff -u requirements.txt requirements.generated.txt
 
+      - name: Regenerate npm lock for dependency update
+        run: npm install --package-lock-only --ignore-scripts
+
+      - name: Upload regenerated npm lock
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: regenerated-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+
       - run: npm ci
 
       - name: No legacy TypeScript runtime or tests
