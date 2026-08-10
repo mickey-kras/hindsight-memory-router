@@ -114,7 +114,10 @@ class QuarantineRepository:
     async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
-            if existing and existing["status"] == "review_in_progress":
+            if existing and existing["status"] in {
+                "review_in_progress",
+                "review_side_effect_started",
+            }:
                 raise HttpError(
                     409,
                     "quarantine_item_in_review",
