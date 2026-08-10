@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -46,6 +46,7 @@ def exact_item(
     }
     item: dict[str, object] = {
         **decrypted,
+        "updated_at": "2026-08-08T00:00:00.000Z",
         "kind": kind,
         "status": "pending",
         "postpone_count": 0,
@@ -60,7 +61,12 @@ def exact_item(
 
 def service(
     item: dict[str, object] | None,
-) -> tuple[admin_module.QuarantineAdminService, SimpleNamespace, SimpleNamespace]:
+) -> tuple[
+    admin_module.QuarantineAdminService,
+    SimpleNamespace,
+    SimpleNamespace,
+    SimpleNamespace,
+]:
     repository = SimpleNamespace(
         get=AsyncMock(return_value=item),
         list_reviewable=AsyncMock(return_value=[]),
@@ -77,18 +83,22 @@ def service(
         ),
     )
     hindsight = SimpleNamespace(retain=AsyncMock(), invalidate_memory=AsyncMock())
+    limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
     return (
-        admin_module.QuarantineAdminService(repository, hindsight, registry(), 2),
+        admin_module.QuarantineAdminService(repository, hindsight, registry(), limits, 2, 300),
         repository,
         hindsight,
+        limits,
     )
 
 
 @pytest.mark.asyncio
 async def test_list_read_stats_and_require_reviewable() -> None:
     item, _ = exact_item("retain_request", {})
-    svc, repo, _ = service(item)
+    svc, repo, _, _ = service(item)
     assert (await svc.list_queue(10, 0))["total"] == 3
+    repo.list_reviewable.assert_awaited_once()
+    assert len(repo.list_reviewable.await_args.args) == 3
     read = await svc.read_item(QID)
     assert (
         "encrypted" in read
@@ -114,6 +124,15 @@ async def test_list_read_stats_and_require_reviewable() -> None:
     assert unavailable.value.code == "quarantine_payload_unavailable"
 
 
+@pytest.mark.asyncio
+async def test_expired_item_cannot_be_reviewed() -> None:
+    item, _ = exact_item("retain_request", {}, expires_at="2020-01-01T00:00:00.000Z")
+    svc, _, _, _ = service(item)
+    with pytest.raises(HttpError) as expired:
+        await svc.read_item(QID)
+    assert expired.value.code == "quarantine_expired"
+
+
 def test_verify_exact_validation_hash_and_metadata() -> None:
     item, decrypted = exact_item("retain_request", {})
     assert admin_module.QuarantineAdminService._verify_exact(item, decrypted) == decrypted
@@ -136,7 +155,7 @@ def test_verify_exact_validation_hash_and_metadata() -> None:
 async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"action": "retain", "writer_id": "main", "body": {"items": [{"content": "ok"}]}}
     item, decrypted = exact_item("retain_request", payload)
-    svc, repo, hindsight = service(item)
+    svc, repo, hindsight, limits = service(item)
     claim = AsyncMock(return_value=item)
     finish = AsyncMock()
     interrupt = AsyncMock()
@@ -145,7 +164,21 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
     result = await svc.approve(QID, {"decrypted": decrypted})
     assert result == {"approved": True, "quarantine_id": QID, "target_bank": "main"}
+    limits.assert_retain_bounds.assert_called_once()
+    limits.consume_retain.assert_awaited_once_with("main")
     hindsight.retain.assert_awaited_once()
+    approved_body = hindsight.retain.await_args.args[1]
+    assert approved_body["items"][0]["metadata"] == {
+        "router_writer_id": "main",
+        "router_source": "http",
+        "router_decision": "approved",
+        "router_target_bank": "main",
+    }
+    assert claim.await_args.args[4] == 300
+    assert claim.await_args.kwargs == {
+        "expected_sha256": item["sha256"],
+        "expected_updated_at": item["updated_at"],
+    }
     finish.assert_awaited_once()
 
     for bad_payload, code in (
@@ -170,20 +203,42 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.asyncio
-async def test_approve_recalled_memory_success_mismatch_and_invalid(
+async def test_approve_recalled_memory_claims_verified_snapshot_before_marking_allowed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = {"action": "recalled_memory", "bank_id": "main", "result": {"id": "m1", "text": "ok"}}
     item, decrypted = exact_item(
         "recalled_memory", payload, source_bank="main", source_memory_id="m1"
     )
-    svc, repo, _ = service(item)
-    mark = AsyncMock()
-    monkeypatch.setattr(admin_module, "mark_memory_reviewed", mark)
+    svc, repo, _, _ = service(item)
+    claim = AsyncMock(return_value=item)
+    finish = AsyncMock()
+    monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "finish_approve_memory", finish)
     result = await svc.approve(QID, {"decrypted": decrypted})
     assert result["allowed"] is True and result["source_memory_id"] == "m1"
-    mark.assert_awaited_once()
+    assert claim.await_args.args[4] == 300
+    assert claim.await_args.kwargs == {
+        "expected_sha256": item["sha256"],
+        "expected_updated_at": item["updated_at"],
+    }
+    finish.assert_awaited_once_with(
+        repo,
+        QID,
+        claim.await_args.args[3],
+        expected_sha256=item["sha256"],
+    )
 
+    claim.side_effect = HttpError(
+        409, "quarantine_review_changed", "quarantine item changed before review could be claimed"
+    )
+    finish.reset_mock()
+    with pytest.raises(HttpError) as changed:
+        await svc.approve(QID, {"decrypted": decrypted})
+    assert changed.value.code == "quarantine_review_changed"
+    finish.assert_not_awaited()
+
+    claim.side_effect = None
     bad_item, bad_decrypted = exact_item(
         "recalled_memory", {"action": "wrong"}, source_bank="main", source_memory_id="m1"
     )
@@ -209,7 +264,7 @@ async def test_approve_recalled_memory_success_mismatch_and_invalid(
 @pytest.mark.asyncio
 async def test_reject_memory_and_request_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     memory, _ = exact_item("recalled_memory", {}, source_bank="main", source_memory_id="m1")
-    svc, repo, hindsight = service(memory)
+    svc, repo, hindsight, _ = service(memory)
     claim = AsyncMock(return_value=memory)
     finish = AsyncMock()
     interrupt = AsyncMock()
@@ -244,20 +299,18 @@ async def test_reject_memory_and_request_paths(monkeypatch: pytest.MonkeyPatch) 
 @pytest.mark.asyncio
 async def test_postpone_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     item, _ = exact_item("retain_request", {})
-    svc, repo, _ = service(item)
+    svc, _, _, _ = service(item)
     postpone = AsyncMock(return_value={"postpone_count": 1})
     monkeypatch.setattr(admin_module, "postpone", postpone)
     assert (await svc.postpone(QID))["count"] == 1
-    repo.get.return_value = {**item, "postpone_count": 2}
-    with pytest.raises(HttpError) as limit:
-        await svc.postpone(QID)
-    assert limit.value.code == "postpone_limit_reached"
+    postpone.assert_awaited_once()
+    assert postpone.await_args.args[3:] == (300, 2)
 
 
 @pytest.mark.asyncio
 async def test_cleanup_dry_run_commit_and_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     item, _ = exact_item("retain_request", {})
-    svc, _, _ = service(item)
+    svc, _, _, _ = service(item)
     preview = AsyncMock(return_value={"count": 2, "encrypted_bytes": 10})
     perform = AsyncMock(return_value={"count": 2, "encrypted_bytes": 10})
     monkeypatch.setattr(admin_module, "preview_cleanup", preview)

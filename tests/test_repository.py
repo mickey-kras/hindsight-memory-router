@@ -101,7 +101,7 @@ async def test_repository_store_get_refresh_list_stats_and_memory_lookup(
     loaded = await repository.get("q1")
     assert loaded and loaded["encrypted"]["data"] == "q1"
     assert await repository.get("missing") is None
-    assert len(await repository.list_reviewable(10, 0)) == 1
+    assert len(await repository.list_reviewable(10, 0, "2026-01-01T00:00:01.000Z")) == 1
     stats = await repository.stats("2026-01-01T00:00:01.000Z")
     assert stats["total_items"] == 1 and stats["pending_items"] == 1 and stats["event_count"] == 1
 
@@ -164,7 +164,10 @@ async def test_capacity_global_bytes_writer_and_expired_replacement(
     assert writer_cap.value.code == "quarantine_writer_capacity_exceeded"
     with pytest.raises(HttpError) as bytes_cap:
         await repository.store(
-            item("b", writer="x"), Capacity(10, 10, 1), mode="id", at="2026-01-01T00:00:01.000Z"
+            item("b", writer="x"),
+            Capacity(10, 10, 1),
+            mode="id",
+            at="2026-01-01T00:00:01.000Z",
         )
     assert bytes_cap.value.code == "quarantine_capacity_exceeded"
 

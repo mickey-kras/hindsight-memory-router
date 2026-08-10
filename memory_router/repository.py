@@ -72,11 +72,13 @@ class QuarantineRepository:
         async with self.db.transaction() as tx:
             return stored(await tx.fetchone(_MEMORY_SELECT, (bank_id, memory_id)))
 
-    async def list_reviewable(self, limit: int, offset: int) -> list[dict[str, Any]]:
+    async def list_reviewable(self, limit: int, offset: int, at: str) -> list[dict[str, Any]]:
         async with self.db.transaction() as tx:
             rows = await tx.fetchall(
-                "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') ORDER BY created_at ASC LIMIT ? OFFSET ?",
-                (limit, offset),
+                "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') "
+                "AND NOT(expires_at IS NOT NULL AND expires_at<=?) "
+                "ORDER BY created_at ASC LIMIT ? OFFSET ?",
+                (at, limit, offset),
             )
         return [_summary(stored(row) or {}) for row in rows]
 
@@ -112,9 +114,27 @@ class QuarantineRepository:
     async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
+            if existing and existing["status"] == "review_in_progress":
+                raise HttpError(
+                    409,
+                    "quarantine_item_in_review",
+                    "matching quarantine item is already being reviewed",
+                )
             await self._assert_capacity(tx, item, existing, capacity, at)
             if existing:
+                if _expired(existing, at):
+                    await self._reopen_expired(tx, existing["quarantine_id"], item)
+                    return
                 if mode == "request" and existing["status"] not in {"pending", "postponed"}:
+                    return
+                if mode == "memory" and existing["status"] == "reviewed_allowed":
+                    await self._reopen_reviewed_memory(
+                        tx,
+                        existing["quarantine_id"],
+                        item,
+                        content_changed=existing.get("source_content_sha256")
+                        != item.get("source_content_sha256"),
+                    )
                     return
                 await self._refresh(
                     tx,
@@ -156,22 +176,104 @@ class QuarantineRepository:
 
     async def _refresh(self, tx: Tx, quarantine_id: str, item: dict[str, Any], count: int) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
-        params = _params(item, envelope)
         await tx.execute(
-            """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,expires_at=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1 WHERE quarantine_id=?""",
-            (*params[1:14], item.get("expires_at"), quarantine_id),
+            """UPDATE quarantine_items SET updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,requarantine_count=requarantine_count+1 WHERE quarantine_id=?""",
+            (
+                item["updated_at"],
+                item["kind"],
+                item["reason"],
+                item.get("writer_id"),
+                item.get("source"),
+                item.get("source_bank"),
+                item.get("source_memory_id"),
+                item.get("source_content_sha256"),
+                item.get("dedupe_key"),
+                item["sha256"],
+                envelope,
+                len(envelope.encode("utf-8")),
+                quarantine_id,
+            ),
+        )
+        if item["reason"] != "auth_failed":
+            await insert_event(
+                tx,
+                quarantine_id,
+                "requarantined",
+                item["updated_at"],
+                {
+                    "kind": item["kind"],
+                    "reason": item["reason"],
+                    "sha256": item["sha256"],
+                    "requarantine_count": count,
+                },
+            )
+
+    async def _reopen_expired(self, tx: Tx, quarantine_id: str, item: dict[str, Any]) -> None:
+        envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
+        await tx.execute(
+            """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1,expires_at=? WHERE quarantine_id=?""",
+            (
+                item["created_at"],
+                item["updated_at"],
+                item["kind"],
+                item["reason"],
+                item.get("writer_id"),
+                item.get("source"),
+                item.get("source_bank"),
+                item.get("source_memory_id"),
+                item.get("source_content_sha256"),
+                item.get("dedupe_key"),
+                item["sha256"],
+                envelope,
+                len(envelope.encode("utf-8")),
+                item.get("expires_at"),
+                quarantine_id,
+            ),
         )
         await insert_event(
             tx,
             quarantine_id,
             "requarantined",
-            item["created_at"],
+            item["updated_at"],
             {
                 "kind": item["kind"],
                 "reason": item["reason"],
                 "sha256": item["sha256"],
-                "requarantine_count": count,
+                "expired": True,
             },
+        )
+
+    async def _reopen_reviewed_memory(
+        self,
+        tx: Tx,
+        quarantine_id: str,
+        item: dict[str, Any],
+        *,
+        content_changed: bool,
+    ) -> None:
+        envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
+        await tx.execute(
+            """UPDATE quarantine_items SET created_at=?,updated_at=?,reason=?,writer_id=?,source=?,source_content_sha256=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1,expires_at=? WHERE quarantine_id=?""",
+            (
+                item["created_at"],
+                item["updated_at"],
+                item["reason"],
+                item.get("writer_id"),
+                item.get("source"),
+                item.get("source_content_sha256"),
+                item["sha256"],
+                envelope,
+                len(envelope.encode("utf-8")),
+                item.get("expires_at"),
+                quarantine_id,
+            ),
+        )
+        await insert_event(
+            tx,
+            quarantine_id,
+            "content_changed" if content_changed else "safety_reopened",
+            item["updated_at"],
+            {"kind": item["kind"], "sha256": item["sha256"]},
         )
 
     async def _assert_capacity(

@@ -4,6 +4,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallBody, RetainBody
 
@@ -11,6 +12,10 @@ from .models import RecallBody, RetainBody
 def parse_retain_body(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise _invalid_retain("retain body must be an object")
+    try:
+        canonical_json(value)
+    except ValueError as exc:
+        raise _invalid_retain("retain body contains an unsupported JSON value") from exc
     try:
         parsed = RetainBody.model_validate(value)
     except ValidationError as exc:
@@ -45,6 +50,10 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
 def parse_recall_body(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise _invalid_recall("recall body must be an object")
+    try:
+        canonical_json(value)
+    except ValueError as exc:
+        raise _invalid_recall("recall body contains an unsupported JSON value") from exc
     try:
         parsed = RecallBody.model_validate(value)
     except ValidationError as exc:

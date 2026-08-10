@@ -137,8 +137,8 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
             }
         )
     )
-    with pytest.raises(RuntimeError, match="cannot read research"):
-        config.load_registry(str(cross))
+    custom = config.load_registry(str(cross))
+    assert custom.writers["main"].read_banks == ["main", "research"]
 
 
 def test_environment_assertions(
