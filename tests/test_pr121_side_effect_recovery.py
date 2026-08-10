@@ -80,7 +80,9 @@ def recalled_item(status: str = "pending") -> dict[str, object]:
     }
 
 
-def service(item: dict[str, object]) -> tuple[admin_module.QuarantineAdminService, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
+def service(
+    item: dict[str, object],
+) -> tuple[admin_module.QuarantineAdminService, SimpleNamespace, SimpleNamespace, SimpleNamespace]:
     repository = SimpleNamespace(get=AsyncMock(return_value=item))
     hindsight = SimpleNamespace(retain=AsyncMock(), invalidate_memory=AsyncMock())
     limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
@@ -93,7 +95,9 @@ def service(item: dict[str, object]) -> tuple[admin_module.QuarantineAdminServic
 
 
 @pytest.mark.asyncio
-async def test_retain_upstream_failure_restores_side_effect(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_retain_upstream_failure_restores_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     item, decrypted = retain_item()
     svc, _, hindsight, _ = service(item)
     claim = AsyncMock(return_value=item)
