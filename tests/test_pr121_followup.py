@@ -298,7 +298,7 @@ async def test_memory_approve_interrupts_claim_when_finish_fails(
 
 
 @pytest.mark.asyncio
-async def test_retain_finish_failure_cannot_replay_upstream_retain(
+async def test_retain_finish_failure_resumes_without_replaying_upstream_retain(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pending = {
@@ -312,8 +312,8 @@ async def test_retain_finish_failure_cannot_replay_upstream_retain(
         "updated_at": "2026-08-09T00:00:00.000Z",
         "encrypted": {"version": 1},
     }
-    started = {**pending, "status": "review_side_effect_started"}
-    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, started]))
+    completed = {**pending, "status": "review_side_effect_completed"}
+    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, completed]))
     hindsight = SimpleNamespace(retain=AsyncMock())
     limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
     service = QuarantineAdminService(repository, hindsight, registry(), limits)
@@ -327,25 +327,29 @@ async def test_retain_finish_failure_cannot_replay_upstream_retain(
         }
     )
     claim = AsyncMock(return_value=pending)
-    finish = AsyncMock(side_effect=RuntimeError("finish failed"))
+    complete = AsyncMock()
+    finish = AsyncMock(side_effect=[RuntimeError("finish failed"), None])
     interrupt = AsyncMock()
     monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "complete_side_effect", complete)
     monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="finish failed"):
         await service.approve(QID, {"decrypted": {}})
-    hindsight.retain.assert_awaited_once()
-    interrupt.assert_awaited_once()
+    result = await service.approve(QID, {"decrypted": {}})
 
-    with pytest.raises(HttpError) as retry:
-        await service.approve(QID, {"decrypted": {}})
-    assert retry.value.code == "quarantine_already_finalized"
+    assert result["approved"] is True
     hindsight.retain.assert_awaited_once()
+    limits.consume_retain.assert_awaited_once()
+    claim.assert_awaited_once()
+    complete.assert_awaited_once()
+    assert finish.await_count == 2
+    interrupt.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_reject_finish_failure_cannot_replay_invalidation(
+async def test_reject_finish_failure_resumes_without_replaying_invalidation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pending = {
@@ -358,23 +362,26 @@ async def test_reject_finish_failure_cannot_replay_invalidation(
         "source_memory_id": "m1",
         "encrypted": {"version": 1},
     }
-    started = {**pending, "status": "review_side_effect_started"}
-    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, started]))
+    completed = {**pending, "status": "review_side_effect_completed"}
+    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, completed]))
     hindsight = SimpleNamespace(invalidate_memory=AsyncMock())
     service = QuarantineAdminService(repository, hindsight, registry(), SimpleNamespace())
     claim = AsyncMock(return_value=pending)
-    finish = AsyncMock(side_effect=RuntimeError("finish failed"))
+    complete = AsyncMock()
+    finish = AsyncMock(side_effect=[RuntimeError("finish failed"), None])
     interrupt = AsyncMock()
     monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "complete_side_effect", complete)
     monkeypatch.setattr(admin_module, "finish_reject_memory", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="finish failed"):
         await service.reject(QID)
-    hindsight.invalidate_memory.assert_awaited_once()
-    interrupt.assert_awaited_once()
+    result = await service.reject(QID)
 
-    with pytest.raises(HttpError) as retry:
-        await service.reject(QID)
-    assert retry.value.code == "quarantine_already_finalized"
+    assert result["allowed"] is False
     hindsight.invalidate_memory.assert_awaited_once()
+    claim.assert_awaited_once()
+    complete.assert_awaited_once()
+    assert finish.await_count == 2
+    interrupt.assert_not_awaited()
