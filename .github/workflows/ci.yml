@@ -14,8 +14,6 @@ permissions:
 
 jobs:
   checks:
-    permissions:
-      contents: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -45,27 +43,6 @@ jobs:
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
             --output-file requirements.generated.txt pyproject.toml
           diff -u requirements.txt requirements.generated.txt
-
-      - name: Regenerate npm lock for dependency update
-        run: npm install --package-lock-only --ignore-scripts
-
-      - name: Upload regenerated npm lock
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: regenerated-package-lock
-          path: package-lock.json
-          if-no-files-found: error
-
-      - name: Commit regenerated npm lock
-        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
-        run: |
-          if ! git diff --quiet -- package-lock.json; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add package-lock.json
-            git commit -m "chore: regenerate npm lock"
-            git push origin "HEAD:${GITHUB_HEAD_REF}"
-          fi
 
       - run: npm ci
 
