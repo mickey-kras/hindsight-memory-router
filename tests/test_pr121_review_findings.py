@@ -104,6 +104,7 @@ async def test_approve_after_requarantine_ignores_preserved_row_created_at(
     limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
     service = admin_module.QuarantineAdminService(repository, hindsight, registry, limits)
     monkeypatch.setattr(admin_module, "claim_review", AsyncMock(return_value=item))
+    monkeypatch.setattr(admin_module, "complete_side_effect", AsyncMock())
     monkeypatch.setattr(admin_module, "finish_approve_retain", AsyncMock())
     result = await service.approve(QID, {"decrypted": decrypted})
     assert result["approved"] is True
