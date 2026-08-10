@@ -23,7 +23,6 @@ The scanner is a deterministic tripwire, not a safety guarantee. It normalizes k
 ## CI dependency trust
 
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
-- Aislop's `adm-zip` dependency is overridden to patched `0.6.0` until its upstream range accepts the fixed release.
 - Semgrep uses a versioned image pinned by digest; update the version and digest together.
 - GitHub Actions remain pinned by commit SHA.
 
