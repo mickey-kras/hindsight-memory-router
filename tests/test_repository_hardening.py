@@ -73,16 +73,15 @@ async def test_refresh_preserves_review_state_and_original_ttl(
 
 
 @pytest.mark.asyncio
-async def test_review_in_progress_memory_cannot_be_refreshed(
-    repository: QuarantineRepository,
+@pytest.mark.parametrize("status", ["review_in_progress", "review_side_effect_started"])
+async def test_active_review_memory_cannot_be_refreshed(
+    repository: QuarantineRepository, status: str
 ) -> None:
     capacity = Capacity(10, 10, 100_000)
     original = quarantine_item("q", bank="main", memory="m", digest="old")
     await repository.store(original, capacity, mode="memory", at="2026-01-01T00:00:00.000Z")
     async with repository.db.transaction() as tx:
-        await tx.execute(
-            "UPDATE quarantine_items SET status='review_in_progress' WHERE quarantine_id='q'"
-        )
+        await tx.execute("UPDATE quarantine_items SET status=? WHERE quarantine_id='q'", (status,))
     with pytest.raises(HttpError) as review:
         await repository.store(
             quarantine_item("new", bank="main", memory="m", digest="new"),
