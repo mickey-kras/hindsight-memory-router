@@ -136,6 +136,9 @@ class ReviewTx:
         if sql.startswith("UPDATE quarantine_items SET status='postponed'") and self.row:
             self.row["status"] = "postponed"
             self.row["updated_at"] = values[0]
+        elif sql.startswith("UPDATE quarantine_items SET status=?") and self.row:
+            self.row["status"] = values[0]
+            self.row["updated_at"] = values[1]
         elif sql.startswith("DELETE FROM quarantine_items"):
             self.row = None
 
@@ -213,6 +216,48 @@ async def test_stale_expired_claim_is_deleted_before_expired_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_side_effect_claim_is_not_stale_recovered() -> None:
+    tx = ReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "pending",
+            "kind": "retain_request",
+            "sha256": "a" * 64,
+            "updated_at": "2026-08-09T00:00:00.000Z",
+            "expires_at": "2040-01-01T00:00:00.000Z",
+            "encrypted_envelope": None,
+        }
+    )
+    repository = QuarantineRepository(ReviewDb(tx))  # type: ignore[arg-type]
+
+    await claim_review(
+        repository,
+        QID,
+        "retain_request",
+        "2026-08-10T00:00:00.000Z",
+        60,
+        True,
+        expected_sha256="a" * 64,
+        expected_updated_at="2026-08-09T00:00:00.000Z",
+    )
+    assert tx.row is not None
+    assert tx.row["status"] == "review_side_effect_started"
+
+    with pytest.raises(HttpError) as retry:
+        await claim_review(
+            repository,
+            QID,
+            "retain_request",
+            "2030-01-01T00:00:00.000Z",
+            60,
+            True,
+        )
+    assert retry.value.code == "quarantine_already_finalized"
+    assert tx.row is not None
+    assert tx.row["status"] == "review_side_effect_started"
+
+
+@pytest.mark.asyncio
 async def test_memory_approve_interrupts_claim_when_finish_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -250,3 +295,86 @@ async def test_memory_approve_interrupts_claim_when_finish_fails(
     claim.assert_awaited_once()
     finish.assert_awaited_once()
     interrupt.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_retain_finish_failure_cannot_replay_upstream_retain(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = {
+        "quarantine_id": QID,
+        "kind": "retain_request",
+        "reason": "suspicious_content",
+        "writer_id": "main",
+        "source": "http",
+        "status": "pending",
+        "sha256": "a" * 64,
+        "updated_at": "2026-08-09T00:00:00.000Z",
+        "encrypted": {"version": 1},
+    }
+    started = {**pending, "status": "review_side_effect_started"}
+    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, started]))
+    hindsight = SimpleNamespace(retain=AsyncMock())
+    limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
+    service = QuarantineAdminService(repository, hindsight, registry(), limits)
+    service._verify_exact = Mock(  # type: ignore[method-assign]
+        return_value={
+            "payload": {
+                "action": "retain",
+                "writer_id": "main",
+                "body": {"items": [{"content": "system prompt"}]},
+            }
+        }
+    )
+    claim = AsyncMock(return_value=pending)
+    finish = AsyncMock(side_effect=RuntimeError("finish failed"))
+    interrupt = AsyncMock()
+    monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
+    monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
+
+    with pytest.raises(RuntimeError, match="finish failed"):
+        await service.approve(QID, {"decrypted": {}})
+    hindsight.retain.assert_awaited_once()
+    interrupt.assert_awaited_once()
+
+    with pytest.raises(HttpError) as retry:
+        await service.approve(QID, {"decrypted": {}})
+    assert retry.value.code == "quarantine_already_finalized"
+    hindsight.retain.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reject_finish_failure_cannot_replay_invalidation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pending = {
+        "quarantine_id": QID,
+        "kind": "recalled_memory",
+        "status": "pending",
+        "sha256": "a" * 64,
+        "updated_at": "2026-08-09T00:00:00.000Z",
+        "source_bank": "main",
+        "source_memory_id": "m1",
+        "encrypted": {"version": 1},
+    }
+    started = {**pending, "status": "review_side_effect_started"}
+    repository = SimpleNamespace(get=AsyncMock(side_effect=[pending, started]))
+    hindsight = SimpleNamespace(invalidate_memory=AsyncMock())
+    service = QuarantineAdminService(repository, hindsight, registry(), SimpleNamespace())
+    claim = AsyncMock(return_value=pending)
+    finish = AsyncMock(side_effect=RuntimeError("finish failed"))
+    interrupt = AsyncMock()
+    monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "finish_reject_memory", finish)
+    monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
+
+    with pytest.raises(RuntimeError, match="finish failed"):
+        await service.reject(QID)
+    hindsight.invalidate_memory.assert_awaited_once()
+    interrupt.assert_awaited_once()
+
+    with pytest.raises(HttpError) as retry:
+        await service.reject(QID)
+    assert retry.value.code == "quarantine_already_finalized"
+    hindsight.invalidate_memory.assert_awaited_once()
