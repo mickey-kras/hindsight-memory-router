@@ -96,7 +96,9 @@ async def test_claim_interrupt_finish_approve_and_finish_reject(repo: Quarantine
     await interrupt_review(repo, claimed, "claim", RuntimeError("down"))
     assert (await repo.get("a"))["status"] == "pending"  # type: ignore[index]
 
-    claimed = await claim_review(repo, "a", "retain_request", "claim2")
+    claimed = await claim_review(repo, "a", "retain_request", "claim2", side_effect=True)
+    assert claimed["status"] == "pending"
+    assert (await repo.get("a"))["status"] == "review_side_effect_started"  # type: ignore[index]
     await finish_approve_retain(repo, "a", "claim2", {"x": 1})
     assert await repo.get("a") is None
 
@@ -108,7 +110,8 @@ async def test_claim_interrupt_finish_approve_and_finish_reject(repo: Quarantine
     assert (await repo.get("allowed"))["status"] == "reviewed_allowed"  # type: ignore[index]
 
     await add(repo, value("m", kind="recalled_memory"))
-    await claim_review(repo, "m", "recalled_memory", "claim")
+    await claim_review(repo, "m", "recalled_memory", "claim", side_effect=True)
+    assert (await repo.get("m"))["status"] == "review_side_effect_started"  # type: ignore[index]
     await finish_reject_memory(repo, "m", "claim")
     assert (await repo.get("m"))["status"] == "reviewed_blocked"  # type: ignore[index]
 
