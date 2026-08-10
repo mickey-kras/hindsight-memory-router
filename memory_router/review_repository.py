@@ -127,6 +127,7 @@ async def claim_review(
     *,
     expected_sha256: str | None = None,
     expected_updated_at: str | None = None,
+    side_effect: bool = False,
 ) -> dict[str, Any]:
     expired = False
     claimed: dict[str, Any] = {}
@@ -140,10 +141,19 @@ async def claim_review(
             _assert_reviewable(item, at)
             if item["kind"] != kind:
                 raise HttpError(409, "invalid_review_action", "invalid quarantine review action")
+            status = "review_side_effect_started" if side_effect else "review_in_progress"
             await tx.execute(
-                "UPDATE quarantine_items SET status='review_in_progress',updated_at=? WHERE quarantine_id=?",
-                (at, quarantine_id),
+                "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+                (status, at, quarantine_id),
             )
+            if side_effect:
+                await insert_event(
+                    tx,
+                    quarantine_id,
+                    "review_side_effect_started",
+                    at,
+                    {"previous_status": item["status"]},
+                )
             claimed = item
     if expired:
         raise HttpError(409, "quarantine_expired", "quarantine item has expired")
@@ -183,7 +193,9 @@ async def finish_approve_retain(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        item = await require_in_progress(tx, quarantine_id, at, expected_sha256=expected_sha256)
+        item = await require_side_effect_started(
+            tx, quarantine_id, at, expected_sha256=expected_sha256
+        )
         await tx.execute(
             "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
         )
@@ -214,7 +226,9 @@ async def finish_reject_memory(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        item = await require_in_progress(tx, quarantine_id, at, expected_sha256=expected_sha256)
+        item = await require_side_effect_started(
+            tx, quarantine_id, at, expected_sha256=expected_sha256
+        )
         await mark_recalled(tx, item, "reviewed_blocked", at)
 
 
@@ -318,8 +332,41 @@ async def require_in_progress(
     *,
     expected_sha256: str | None = None,
 ) -> dict[str, Any]:
+    return await _require_review_state(
+        tx,
+        quarantine_id,
+        at,
+        "review_in_progress",
+        expected_sha256=expected_sha256,
+    )
+
+
+async def require_side_effect_started(
+    tx: Any,
+    quarantine_id: str,
+    at: str,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    return await _require_review_state(
+        tx,
+        quarantine_id,
+        at,
+        "review_side_effect_started",
+        expected_sha256=expected_sha256,
+    )
+
+
+async def _require_review_state(
+    tx: Any,
+    quarantine_id: str,
+    at: str,
+    status: str,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
     item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
-    if not item or item["status"] != "review_in_progress" or item["updated_at"] != at:
+    if not item or item["status"] != status or item["updated_at"] != at:
         raise HttpError(
             409, "quarantine_review_changed", "quarantine item changed while review was in progress"
         )
