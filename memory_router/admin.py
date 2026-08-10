@@ -11,6 +11,7 @@ from .maintenance import cleanup, preview_cleanup
 from .policy import prepare_retain_body
 from .review_repository import (
     claim_review,
+    complete_side_effect,
     finish_approve_memory,
     finish_approve_retain,
     finish_reject_memory,
@@ -87,30 +88,46 @@ class QuarantineAdminService:
             approved_body = prepare_retain_body(
                 retain_body, writer_id, source, writer.write_bank, decision="approved"
             )
-            await self.limits.consume_retain(writer_id)
-            at = iso_now()
-            claimed = await claim_review(
-                self.repository,
-                quarantine_id,
-                "retain_request",
-                at,
-                self.review_stale_seconds,
-                True,
-                expected_sha256=str(item["sha256"]),
-                expected_updated_at=_optional_str(item.get("updated_at")),
-            )
-            try:
-                await self.hindsight.retain(writer.write_bank, approved_body)
+            details = {"writer_id": writer_id, "target_bank": writer.write_bank}
+            if item["status"] == "review_side_effect_completed":
+                await finish_approve_retain(
+                    self.repository,
+                    quarantine_id,
+                    str(item["updated_at"]),
+                    details,
+                    expected_sha256=str(item["sha256"]),
+                )
+            else:
+                await self.limits.consume_retain(writer_id)
+                at = iso_now()
+                claimed = await claim_review(
+                    self.repository,
+                    quarantine_id,
+                    "retain_request",
+                    at,
+                    self.review_stale_seconds,
+                    True,
+                    expected_sha256=str(item["sha256"]),
+                    expected_updated_at=_optional_str(item.get("updated_at")),
+                )
+                try:
+                    await self.hindsight.retain(writer.write_bank, approved_body)
+                except Exception as exc:
+                    await interrupt_review(self.repository, claimed, at, exc)
+                    raise
+                await complete_side_effect(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    expected_sha256=str(item["sha256"]),
+                )
                 await finish_approve_retain(
                     self.repository,
                     quarantine_id,
                     at,
-                    {"writer_id": writer_id, "target_bank": writer.write_bank},
+                    details,
                     expected_sha256=str(item["sha256"]),
                 )
-            except Exception as exc:
-                await interrupt_review(self.repository, claimed, at, exc)
-                raise
             return {
                 "approved": True,
                 "quarantine_id": quarantine_id,
@@ -178,22 +195,39 @@ class QuarantineAdminService:
                 raise HttpError(
                     409, "quarantine_source_missing", "recalled memory source metadata is missing"
                 )
-            at = iso_now()
-            claimed = await claim_review(
-                self.repository,
-                quarantine_id,
-                "recalled_memory",
-                at,
-                self.review_stale_seconds,
-                True,
-                expected_sha256=str(item["sha256"]),
-                expected_updated_at=_optional_str(item.get("updated_at")),
-            )
-            try:
-                await self.hindsight.invalidate_memory(
-                    bank_id,
-                    memory_id,
-                    f"Rejected by memory-router quarantine review {quarantine_id}",
+            if item["status"] == "review_side_effect_completed":
+                await finish_reject_memory(
+                    self.repository,
+                    quarantine_id,
+                    str(item["updated_at"]),
+                    expected_sha256=str(item["sha256"]),
+                )
+            else:
+                at = iso_now()
+                claimed = await claim_review(
+                    self.repository,
+                    quarantine_id,
+                    "recalled_memory",
+                    at,
+                    self.review_stale_seconds,
+                    True,
+                    expected_sha256=str(item["sha256"]),
+                    expected_updated_at=_optional_str(item.get("updated_at")),
+                )
+                try:
+                    await self.hindsight.invalidate_memory(
+                        bank_id,
+                        memory_id,
+                        f"Rejected by memory-router quarantine review {quarantine_id}",
+                    )
+                except Exception as exc:
+                    await interrupt_review(self.repository, claimed, at, exc)
+                    raise
+                await complete_side_effect(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    expected_sha256=str(item["sha256"]),
                 )
                 await finish_reject_memory(
                     self.repository,
@@ -201,9 +235,6 @@ class QuarantineAdminService:
                     at,
                     expected_sha256=str(item["sha256"]),
                 )
-            except Exception as exc:
-                await interrupt_review(self.repository, claimed, at, exc)
-                raise
             return {
                 "reviewed": True,
                 "allowed": False,
@@ -285,7 +316,12 @@ class QuarantineAdminService:
 
     async def _require_claim_candidate(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
-        if item["status"] not in {"pending", "postponed", "review_in_progress"}:
+        if item["status"] not in {
+            "pending",
+            "postponed",
+            "review_in_progress",
+            "review_side_effect_completed",
+        }:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
