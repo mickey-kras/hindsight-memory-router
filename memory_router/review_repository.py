@@ -160,12 +160,34 @@ async def claim_review(
     return claimed
 
 
+async def complete_side_effect(
+    repository: QuarantineRepository,
+    quarantine_id: str,
+    at: str,
+    *,
+    expected_sha256: str | None = None,
+) -> None:
+    async with repository.db.transaction() as tx:
+        item = await require_side_effect_started(
+            tx, quarantine_id, at, expected_sha256=expected_sha256
+        )
+        await tx.execute(
+            "UPDATE quarantine_items SET status='review_side_effect_completed',updated_at=? WHERE quarantine_id=?",
+            (at, quarantine_id),
+        )
+        await insert_event(tx, quarantine_id, "review_side_effect_completed", at, {})
+
+
 async def interrupt_review(
     repository: QuarantineRepository, claimed: dict[str, Any], at: str, error: Exception
 ) -> None:
     async with repository.db.transaction() as tx:
         current = stored(await tx.fetchone(_item_query(tx), (claimed["quarantine_id"],)))
-        if not current or current["status"] != "review_in_progress" or current["updated_at"] != at:
+        if (
+            not current
+            or current["status"] not in {"review_in_progress", "review_side_effect_started"}
+            or current["updated_at"] != at
+        ):
             return
         status = str(claimed["status"])
         if status not in {"pending", "postponed"}:
@@ -193,7 +215,7 @@ async def finish_approve_retain(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        item = await require_side_effect_started(
+        item = await require_side_effect_completed(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
         await tx.execute(
@@ -226,7 +248,7 @@ async def finish_reject_memory(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        item = await require_side_effect_started(
+        item = await require_side_effect_completed(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
         await mark_recalled(tx, item, "reviewed_blocked", at)
@@ -353,6 +375,22 @@ async def require_side_effect_started(
         quarantine_id,
         at,
         "review_side_effect_started",
+        expected_sha256=expected_sha256,
+    )
+
+
+async def require_side_effect_completed(
+    tx: Any,
+    quarantine_id: str,
+    at: str,
+    *,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    return await _require_review_state(
+        tx,
+        quarantine_id,
+        at,
+        "review_side_effect_completed",
         expected_sha256=expected_sha256,
     )
 
