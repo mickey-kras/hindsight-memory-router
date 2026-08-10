@@ -7,6 +7,7 @@ from typing import Any, cast
 from .canonical import sha256_hex
 from .envelope import QUARANTINE_ID_RE, canonical_decrypted, parse_decrypted
 from .errors import HttpError
+from .hindsight import HindsightGatewayError
 from .maintenance import cleanup, preview_cleanup
 from .policy import prepare_retain_body
 from .review_repository import (
@@ -113,7 +114,8 @@ class QuarantineAdminService:
                 try:
                     await self.hindsight.retain(writer.write_bank, approved_body)
                 except Exception as exc:
-                    await interrupt_review(self.repository, claimed, at, exc)
+                    if _side_effect_definitely_failed(exc):
+                        await interrupt_review(self.repository, claimed, at, exc)
                     raise
                 await complete_side_effect(
                     self.repository,
@@ -221,7 +223,8 @@ class QuarantineAdminService:
                         f"Rejected by memory-router quarantine review {quarantine_id}",
                     )
                 except Exception as exc:
-                    await interrupt_review(self.repository, claimed, at, exc)
+                    if _side_effect_definitely_failed(exc):
+                        await interrupt_review(self.repository, claimed, at, exc)
                     raise
                 await complete_side_effect(
                     self.repository,
@@ -368,6 +371,16 @@ class QuarantineAdminService:
                     "decrypted quarantine metadata differs from the stored item",
                 )
         return decrypted
+
+
+def _side_effect_definitely_failed(error: Exception) -> bool:
+    if not isinstance(error, HindsightGatewayError):
+        return True
+    return (
+        error.kind == "http"
+        and error.upstream_status is not None
+        and 400 <= error.upstream_status < 500
+    )
 
 
 def _optional_str(value: Any) -> str | None:
