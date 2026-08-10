@@ -124,10 +124,10 @@ async def claim_review(
     kind: str,
     at: str,
     stale_seconds: int | None = None,
+    side_effect: bool = False,
     *,
     expected_sha256: str | None = None,
     expected_updated_at: str | None = None,
-    side_effect: bool = False,
 ) -> dict[str, Any]:
     expired = False
     claimed: dict[str, Any] = {}
