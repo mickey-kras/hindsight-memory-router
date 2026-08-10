@@ -19,12 +19,9 @@
   },
   "devDependencies": {
     "@redocly/cli": "2.43.2",
-    "aislop": "0.14.0"
+    "aislop": "0.14.1"
   },
   "overrides": {
-    "aislop": {
-      "adm-zip": "0.6.0"
-    },
     "postcss": {
       "nanoid": "5.1.16"
     }
