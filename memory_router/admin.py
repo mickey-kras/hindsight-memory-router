@@ -89,24 +89,28 @@ class QuarantineAdminService:
             )
             await self.limits.consume_retain(writer_id)
             at = iso_now()
-            await claim_review(
+            claimed = await claim_review(
                 self.repository,
                 quarantine_id,
                 "retain_request",
                 at,
                 self.review_stale_seconds,
+                True,
                 expected_sha256=str(item["sha256"]),
                 expected_updated_at=_optional_str(item.get("updated_at")),
-                side_effect=True,
             )
-            await self.hindsight.retain(writer.write_bank, approved_body)
-            await finish_approve_retain(
-                self.repository,
-                quarantine_id,
-                at,
-                {"writer_id": writer_id, "target_bank": writer.write_bank},
-                expected_sha256=str(item["sha256"]),
-            )
+            try:
+                await self.hindsight.retain(writer.write_bank, approved_body)
+                await finish_approve_retain(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    {"writer_id": writer_id, "target_bank": writer.write_bank},
+                    expected_sha256=str(item["sha256"]),
+                )
+            except Exception as exc:
+                await interrupt_review(self.repository, claimed, at, exc)
+                raise
             return {
                 "approved": True,
                 "quarantine_id": quarantine_id,
@@ -175,27 +179,31 @@ class QuarantineAdminService:
                     409, "quarantine_source_missing", "recalled memory source metadata is missing"
                 )
             at = iso_now()
-            await claim_review(
+            claimed = await claim_review(
                 self.repository,
                 quarantine_id,
                 "recalled_memory",
                 at,
                 self.review_stale_seconds,
+                True,
                 expected_sha256=str(item["sha256"]),
                 expected_updated_at=_optional_str(item.get("updated_at")),
-                side_effect=True,
             )
-            await self.hindsight.invalidate_memory(
-                bank_id,
-                memory_id,
-                f"Rejected by memory-router quarantine review {quarantine_id}",
-            )
-            await finish_reject_memory(
-                self.repository,
-                quarantine_id,
-                at,
-                expected_sha256=str(item["sha256"]),
-            )
+            try:
+                await self.hindsight.invalidate_memory(
+                    bank_id,
+                    memory_id,
+                    f"Rejected by memory-router quarantine review {quarantine_id}",
+                )
+                await finish_reject_memory(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    expected_sha256=str(item["sha256"]),
+                )
+            except Exception as exc:
+                await interrupt_review(self.repository, claimed, at, exc)
+                raise
             return {
                 "reviewed": True,
                 "allowed": False,
