@@ -8,6 +8,7 @@ import pytest
 from memory_router import admin as admin_module
 from memory_router.canonical import sha256_hex
 from memory_router.envelope import canonical_decrypted
+from memory_router.hindsight import HindsightGatewayError
 from memory_router.models import WriterRegistry
 
 QID = "q_item_0123456789abcdef"
@@ -114,6 +115,33 @@ async def test_retain_upstream_failure_restores_side_effect(
         await svc.approve(QID, {"decrypted": decrypted})
 
     interrupt.assert_awaited_once()
+    complete.assert_not_awaited()
+    finish.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_retain_ambiguous_timeout_is_not_restored_for_replay(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item, decrypted = retain_item()
+    svc, _, hindsight, _ = service(item)
+    claim = AsyncMock(return_value=item)
+    complete = AsyncMock()
+    finish = AsyncMock()
+    interrupt = AsyncMock()
+    monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "complete_side_effect", complete)
+    monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
+    monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
+    hindsight.retain.side_effect = HindsightGatewayError(
+        "timeout", operation="retain", method="POST", timeout_ms=10_000
+    )
+
+    with pytest.raises(HindsightGatewayError) as exc:
+        await svc.approve(QID, {"decrypted": decrypted})
+
+    assert exc.value.kind == "timeout"
+    interrupt.assert_not_awaited()
     complete.assert_not_awaited()
     finish.assert_not_awaited()
 
