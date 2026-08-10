@@ -157,9 +157,11 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     item, decrypted = exact_item("retain_request", payload)
     svc, repo, hindsight, limits = service(item)
     claim = AsyncMock(return_value=item)
+    complete = AsyncMock()
     finish = AsyncMock()
     interrupt = AsyncMock()
     monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "complete_side_effect", complete)
     monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
     result = await svc.approve(QID, {"decrypted": decrypted})
@@ -179,6 +181,7 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
         "expected_sha256": item["sha256"],
         "expected_updated_at": item["updated_at"],
     }
+    complete.assert_awaited_once()
     finish.assert_awaited_once()
 
     for bad_payload, code in (
@@ -266,16 +269,19 @@ async def test_reject_memory_and_request_paths(monkeypatch: pytest.MonkeyPatch) 
     memory, _ = exact_item("recalled_memory", {}, source_bank="main", source_memory_id="m1")
     svc, repo, hindsight, _ = service(memory)
     claim = AsyncMock(return_value=memory)
+    complete = AsyncMock()
     finish = AsyncMock()
     interrupt = AsyncMock()
     remove = AsyncMock()
     monkeypatch.setattr(admin_module, "claim_review", claim)
+    monkeypatch.setattr(admin_module, "complete_side_effect", complete)
     monkeypatch.setattr(admin_module, "finish_reject_memory", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
     monkeypatch.setattr(admin_module, "remove", remove)
     result = await svc.reject(QID)
     assert result["allowed"] is False
     hindsight.invalidate_memory.assert_awaited_once()
+    complete.assert_awaited_once()
     finish.assert_awaited_once()
 
     repo.get.return_value = {**memory, "source_bank": None}
