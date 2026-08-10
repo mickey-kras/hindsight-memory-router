@@ -168,7 +168,7 @@ async def complete_side_effect(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        item = await require_side_effect_started(
+        await require_side_effect_started(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
         await tx.execute(
