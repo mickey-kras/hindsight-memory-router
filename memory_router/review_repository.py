@@ -168,9 +168,7 @@ async def complete_side_effect(
     expected_sha256: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
-        await require_side_effect_started(
-            tx, quarantine_id, at, expected_sha256=expected_sha256
-        )
+        await require_side_effect_started(tx, quarantine_id, at, expected_sha256=expected_sha256)
         await tx.execute(
             "UPDATE quarantine_items SET status='review_side_effect_completed',updated_at=? WHERE quarantine_id=?",
             (at, quarantine_id),
