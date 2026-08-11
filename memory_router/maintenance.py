@@ -146,7 +146,10 @@ def cleanup_params(
     clauses = [
         "status IN ('pending','postponed')"
         if scope == "pending"
-        else "status NOT IN ('review_in_progress','reviewed_allowed','reviewed_blocked')"
+        else (
+            "status NOT IN ('review_in_progress','review_side_effect_started',"
+            "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
+        )
     ]
     params: list[Any] = []
     if selected:
