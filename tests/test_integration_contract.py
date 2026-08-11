@@ -69,11 +69,15 @@ def test_router_route_surface_is_declared_by_integration_contract() -> None:
                 pattern = _string_arg(node)
                 if pattern is not None:
                     regex_paths.add(pattern)
-            if isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Name):
-                if node.func.value.id == "app" and node.func.attr in {"get", "api_route"}:
-                    path = _string_arg(node)
-                    if path is not None:
-                        decorated_paths.add(path)
+            if (
+                isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "app"
+                and node.func.attr in {"get", "api_route"}
+            ):
+                path = _string_arg(node)
+                if path is not None:
+                    decorated_paths.add(path)
 
     assert exact_paths == EXPECTED_EXACT_PATHS
     assert regex_paths == EXPECTED_REGEX_PATHS
