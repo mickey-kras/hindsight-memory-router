@@ -38,9 +38,7 @@ DIRECT_ROUTE_COVERAGE = {
     ("GET", "/ready"): "router readiness and internal Hindsight become reachable",
 }
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
-ADMIN_ITEM_REGEX = (
-    "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?"
-)
+ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?"
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
@@ -67,9 +65,7 @@ DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {"method=='GET'", "pathname=='/version'"}
     ): "authentication and network boundaries hold",
-    frozenset(
-        {BANK_MEMORY_REGEX, "method=='POST'"}
-    ): "known writer retain succeeds",
+    frozenset({BANK_MEMORY_REGEX, "method=='POST'"}): "known writer retain succeeds",
     frozenset(
         {BANK_MEMORY_REGEX, "method=='POST'", "action=='recall'"}
     ): "safe recall endpoint succeeds",
@@ -250,8 +246,7 @@ def _route_handler_fingerprint(tree: ast.AST) -> str:
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
         if any(
-            isinstance(decorator, ast.Call)
-            and _http_decorator_methods(decorator) is not None
+            isinstance(decorator, ast.Call) and _http_decorator_methods(decorator) is not None
             for decorator in node.decorator_list
         ):
             route_functions.append(ast.dump(node, include_attributes=False))
@@ -316,8 +311,6 @@ def test_every_declared_operation_and_workflow_has_integration_smoke_coverage() 
         | set(DISPATCH_BRANCH_COVERAGE.values())
         | REQUIRED_WORKFLOW_CHECKS
     )
-    missing = sorted(
-        check for check in required_checks if f'begin_check "{check}"' not in smoke
-    )
+    missing = sorted(check for check in required_checks if f'begin_check "{check}"' not in smoke)
 
     assert missing == []
