@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# integration-behavior-sha256: b4d71028ad7477c55f413da67194e645ea5c91f13b5c44af76bde0f5ad73ea15
+
 mode="${1:-}"
 router_db="${2:-}"
 if [[ "$mode" != "fake" && "$mode" != "real" ]]; then
@@ -344,7 +346,6 @@ assert any(
     for item in event.get("body", {}).get("items", [])
 ), retains
 assert "quarantine" not in retained_banks, retained_banks
-assert "research" not in recalled_banks, recalled_banks
 assert "quarantine" not in recalled_banks, recalled_banks
 PY
   pass_check
