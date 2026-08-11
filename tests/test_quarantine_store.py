@@ -212,7 +212,7 @@ async def test_put_rejects_oversize_and_reviewed_duplicate() -> None:
 
 @pytest.mark.asyncio
 async def test_oversize_is_rejected_before_encrypt(monkeypatch: pytest.MonkeyPatch) -> None:
-    store, repository, _ = store_fixture(QuarantineLimits(max_item_bytes=1))
+    store, repository, limiter = store_fixture(QuarantineLimits(max_item_bytes=1))
     encrypt = MagicMock()
     monkeypatch.setattr(store, "_encrypt", encrypt)
     with pytest.raises(HttpError) as too_large:
@@ -220,6 +220,8 @@ async def test_oversize_is_rejected_before_encrypt(monkeypatch: pytest.MonkeyPat
     assert too_large.value.code == "quarantine_item_too_large"
     encrypt.assert_not_called()
     repository.store.assert_not_awaited()
+    assert not limiter.session.count_calls
+    assert not limiter.session.distinct_calls
 
 
 @pytest.mark.asyncio
@@ -280,6 +282,55 @@ async def test_rate_limit_failure_happens_before_encryption(
     assert limited.value.code == "quarantine_rate_limited"
     encrypt.assert_not_called()
     repository.store.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_oversize_preflight_preserves_rate_budget_for_bounded_placeholder() -> None:
+    database = FakePostgresDatabase()
+    limiter = PostgresRateLimiter(database)
+    repository = SimpleNamespace(
+        get=AsyncMock(return_value=None),
+        find_memory_state=AsyncMock(return_value=None),
+        store=AsyncMock(),
+    )
+    store = QuarantineStore(
+        public_key(),
+        repository,
+        QuarantineLimits(
+            max_item_bytes=2_048,
+            rate_limit_max=1,
+            rate_limit_global_max=1,
+            distinct_family_limit_max=0,
+        ),
+        limiter,
+    )
+    oversized = base_input(
+        "recall_request",
+        dedupeKey="oversized",
+        payload={"query": "system prompt", "padding": "x" * 4_096},
+    )
+
+    with pytest.raises(HttpError) as too_large:
+        await store.put(oversized)
+    assert too_large.value.code == "quarantine_item_too_large"
+    assert database.state["events"] == []
+
+    placeholder = base_input(
+        "security_event",
+        reason="suspicious_query",
+        dedupeKey="bounded-placeholder",
+        payload={
+            "action": "recall_request_too_large",
+            "writer_id": "main",
+            "content_sha256": "a" * 64,
+            "findings": [{"matched": "system prompt", "reason": "prompt_injection"}],
+        },
+    )
+    result = await store.put(placeholder)
+
+    assert result["quarantine_id"].startswith("q_security")
+    assert len(database.state["events"]) == 2  # type: ignore[arg-type]
+    repository.store.assert_awaited_once()
 
 
 @pytest.mark.asyncio
