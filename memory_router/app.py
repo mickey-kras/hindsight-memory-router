@@ -374,18 +374,34 @@ async def health_live() -> dict[str, str]:
     return {"status": "healthy"}
 
 
+async def _database_health(repository: QuarantineRepository) -> bool:
+    try:
+        await repository.ping()
+    except Exception:
+        return False
+    return True
+
+
+async def _hindsight_health(hindsight: HindsightGateway) -> tuple[bool, Any]:
+    try:
+        return True, await hindsight.health()
+    except Exception:
+        return False, None
+
+
 async def _health_ready_response() -> Response:
     try:
         repository = _require_runtime(runtime.repository, "repository")
         hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
-        database_result, hindsight_result = await asyncio.gather(
-            repository.ping(), hindsight.health(), return_exceptions=True
+        database_healthy, hindsight_check = await asyncio.gather(
+            _database_health(repository), _hindsight_health(hindsight)
         )
     except Exception:
         return JSONResponse({"status": "unhealthy"}, status_code=503)
-    if isinstance(database_result, Exception) or isinstance(hindsight_result, Exception):
+    hindsight_healthy, hindsight_response = hindsight_check
+    if not database_healthy or not hindsight_healthy:
         return JSONResponse({"status": "unhealthy"}, status_code=503)
-    return JSONResponse(hindsight_result)
+    return JSONResponse(hindsight_response)
 
 
 @app.get("/health")
