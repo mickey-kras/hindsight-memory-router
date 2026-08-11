@@ -117,18 +117,27 @@ jobs:
       - name: Default Compose smoke
         run: bash tests/integration/default-compose-smoke.sh
 
-      - name: Fake Hindsight compose smoke
+      - name: Fake Hindsight router-storage parity
         id: fake-smoke
         run: |
-          set -o pipefail
-          bash tests/integration/smoke.sh fake 2>&1 | tee fake-smoke.log
+          set -uo pipefail
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake sqlite > >(tee fake-sqlite-smoke.log) 2>&1 &
+          sqlite_pid=$!
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake postgres > >(tee fake-postgres-smoke.log) 2>&1 &
+          postgres_pid=$!
+          status=0
+          wait "$sqlite_pid" || status=1
+          wait "$postgres_pid" || status=1
+          exit "$status"
 
       - name: Upload fake smoke diagnostics
         if: failure() && steps.fake-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: fake-smoke-diagnostics
-          path: fake-smoke.log
+          path: |
+            fake-sqlite-smoke.log
+            fake-postgres-smoke.log
           if-no-files-found: error
 
       - name: Real Hindsight compose smoke
