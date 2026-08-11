@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: b4d71028ad7477c55f413da67194e645ea5c91f13b5c44af76bde0f5ad73ea15
+# integration-behavior-sha256: 3452b511f1f7ea34bf21d63eb9fa0ca447abf63a5019116b8cc601ede049a522
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -118,18 +118,36 @@ begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
 
+begin_check "router liveness is dependency independent"
+for _ in {1..60}; do
+  if curl -fsS "${router_url}/health/live" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+live_response="$(curl -fsS "${router_url}/health/live")"
+printf '%s' "$live_response" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"healthy"}' || fail_check "router /health/live response was unexpected"
+pass_check
+
 begin_check "router readiness and internal Hindsight become reachable"
 for _ in {1..60}; do
   if curl -fsS "${router_url}/health" >/dev/null 2>&1 && \
+    curl -fsS "${router_url}/health/ready" >/dev/null 2>&1 && \
     curl -fsS "${router_url}/ready" >/dev/null 2>&1 && \
     docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-curl -fsS "${router_url}/health" >/dev/null
-ready_response="$(curl -fsS "${router_url}/ready")"
-printf '%s' "$ready_response" | grep -q '"status":"ready"' || fail_check "router /ready did not report ready"
+health_response="$(curl -fsS "${router_url}/health")"
+ready_response="$(curl -fsS "${router_url}/health/ready")"
+legacy_ready_response="$(curl -fsS "${router_url}/ready")"
+[[ "$health_response" == "$ready_response" ]] || fail_check "/health and /health/ready responses differ"
+[[ "$health_response" == "$legacy_ready_response" ]] || fail_check "/health and deprecated /ready responses differ"
+printf '%s' "$health_response" | grep -q '"status"' || fail_check "router readiness response is not Hindsight-compatible health JSON"
+if printf '%s' "$health_response" | grep -q 'router_health'; then
+  fail_check "router readiness leaked router_health internals"
+fi
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
