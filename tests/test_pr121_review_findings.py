@@ -469,4 +469,7 @@ def test_cleanup_all_deliberately_preserves_reviewed_decisions() -> None:
     from memory_router.maintenance import cleanup_params
 
     where, _ = cleanup_params("all", None, None)
-    assert where == "status NOT IN ('review_in_progress','reviewed_allowed','reviewed_blocked')"
+    assert where == (
+        "status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
+    )
