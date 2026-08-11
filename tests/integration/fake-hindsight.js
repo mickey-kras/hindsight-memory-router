@@ -53,7 +53,11 @@ createServer(async (req, res) => {
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
 
     if (method === "GET" && url.pathname === "/health") {
-      return send(res, 200, { status: "healthy", service: "fake-hindsight" });
+      return send(res, 200, {
+        status: "healthy",
+        database: "connected",
+        service: "fake-hindsight",
+      });
     }
 
     if (method === "GET" && url.pathname === "/version") {
