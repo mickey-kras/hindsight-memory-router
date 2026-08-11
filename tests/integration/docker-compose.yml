@@ -9,7 +9,7 @@ services:
       - "8888"
     volumes:
       - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
-      - ./tmp/fake/state:/state
+      - ${FAKE_HINDSIGHT_STATE_DIR:-./tmp/fake-sqlite/state}:/state
     networks:
       - internal
 
@@ -22,17 +22,17 @@ services:
       MEMORY_ROUTER_DEPLOYMENT_MODE: single
       MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "false"
       MEMORY_ROUTER_TOKEN: test-router-token
-      MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-token
-      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-token
-      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-token
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-read-token
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-cleanup-token
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
       QUARANTINE_DATABASE_URL: sqlite:/state/quarantine.db
     ports:
-      - "127.0.0.1:8890:8890"
+      - "127.0.0.1:${MEMORY_ROUTER_TEST_PORT:-8890}:8890"
     volumes:
-      - ./tmp/fake/quarantine:/state
+      - ${QUARANTINE_STATE_DIR:-./tmp/fake-sqlite/quarantine}:/state
     healthcheck:
       test:
         [
