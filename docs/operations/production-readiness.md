@@ -16,6 +16,7 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Quarantine capacity/dedupe/rate limits | Ready | Atomic storage limits and request-family controls |
 | Multi-bank recall degradation | Ready | Typed per-bank failure isolation |
 | Provider response validation | Ready | Size, JSON, depth, finite-number and response-shape checks |
+| Health/readiness contract | Ready | `/health/live` is router liveness; `/health` and `/health/ready` require router storage + Hindsight health |
 | Review concurrency | Ready | Snapshot checks and review claims |
 | Non-idempotent review side-effect protection | Ready | Explicit side-effect checkpoint states prevent blind replay |
 | Ambiguous review side-effect reconciliation | Blocked | No supported transition out of `review_side_effect_started` after an ambiguous provider outcome |
@@ -23,7 +24,6 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Build/publish artifact identity | Blocked | Trivy scans one build; publish jobs rebuild independently before pushing/signing |
 | SonarQube Community gate | Pending | Planned static quality gate on `main` is not present |
 | Structured logging / centralized logs | Pending | Adopt structured JSON logging with Grafana Loki + Grafana |
-| Provider health telemetry | Needs improvement | `/ready` checks quarantine storage only |
 | Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
 
 ## Blocker: ambiguous review side-effect reconciliation
@@ -105,18 +105,20 @@ Use Loki/Grafana for searchable retention, dashboards, and alerts around authent
 
 Metrics and tracing remain separate follow-up concerns rather than being coupled to the logging implementation.
 
-## Readiness and provider telemetry
+## Health and operational telemetry
 
-Current readiness semantics are:
+Health endpoint semantics are now complete:
 
 ```text
-/health -> process is alive
-/ready  -> quarantine database is reachable
+/health/live  -> router process/event-loop liveness only
+/health/ready -> router quarantine storage + Hindsight /health
+/health       -> exact alias of /health/ready
+/ready        -> deprecated alias of /health/ready
 ```
 
-Hindsight availability is not part of `/ready`. This is compatible with recall's deliberate partial-degradation behavior, but production operations still need a separate provider-health signal because valid retain calls cannot succeed while Hindsight is unavailable.
+The readiness checks run router storage and Hindsight health concurrently. Success returns the validated Hindsight `/health` JSON unchanged; either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
 
-Recommended telemetry includes:
+Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
 - Hindsight availability and latency;
 - degraded recall bank count;
@@ -137,7 +139,6 @@ Work through unresolved items in this order:
 3. provenance source correction;
 4. SonarQube Community gate;
 5. structured JSON logging + Grafana Loki/Grafana;
-6. provider health telemetry;
-7. production metrics and alerts.
+6. production metrics and alerts.
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.
