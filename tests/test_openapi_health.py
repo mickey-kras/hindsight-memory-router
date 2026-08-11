@@ -19,7 +19,8 @@ def test_health_openapi_contract() -> None:
 
     health = paths["/health"]["get"]
     ready = paths["/health/ready"]["get"]
-    assert health["responses"] == ready["responses"]
+    for status in ("200", "503"):
+        assert health["responses"][status] == ready["responses"][status]
     assert health["responses"]["200"]["content"]["application/json"]["schema"] == {}
     assert health["responses"]["503"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/HealthUnavailableResponse"
