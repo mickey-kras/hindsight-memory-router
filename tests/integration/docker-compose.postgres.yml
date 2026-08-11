@@ -1,4 +1,18 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: quarantine
+      POSTGRES_USER: quarantine
+      POSTGRES_PASSWORD: quarantine
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quarantine -d quarantine"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
   hindsight:
     image: node:26-alpine
     working_dir: /workspace
@@ -9,14 +23,17 @@ services:
       - "8888"
     volumes:
       - ./fake-hindsight.js:/workspace/fake-hindsight.js:ro
-      - ${FAKE_HINDSIGHT_STATE_DIR:-./tmp/fake-sqlite/state}:/state
+      - ${FAKE_HINDSIGHT_STATE_DIR:-./tmp/fake-postgres/state}:/state
     networks:
       - internal
 
   memory-router:
     image: hindsight-memory-router:ci
     depends_on:
-      - hindsight
+      postgres:
+        condition: service_healthy
+      hindsight:
+        condition: service_started
     environment:
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_DEPLOYMENT_MODE: single
@@ -28,11 +45,9 @@ services:
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
-      QUARANTINE_DATABASE_URL: sqlite:/state/quarantine.db
+      QUARANTINE_DATABASE_URL: postgresql://quarantine:quarantine@postgres:5432/quarantine
     ports:
-      - "127.0.0.1:${MEMORY_ROUTER_TEST_PORT:-8890}:8890"
-    volumes:
-      - ${QUARANTINE_STATE_DIR:-./tmp/fake-sqlite/quarantine}:/state
+      - "127.0.0.1:${MEMORY_ROUTER_TEST_PORT:-8891}:8890"
     healthcheck:
       test:
         [
