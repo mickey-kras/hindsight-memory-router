@@ -48,6 +48,7 @@ class QuarantineStore:
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
         quarantine_id = self._resolve_id(input_)
+        self._assert_item_size(input_, quarantine_id)
         existing_for_charge = await self.repository.get(quarantine_id)
         known = await self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
@@ -72,7 +73,6 @@ class QuarantineStore:
                     "matching quarantine item is already being reviewed",
                 )
 
-            self._assert_item_size(input_, quarantine_id)
             encrypted = self._encrypt(input_, quarantine_id)
             item = self._build_item(input_, quarantine_id, encrypted)
             mode = (
