@@ -369,19 +369,34 @@ async def _admin_rate(method: str) -> None:
         raise
 
 
+@app.get("/health/live")
+async def health_live() -> dict[str, str]:
+    return {"status": "healthy"}
+
+
+async def _health_ready_response() -> Response:
+    try:
+        repository = _require_runtime(runtime.repository, "repository")
+        hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
+        database_result, hindsight_result = await asyncio.gather(
+            repository.ping(), hindsight.health(), return_exceptions=True
+        )
+    except Exception:
+        return JSONResponse({"status": "unhealthy"}, status_code=503)
+    if isinstance(database_result, Exception) or isinstance(hindsight_result, Exception):
+        return JSONResponse({"status": "unhealthy"}, status_code=503)
+    return JSONResponse(hindsight_result)
+
+
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "healthy", "service": "memory-router"}
+@app.get("/health/ready")
+async def health_ready() -> Response:
+    return await _health_ready_response()
 
 
 @app.get("/ready")
 async def ready() -> Response:
-    try:
-        repository = _require_runtime(runtime.repository, "repository")
-        await repository.ping()
-        return JSONResponse({"status": "ready", "service": "memory-router"})
-    except Exception:
-        return JSONResponse({"status": "not_ready", "service": "memory-router"}, status_code=503)
+    return await _health_ready_response()
 
 
 @app.api_route(
