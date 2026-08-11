@@ -33,6 +33,8 @@ EXPECTED_CATCH_ALL_METHODS = {
 }
 DIRECT_ROUTE_COVERAGE = {
     ("GET", "/health"): "router readiness and internal Hindsight become reachable",
+    ("GET", "/health/live"): "router liveness is dependency independent",
+    ("GET", "/health/ready"): "router readiness and internal Hindsight become reachable",
     ("GET", "/ready"): "router readiness and internal Hindsight become reachable",
 }
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
@@ -78,7 +80,7 @@ REQUIRED_WORKFLOW_CHECKS = {
 }
 INTEGRATION_BEHAVIOR_PATHS = {APP_PATH, POLICY_PATH, ADMIN_PATH}
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
-ROUTE_HANDLER_AST_SHA256 = "8fadbd619c6033ada8f9ca7eace9699a8af18cb8501ab21cebbfc099b16cb3a2"
+ROUTE_HANDLER_AST_SHA256 = "a8e2486627cb3acf3c20942edd059296ab6bd62bb3c7b588704cb1b055f21eb8"
 
 
 def _string_arg(call: ast.Call) -> str | None:

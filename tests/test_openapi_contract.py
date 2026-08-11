@@ -6,6 +6,8 @@ import pathlib
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
 EXPECTED_ROUTES = {
     "/health": {"get"},
+    "/health/live": {"get"},
+    "/health/ready": {"get"},
     "/ready": {"get"},
     "/version": {"get"},
     "/v1/default/banks/{writer_id}/memories": {"post"},
@@ -38,6 +40,8 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     source = pathlib.Path("memory_router/app.py").read_text()
     markers = {
         "/health": '@app.get("/health")',
+        "/health/live": '@app.get("/health/live")',
+        "/health/ready": '@app.get("/health/ready")',
         "/ready": '@app.get("/ready")',
         "/version": 'pathname == "/version"',
         "/v1/default/banks/{writer_id}/memories": r"/v1/default/banks/([^/]+)/memories(?:/(recall))?",

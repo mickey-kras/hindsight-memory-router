@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from .canonical import canonical_json
 from .errors import HttpError
@@ -17,6 +17,13 @@ from .observability import current_request_id
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
+
+
+class _HindsightHealthResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", strict=True)
+
+    status: Literal["healthy"]
+    database: Literal["connected"]
 
 
 class HindsightGatewayError(HttpError):
@@ -107,8 +114,15 @@ class HindsightGateway:
     async def close(self) -> None:
         await self.client.aclose()
 
-    async def health(self) -> Any:
-        return await self._request("health", "GET", "/health")
+    async def health(self) -> dict[str, Any]:
+        value = await self._request("health", "GET", "/health")
+        try:
+            _HindsightHealthResponse.model_validate(value)
+        except ValidationError as exc:
+            raise HindsightGatewayError(
+                "invalid-response", operation="health", method="GET"
+            ) from exc
+        return cast(dict[str, Any], value)
 
     async def version(self) -> Any:
         return await self._request("version", "GET", "/version")
