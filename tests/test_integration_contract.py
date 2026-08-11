@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import ast
 import hashlib
-import os
-import subprocess
 from pathlib import Path
 
 APP_PATH = Path("memory_router/app.py")
@@ -79,6 +77,7 @@ REQUIRED_WORKFLOW_CHECKS = {
     "recalled suspicious memory stays blocked after reject and invalidates upstream",
 }
 INTEGRATION_BEHAVIOR_PATHS = {APP_PATH, POLICY_PATH, ADMIN_PATH}
+INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
 ROUTE_HANDLER_AST_SHA256 = "ebe4707e5bc285d354f7d8bf8fe2f020c3f1a2cb9b94699a7ab3eb10e39e6321"
 
 
@@ -256,23 +255,18 @@ def _route_handler_fingerprint(tree: ast.AST) -> str:
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _pr_changed_files() -> set[Path] | None:
-    base_ref = os.environ.get("GITHUB_BASE_REF")
-    if not base_ref:
-        return None
-    merge_base = subprocess.run(
-        ["git", "merge-base", "HEAD", f"origin/{base_ref}"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    changed = subprocess.run(
-        ["git", "diff", "--name-only", merge_base, "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.splitlines()
-    return {Path(path) for path in changed if path}
+def _git_blob_sha(path: Path) -> str:
+    data = path.read_bytes()
+    header = f"blob {len(data)}\0".encode()
+    return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
+
+
+def _integration_behavior_fingerprint() -> str:
+    parts = [
+        f"{path.as_posix()}:{_git_blob_sha(path)}"
+        for path in sorted(INTEGRATION_BEHAVIOR_PATHS, key=lambda value: value.as_posix())
+    ]
+    return hashlib.sha256("\n".join(parts).encode()).hexdigest()
 
 
 def test_direct_http_routes_are_bound_to_integration_coverage() -> None:
@@ -296,12 +290,11 @@ def test_route_handler_behavior_fingerprint_is_explicit() -> None:
     assert _route_handler_fingerprint(tree) == ROUTE_HANDLER_AST_SHA256
 
 
-def test_behavior_changes_update_integration_smoke_in_pr_ci() -> None:
-    changed_files = _pr_changed_files()
-    if changed_files is None:
-        return
-    if changed_files & INTEGRATION_BEHAVIOR_PATHS:
-        assert SMOKE_PATH in changed_files
+def test_behavior_changes_require_integration_smoke_update() -> None:
+    marker = f"{INTEGRATION_BEHAVIOR_MARKER_PREFIX}{_integration_behavior_fingerprint()}"
+    smoke_lines = SMOKE_PATH.read_text(encoding="utf-8").splitlines()
+
+    assert marker in smoke_lines
 
 
 def test_every_declared_operation_and_workflow_has_integration_smoke_coverage() -> None:
