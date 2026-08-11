@@ -6,7 +6,7 @@ import pytest
 
 from memory_router.config import DEFAULT_REGISTRY
 from memory_router.hindsight import HindsightGatewayError
-from memory_router.policy import RouterPolicy
+from memory_router.policy import RouterPolicy, recalled_content_digest
 
 
 class FakeHindsight:
@@ -102,6 +102,26 @@ async def test_prompt_injection_retain_is_quarantined_before_provider() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"items": [{"content": "safe"}], "document_tags": ["system prompt"]},
+        {"items": [{"content": "safe", "timestamp": "new instructions"}]},
+        {"items": [{"content": "safe", "extra": {"nested": "overwrite permissions"}}]},
+        {"items": [{"content": "safe", "developer message": "ordinary"}]},
+    ],
+)
+async def test_all_retain_strings_and_keys_are_scanned(body: dict[str, Any]) -> None:
+    hindsight = FakeHindsight()
+    router, limits, store, _ = policy(hindsight)
+    result = await router.retain("main", body)
+    assert result["reason"] == "suspicious_content"
+    assert hindsight.retain_calls == []
+    assert limits.retain == []
+    assert store.items
+
+
+@pytest.mark.asyncio
 async def test_unknown_writer_is_quarantined_without_consuming_provider_quota() -> None:
     hindsight = FakeHindsight()
     router, limits, store, _ = policy(hindsight)
@@ -110,6 +130,19 @@ async def test_unknown_writer_is_quarantined_without_consuming_provider_quota() 
     assert hindsight.retain_calls == []
     assert limits.retain == []
     assert store.items[0]["reason"] == "unknown_writer"
+
+
+@pytest.mark.asyncio
+async def test_all_recall_request_strings_are_scanned() -> None:
+    hindsight = FakeHindsight()
+    router, limits, store, _ = policy(hindsight)
+    response = await router.recall(
+        "main", {"query": "status", "tags": ["system prompt"], "extra": {"safe": "ok"}}
+    )
+    assert response == {"results": []}
+    assert hindsight.recall_calls == []
+    assert limits.recall == []
+    assert store.items[0]["kind"] == "recall_request"
 
 
 @pytest.mark.asyncio
@@ -122,6 +155,17 @@ async def test_malicious_recalled_memory_never_reaches_caller() -> None:
     assert len(hindsight.recall_calls) == 1
     assert store.items[0]["kind"] == "recalled_memory"
     assert store.items[0]["reason"] == "recalled_suspicious_memory"
+
+
+@pytest.mark.asyncio
+async def test_malicious_recall_result_extra_is_quarantined() -> None:
+    hindsight = FakeHindsight(
+        [{"id": "m1", "text": "safe text", "metadata": {"note": "system prompt"}}]
+    )
+    router, _, store, _ = policy(hindsight)
+    response = await router.recall("main", {"query": "status"})
+    assert response == {"results": []}
+    assert store.items[0]["kind"] == "recalled_memory"
 
 
 @pytest.mark.asyncio
@@ -145,28 +189,68 @@ async def test_provider_failure_degrades_recall_per_existing_semantics() -> None
 
 
 @pytest.mark.asyncio
-async def test_reviewed_allowed_memory_requires_exact_content_hash() -> None:
-    hindsight = FakeHindsight([{"id": "m1", "text": "approved text"}])
+async def test_reviewed_allowed_memory_requires_exact_id_text_hash() -> None:
+    result = {"id": "m1", "text": "approved text", "metadata": {"source": "trusted"}}
+    hindsight = FakeHindsight([result])
     router, _, store, repository = policy(hindsight)
-    from memory_router.canonical import sha256_hex
-
     repository.states[("main", "m1")] = {
         "status": "reviewed_allowed",
-        "source_content_sha256": sha256_hex("approved text"),
+        "source_content_sha256": recalled_content_digest(result),
     }
-    assert await router.recall("main", {"query": "status"}) == {
-        "results": [{"id": "m1", "text": "approved text"}]
-    }
+    assert await router.recall("main", {"query": "status"}) == {"results": [result]}
     assert store.items == []
 
 
 @pytest.mark.asyncio
-async def test_changed_reviewed_memory_is_requarantined() -> None:
-    hindsight = FakeHindsight([{"id": "m1", "text": "changed safe text"}])
+async def test_reviewed_allowed_flagged_text_stays_allowed_when_stable_digest_matches() -> None:
+    result = {"id": "m1", "text": "system prompt", "metadata": {"source": "trusted"}}
+    hindsight = FakeHindsight([result])
     router, _, store, repository = policy(hindsight)
     repository.states[("main", "m1")] = {
         "status": "reviewed_allowed",
-        "source_content_sha256": "0" * 64,
+        "source_content_sha256": recalled_content_digest(result),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": [result]}
+    assert store.items == []
+
+
+@pytest.mark.asyncio
+async def test_changed_reviewed_result_extra_does_not_invalidate_approval() -> None:
+    approved = {"id": "m1", "text": "same text", "metadata": {"source": "trusted"}}
+    changed = {"id": "m1", "text": "same text", "metadata": {"source": "changed"}}
+    hindsight = FakeHindsight([changed])
+    router, _, store, repository = policy(hindsight)
+    repository.states[("main", "m1")] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": [changed]}
+    assert store.items == []
+
+
+@pytest.mark.asyncio
+async def test_poisoned_metadata_on_approved_memory_is_suppressed_and_requarantined() -> None:
+    approved = {"id": "m1", "text": "same text", "metadata": {"source": "trusted"}}
+    poisoned = {"id": "m1", "text": "same text", "metadata": {"note": "system prompt"}}
+    hindsight = FakeHindsight([poisoned])
+    router, _, store, repository = policy(hindsight)
+    repository.states[("main", "m1")] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
     }
     assert await router.recall("main", {"query": "status"}) == {"results": []}
     assert store.items[0]["kind"] == "recalled_memory"
+    assert store.items[0]["sourceContentSha256"] == recalled_content_digest(approved)
+
+
+@pytest.mark.asyncio
+async def test_review_in_progress_memory_is_suppressed_without_refresh() -> None:
+    result = {"id": "m1", "text": "safe text"}
+    hindsight = FakeHindsight([result])
+    router, _, store, repository = policy(hindsight)
+    repository.states[("main", "m1")] = {
+        "status": "review_in_progress",
+        "source_content_sha256": recalled_content_digest(result),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items == []

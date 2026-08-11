@@ -122,8 +122,17 @@ class InMemoryRateLimiter:
 
 
 class _PostgresSession:
-    def __init__(self, tx: Any) -> None:
+    def __init__(
+        self,
+        tx: Any,
+        *,
+        global_sweep: bool = False,
+        max_window_cache: list[int] | None = None,
+    ) -> None:
         self.tx = tx
+        self.global_sweep = global_sweep
+        self.max_window_cache = max_window_cache
+        self.observed_max_window: int | None = None
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -156,13 +165,9 @@ class _PostgresSession:
         windows = [window for _, _, window in normalized_buckets] + [
             window for _, _, _, window in normalized_identities
         ]
-        global_cutoff = now - max(windows)
-        await self.tx.execute(
-            "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?", (global_cutoff,)
-        )
-        await self.tx.execute(
-            "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (global_cutoff,)
-        )
+        await self._record_max_window(max(windows))
+        if self.global_sweep:
+            await self._global_sweep(now)
         for key, maximum, window in normalized_buckets:
             cutoff = now - window
             await self.tx.execute(
@@ -216,6 +221,46 @@ class _PostgresSession:
                 (scope, identity, now),
             )
 
+    async def _record_max_window(self, window: int) -> None:
+        if self.max_window_cache is None and not self.global_sweep:
+            return
+        if self.max_window_cache is not None and window <= self.max_window_cache[0]:
+            self.observed_max_window = self.max_window_cache[0]
+            return
+        row = (
+            await self.tx.fetchone(
+                "SELECT max_window_ms FROM quarantine_rate_limit_state WHERE id=1"
+            )
+            or {}
+        )
+        current = int(row.get("max_window_ms") or 0)
+        if window > current:
+            await self.tx.execute(
+                "INSERT INTO quarantine_rate_limit_state(id,max_window_ms) VALUES(1,?) "
+                "ON CONFLICT(id) DO UPDATE SET max_window_ms=GREATEST(quarantine_rate_limit_state.max_window_ms,EXCLUDED.max_window_ms)",
+                (window,),
+            )
+        self.observed_max_window = max(current, window)
+
+    async def _global_sweep(self, now: int) -> None:
+        row = (
+            await self.tx.fetchone(
+                "SELECT max_window_ms FROM quarantine_rate_limit_state WHERE id=1"
+            )
+            or {}
+        )
+        max_window = int(row.get("max_window_ms") or 0)
+        self.observed_max_window = max(self.observed_max_window or 0, max_window)
+        if max_window <= 0:
+            return
+        cutoff = now - max_window
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?", (cutoff,)
+        )
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (cutoff,)
+        )
+
     async def _database_now_ms(self) -> int:
         row = (
             await self.tx.fetchone(
@@ -229,6 +274,8 @@ class _PostgresSession:
 class PostgresRateLimiter:
     def __init__(self, database: Any) -> None:
         self.database = database
+        self.consume_count = 0
+        self.max_window_cache = [0]
 
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
@@ -249,6 +296,22 @@ class PostgresRateLimiter:
                 "CREATE INDEX IF NOT EXISTS idx_quarantine_rate_limit_identities_scope "
                 "ON quarantine_rate_limit_identities(scope, occurred_at_ms)"
             )
+            await tx.execute(
+                "CREATE TABLE IF NOT EXISTS quarantine_rate_limit_state "
+                "(id SMALLINT PRIMARY KEY, max_window_ms BIGINT NOT NULL)"
+            )
+
+    def _next_session(self, tx: Any) -> _PostgresSession:
+        self.consume_count += 1
+        return _PostgresSession(
+            tx,
+            global_sweep=self.consume_count % _SWEEP_EVERY == 0,
+            max_window_cache=self.max_window_cache,
+        )
+
+    def _commit_session(self, session: _PostgresSession) -> None:
+        if session.observed_max_window is not None:
+            self.max_window_cache[0] = max(self.max_window_cache[0], session.observed_max_window)
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -257,7 +320,9 @@ class PostgresRateLimiter:
         self, buckets: list[Bucket], identities: list[Distinct], at_ms: int | None = None
     ) -> None:
         async with self.database.transaction() as tx:
-            await _PostgresSession(tx).consume_many_distinct(buckets, identities, at_ms)
+            session = self._next_session(tx)
+            await session.consume_many_distinct(buckets, identities, at_ms)
+        self._commit_session(session)
 
     async def with_identity_lock(
         self, identity: str, operation: Callable[[Any], Awaitable[T]]
@@ -267,4 +332,7 @@ class PostgresRateLimiter:
                 "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
                 (f"quarantine-identity:{identity}",),
             )
-            return await operation(_PostgresSession(tx))
+            session = self._next_session(tx)
+            result = await operation(session)
+        self._commit_session(session)
+        return result

@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity
-from .envelope import create_envelope, decode_public_key
+from .envelope import canonical_decrypted, create_envelope, decode_public_key
 from .errors import HttpError
 from .repository import Capacity, QuarantineRepository
 
@@ -36,8 +36,9 @@ class QuarantineStore:
         limits: QuarantineLimits,
         rate_limiter: Any,
     ) -> None:
-        decode_public_key(public_key)
+        key = decode_public_key(public_key)
         self.public_key = public_key
+        self.public_key_bytes = key.key_size // 8
         self.repository = repository
         self.limits = limits
         self.rate_limiter = rate_limiter
@@ -47,18 +48,12 @@ class QuarantineStore:
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
         quarantine_id = self._resolve_id(input_)
-        encrypted = self._encrypt(input_, quarantine_id)
-        encrypted_bytes = len(
-            json.dumps(encrypted, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        )
-        if encrypted_bytes > self.limits.max_item_bytes:
-            raise HttpError(
-                413,
-                "quarantine_item_too_large",
-                "encrypted quarantine item exceeds configured size limit",
-            )
+        self._assert_item_size(input_, quarantine_id)
+        existing_for_charge = await self.repository.get(quarantine_id)
+        known = await self._known_identity(input_, existing_for_charge is not None)
+        await self._charge(input_, known, self.rate_limiter)
 
-        async def operation(session: Any) -> dict[str, str]:
+        async def operation(_session: Any) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
             if (
                 input_["kind"] in {"retain_request", "recall_request"}
@@ -71,8 +66,14 @@ class QuarantineStore:
                     "quarantine_request_in_review",
                     "matching quarantine request is already being reviewed",
                 )
-            known = await self._known_identity(input_, existing is not None)
-            await self._charge(input_, known, session)
+            if existing and existing["status"] == "review_in_progress":
+                raise HttpError(
+                    409,
+                    "quarantine_item_in_review",
+                    "matching quarantine item is already being reviewed",
+                )
+
+            encrypted = self._encrypt(input_, quarantine_id)
             item = self._build_item(input_, quarantine_id, encrypted)
             mode = (
                 "memory"
@@ -91,7 +92,7 @@ class QuarantineStore:
             dict[str, str], await self.rate_limiter.with_identity_lock(quarantine_id, operation)
         )
 
-    def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
+    def _decrypted(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
         decrypted: dict[str, Any] = {
             "quarantine_id": quarantine_id,
             "created_at": input_["timestamp"],
@@ -102,7 +103,45 @@ class QuarantineStore:
             decrypted["writer_id"] = input_["writerId"]
         if input_.get("source") is not None:
             decrypted["source"] = input_["source"]
-        return create_envelope(decrypted, self.public_key)
+        return decrypted
+
+    def _assert_item_size(self, input_: dict[str, Any], quarantine_id: str) -> None:
+        decrypted = self._decrypted(input_, quarantine_id)
+        plaintext_bytes = len(canonical_decrypted(decrypted).encode("utf-8"))
+        wrapped_b64_len = 4 * ((self.public_key_bytes + 2) // 3)
+        ciphertext_b64_len = 4 * ((plaintext_bytes + 2) // 3)
+        envelope: dict[str, Any] = {
+            "version": 1,
+            "quarantine_id": quarantine_id,
+            "created_at": input_["timestamp"],
+            "reason": input_["reason"],
+        }
+        if input_.get("writerId") is not None:
+            envelope["writer_id"] = input_["writerId"]
+        if input_.get("source") is not None:
+            envelope["source"] = input_["source"]
+        envelope["sha256"] = "0" * 64
+        envelope["encryption"] = {
+            "algorithm": "AES-256-GCM",
+            "key_wrap": "RSA-OAEP-SHA256",
+            "aad": "metadata-v1",
+            "wrapped_key_b64": "A" * wrapped_b64_len,
+            "iv_b64": "A" * 16,
+            "tag_b64": "A" * 24,
+        }
+        envelope["ciphertext_b64"] = "A" * ciphertext_b64_len
+        encrypted_bytes = len(
+            json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
+        if encrypted_bytes > self.limits.max_item_bytes:
+            raise HttpError(
+                413,
+                "quarantine_item_too_large",
+                "encrypted quarantine item exceeds configured size limit",
+            )
+
+    def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
+        return create_envelope(self._decrypted(input_, quarantine_id), self.public_key)
 
     def _build_item(
         self, input_: dict[str, Any], quarantine_id: str, encrypted: dict[str, Any]
@@ -173,7 +212,7 @@ class QuarantineStore:
             )
             await session.consume_many([(key, self.limits.requarantine_ops_max, window)])
             return
-        if self.limits.rate_limit_max <= 0 or await self._capacity_exhausted(input_["timestamp"]):
+        if self.limits.rate_limit_max <= 0:
             return
         if auth_audit:
             await session.consume_many(
@@ -204,13 +243,6 @@ class QuarantineStore:
                 ("quarantine-writes", self.limits.rate_limit_global_max, window),
             ],
             identities,
-        )
-
-    async def _capacity_exhausted(self, at: str) -> bool:
-        stats = await self.repository.stats(at)
-        return (
-            stats["pending_items"] + stats["postponed_items"] >= self.capacity.max_pending_items
-            or stats["encrypted_bytes"] >= self.capacity.max_encrypted_bytes
         )
 
     def _resolve_id(self, input_: dict[str, Any]) -> str:

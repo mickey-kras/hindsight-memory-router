@@ -147,7 +147,10 @@ def test_cleanup_params_validation() -> None:
     assert params == ["a", "2020"]
 
     where, params = cleanup_params("all", None, None)
-    assert where == "status <> 'review_in_progress'"
+    assert where == (
+        "status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
+    )
     assert params == []
 
     with pytest.raises(HttpError) as invalid_scope:
@@ -164,7 +167,11 @@ def test_cleanup_params_validation() -> None:
 
     reasons = [str(i) for i in range(7)]
     where, params = cleanup_params("all", reasons, None)
-    assert where == "status <> 'review_in_progress' AND reason IN (?,?,?,?,?,?,?)"
+    assert where == (
+        "status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked') "
+        "AND reason IN (?,?,?,?,?,?,?)"
+    )
     assert params == reasons
 
 

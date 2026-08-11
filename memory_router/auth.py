@@ -37,6 +37,10 @@ def admin_authorized(authorization: str | None, scope: str, tokens: dict[str, st
     return any(bearer_matches(authorization, token) for token in allowed)
 
 
+def admin_token_recognized(authorization: str | None, tokens: dict[str, str | None]) -> bool:
+    return any(bearer_matches(authorization, token) for token in tokens.values() if token)
+
+
 class AuthFailureAuditor:
     def __init__(self, store: Any) -> None:
         self.store = store

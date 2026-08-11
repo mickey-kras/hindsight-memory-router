@@ -9,6 +9,8 @@ from memory_router.errors import HttpError
 from memory_router.repository import Capacity, QuarantineRepository
 from memory_router.review_repository import (
     claim_review,
+    complete_side_effect,
+    finish_approve_memory,
     finish_approve_retain,
     finish_reject_memory,
     interrupt_review,
@@ -95,12 +97,28 @@ async def test_claim_interrupt_finish_approve_and_finish_reject(repo: Quarantine
     await interrupt_review(repo, claimed, "claim", RuntimeError("down"))
     assert (await repo.get("a"))["status"] == "pending"  # type: ignore[index]
 
-    claimed = await claim_review(repo, "a", "retain_request", "claim2")
+    claimed = await claim_review(repo, "a", "retain_request", "failed", side_effect=True)
+    assert (await repo.get("a"))["status"] == "review_side_effect_started"  # type: ignore[index]
+    await interrupt_review(repo, claimed, "failed", RuntimeError("upstream"))
+    assert (await repo.get("a"))["status"] == "pending"  # type: ignore[index]
+
+    await claim_review(repo, "a", "retain_request", "claim2", side_effect=True)
+    await complete_side_effect(repo, "a", "claim2", expected_sha256="hash")
+    assert (await repo.get("a"))["status"] == "review_side_effect_completed"  # type: ignore[index]
     await finish_approve_retain(repo, "a", "claim2", {"x": 1})
     assert await repo.get("a") is None
 
+    allowed = value("allowed", kind="recalled_memory")
+    allowed["source_memory_id"] = "m2"
+    await add(repo, allowed)
+    await claim_review(repo, "allowed", "recalled_memory", "claim")
+    await finish_approve_memory(repo, "allowed", "claim", expected_sha256="hash")
+    assert (await repo.get("allowed"))["status"] == "reviewed_allowed"  # type: ignore[index]
+
     await add(repo, value("m", kind="recalled_memory"))
-    await claim_review(repo, "m", "recalled_memory", "claim")
+    await claim_review(repo, "m", "recalled_memory", "claim", side_effect=True)
+    await complete_side_effect(repo, "m", "claim", expected_sha256="hash")
+    assert (await repo.get("m"))["status"] == "review_side_effect_completed"  # type: ignore[index]
     await finish_reject_memory(repo, "m", "claim")
     assert (await repo.get("m"))["status"] == "reviewed_blocked"  # type: ignore[index]
 
@@ -122,7 +140,7 @@ async def test_review_guards_and_noop_interrupt(repo: QuarantineRepository) -> N
 
     async with repo.db.transaction() as tx:
         with pytest.raises(HttpError):
-            await require_reviewable(tx, "missing")
+            await require_reviewable(tx, "missing", "now")
         with pytest.raises(HttpError):
             await require_in_progress(tx, "k", "now")
 
@@ -142,3 +160,42 @@ async def test_recover_interrupted_only_stale(repo: QuarantineRepository) -> Non
     await recover_interrupted(repo, "2026-01-01T00:10:00.000Z", stale_seconds=300)
     assert (await repo.get("old"))["status"] == "postponed"  # type: ignore[index]
     assert (await repo.get("new"))["status"] == "review_in_progress"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_claim_review_recovers_stale_claim_on_demand(repo: QuarantineRepository) -> None:
+    await add(repo, value("stale"))
+    await claim_review(repo, "stale", "retain_request", "2026-01-01T00:00:00.000Z")
+    claimed = await claim_review(
+        repo,
+        "stale",
+        "retain_request",
+        "2026-01-01T00:10:00.000Z",
+        stale_seconds=300,
+    )
+    assert claimed["status"] == "postponed"
+    current = await repo.get("stale")
+    assert current and current["status"] == "review_in_progress"
+    assert current["updated_at"] == "2026-01-01T00:10:00.000Z"
+
+
+@pytest.mark.asyncio
+async def test_claim_review_rejects_changed_verified_snapshot(repo: QuarantineRepository) -> None:
+    await add(repo, value("snapshot", kind="recalled_memory"))
+    original = await repo.get("snapshot")
+    assert original is not None
+    async with repo.db.transaction() as tx:
+        await tx.execute(
+            "UPDATE quarantine_items SET sha256=?,updated_at=? WHERE quarantine_id=?",
+            ("changed", "2026-01-01T00:00:01.000Z", "snapshot"),
+        )
+    with pytest.raises(HttpError) as changed:
+        await claim_review(
+            repo,
+            "snapshot",
+            "recalled_memory",
+            "2026-01-01T00:00:02.000Z",
+            expected_sha256=str(original["sha256"]),
+            expected_updated_at=str(original["updated_at"]),
+        )
+    assert changed.value.code == "quarantine_review_changed"
