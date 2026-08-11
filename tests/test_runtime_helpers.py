@@ -27,8 +27,9 @@ async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) 
         HindsightGateway("http://x", None, 0)
     gateway = HindsightGateway("http://x/", "key", 100)
 
-    httpx_mock.add_response(url="http://x/health", json={"ok": True})
-    assert await gateway.health() == {"ok": True}
+    healthy = {"status": "healthy", "database": "connected"}
+    httpx_mock.add_response(url="http://x/health", json=healthy)
+    assert await gateway.health() == healthy
     request = httpx_mock.get_request(url="http://x/health")
     assert request is not None
     assert request.headers["authorization"] == "Bearer key"
@@ -68,7 +69,9 @@ async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) 
     assert network.value.code == "hindsight_unavailable"
 
     httpx_mock.add_response(url="http://x/health", content=b"")
-    assert await gateway.health() is None
+    with pytest.raises(HindsightGatewayError) as empty_health:
+        await gateway.health()
+    assert empty_health.value.code == "hindsight_invalid_response"
 
     httpx_mock.add_response(
         url="http://x/health", content=b"not-json", headers={"content-type": "application/json"}
