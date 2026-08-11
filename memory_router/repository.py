@@ -117,6 +117,7 @@ class QuarantineRepository:
             if existing and existing["status"] in {
                 "review_in_progress",
                 "review_side_effect_started",
+                "review_side_effect_completed",
             }:
                 raise HttpError(
                     409,
