@@ -10,14 +10,22 @@ flowchart TD
     HTTP --> RID[RequestIdMiddleware]
     RID --> App[FastAPI]
 
-    App --> Health[GET /health]
-    App --> Ready[GET /ready]
+    App --> Live[GET /health/live]
+    App --> Health[GET /health or /health/ready]
+    App --> LegacyReady[GET /ready deprecated alias]
     App --> Admin{Path starts /admin/?}
 
-    Health --> H200[200 healthy]
-    Ready --> DBPing[Quarantine DB ping]
-    DBPing -->|OK| R200[200 ready]
-    DBPing -->|failure| R503[503 not_ready]
+    Live --> L200[200 router liveness; no dependency I/O]
+
+    Health --> Checks[Run readiness checks in parallel]
+    LegacyReady --> Checks
+    Checks --> RouterDB[Quarantine DB ping]
+    Checks --> HHealth[Hindsight GET /health]
+    HHealth --> HDB[Hindsight checks its DB]
+    RouterDB --> Ready{Both healthy?}
+    HDB --> Ready
+    Ready -->|yes| H200[200 validated Hindsight health JSON unchanged]
+    Ready -->|no| H503[503 status: unhealthy]
 
     Admin -->|yes| AdminAuth[Scoped admin auth]
     Admin -->|no| RouterAuth[Router bearer auth]
@@ -38,6 +46,8 @@ flowchart TD
 
     AdminRate --> AdminDispatch[Admin quarantine API]
 ```
+
+Health endpoints are unauthenticated. `/health/live` is router-process liveness only. `/health` and `/health/ready` are exact readiness aliases: they require both router quarantine storage and Hindsight `/health` to succeed. The legacy `/ready` endpoint is deprecated and uses the same readiness behavior. A successful readiness response is the validated Hindsight `/health` JSON returned unchanged; dependency failure returns `503 {"status":"unhealthy"}`.
 
 `RequestIdMiddleware` accepts a valid incoming `X-Request-ID` or generates one. The request ID is returned to the client and forwarded to Hindsight.
 
