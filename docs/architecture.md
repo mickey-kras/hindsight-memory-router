@@ -19,6 +19,8 @@ On retain and recall, the router:
 
 Hindsight is the only provider implemented today. The architecture keeps product identity separate from Hindsight, but this repository does not yet implement a general provider abstraction.
 
+For the complete as-built request, quarantine, review, maintenance, CI, and publish flows, see [Runtime interaction map](architecture/runtime-interactions.md). Production-readiness findings are tracked separately in [Production readiness](operations/production-readiness.md).
+
 ## Routing behavior
 
 Retain:
