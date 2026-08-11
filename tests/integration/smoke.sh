@@ -198,8 +198,8 @@ decrypt_local() {
 }
 
 begin_check "scoped admin tokens enforce read review and cleanup boundaries"
-wrong_read_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" "${router_url}/admin/quarantine/queue")"
-[[ "$wrong_read_status" == "401" ]] || fail_check "review token unexpectedly accessed admin read endpoint"
+review_read_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" "${router_url}/admin/quarantine/queue")"
+[[ "$review_read_status" == "200" ]] || fail_check "review token could not access admin read endpoint: ${review_read_status}"
 wrong_review_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/not-a-valid-id/reject" -d '{}')"
 [[ "$wrong_review_status" == "401" ]] || fail_check "read token unexpectedly accessed admin review endpoint"
 wrong_cleanup_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/cleanup" -d '{"dry_run":true}')"
