@@ -68,7 +68,9 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     assert hindsight.health.await_count == 3
 
     repository.ping.side_effect = None
-    hindsight.health.side_effect = HindsightGatewayError("network", operation="health", method="GET")
+    hindsight.health.side_effect = HindsightGatewayError(
+        "network", operation="health", method="GET"
+    )
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
