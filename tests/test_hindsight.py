@@ -14,6 +14,46 @@ from memory_router.hindsight import (
 
 
 @pytest.mark.asyncio
+async def test_health_validates_contract_and_preserves_upstream_response() -> None:
+    response = {
+        "status": "healthy",
+        "database": "connected",
+        "db_acquire_ms": 0.4,
+        "db_pool_waiting": 0,
+    }
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    try:
+        assert await gateway.health() is response
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "unhealthy", "database": "connected"},
+        {"status": "healthy", "database": "disconnected"},
+        {"status": "healthy"},
+        [],
+    ],
+)
+async def test_health_rejects_unhealthy_or_invalid_success_response(response: object) -> None:
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HindsightGatewayError) as exc:
+            await gateway.health()
+        assert exc.value.code == "hindsight_invalid_response"
+        assert exc.value.kind == "invalid-response"
+        assert exc.value.context["operation"] == "health"
+        assert exc.value.context["method"] == "GET"
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_recall_rejects_deep_upstream_json_before_recursive_scanning() -> None:
     nested: object = "leaf"
     for _ in range(MAX_HINDSIGHT_JSON_DEPTH + 1):
