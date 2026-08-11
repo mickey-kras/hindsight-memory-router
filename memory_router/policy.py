@@ -213,7 +213,12 @@ class RouterPolicy:
     ) -> bool:
         state = await self.repository.find_memory_state(bank_id, str(result["id"]))
         digest = recalled_content_digest(result)
-        if state and state["status"] in {"reviewed_blocked", "review_in_progress"}:
+        if state and state["status"] in {
+            "reviewed_blocked",
+            "review_in_progress",
+            "review_side_effect_started",
+            "review_side_effect_completed",
+        }:
             return False
         if state and state["status"] == "reviewed_allowed":
             if state.get("source_content_sha256") == digest:
