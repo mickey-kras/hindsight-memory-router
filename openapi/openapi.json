@@ -33,23 +33,87 @@
     "/health": {
       "get": {
         "operationId": "getHealth",
-        "summary": "Check router health",
-        "description": "Returns process-level health without requiring authentication.",
+        "summary": "Check router readiness",
+        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response is the validated Hindsight /health JSON returned unchanged.",
         "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router is healthy.",
+            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
+                  "$ref": "#/components/schemas/HealthUnavailableResponse"
                 }
               }
             }
           },
           "4XX": {
             "description": "The HTTP server rejected a malformed client request before invoking the health handler."
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "getLiveness",
+        "summary": "Check router liveness",
+        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight.",
+        "tags": ["Service"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Router process is serving requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the liveness handler."
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getHealthReadiness",
+        "summary": "Check router readiness",
+        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response is the validated Hindsight /health JSON returned unchanged.",
+        "tags": ["Service"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthUnavailableResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the readiness handler."
           }
         }
       }
@@ -523,28 +587,27 @@
     },
     "/ready": {
       "get": {
-        "operationId": "getReadiness",
-        "summary": "Check router readiness",
-        "description": "Checks that the quarantine database is reachable without changing state.",
+        "operationId": "getLegacyReadiness",
+        "summary": "Check router readiness (deprecated)",
+        "description": "Deprecated compatibility alias for /health/ready.",
+        "deprecated": true,
         "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router and quarantine storage are ready.",
+            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
             "content": {
               "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadinessResponse"
-                }
+                "schema": {}
               }
             }
           },
           "503": {
-            "description": "Quarantine storage is unavailable.",
+            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadinessResponse"
+                  "$ref": "#/components/schemas/HealthUnavailableResponse"
                 }
               }
             }
@@ -695,18 +758,25 @@
       }
     },
     "schemas": {
-      "HealthResponse": {
+      "LivenessResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status", "service"],
+        "required": ["status"],
         "properties": {
           "status": {
             "type": "string",
             "const": "healthy"
-          },
-          "service": {
+          }
+        }
+      },
+      "HealthUnavailableResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": {
+          "status": {
             "type": "string",
-            "const": "memory-router"
+            "const": "unhealthy"
           }
         }
       },
@@ -1362,21 +1432,6 @@
           }
         },
         "additionalProperties": false
-      },
-      "ReadinessResponse": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["status", "service"],
-        "properties": {
-          "status": {
-            "type": "string",
-            "enum": ["ready", "not_ready"]
-          },
-          "service": {
-            "type": "string",
-            "const": "memory-router"
-          }
-        }
       }
     }
   }
