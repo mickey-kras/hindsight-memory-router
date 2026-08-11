@@ -21,7 +21,8 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Ambiguous review side-effect reconciliation | Blocked | No supported transition out of `review_side_effect_started` after an ambiguous provider outcome |
 | Router provenance source | Needs correction | Runtime defaults policy source to `openclaw` instead of using the agent-neutral registry source |
 | Build/publish artifact identity | Blocked | Trivy scans one build; publish jobs rebuild independently before pushing/signing |
-| SonarQube gate | Pending | Planned Sonar Community gate is not present |
+| SonarQube Community gate | Pending | Planned static quality gate on `main` is not present |
+| Structured logging / centralized logs | Pending | Adopt structured JSON logging with Grafana Loki + Grafana |
 | Provider health telemetry | Needs improvement | `/ready` checks quarantine storage only |
 | Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
 
@@ -90,11 +91,19 @@ This does not bypass policy enforcement, but it produces stale product-specific 
 
 Target: derive the provenance source from the resolved writer/registry policy or use an explicitly agent-neutral runtime source.
 
-## SonarQube
+## SonarQube Community
 
-The current CI/security stack includes Ruff, mypy, pytest/coverage, pip-audit, Bandit, npm audit, Gitleaks, Semgrep, Hadolint, Aislop, CodeQL, and Trivy.
+Add SonarQube Community as a static quality gate on `main`. Keep the existing CI/security gates; SonarQube is an additional maintainability/code-quality signal rather than a replacement for them.
 
-The planned Sonar Community main-branch quality gate is not currently wired into CI or publishing.
+## Structured logging and centralized logs
+
+Adopt structured JSON application logging and centralize logs with Grafana Loki + Grafana.
+
+Logging must expose stable machine-queryable fields such as request ID, event, operation, writer/bank identity where safe, status/error code, and duration while never logging request bodies, recalled memory content, credentials, secrets, or decrypted quarantine payloads.
+
+Use Loki/Grafana for searchable retention, dashboards, and alerts around authentication failures, Hindsight degradation, quarantine admission/capacity failures, rate limiting, sweeper failures, and unresolved review side effects.
+
+Metrics and tracing remain separate follow-up concerns rather than being coupled to the logging implementation.
 
 ## Readiness and provider telemetry
 
@@ -126,8 +135,9 @@ Work through unresolved items in this order:
 1. ambiguous review side-effect reconciliation;
 2. build-once / scan-once / publish-same-artifact;
 3. provenance source correction;
-4. SonarQube gate;
-5. provider health telemetry;
-6. production metrics and alerts.
+4. SonarQube Community gate;
+5. structured JSON logging + Grafana Loki/Grafana;
+6. provider health telemetry;
+7. production metrics and alerts.
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.
