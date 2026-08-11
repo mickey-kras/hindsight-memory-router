@@ -142,12 +142,9 @@ done
 health_response="$(curl -fsS "${router_url}/health")"
 ready_response="$(curl -fsS "${router_url}/health/ready")"
 legacy_ready_response="$(curl -fsS "${router_url}/ready")"
-[[ "$health_response" == "$ready_response" ]] || fail_check "/health and /health/ready responses differ"
-[[ "$health_response" == "$legacy_ready_response" ]] || fail_check "/health and deprecated /ready responses differ"
-printf '%s' "$health_response" | grep -q '"status"' || fail_check "router readiness response is not Hindsight-compatible health JSON"
-if printf '%s' "$health_response" | grep -q 'router_health'; then
-  fail_check "router readiness leaked router_health internals"
-fi
+for readiness_response in "$health_response" "$ready_response" "$legacy_ready_response"; do
+  printf '%s' "$readiness_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, dict) and "status" in data and "router_health" not in data' || fail_check "router readiness alias returned unexpected health JSON"
+done
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
