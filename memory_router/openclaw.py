@@ -8,7 +8,6 @@ from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
 from .observability import current_request_id
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
-from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
 
@@ -67,14 +66,17 @@ class OpenClawFacade:
             await self.policy.limits.consume_retain(writer_id)
 
         bank = quote(writer.write_bank, safe="")
-        path = f"/v1/default/banks/{bank}/{resource}"
+        path = f"/v1/default/banks/{bank}"
+        if resource:
+            path += f"/{resource}"
         if mental_model_id is not None:
             path += f"/{quote(mental_model_id, safe='')}"
         if query:
             path += "?" + urlencode(query)
 
+        operation = resource.replace("/", "_") or "bank"
         value = await self.policy.hindsight.openclaw_request(
-            f"openclaw_{resource.replace('/', '_')}", method, path, body
+            f"openclaw_{operation}", method, path, body
         )
         if value is None:
             return None
