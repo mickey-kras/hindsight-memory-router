@@ -1,12 +1,12 @@
 # Runtime interaction map
 
-This document describes the current runtime behavior of Memory Router. It is intended to be the as-built reference for request routing, security decisions, quarantine, review state, maintenance, and provider interaction.
+This document describes the current runtime behavior of Memory Router. It is intended to be the as-built reference for request routing, security decisions, quarantine, review state, maintenance, and Hindsight interaction.
 
 ## Request entry
 
 ```mermaid
 flowchart TD
-    Client[Agent / Application] --> HTTP[Uvicorn :8890]
+    Client[OpenClaw Hindsight plugin] --> HTTP[Uvicorn :8890]
     HTTP --> RID[RequestIdMiddleware]
     RID --> App[FastAPI]
 
@@ -108,7 +108,7 @@ flowchart TD
     Safe -->|yes| Rewrite[Inject router provenance metadata]
     Rewrite --> Rate[Consume writer + global retain quota]
     Rate --> Hindsight[POST assigned Hindsight write bank]
-    Hindsight --> Response[Return provider response]
+    Hindsight --> Response[Return Hindsight response]
 ```
 
 The security scan includes canonicalization, deterministic router rules, Agent Memory Guard detectors, rolling cross-field scans, and direct/split Base64 inspection.
@@ -210,7 +210,7 @@ stateDiagram-v2
 
     review_side_effect_started --> pending: definite failure from pending
     review_side_effect_started --> postponed: definite failure from postponed
-    review_side_effect_started --> review_side_effect_completed: provider side effect confirmed
+    review_side_effect_started --> review_side_effect_completed: Hindsight side effect confirmed
 
     review_side_effect_completed --> [*]: approved retain finalized
     review_side_effect_completed --> reviewed_blocked: recalled memory rejection finalized

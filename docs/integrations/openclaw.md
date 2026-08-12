@@ -1,8 +1,14 @@
 # OpenClaw integration
 
-OpenClaw is one possible client of Memory Router; it is not part of the product identity or runtime architecture.
+OpenClaw's Hindsight plugin is the currently supported Memory Router client integration.
 
-For the existing Hindsight-compatible integration, point OpenClaw at Memory Router instead of directly at Hindsight:
+Current topology:
+
+```text
+OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
+```
+
+Point the OpenClaw Hindsight plugin at Memory Router instead of directly at Hindsight:
 
 ```text
 hindsightApiUrl = http://memory-router:8890
@@ -16,3 +22,5 @@ enableKnowledgeTools = false initially
 ```
 
 Writer IDs must exist in the configured Memory Router registry or their requests follow the unknown-writer quarantine policy.
+
+Other agent/application integrations are future work; they are not part of the current supported runtime contract.

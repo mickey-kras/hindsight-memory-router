@@ -1,6 +1,12 @@
 # Getting started
 
-Memory Router sits between an agent/application and Hindsight and applies writer policy, request bounds, authentication, and encrypted quarantine around retain/recall traffic.
+Memory Router currently sits between the OpenClaw Hindsight plugin and Hindsight:
+
+```text
+OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
+```
+
+It applies writer policy, request bounds, authentication, quotas, safety scanning, and encrypted quarantine around the retain/recall traffic used by that integration. A generic agent/application facade is not implemented yet.
 
 ## Quarantine key
 
@@ -36,7 +42,7 @@ Compose:
 
 Authentication still fails closed: configure a router token before sending retain/recall traffic and scoped admin tokens before using review operations.
 
-The built-in provider endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
+The built-in Hindsight endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
 
 ## Defaults
 
@@ -45,14 +51,15 @@ Normal startup uses built-in defaults:
 - deployment mode: `single`;
 - quarantine database: `sqlite:./data/quarantine.db`;
 - listener port: `8890`;
-- one neutral `main` writer that reads and writes only the `main` bank;
+- one neutral `main` writer that reads and writes only the `main` Hindsight bank;
 - bounded retain/recall, quarantine, timeout, capacity, and retention settings.
 
 Use `.env.example` as an override reference.
 
 ## Next
 
+- [OpenClaw integration](integrations/openclaw.md)
 - [Configuration](configuration.md)
 - [Docker deployment](deployment/docker.md)
-- [Hindsight provider](providers/hindsight.md)
+- [Hindsight upstream](providers/hindsight.md)
 - [Authentication](security/authentication.md)

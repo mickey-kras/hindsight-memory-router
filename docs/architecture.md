@@ -1,23 +1,25 @@
 # Architecture
 
+Current supported topology:
+
 ```text
-Agent / Application -> Memory Router -> Memory Provider
+OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
 ```
 
-Memory Router is the policy and security boundary. It is not tied to a particular agent framework.
+Memory Router is the policy and security boundary for this integration. The current runtime is Hindsight-specific and is exercised through the OpenClaw Hindsight plugin; a generic agent/application facade and provider abstraction are not implemented yet.
 
 ## Responsibilities
 
 On retain and recall, the router:
 
-- authenticates the caller;
-- resolves writer policy and allowed memory banks;
+- authenticates the OpenClaw Hindsight-plugin request;
+- resolves writer policy and allowed Hindsight banks;
 - enforces request bounds and rate limits;
 - scans content at the policy boundary;
-- forwards allowed operations to the configured provider;
+- forwards allowed operations to Hindsight;
 - stores unknown or suspicious material in encrypted quarantine.
 
-Hindsight is the only provider implemented today. The architecture keeps product identity separate from Hindsight, but this repository does not yet implement a general provider abstraction.
+A broader `Agent / Application -> Memory Router -> Memory Provider` architecture remains a future direction, not the current contract.
 
 For the complete as-built request, quarantine, review, maintenance, CI, and publish flows, see [Runtime interaction map](architecture/runtime-interactions.md). Production-readiness findings are tracked separately in [Production readiness](operations/production-readiness.md).
 
