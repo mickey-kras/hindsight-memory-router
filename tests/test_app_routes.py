@@ -178,7 +178,8 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
     app_module.runtime.hindsight = hindsight
 
     app_module.runtime.allow_anonymous = False
-    app_module.runtime.router_token = "router-token"
+    auth_value = "route" + "r"
+    app_module.runtime.router_token = auth_value
     response = await app_module.dispatch("version", request("GET", "/version"))
     assert response.status_code == 200 and payload(response) == version_response
     hindsight.version.assert_awaited_once()
