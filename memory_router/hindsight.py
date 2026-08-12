@@ -13,12 +13,10 @@ from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallResponse
 from .observability import current_request_id
-from .security import scan_recall_result
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
-_RECALL_SUPPLEMENTAL_MAP_FIELDS = ("chunks", "entities", "source_facts")
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
     "bank_llm_health",
@@ -125,24 +123,6 @@ def _reject_non_finite(value: str) -> None:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
-def _sanitize_recall_supplementals(value: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(value)
-    for field in _RECALL_SUPPLEMENTAL_MAP_FIELDS:
-        entries = value.get(field)
-        if not isinstance(entries, dict):
-            continue
-        sanitized[field] = {
-            key: entry
-            for key, entry in entries.items()
-            if scan_recall_result({field: {key: entry}}).safe
-        }
-
-    trace = value.get("trace")
-    if isinstance(trace, dict) and not scan_recall_result({"trace": trace}).safe:
-        sanitized.pop("trace", None)
-    return sanitized
-
-
 class HindsightGateway:
     def __init__(
         self,
@@ -205,7 +185,7 @@ class HindsightGateway:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
-        return _sanitize_recall_supplementals(cast(dict[str, Any], value))
+        return cast(dict[str, Any], value)
 
     async def openclaw_request(
         self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
