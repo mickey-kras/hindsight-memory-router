@@ -46,10 +46,7 @@ class OpenClawFacade:
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
             "resource": resource,
-            "query": [
-                {"key": key, "value": value}
-                for key, value in (query or [])
-            ],
+            "query": [{"key": key, "value": value} for key, value in (query or [])],
         }
         if mental_model_id is not None:
             request_evidence["mental_model_id"] = mental_model_id
@@ -103,8 +100,6 @@ class OpenClawFacade:
             raise HindsightGatewayError(
                 "invalid-response", operation=f"openclaw_{operation}", method=method
             ) from exc
-        if method == "DELETE" and resource == "mental-models" and value is None:
-            return {}
         return value
 
     async def _audit(
