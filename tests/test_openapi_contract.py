@@ -59,11 +59,24 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
         assert marker in source, f"OpenAPI path has no dispatcher marker: {path}"
 
 
-def test_openapi_version_matches_runtime_version() -> None:
+def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     spec = _spec()
-    info = spec["info"]
-    assert isinstance(info, dict)
-    version = info["version"]
-    assert isinstance(version, str)
-    source = pathlib.Path("memory_router/app.py").read_text()
-    assert f'"api_version": "{version}"' in source
+    paths = spec["paths"]
+    assert isinstance(paths, dict)
+    version = paths["/version"]["get"]
+    assert version["security"] == []
+    assert "401" not in version["responses"]
+
+    schemas = spec["components"]["schemas"]
+    version_schema = schemas["VersionResponse"]
+    assert version_schema["required"] == ["api_version", "features"]
+    assert set(version_schema["properties"]) == {"api_version", "features"}
+
+    recall_schema = schemas["RecallResponse"]
+    assert set(recall_schema["properties"]) == {
+        "results",
+        "chunks",
+        "entities",
+        "source_facts",
+        "trace",
+    }
