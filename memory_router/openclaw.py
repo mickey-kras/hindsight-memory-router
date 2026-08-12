@@ -62,6 +62,9 @@ class OpenClawFacade:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
             raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
+        if resource == "reflect" and body is not None:
+            self.policy.limits.assert_recall_bounds(body)
+
         if read_operation:
             await self.policy.limits.consume_recall(writer_id)
         elif method in _WRITE_METHODS:
