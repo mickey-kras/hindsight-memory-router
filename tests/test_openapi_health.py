@@ -40,8 +40,12 @@ def test_health_openapi_contract() -> None:
     assert schemas["LivenessResponse"] == {
         "type": "object",
         "additionalProperties": False,
-        "required": ["status"],
-        "properties": {"status": {"type": "string", "const": "healthy"}},
+        "required": ["status", "version", "uptime_seconds"],
+        "properties": {
+            "status": {"type": "string", "const": "alive"},
+            "version": {"type": "string"},
+            "uptime_seconds": {"type": "number", "minimum": 0},
+        },
     }
     assert schemas["HealthUnavailableResponse"] == {
         "type": "object",

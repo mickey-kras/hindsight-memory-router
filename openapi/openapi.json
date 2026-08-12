@@ -66,7 +66,7 @@
       "get": {
         "operationId": "getLiveness",
         "summary": "Check router liveness",
-        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight.",
+        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight. Uses Hindsight's liveness response contract.",
         "tags": ["Service"],
         "security": [],
         "responses": {
@@ -121,16 +121,13 @@
     "/version": {
       "get": {
         "operationId": "getVersion",
-        "summary": "Get router API version and features",
+        "summary": "Get Hindsight API version and features",
+        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
         "tags": ["Service"],
-        "security": [
-          {
-            "RouterToken": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
-            "description": "Router version and enabled capabilities.",
+            "description": "Hindsight API version and facade-exposed capabilities.",
             "content": {
               "application/json": {
                 "schema": {
@@ -139,8 +136,28 @@
               }
             }
           },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
+          "502": {
+            "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Hindsight timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the version handler."
           }
         }
       }
@@ -235,7 +252,7 @@
         },
         "responses": {
           "200": {
-            "description": "ACL-filtered and safety-filtered recall results.",
+            "description": "Hindsight-compatible recall response with ACL- and safety-filtered results plus supported top-level recall metadata.",
             "content": {
               "application/json": {
                 "schema": {
@@ -761,11 +778,18 @@
       "LivenessResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status"],
+        "required": ["status", "version", "uptime_seconds"],
         "properties": {
           "status": {
             "type": "string",
-            "const": "healthy"
+            "const": "alive"
+          },
+          "version": {
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "type": "number",
+            "minimum": 0
           }
         }
       },
@@ -783,41 +807,60 @@
       "VersionResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["api_version", "router", "features"],
+        "required": ["api_version", "features"],
         "properties": {
           "api_version": {
-            "type": "string",
-            "const": "0.9.0"
-          },
-          "router": {
-            "type": "string",
-            "const": "memory-router"
+            "type": "string"
           },
           "features": {
             "type": "object",
             "additionalProperties": false,
             "required": [
-              "policy_facade",
-              "encrypted_quarantine",
-              "quarantine_admin_api",
-              "quarantine_database"
+              "observations",
+              "mcp",
+              "worker",
+              "bank_config_api",
+              "bank_llm_health",
+              "file_upload_api",
+              "document_export_api",
+              "document_import_api",
+              "audit_log",
+              "llm_trace",
+              "store_document_text"
             ],
             "properties": {
-              "policy_facade": {
-                "type": "boolean",
-                "const": true
+              "observations": {
+                "type": "boolean"
               },
-              "encrypted_quarantine": {
-                "type": "boolean",
-                "const": true
+              "mcp": {
+                "type": "boolean"
               },
-              "quarantine_admin_api": {
-                "type": "boolean",
-                "const": true
+              "worker": {
+                "type": "boolean"
               },
-              "quarantine_database": {
-                "type": "boolean",
-                "const": true
+              "bank_config_api": {
+                "type": "boolean"
+              },
+              "bank_llm_health": {
+                "type": "boolean"
+              },
+              "file_upload_api": {
+                "type": "boolean"
+              },
+              "document_export_api": {
+                "type": "boolean"
+              },
+              "document_import_api": {
+                "type": "boolean"
+              },
+              "audit_log": {
+                "type": "boolean"
+              },
+              "llm_trace": {
+                "type": "boolean"
+              },
+              "store_document_text": {
+                "type": "boolean"
               }
             }
           }
@@ -946,6 +989,22 @@
             "items": {
               "$ref": "#/components/schemas/RecallResult"
             }
+          },
+          "chunks": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          },
+          "entities": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          },
+          "source_facts": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          },
+          "trace": {
+            "type": ["object", "null"],
+            "additionalProperties": true
           }
         },
         "additionalProperties": true

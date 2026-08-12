@@ -13,6 +13,7 @@ from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_r
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
+_RECALL_RESPONSE_MAP_FIELDS = ("chunks", "entities", "source_facts", "trace")
 
 
 def prepare_retain_body(
@@ -115,7 +116,22 @@ class RouterPolicy:
             for result in response.get("results", []):
                 if await self._allow_recalled_or_degrade(writer_id, source, bank_id, result):
                     results.append(result)
-        return {"results": results}
+        combined: dict[str, Any] = {"results": results}
+        for field in _RECALL_RESPONSE_MAP_FIELDS:
+            merged: dict[str, Any] = {}
+            present = False
+            map_present = False
+            for _, response in responses:
+                if field not in response:
+                    continue
+                present = True
+                value = response[field]
+                if isinstance(value, dict):
+                    merged.update(value)
+                    map_present = True
+            if present:
+                combined[field] = merged if map_present else None
+        return combined
 
     async def deny_endpoint(
         self, method: str, path: str, writer_id: str | None = None
