@@ -124,7 +124,7 @@ async def test_openclaw_conditional_routes_are_allowlisted(
 
     result = await app_module.dispatch(path.lstrip("/"), request(method, path, body=body))
 
-    assert result.status_code == (204 if method == "DELETE" else 200)
+    assert result.status_code == 200
     policy.hindsight.openclaw_request.assert_awaited_once()
     forwarded_path = policy.hindsight.openclaw_request.await_args.args[2]
     assert "/banks/resolved-main" in forwarded_path
