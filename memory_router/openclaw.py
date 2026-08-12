@@ -6,7 +6,9 @@ from urllib.parse import quote, urlencode
 
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
+from .hindsight import HindsightGatewayError
 from .observability import current_request_id
+from .openclaw_contracts import validate_openclaw_response
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 
 logger = logging.getLogger(__name__)
@@ -78,6 +80,12 @@ class OpenClawFacade:
         value = await self.policy.hindsight.openclaw_request(
             f"openclaw_{operation}", method, path, body
         )
+        try:
+            validate_openclaw_response(method, resource, mental_model_id, value)
+        except ValueError as exc:
+            raise HindsightGatewayError(
+                "invalid-response", operation=f"openclaw_{operation}", method=method
+            ) from exc
         if value is None:
             return None
 
