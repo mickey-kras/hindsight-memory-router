@@ -38,7 +38,6 @@ def _facade_version_response() -> dict[str, object]:
     assert isinstance(features, dict)
     for feature in (
         "mcp",
-        "bank_config_api",
         "bank_llm_health",
         "file_upload_api",
         "document_export_api",
@@ -173,7 +172,7 @@ async def test_recall_preserves_safe_supplemental_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_recall_suppresses_unsafe_supplemental_content() -> None:
+async def test_recall_gateway_preserves_supplementals_for_policy_scanning() -> None:
     response = {
         "results": [{"id": "m1", "text": "safe memory"}],
         "chunks": {
@@ -197,14 +196,7 @@ async def test_recall_suppresses_unsafe_supplemental_content() -> None:
     gateway = HindsightGateway("http://hindsight", None)
     gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
     try:
-        sanitized = await gateway.recall("main", {"query": "status"})
-        assert sanitized["results"] == response["results"]
-        assert sanitized["chunks"] == {"safe": response["chunks"]["safe"]}  # type: ignore[index]
-        assert sanitized["entities"] == {"safe": response["entities"]["safe"]}  # type: ignore[index]
-        assert sanitized["source_facts"] == {
-            "safe": response["source_facts"]["safe"]  # type: ignore[index]
-        }
-        assert "trace" not in sanitized
+        assert await gateway.recall("main", {"query": "status"}) == response
     finally:
         await gateway.close()
 
