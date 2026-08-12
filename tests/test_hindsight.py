@@ -43,7 +43,6 @@ def _facade_version_response() -> dict[str, object]:
         "file_upload_api",
         "document_export_api",
         "document_import_api",
-        "audit_log",
     ):
         features[feature] = False
     return response
