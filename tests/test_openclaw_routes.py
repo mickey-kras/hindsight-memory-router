@@ -53,11 +53,7 @@ def _openclaw_response(method: str, path: str) -> object:
     if path.endswith("/config"):
         return {"bank_id": "resolved-main", "config": {}, "overrides": {}}
     if path.endswith("/mental-models?detail=metadata"):
-        return {
-            "items": [
-                {"id": "page-1", "bank_id": "resolved-main", "name": "Preferences"}
-            ]
-        }
+        return {"items": [{"id": "page-1", "bank_id": "resolved-main", "name": "Preferences"}]}
     if method == "POST" and path.endswith("/mental-models"):
         return {"operation_id": "op-1", "mental_model_id": "page-1"}
     if "/mental-models/page-1" in path:
