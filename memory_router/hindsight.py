@@ -65,6 +65,7 @@ class HindsightGatewayError(HttpError):
         operation: str | None = None,
         method: str | None = None,
         timeout_ms: int | None = None,
+        client_status: int | None = None,
     ) -> None:
         code = {
             "timeout": "hindsight_timeout",
@@ -80,7 +81,8 @@ class HindsightGatewayError(HttpError):
             "network": "Upstream memory service is unavailable",
             "response-too-large": "Upstream memory service response exceeded the size limit",
         }[kind]
-        super().__init__(504 if kind == "timeout" else 502, code, message)
+        status = client_status if client_status is not None else (504 if kind == "timeout" else 502)
+        super().__init__(status, code, message)
         self.kind = kind
         self.upstream_status = upstream_status
         self.context = {"operation": operation, "method": method, "timeout_ms": timeout_ms}
@@ -190,12 +192,8 @@ class HindsightGateway:
     async def openclaw_request(
         self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
     ) -> Any:
-        """Forward one allowlisted OpenClaw-facing Hindsight operation.
-
-        Route allowlisting and bank resolution live in the router facade; this method only
-        preserves the gateway's auth, timeout, response-size/depth and JSON validation.
-        """
-        return await self._request(operation, method, path, body)
+        """Forward one allowlisted OpenClaw-facing Hindsight operation."""
+        return await self._request(operation, method, path, body, preserve_http_status=True)
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
@@ -205,7 +203,15 @@ class HindsightGateway:
             {"state": "invalidated", "reason": reason},
         )
 
-    async def _request(self, operation: str, method: str, path: str, body: Any = None) -> Any:
+    async def _request(
+        self,
+        operation: str,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        preserve_http_status: bool = False,
+    ) -> Any:
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
@@ -228,6 +234,7 @@ class HindsightGateway:
                         upstream_status=response.status_code,
                         operation=operation,
                         method=method,
+                        client_status=response.status_code if preserve_http_status else None,
                     )
                 content_length = response.headers.get("content-length")
                 if (
