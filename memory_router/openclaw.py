@@ -100,6 +100,8 @@ class OpenClawFacade:
             raise HindsightGatewayError(
                 "invalid-response", operation=f"openclaw_{operation}", method=method
             ) from exc
+        if method == "DELETE" and resource == "mental-models" and value is None:
+            return {}
         return value
 
     async def _audit(
