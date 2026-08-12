@@ -46,7 +46,10 @@ class OpenClawFacade:
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
             "resource": resource,
-            "query": query or [],
+            "query": [
+                {"key": key, "value": value}
+                for key, value in (query or [])
+            ],
         }
         if mental_model_id is not None:
             request_evidence["mental_model_id"] = mental_model_id
