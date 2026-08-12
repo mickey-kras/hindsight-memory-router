@@ -54,7 +54,7 @@ async def test_openclaw_startup_health_and_version_probe_are_unauthenticated() -
         health=AsyncMock(return_value=health), version=AsyncMock(return_value=version)
     )
 
-    health_response = await app_module.dispatch("health", request("GET", "/health"))
+    health_response = await app_module.health_ready()
     version_response = await app_module.dispatch("version", request("GET", "/version"))
 
     assert health_response.status_code == 200
