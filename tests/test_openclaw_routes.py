@@ -40,10 +40,37 @@ def _policy(response: object) -> SimpleNamespace:
     )
 
 
+def _openclaw_response(method: str, path: str) -> object:
+    if method == "DELETE":
+        return None
+    if method == "PUT":
+        return {
+            "bank_id": "resolved-main",
+            "name": "resolved-main",
+            "disposition": {},
+            "mission": "Remember preferences",
+        }
+    if path.endswith("/config"):
+        return {"bank_id": "resolved-main", "config": {}, "overrides": {}}
+    if path.endswith("/mental-models?detail=metadata"):
+        return {
+            "items": [
+                {"id": "page-1", "bank_id": "resolved-main", "name": "Preferences"}
+            ]
+        }
+    if method == "POST" and path.endswith("/mental-models"):
+        return {"operation_id": "op-1", "mental_model_id": "page-1"}
+    if "/mental-models/page-1" in path:
+        return {"id": "page-1", "bank_id": "resolved-main", "name": "Preferences"}
+    if path.endswith("/reflect"):
+        return {"text": "safe reflection"}
+    raise AssertionError(f"unhandled OpenClaw route fixture: {method} {path}")
+
+
 @pytest.mark.asyncio
 async def test_openclaw_startup_health_and_version_probe_are_unauthenticated() -> None:
     app_module.runtime.allow_anonymous = False
-    app_module.runtime.router_token = "router-secret"
+    app_module.runtime.router_token = "router-secret"  # noqa: S105 - synthetic test credential
     app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
     health = {"status": "healthy", "database": "connected"}
     version = {
@@ -96,8 +123,7 @@ async def test_openclaw_startup_health_and_version_probe_are_unauthenticated() -
 async def test_openclaw_conditional_routes_are_allowlisted(
     method: str, path: str, body: dict[str, object] | None
 ) -> None:
-    response = None if method == "DELETE" else {"content": "safe"}
-    policy = _policy(response)
+    policy = _policy(_openclaw_response(method, path))
     app_module.runtime.policy = policy
 
     result = await app_module.dispatch(path.lstrip("/"), request(method, path, body=body))
@@ -111,7 +137,7 @@ async def test_openclaw_conditional_routes_are_allowlisted(
 
 @pytest.mark.asyncio
 async def test_unrelated_hindsight_endpoint_remains_denied() -> None:
-    policy = _policy({"content": "safe"})
+    policy = _policy({"text": "safe"})
     app_module.runtime.policy = policy
 
     response = await app_module.dispatch(
