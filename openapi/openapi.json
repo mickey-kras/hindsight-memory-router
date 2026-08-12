@@ -135,6 +135,9 @@
                 }
               }
             }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the version handler."
           }
         }
       }
