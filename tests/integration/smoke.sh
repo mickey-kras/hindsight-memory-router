@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: ab2f6c9e52f4912aa0044f84aee58816ae0f35f778313eea6f4d727f5710c35e
+# integration-behavior-sha256: b61767b2bddc559ccdae6fc2467f4313df45c2f7f39b8e5c51fd68529c3c25ad
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -151,7 +151,7 @@ pass_check
 begin_check "authentication and network boundaries hold"
 version="$(curl -fsS "${router_url}/version")"
 upstream_version="$(docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; print(urllib.request.urlopen('http://hindsight:8888/version', timeout=2).read().decode())")"
-python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_config_api","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==set(upstream["features"]); assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose Hindsight-compatible facade capabilities"
+python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","bank_config_api","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==set(upstream["features"]); assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose Hindsight-compatible facade capabilities"
 retain_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
 [[ "$retain_status" == "401" ]] || fail_check "expected unauthenticated retain 401, got ${retain_status}"
 if curl --max-time 2 -fsS "http://127.0.0.1:8888/health" >/dev/null 2>&1; then
@@ -320,6 +320,10 @@ admin_denied_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization
 pass_check
 
 if [[ "$mode" == "fake" ]]; then
+  # Exact request shapes used by the current OpenClaw plugin and hindsight-agent-sdk.
+  # shellcheck source=tests/integration/openclaw-compat.sh
+  source tests/integration/openclaw-compat.sh
+
   begin_check "recalled suspicious memory can be approved and remains allowed"
   first_approval_recall="$(post_router "/v1/default/banks/main/memories/recall" '{"query":"unsafe approval result"}')"
   printf '%s' "$first_approval_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
