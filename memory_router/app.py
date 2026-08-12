@@ -521,18 +521,18 @@ async def dispatch(path: str, request: Request) -> Response:
         )
     if method in {"GET", "POST"} and mental_list_match:
         writer_id = _decode_path_segment(mental_list_match.group(1))
-        body: dict[str, Any] | None = None
+        mental_body: dict[str, Any] | None = None
         if method == "POST":
             raw_body = await _json_body(request)
             if not isinstance(raw_body, dict):
                 raise HttpError(400, "invalid_request", "mental-model body must be an object")
-            body = raw_body
+            mental_body = raw_body
         return JSONResponse(
             await facade.forward(
                 writer_id=writer_id,
                 method=method,
                 resource="mental-models",
-                body=body,
+                body=mental_body,
                 query=list(request.query_params.multi_items()),
                 read_operation=method == "GET",
             )
