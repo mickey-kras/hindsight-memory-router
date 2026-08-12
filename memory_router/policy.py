@@ -120,13 +120,17 @@ class RouterPolicy:
         for field in _RECALL_RESPONSE_MAP_FIELDS:
             merged: dict[str, Any] = {}
             present = False
+            map_present = False
             for _, response in responses:
-                value = response.get(field)
+                if field not in response:
+                    continue
+                present = True
+                value = response[field]
                 if isinstance(value, dict):
                     merged.update(value)
-                    present = True
+                    map_present = True
             if present:
-                combined[field] = merged
+                combined[field] = merged if map_present else None
         return combined
 
     async def deny_endpoint(
