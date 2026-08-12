@@ -83,7 +83,9 @@ async def test_unsafe_recall_supplementals_are_suppressed_and_audited() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unsafe_recall_supplemental_stays_suppressed_when_audit_store_is_unavailable() -> None:
+async def test_unsafe_recall_supplemental_stays_suppressed_when_audit_store_is_unavailable() -> (
+    None
+):
     store = Store(HttpError(507, "quarantine_capacity_exceeded", "full"))
     router = policy(
         {
