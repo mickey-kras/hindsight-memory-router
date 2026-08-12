@@ -32,6 +32,23 @@ def _version_response() -> dict[str, object]:
     }
 
 
+def _facade_version_response() -> dict[str, object]:
+    response = _version_response()
+    features = response["features"]
+    assert isinstance(features, dict)
+    for feature in (
+        "mcp",
+        "bank_config_api",
+        "bank_llm_health",
+        "file_upload_api",
+        "document_export_api",
+        "document_import_api",
+        "audit_log",
+    ):
+        features[feature] = False
+    return response
+
+
 @pytest.mark.asyncio
 async def test_health_validates_contract_and_preserves_upstream_response() -> None:
     response = {
@@ -73,12 +90,13 @@ async def test_health_rejects_unhealthy_or_invalid_success_response(response: ob
 
 
 @pytest.mark.asyncio
-async def test_version_validates_current_hindsight_contract() -> None:
+async def test_version_validates_current_hindsight_contract_and_reports_facade_features() -> None:
     response = _version_response()
     gateway = HindsightGateway("http://hindsight", None)
     gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
     try:
-        assert await gateway.version() == response
+        assert await gateway.version() == _facade_version_response()
+        assert response == _version_response()
     finally:
         await gateway.close()
 
