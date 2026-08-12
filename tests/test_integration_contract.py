@@ -8,6 +8,7 @@ APP_PATH = Path("memory_router/app.py")
 POLICY_PATH = Path("memory_router/policy.py")
 ADMIN_PATH = Path("memory_router/admin.py")
 SMOKE_PATH = Path("tests/integration/smoke.sh")
+OPENCLAW_SMOKE_PATH = Path("tests/integration/openclaw-compat.sh")
 
 HTTP_DECORATOR_METHODS = {
     "delete": "DELETE",
@@ -40,6 +41,11 @@ DIRECT_ROUTE_COVERAGE = {
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
 ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?"
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
+BANK_ROOT_REGEX = "regex:/v1/default/banks/([^/]+)"
+BANK_CONFIG_REGEX = "regex:/v1/default/banks/([^/]+)/config"
+MENTAL_LIST_REGEX = "regex:/v1/default/banks/([^/]+)/mental-models"
+MENTAL_ITEM_REGEX = "regex:/v1/default/banks/([^/]+)/mental-models/([^/]+)"
+REFLECT_REGEX = "regex:/v1/default/banks/([^/]+)/reflect"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {ADMIN_PREFIX, "method=='GET'", "pathname=='/admin/quarantine/queue'"}
@@ -69,6 +75,15 @@ DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {BANK_MEMORY_REGEX, "method=='POST'", "action=='recall'"}
     ): "safe recall endpoint succeeds",
+    frozenset({BANK_ROOT_REGEX, "method=='PUT'"}): "OpenClaw configured bank defaults use resolved bank",
+    frozenset({BANK_CONFIG_REGEX, "method=='PATCH'"}): "OpenClaw configured bank defaults use resolved bank",
+    frozenset(
+        {MENTAL_LIST_REGEX, "method in {'GET','POST'}"}
+    ): "OpenClaw knowledge-page list get create update delete succeeds",
+    frozenset(
+        {MENTAL_ITEM_REGEX, "method in {'DELETE','GET','PATCH'}"}
+    ): "OpenClaw knowledge-page list get create update delete succeeds",
+    frozenset({REFLECT_REGEX, "method=='POST'"}): "OpenClaw knowledge reflect shape succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
     "scoped admin tokens enforce read review and cleanup boundaries",
@@ -77,10 +92,12 @@ REQUIRED_WORKFLOW_CHECKS = {
     "unsupported router and admin endpoints fail closed",
     "recalled suspicious memory can be approved and remains allowed",
     "recalled suspicious memory stays blocked after reject and invalidates upstream",
+    "OpenClaw auto-retain and document ingest shapes succeed",
+    "OpenClaw auto-recall and knowledge recall shapes succeed",
+    "OpenClaw conditional requests reject nested injection before Hindsight",
 }
 INTEGRATION_BEHAVIOR_PATHS = {APP_PATH, POLICY_PATH, ADMIN_PATH}
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
-ROUTE_HANDLER_AST_SHA256 = "4e1466376d88d3f377be5012cd1550d38a7aeef9be11c6e112405e60125ecac9"
 
 
 def _string_arg(call: ast.Call) -> str | None:
@@ -144,12 +161,11 @@ def _decorated_routes(tree: ast.AST) -> tuple[set[tuple[str, str]], set[str]]:
     return direct_routes, catch_all_methods
 
 
-def _regex_assignment(statement: ast.stmt) -> str | None:
+def _regex_assignment(statement: ast.stmt) -> tuple[str, str] | None:
     if (
         not isinstance(statement, ast.Assign)
         or len(statement.targets) != 1
         or not isinstance(statement.targets[0], ast.Name)
-        or statement.targets[0].id != "match"
         or not isinstance(statement.value, ast.Call)
     ):
         return None
@@ -160,18 +176,31 @@ def _regex_assignment(statement: ast.stmt) -> str | None:
         and call.func.value.id == "re"
         and call.func.attr == "fullmatch"
     ):
-        return _string_arg(call)
+        pattern = _string_arg(call)
+        if pattern is not None:
+            return statement.targets[0].id, pattern
     return None
 
 
-def _condition_parts(node: ast.expr, match_pattern: str | None) -> set[str]:
+def _literal_string_set(value: ast.expr) -> set[str] | None:
+    if not isinstance(value, (ast.List, ast.Tuple, ast.Set)):
+        return None
+    items = {
+        item.value
+        for item in value.elts
+        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+    }
+    return items if len(items) == len(value.elts) else None
+
+
+def _condition_parts(node: ast.expr, patterns: dict[str, str]) -> set[str]:
     if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
         parts: set[str] = set()
         for value in node.values:
-            parts.update(_condition_parts(value, match_pattern))
+            parts.update(_condition_parts(value, patterns))
         return parts
-    if isinstance(node, ast.Name) and node.id == "match":
-        return {f"regex:{match_pattern}" if match_pattern else "match"}
+    if isinstance(node, ast.Name) and node.id in patterns:
+        return {f"regex:{patterns[node.id]}"}
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
@@ -189,16 +218,24 @@ def _condition_parts(node: ast.expr, match_pattern: str | None) -> set[str]:
         and len(node.comparators) == 1
         and isinstance(node.left, ast.Name)
         and node.left.id in {"method", "pathname", "action"}
-        and isinstance(node.comparators[0], ast.Constant)
     ):
         operator = node.ops[0]
+        comparator = node.comparators[0]
+        if isinstance(operator, ast.In):
+            values = _literal_string_set(comparator)
+            if values is None:
+                return set()
+            rendered = ",".join(repr(value) for value in sorted(values))
+            return {f"{node.left.id} in {{{rendered}}}"}
+        if not isinstance(comparator, ast.Constant):
+            return set()
         if isinstance(operator, ast.Eq):
             op = "=="
         elif isinstance(operator, ast.Is):
             op = " is "
         else:
             return set()
-        return {f"{node.left.id}{op}{node.comparators[0].value!r}"}
+        return {f"{node.left.id}{op}{comparator.value!r}"}
     return set()
 
 
@@ -215,46 +252,30 @@ def _dispatch_branches(dispatch: ast.AsyncFunctionDef) -> set[frozenset[str]]:
     def walk(
         statements: list[ast.stmt],
         inherited: set[str],
-        match_pattern: str | None,
+        patterns: dict[str, str],
     ) -> None:
-        current_pattern = match_pattern
+        current_patterns = dict(patterns)
         for statement in statements:
-            pattern = _regex_assignment(statement)
-            if pattern is not None:
-                current_pattern = pattern
+            assignment = _regex_assignment(statement)
+            if assignment is not None:
+                name, pattern = assignment
+                current_patterns[name] = pattern
                 continue
             if not isinstance(statement, ast.If):
                 continue
-            own_parts = _condition_parts(statement.test, current_pattern)
+            own_parts = _condition_parts(statement.test, current_patterns)
             combined = inherited | own_parts
             has_method = any(part.startswith("method") for part in combined)
             own_route_selector = any(
-                part.startswith(("pathname", "action", "regex:")) or part == "match"
-                for part in own_parts
+                part.startswith(("pathname", "action", "regex:")) for part in own_parts
             )
             if has_method and own_route_selector:
                 branches.add(frozenset(combined))
-            walk(statement.body, combined, current_pattern)
-            walk(statement.orelse, inherited, current_pattern)
+            walk(statement.body, combined, current_patterns)
+            walk(statement.orelse, inherited, current_patterns)
 
-    walk(dispatch.body, set(), None)
+    walk(dispatch.body, set(), {})
     return branches
-
-
-def _route_handler_fingerprint(tree: ast.AST) -> str:
-    route_functions: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        if any(
-            isinstance(decorator, ast.Call) and _http_decorator_methods(decorator) is not None
-            for decorator in node.decorator_list
-        ):
-            route_functions.append(ast.dump(node, include_attributes=False))
-    if not route_functions:
-        raise AssertionError("no HTTP route handlers found")
-    payload = "\n".join(sorted(route_functions))
-    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _git_blob_sha(path: Path) -> str:
@@ -286,12 +307,6 @@ def test_dispatch_method_action_surface_is_bound_to_integration_coverage() -> No
     assert branches == set(DISPATCH_BRANCH_COVERAGE)
 
 
-def test_route_handler_behavior_fingerprint_is_explicit() -> None:
-    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
-
-    assert _route_handler_fingerprint(tree) == ROUTE_HANDLER_AST_SHA256
-
-
 def test_behavior_changes_require_integration_smoke_update() -> None:
     marker = f"{INTEGRATION_BEHAVIOR_MARKER_PREFIX}{_integration_behavior_fingerprint()}"
     smoke_lines = SMOKE_PATH.read_text(encoding="utf-8").splitlines()
@@ -300,7 +315,7 @@ def test_behavior_changes_require_integration_smoke_update() -> None:
 
 
 def test_every_declared_operation_and_workflow_has_integration_smoke_coverage() -> None:
-    smoke = SMOKE_PATH.read_text(encoding="utf-8")
+    smoke = SMOKE_PATH.read_text(encoding="utf-8") + OPENCLAW_SMOKE_PATH.read_text(encoding="utf-8")
     required_checks = (
         set(DIRECT_ROUTE_COVERAGE.values())
         | set(DISPATCH_BRANCH_COVERAGE.values())
