@@ -57,7 +57,7 @@ async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) 
             "observations": True,
             "mcp": False,
             "worker": True,
-            "bank_config_api": False,
+            "bank_config_api": True,
             "bank_llm_health": False,
             "file_upload_api": False,
             "document_export_api": False,
