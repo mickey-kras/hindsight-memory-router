@@ -41,8 +41,10 @@ class ReflectResponse(_Response):
     text: StrictStr
 
 
-def validate_openclaw_response(method: str, resource: str, value: Any) -> None:
-    if method == "DELETE" and resource == "mental-models":
+def validate_openclaw_response(
+    method: str, resource: str, mental_model_id: str | None, value: Any
+) -> None:
+    if method == "DELETE" and resource == "mental-models" and mental_model_id is not None:
         if value is None or isinstance(value, dict):
             return
         raise ValueError("mental model delete response must be empty or an object")
@@ -52,11 +54,11 @@ def validate_openclaw_response(method: str, resource: str, value: Any) -> None:
         model = BankProfileResponse
     elif method == "PATCH" and resource == "config":
         model = BankConfigResponse
-    elif method == "GET" and resource == "mental-models":
+    elif method == "GET" and resource == "mental-models" and mental_model_id is None:
         model = MentalModelListResponse
-    elif method == "POST" and resource == "mental-models":
+    elif method == "POST" and resource == "mental-models" and mental_model_id is None:
         model = CreateMentalModelResponse
-    elif method in {"GET", "PATCH"} and resource == "mental-models":
+    elif method in {"GET", "PATCH"} and resource == "mental-models" and mental_model_id is not None:
         model = MentalModelResponse
     elif method == "POST" and resource == "reflect":
         model = ReflectResponse
