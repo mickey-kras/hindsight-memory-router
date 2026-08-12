@@ -40,10 +40,20 @@ jobs:
       - run: python -m pip install -e '.[dev]'
 
       - name: Python runtime lock is current
+        id: python-lock
+        continue-on-error: true
         run: |
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
             --output-file requirements.generated.txt pyproject.toml
           diff -u requirements.txt requirements.generated.txt
+
+      - name: Upload Python lock diagnostics
+        if: steps.python-lock.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-lock-diagnostics
+          path: requirements.generated.txt
+          if-no-files-found: error
 
       - run: npm ci
 
@@ -165,6 +175,10 @@ jobs:
           name: real-smoke-diagnostics
           path: real-smoke.log
           if-no-files-found: error
+
+      - name: Python runtime lock gate
+        if: always() && steps.python-lock.outcome == 'failure'
+        run: exit 1
 
   aislop:
     name: aislop status
