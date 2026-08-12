@@ -62,7 +62,7 @@ async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) 
             "file_upload_api": False,
             "document_export_api": False,
             "document_import_api": False,
-            "audit_log": False,
+            "audit_log": True,
             "llm_trace": True,
             "store_document_text": True,
         },
