@@ -122,12 +122,12 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Get Hindsight API version and features",
-        "description": "Returns the configured Hindsight /version response unchanged without requiring router authentication.",
+        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
         "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
-            "description": "Configured Hindsight version and enabled capabilities.",
+            "description": "Hindsight API version and facade-exposed capabilities.",
             "content": {
               "application/json": {
                 "schema": {
