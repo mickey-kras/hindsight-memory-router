@@ -7,16 +7,18 @@ from typing import Any, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
 
 from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallResponse
 from .observability import current_request_id
+from .security import scan_recall_result
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
+_RECALL_SUPPLEMENTAL_MAP_FIELDS = ("chunks", "entities", "source_facts")
 
 
 class _HindsightHealthResponse(BaseModel):
@@ -24,6 +26,29 @@ class _HindsightHealthResponse(BaseModel):
 
     status: Literal["healthy"]
     database: Literal["connected"]
+
+
+class _HindsightFeaturesInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    observations: StrictBool
+    mcp: StrictBool
+    worker: StrictBool
+    bank_config_api: StrictBool
+    bank_llm_health: StrictBool
+    file_upload_api: StrictBool
+    document_export_api: StrictBool
+    document_import_api: StrictBool
+    audit_log: StrictBool
+    llm_trace: StrictBool
+    store_document_text: StrictBool
+
+
+class _HindsightVersionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    api_version: StrictStr
+    features: _HindsightFeaturesInfo
 
 
 class HindsightGatewayError(HttpError):
@@ -93,6 +118,24 @@ def _reject_non_finite(value: str) -> None:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
+def _sanitize_recall_supplementals(value: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(value)
+    for field in _RECALL_SUPPLEMENTAL_MAP_FIELDS:
+        entries = value.get(field)
+        if not isinstance(entries, dict):
+            continue
+        sanitized[field] = {
+            key: entry
+            for key, entry in entries.items()
+            if scan_recall_result({field: {key: entry}}).safe
+        }
+
+    trace = value.get("trace")
+    if isinstance(trace, dict) and not scan_recall_result({"trace": trace}).safe:
+        sanitized.pop("trace", None)
+    return sanitized
+
+
 class HindsightGateway:
     def __init__(
         self,
@@ -124,8 +167,15 @@ class HindsightGateway:
             ) from exc
         return cast(dict[str, Any], value)
 
-    async def version(self) -> Any:
-        return await self._request("version", "GET", "/version")
+    async def version(self) -> dict[str, Any]:
+        value = await self._request("version", "GET", "/version")
+        try:
+            response = _HindsightVersionResponse.model_validate(value)
+        except ValidationError as exc:
+            raise HindsightGatewayError(
+                "invalid-response", operation="version", method="GET"
+            ) from exc
+        return response.model_dump()
 
     async def retain(self, bank_id: str, body: dict[str, Any]) -> Any:
         return await self._request(
@@ -145,7 +195,7 @@ class HindsightGateway:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
-        return cast(dict[str, Any], value)
+        return _sanitize_recall_supplementals(cast(dict[str, Any], value))
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
