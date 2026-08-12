@@ -79,6 +79,84 @@ createServer(async (req, res) => {
       });
     }
 
+    const bank = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)$/);
+    if (method === "PUT" && bank) {
+      const body = await readJson(req);
+      const bankId = decodeURIComponent(bank[1]);
+      if (rejectForbiddenRouterTraffic(res, "bank", bankId)) return;
+      record({ kind: "bank", bank_id: bankId, body });
+      return send(res, 200, { id: bankId, name: body.name ?? bankId, ...body });
+    }
+
+    const bankConfig = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/config$/);
+    if (method === "PATCH" && bankConfig) {
+      const body = await readJson(req);
+      const bankId = decodeURIComponent(bankConfig[1]);
+      if (rejectForbiddenRouterTraffic(res, "bank_config", bankId)) return;
+      record({ kind: "bank_config", bank_id: bankId, body });
+      return send(res, 200, { success: true, bank_id: bankId, updates: body.updates ?? {} });
+    }
+
+    const mentalModels = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/mental-models$/);
+    if (mentalModels) {
+      const bankId = decodeURIComponent(mentalModels[1]);
+      if (rejectForbiddenRouterTraffic(res, "mental_models", bankId)) return;
+      if (method === "GET") {
+        record({ kind: "mental_model_list", bank_id: bankId, detail: url.searchParams.get("detail") });
+        return send(res, 200, [{ id: "page-1", name: "Preferences" }]);
+      }
+      if (method === "POST") {
+        const body = await readJson(req);
+        record({ kind: "mental_model_create", bank_id: bankId, body });
+        return send(res, 200, { ...body, content: "safe synthesized page" });
+      }
+    }
+
+    const mentalModel = url.pathname.match(
+      /^\/v1\/default\/banks\/([^/]+)\/mental-models\/([^/]+)$/,
+    );
+    if (mentalModel) {
+      const bankId = decodeURIComponent(mentalModel[1]);
+      const mentalModelId = decodeURIComponent(mentalModel[2]);
+      if (rejectForbiddenRouterTraffic(res, "mental_model", bankId)) return;
+      if (method === "GET") {
+        record({
+          kind: "mental_model_get",
+          bank_id: bankId,
+          mental_model_id: mentalModelId,
+          detail: url.searchParams.get("detail"),
+        });
+        return send(res, 200, {
+          id: mentalModelId,
+          name: "Preferences",
+          source_query: "What does the user prefer?",
+          content: "safe synthesized page",
+        });
+      }
+      if (method === "PATCH") {
+        const body = await readJson(req);
+        record({ kind: "mental_model_update", bank_id: bankId, mental_model_id: mentalModelId, body });
+        return send(res, 200, { id: mentalModelId, ...body, content: "safe synthesized page" });
+      }
+      if (method === "DELETE") {
+        record({ kind: "mental_model_delete", bank_id: bankId, mental_model_id: mentalModelId });
+        res.writeHead(204);
+        return res.end();
+      }
+    }
+
+    const reflect = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/reflect$/);
+    if (method === "POST" && reflect) {
+      const body = await readJson(req);
+      const bankId = decodeURIComponent(reflect[1]);
+      if (rejectForbiddenRouterTraffic(res, "reflect", bankId)) return;
+      record({ kind: "reflect", bank_id: bankId, body });
+      return send(res, 200, {
+        answer: `safe reflection from ${bankId}`,
+        supporting_facts: [{ id: "fact-1", text: "safe supporting fact" }],
+      });
+    }
+
     const retain = url.pathname.match(
       /^\/v1\/default\/banks\/([^/]+)\/memories$/,
     );
