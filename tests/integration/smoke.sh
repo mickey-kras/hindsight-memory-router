@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 3d9374c6030450c85439bc55166884fe4192febe33e0d948ee22557166053d60
+# integration-behavior-sha256: 26d4c9c1c7c3ddcc17af76678591e06257307b97316121044991dd47ca4b5e4a
 
 mode="${1:-}"
 router_db="${2:-}"
