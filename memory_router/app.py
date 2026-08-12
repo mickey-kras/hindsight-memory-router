@@ -499,9 +499,7 @@ async def dispatch(path: str, request: Request) -> Response:
     bank_match = re.fullmatch(r"/v1/default/banks/([^/]+)", pathname)
     config_match = re.fullmatch(r"/v1/default/banks/([^/]+)/config", pathname)
     mental_list_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models", pathname)
-    mental_item_match = re.fullmatch(
-        r"/v1/default/banks/([^/]+)/mental-models/([^/]+)", pathname
-    )
+    mental_item_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models/([^/]+)", pathname)
     reflect_match = re.fullmatch(r"/v1/default/banks/([^/]+)/reflect", pathname)
     facade = OpenClawFacade(policy)
 
