@@ -43,16 +43,19 @@ jobs:
         id: python-lock
         continue-on-error: true
         run: |
+          set -o pipefail
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
             --output-file requirements.generated.txt pyproject.toml
-          diff -u requirements.txt requirements.generated.txt
+          diff -u requirements.txt requirements.generated.txt | tee requirements.diff
 
       - name: Upload Python lock diagnostics
         if: steps.python-lock.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-lock-diagnostics
-          path: requirements.generated.txt
+          path: |
+            requirements.generated.txt
+            requirements.diff
           if-no-files-found: error
 
       - run: npm ci
@@ -83,7 +86,21 @@ jobs:
       - name: OpenClaw compatibility inventory
         run: python scripts/check_openclaw_compat.py .upstream/hindsight
 
-      - run: ruff format --diff memory_router tests
+      - name: Python formatting
+        id: python-format
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          ruff format --diff memory_router tests | tee ruff-format.diff
+
+      - name: Upload Python formatting diagnostics
+        if: steps.python-format.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ruff-format-diagnostics
+          path: ruff-format.diff
+          if-no-files-found: error
+
       - run: ruff check memory_router tests
       - run: mypy memory_router
 
@@ -176,8 +193,8 @@ jobs:
           path: real-smoke.log
           if-no-files-found: error
 
-      - name: Python runtime lock gate
-        if: always() && steps.python-lock.outcome == 'failure'
+      - name: Deferred diagnostic gates
+        if: always() && (steps.python-lock.outcome == 'failure' || steps.python-format.outcome == 'failure')
         run: exit 1
 
   aislop:
