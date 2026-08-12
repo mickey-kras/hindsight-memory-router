@@ -51,7 +51,22 @@ async def test_hindsight_gateway_success_and_error_paths(httpx_mock: HTTPXMock) 
         },
     }
     httpx_mock.add_response(url="http://x/version", json=version)
-    assert await gateway.version() == version
+    assert await gateway.version() == {
+        "api_version": "0.9.0",
+        "features": {
+            "observations": True,
+            "mcp": False,
+            "worker": True,
+            "bank_config_api": False,
+            "bank_llm_health": False,
+            "file_upload_api": False,
+            "document_export_api": False,
+            "document_import_api": False,
+            "audit_log": False,
+            "llm_trace": True,
+            "store_document_text": True,
+        },
+    }
 
     httpx_mock.add_response(url="http://x/v1/default/banks/a%2Fb/memories", json={"ok": True})
     await gateway.retain("a/b", {"items": []})
