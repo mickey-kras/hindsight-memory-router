@@ -26,7 +26,6 @@ _UNSUPPORTED_FACADE_FEATURES = (
     "file_upload_api",
     "document_export_api",
     "document_import_api",
-    "audit_log",
 )
 
 
