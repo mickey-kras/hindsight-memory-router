@@ -21,7 +21,6 @@ MAX_HINDSIGHT_JSON_DEPTH = 64
 _RECALL_SUPPLEMENTAL_MAP_FIELDS = ("chunks", "entities", "source_facts")
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
-    "bank_config_api",
     "bank_llm_health",
     "file_upload_api",
     "document_export_api",
@@ -207,6 +206,16 @@ class HindsightGateway:
                 "invalid-response", operation="recall", method="POST"
             ) from exc
         return _sanitize_recall_supplementals(cast(dict[str, Any], value))
+
+    async def openclaw_request(
+        self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> Any:
+        """Forward one allowlisted OpenClaw-facing Hindsight operation.
+
+        Route allowlisting and bank resolution live in the router facade; this method only
+        preserves the gateway's auth, timeout, response-size/depth and JSON validation.
+        """
+        return await self._request(operation, method, path, body)
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
