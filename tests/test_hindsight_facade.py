@@ -66,3 +66,23 @@ async def test_recall_preserves_hindsight_top_level_fields_while_filtering_resul
     }
     assert len(store.items) == 1
     assert store.items[0]["sourceMemoryId"] == "unsafe"
+
+
+@pytest.mark.asyncio
+async def test_recall_preserves_explicit_null_hindsight_top_level_fields() -> None:
+    upstream = {
+        "results": [],
+        "chunks": None,
+        "entities": None,
+        "source_facts": None,
+        "trace": None,
+    }
+    policy = RouterPolicy(
+        DEFAULT_REGISTRY.model_copy(deep=True),
+        FakeHindsight(upstream),
+        FakeLimits(),
+        FakeStore(),
+        FakeRepository(),
+    )
+
+    assert await policy.recall("main", {"query": "status"}) == upstream
