@@ -45,7 +45,10 @@ async def test_request_id_middleware_preserves_valid_id_and_replaces_invalid() -
 
 @pytest.mark.asyncio
 async def test_request_id_is_propagated_to_hindsight(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(url="http://hindsight/health", json={"ok": True})
+    httpx_mock.add_response(
+        url="http://hindsight/health",
+        json={"status": "healthy", "database": "connected"},
+    )
     gateway = HindsightGateway("http://hindsight", None)
 
     async def inner(scope: dict[str, Any], receive: Any, send: Any) -> None:

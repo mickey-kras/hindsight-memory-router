@@ -18,6 +18,8 @@ function requestClass(method, path) {
 function isAllowedPath(path) {
   return (
     path === "/health" ||
+    path === "/health/live" ||
+    path === "/health/ready" ||
     path === "/ready" ||
     path === "/version" ||
     path.startsWith("/v1/default/banks/") ||

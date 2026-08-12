@@ -35,13 +35,45 @@ def runtime_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_health_ready_and_exception_handlers(caplog: pytest.LogCaptureFixture) -> None:
-    assert await app_module.health() == {"status": "healthy", "service": "memory-router"}
-    app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
-    assert payload(await app_module.ready()) == {"status": "ready", "service": "memory-router"}
-    app_module.runtime.repository.ping.side_effect = RuntimeError("down")
+async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCaptureFixture) -> None:
+    repository = SimpleNamespace(ping=AsyncMock())
+    upstream_health = {
+        "status": "healthy",
+        "database": "connected",
+        "db_acquire_ms": 0.4,
+        "db_pool_waiting": 0,
+    }
+    hindsight = SimpleNamespace(health=AsyncMock(return_value=upstream_health))
+    app_module.runtime.repository = repository
+    app_module.runtime.hindsight = hindsight
+
+    assert await app_module.health_live() == {"status": "healthy"}
+    repository.ping.assert_not_awaited()
+    hindsight.health.assert_not_awaited()
+
+    response = await app_module.health_ready()
+    assert response.status_code == 200
+    assert payload(response) == upstream_health
+    repository.ping.assert_awaited_once()
+    hindsight.health.assert_awaited_once()
+
     response = await app_module.ready()
-    assert response.status_code == 503 and payload(response)["status"] == "not_ready"
+    assert response.status_code == 200
+    assert payload(response) == upstream_health
+
+    repository.ping.side_effect = RuntimeError("database down")
+    response = await app_module.health_ready()
+    assert response.status_code == 503
+    assert payload(response) == {"status": "unhealthy"}
+    assert hindsight.health.await_count == 3
+
+    repository.ping.side_effect = None
+    hindsight.health.side_effect = HindsightGatewayError(
+        "network", operation="health", method="GET"
+    )
+    response = await app_module.health_ready()
+    assert response.status_code == 503
+    assert payload(response) == {"status": "unhealthy"}
 
     response = await app_module.http_error_handler(
         request("GET", "/"), HttpError(429, "limited", "slow", {"retry-after": "2"})
