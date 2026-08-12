@@ -5,9 +5,11 @@ import json
 import logging
 import os
 import re
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import PackageNotFoundError, version as package_version
 from typing import Any
 from urllib.parse import unquote
 
@@ -48,6 +50,11 @@ logger = logging.getLogger(__name__)
 _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
+_PROCESS_START = time.monotonic()
+try:
+    _ROUTER_VERSION = package_version("hindsight-memory-router")
+except PackageNotFoundError:
+    _ROUTER_VERSION = "0.0.0"
 
 
 def _now() -> str:
@@ -370,8 +377,12 @@ async def _admin_rate(method: str) -> None:
 
 
 @app.get("/health/live")
-async def health_live() -> dict[str, str]:
-    return {"status": "healthy"}
+async def health_live() -> dict[str, str | float]:
+    return {
+        "status": "alive",
+        "version": _ROUTER_VERSION,
+        "uptime_seconds": round(time.monotonic() - _PROCESS_START, 1),
+    }
 
 
 async def _database_health(repository: QuarantineRepository) -> bool:
@@ -465,21 +476,11 @@ async def dispatch(path: str, request: Request) -> Response:
                 return JSONResponse(await admin.postpone(item_id))
         return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
 
+    if method == "GET" and pathname == "/version":
+        hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
+        return JSONResponse(await hindsight.version())
     if not await _router_auth(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if method == "GET" and pathname == "/version":
-        return JSONResponse(
-            {
-                "api_version": "0.9.0",
-                "router": "memory-router",
-                "features": {
-                    "policy_facade": True,
-                    "encrypted_quarantine": True,
-                    "quarantine_admin_api": True,
-                    "quarantine_database": True,
-                },
-            }
-        )
     policy = _require_runtime(runtime.policy, "router policy")
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
     if method == "POST" and match:
