@@ -80,28 +80,26 @@ class OpenClawFacade:
         value = await self.policy.hindsight.openclaw_request(
             f"openclaw_{operation}", method, path, body
         )
+        if value is not None:
+            response_scan = scan_recall_result({"response": value})
+            if not response_scan.safe:
+                await self._audit(
+                    writer_id,
+                    "openclaw_suspicious_provider_response",
+                    {"resource": resource, "response": value},
+                    response_scan,
+                )
+                raise HttpError(
+                    502,
+                    "hindsight_unsafe_response",
+                    "upstream memory service returned unsafe content",
+                )
         try:
             validate_openclaw_response(method, resource, mental_model_id, value)
         except ValueError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation=f"openclaw_{operation}", method=method
             ) from exc
-        if value is None:
-            return None
-
-        response_scan = scan_recall_result({"response": value})
-        if not response_scan.safe:
-            await self._audit(
-                writer_id,
-                "openclaw_suspicious_provider_response",
-                {"resource": resource, "response": value},
-                response_scan,
-            )
-            raise HttpError(
-                502,
-                "hindsight_unsafe_response",
-                "upstream memory service returned unsafe content",
-            )
         return value
 
     async def _audit(
