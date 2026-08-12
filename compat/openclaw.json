@@ -7,6 +7,12 @@
     "agent_sdk": "hindsight-tools/hindsight-agent-sdk/src/index.ts",
     "client": "hindsight-clients/typescript/src/index.ts"
   },
+  "source_blob_shas": {
+    "plugin": "fd3bd44028a5475b8a09ee2068acb0136bc250d1",
+    "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
+    "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
+    "client": "7ddc437988e4ba3b9730fd209c9a1cbb08f88ccd"
+  },
   "plugin_client_methods": ["createBank", "recall", "retain"],
   "agent_sdk_methods": [
     "createMentalModel",
