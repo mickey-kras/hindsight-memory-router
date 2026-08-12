@@ -1,0 +1,87 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Memory Router OpenClaw Compatibility Surface",
+    "version": "0.9.0",
+    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. bank_id is always resolved as a Memory Router writer ID; it is never forwarded as an arbitrary Hindsight bank ID."
+  },
+  "paths": {
+    "/v1/default/banks/{bank_id}": {
+      "put": {
+        "operationId": "openClawUpsertBank",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Hindsight-compatible bank response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      }
+    },
+    "/v1/default/banks/{bank_id}/config": {
+      "patch": {
+        "operationId": "openClawUpdateBankConfig",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["updates"], "properties": {"updates": {"type": "object", "additionalProperties": true}}, "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Hindsight-compatible bank config response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      }
+    },
+    "/v1/default/banks/{bank_id}/mental-models": {
+      "get": {
+        "operationId": "openClawListMentalModels",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}, {"name": "detail", "in": "query", "schema": {"type": "string", "enum": ["metadata", "content", "full"]}}],
+        "responses": {"200": {"description": "Hindsight-compatible mental model list"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      },
+      "post": {
+        "operationId": "openClawCreateMentalModel",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Hindsight-compatible mental model creation response"}, "201": {"description": "Hindsight-compatible mental model creation response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      }
+    },
+    "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": {
+      "get": {
+        "operationId": "openClawGetMentalModel",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}, {"name": "detail", "in": "query", "schema": {"type": "string", "enum": ["metadata", "content", "full"]}}],
+        "responses": {"200": {"description": "Hindsight-compatible mental model response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      },
+      "patch": {
+        "operationId": "openClawUpdateMentalModel",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Hindsight-compatible mental model response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      },
+      "delete": {
+        "operationId": "openClawDeleteMentalModel",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}],
+        "responses": {"200": {"description": "Hindsight-compatible delete response when one is returned"}, "204": {"description": "Mental model deleted"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      }
+    },
+    "/v1/default/banks/{bank_id}/reflect": {
+      "post": {
+        "operationId": "openClawReflect",
+        "security": [{"RouterToken": []}],
+        "parameters": [{"$ref": "#/components/parameters/BankId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["query"], "additionalProperties": true}}}},
+        "responses": {"200": {"description": "Hindsight-compatible reflect response after provider-content safety scanning"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "RouterToken": {"type": "http", "scheme": "bearer"}
+    },
+    "parameters": {
+      "BankId": {"name": "bank_id", "in": "path", "required": true, "description": "Memory Router writer ID; resolved to the configured write bank.", "schema": {"type": "string", "minLength": 1}},
+      "MentalModelId": {"name": "mental_model_id", "in": "path", "required": true, "schema": {"type": "string", "minLength": 1}}
+    },
+    "responses": {
+      "Unauthorized": {"description": "Missing or invalid router bearer token"},
+      "Blocked": {"description": "Request blocked by Memory Router security policy"},
+      "UpstreamFailure": {"description": "Hindsight unavailable, invalid, oversized, or unsafe provider response"}
+    }
+  }
+}
