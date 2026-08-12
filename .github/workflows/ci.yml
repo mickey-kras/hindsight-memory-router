@@ -41,9 +41,10 @@ jobs:
 
       - name: Python runtime lock is current
         run: |
+          cp requirements.txt requirements.expected.txt
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
-            --output-file requirements.generated.txt pyproject.toml
-          diff -u requirements.txt requirements.generated.txt
+            --output-file requirements.txt pyproject.toml
+          diff -u requirements.expected.txt requirements.txt
 
       - run: npm ci
 
