@@ -3,11 +3,22 @@
   "info": {
     "title": "Memory Router OpenClaw Compatibility Surface",
     "version": "0.9.0",
-    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. bank_id is always resolved as a Memory Router writer ID; it is never forwarded as an arbitrary Hindsight bank ID."
+    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. bank_id is always resolved as a Memory Router writer ID; it is never forwarded as an arbitrary Hindsight bank ID.",
+    "license": {
+      "name": "MIT",
+      "identifier": "MIT"
+    }
   },
+  "servers": [
+    {
+      "url": "http://localhost:8890",
+      "description": "Local memory-router"
+    }
+  ],
   "paths": {
     "/v1/default/banks/{bank_id}": {
       "put": {
+        "summary": "Create or update the resolved OpenClaw bank",
         "operationId": "openClawUpsertBank",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}],
@@ -17,6 +28,7 @@
     },
     "/v1/default/banks/{bank_id}/config": {
       "patch": {
+        "summary": "Update configuration for the resolved OpenClaw bank",
         "operationId": "openClawUpdateBankConfig",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}],
@@ -26,27 +38,31 @@
     },
     "/v1/default/banks/{bank_id}/mental-models": {
       "get": {
+        "summary": "List mental models for the resolved OpenClaw bank",
         "operationId": "openClawListMentalModels",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}, {"name": "detail", "in": "query", "schema": {"type": "string", "enum": ["metadata", "content", "full"]}}],
         "responses": {"200": {"description": "Hindsight-compatible mental model list"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       },
       "post": {
+        "summary": "Create a mental model for the resolved OpenClaw bank",
         "operationId": "openClawCreateMentalModel",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}],
         "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "additionalProperties": true}}}},
-        "responses": {"200": {"description": "Hindsight-compatible mental model creation response"}, "201": {"description": "Hindsight-compatible mental model creation response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+        "responses": {"200": {"description": "Hindsight-compatible mental model creation response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       }
     },
     "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": {
       "get": {
+        "summary": "Get a mental model from the resolved OpenClaw bank",
         "operationId": "openClawGetMentalModel",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}, {"name": "detail", "in": "query", "schema": {"type": "string", "enum": ["metadata", "content", "full"]}}],
         "responses": {"200": {"description": "Hindsight-compatible mental model response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       },
       "patch": {
+        "summary": "Update a mental model in the resolved OpenClaw bank",
         "operationId": "openClawUpdateMentalModel",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}],
@@ -54,18 +70,20 @@
         "responses": {"200": {"description": "Hindsight-compatible mental model response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       },
       "delete": {
+        "summary": "Delete a mental model from the resolved OpenClaw bank",
         "operationId": "openClawDeleteMentalModel",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}, {"$ref": "#/components/parameters/MentalModelId"}],
-        "responses": {"200": {"description": "Hindsight-compatible delete response when one is returned"}, "204": {"description": "Mental model deleted"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
+        "responses": {"200": {"description": "Hindsight-compatible mental model delete response"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       }
     },
     "/v1/default/banks/{bank_id}/reflect": {
       "post": {
+        "summary": "Reflect against the resolved OpenClaw bank",
         "operationId": "openClawReflect",
         "security": [{"RouterToken": []}],
         "parameters": [{"$ref": "#/components/parameters/BankId"}],
-        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["query"], "additionalProperties": true}}}},
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"type": "object", "required": ["query"], "properties": {"query": {"type": "string"}}, "additionalProperties": true}}}},
         "responses": {"200": {"description": "Hindsight-compatible reflect response after provider-content safety scanning"}, "401": {"$ref": "#/components/responses/Unauthorized"}, "422": {"$ref": "#/components/responses/Blocked"}, "4XX": {"$ref": "#/components/responses/UpstreamClientError"}, "502": {"$ref": "#/components/responses/UpstreamFailure"}}
       }
     }
