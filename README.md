@@ -4,18 +4,19 @@
 [![codeql](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml/badge.svg)](https://github.com/mickey-kras/hindsight-memory-router/actions/workflows/codeql.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Memory Router is an agent- and framework-neutral policy boundary between an application and its memory provider.
+Memory Router is a policy and security boundary for the current OpenClaw Hindsight integration.
 
 ```text
-Agent / Application -> Memory Router -> Memory Provider
+OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
 ```
 
-It has two goals:
+Today it:
 
-- decouple agents and applications from provider-specific memory access;
-- enforce a security and policy boundary around memory retain and recall.
+- accepts the Hindsight-compatible retain/recall traffic used by the OpenClaw Hindsight plugin;
+- maps configured writers to Hindsight banks;
+- enforces authentication, bounds, quotas, safety scanning, and encrypted quarantine before or after Hindsight calls as appropriate.
 
-Hindsight is the currently supported memory provider. Provider abstraction is not implemented yet.
+Memory Router is not yet a generic agent/application memory facade. Support for additional clients or memory providers is future work and is not implemented in the current runtime.
 
 ## Quick start
 
@@ -42,7 +43,8 @@ Router and admin capabilities remain fail-closed until their credentials are con
 - [Getting started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [Architecture](docs/architecture.md)
-- [Hindsight provider](docs/providers/hindsight.md)
+- [Hindsight upstream](docs/providers/hindsight.md)
+- [OpenClaw integration](docs/integrations/openclaw.md)
 - [Docker deployment](docs/deployment/docker.md)
 - [Security](docs/security/quarantine.md)
 - [Environment variable reference](docs/reference/environment-variables.md)
