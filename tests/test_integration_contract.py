@@ -75,8 +75,12 @@ DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {BANK_MEMORY_REGEX, "method=='POST'", "action=='recall'"}
     ): "safe recall endpoint succeeds",
-    frozenset({BANK_ROOT_REGEX, "method=='PUT'"}): "OpenClaw configured bank defaults use resolved bank",
-    frozenset({BANK_CONFIG_REGEX, "method=='PATCH'"}): "OpenClaw configured bank defaults use resolved bank",
+    frozenset(
+        {BANK_ROOT_REGEX, "method=='PUT'"}
+    ): "OpenClaw configured bank defaults use resolved bank",
+    frozenset(
+        {BANK_CONFIG_REGEX, "method=='PATCH'"}
+    ): "OpenClaw configured bank defaults use resolved bank",
     frozenset(
         {MENTAL_LIST_REGEX, "method in {'GET','POST'}"}
     ): "OpenClaw knowledge-page list get create update delete succeeds",
