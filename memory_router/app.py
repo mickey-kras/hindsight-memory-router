@@ -555,8 +555,6 @@ async def dispatch(path: str, request: Request) -> Response:
             query=list(request.query_params.multi_items()),
             read_operation=method == "GET",
         )
-        if method == "DELETE" and value is None:
-            return Response(status_code=204)
         return JSONResponse(value)
     if method == "POST" and reflect_match:
         writer_id = _decode_path_segment(reflect_match.group(1))
