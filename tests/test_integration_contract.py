@@ -309,7 +309,9 @@ def test_dispatch_method_action_surface_is_bound_to_integration_coverage() -> No
 
 def test_behavior_changes_require_integration_smoke_update() -> None:
     marker = f"{INTEGRATION_BEHAVIOR_MARKER_PREFIX}{_integration_behavior_fingerprint()}"
-    smoke_lines = SMOKE_PATH.read_text(encoding="utf-8").splitlines()
+    smoke_lines = (
+        SMOKE_PATH.read_text(encoding="utf-8") + OPENCLAW_SMOKE_PATH.read_text(encoding="utf-8")
+    ).splitlines()
 
     assert marker in smoke_lines
 
