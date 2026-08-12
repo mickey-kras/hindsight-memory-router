@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memory_router.errors import HttpError
+from memory_router.hindsight import HindsightGatewayError
 from memory_router.openclaw import OpenClawFacade
 from memory_router.security import scan_recall_body, scan_retain_body
 from memory_router.validation import parse_recall_body, parse_retain_body
@@ -25,6 +26,33 @@ def make_policy(response: object = None) -> FakePolicy:
         limits=SimpleNamespace(consume_retain=AsyncMock(), consume_recall=AsyncMock()),
         _quarantine=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
+
+
+def valid_response(method: str, resource: str, mental_model_id: str | None) -> object:
+    if method == "DELETE":
+        return None
+    if method == "PUT" and resource == "":
+        return {
+            "bank_id": "physical-main",
+            "name": "physical-main",
+            "disposition": {"skepticism": 3, "literalism": 3, "empathy": 3},
+            "mission": "Remember preferences",
+        }
+    if method == "PATCH" and resource == "config":
+        return {"bank_id": "physical-main", "config": {}, "overrides": {}}
+    if resource == "mental-models" and mental_model_id is None and method == "GET":
+        return {
+            "items": [
+                {"id": "user-preferences", "bank_id": "physical-main", "name": "User preferences"}
+            ]
+        }
+    if resource == "mental-models" and mental_model_id is None and method == "POST":
+        return {"mental_model_id": "user-preferences", "operation_id": "op-1"}
+    if resource == "mental-models" and mental_model_id is not None:
+        return {"id": mental_model_id, "bank_id": "physical-main", "name": "User preferences"}
+    if method == "POST" and resource == "reflect":
+        return {"text": "Safe reflection", "based_on": {"memories": []}}
+    raise AssertionError((method, resource, mental_model_id))
 
 
 @pytest.mark.parametrize(
@@ -153,7 +181,7 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
     read_operation: bool,
     path: str,
 ) -> None:
-    response = {"ok": True, "content": "safe response"}
+    response = valid_response(method, resource, mental_model_id)
     policy = make_policy(response)
     facade = OpenClawFacade(policy)
 
@@ -236,7 +264,12 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
             {
                 "method": "POST",
                 "resource": "mental-models",
-                "body": {"id": "page", "name": "safe", "source_query": "safe", "trigger": {INJECTION: True}},
+                "body": {
+                    "id": "page",
+                    "name": "safe",
+                    "source_query": "safe",
+                    "trigger": {INJECTION: True},
+                },
             },
         ),
         (
@@ -253,6 +286,13 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
                 "resource": "mental-models",
                 "mental_model_id": "page",
                 "body": {"name": INJECTION},
+            },
+        ),
+        (
+            {
+                "method": "DELETE",
+                "resource": "mental-models",
+                "mental_model_id": INJECTION,
             },
         ),
         (
@@ -277,7 +317,7 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
 async def test_openclaw_request_strings_keys_and_values_are_scanned(
     kwargs: dict[str, object],
 ) -> None:
-    policy = make_policy({"ok": True})
+    policy = make_policy({"text": "safe"})
     facade = OpenClawFacade(policy)
 
     with pytest.raises(HttpError) as blocked:
@@ -291,10 +331,10 @@ async def test_openclaw_request_strings_keys_and_values_are_scanned(
 @pytest.mark.parametrize(
     "response",
     [
-        {"content": INJECTION},
-        {"answer": "safe", "supporting_facts": [{"text": INJECTION}]},
-        {"models": [{"name": "safe", "content": INJECTION}]},
-        {"models": [{INJECTION: "safe"}]},
+        {"text": INJECTION},
+        {"text": "safe", "based_on": {"memories": [{"text": INJECTION}]}},
+        {"text": "safe", "structured_output": {INJECTION: "safe"}},
+        {"text": "safe", "trace": {"output": INJECTION}},
     ],
 )
 @pytest.mark.asyncio
@@ -319,8 +359,25 @@ async def test_openclaw_unsafe_provider_content_never_reaches_agent_when_audit_f
 
 
 @pytest.mark.asyncio
+async def test_invalid_openclaw_provider_shape_is_rejected() -> None:
+    policy = make_policy({"answer": "old non-Hindsight shape"})
+    facade = OpenClawFacade(policy)
+
+    with pytest.raises(HindsightGatewayError) as invalid:
+        await facade.forward(
+            writer_id="openclaw",
+            method="POST",
+            resource="reflect",
+            body={"query": "safe question"},
+            read_operation=True,
+        )
+
+    assert invalid.value.code == "hindsight_invalid_response"
+
+
+@pytest.mark.asyncio
 async def test_unknown_plugin_bank_cannot_address_upstream_bank() -> None:
-    policy = make_policy({"ok": True})
+    policy = make_policy({"text": "safe"})
     facade = OpenClawFacade(policy)
 
     with pytest.raises(HttpError) as blocked:
