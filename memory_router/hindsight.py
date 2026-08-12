@@ -19,6 +19,15 @@ DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
 _RECALL_SUPPLEMENTAL_MAP_FIELDS = ("chunks", "entities", "source_facts")
+_UNSUPPORTED_FACADE_FEATURES = (
+    "mcp",
+    "bank_config_api",
+    "bank_llm_health",
+    "file_upload_api",
+    "document_export_api",
+    "document_import_api",
+    "audit_log",
+)
 
 
 class _HindsightHealthResponse(BaseModel):
@@ -175,7 +184,10 @@ class HindsightGateway:
             raise HindsightGatewayError(
                 "invalid-response", operation="version", method="GET"
             ) from exc
-        return response.model_dump()
+        facade = response.model_dump()
+        for feature in _UNSUPPORTED_FACADE_FEATURES:
+            facade["features"][feature] = False
+        return facade
 
     async def retain(self, bank_id: str, body: dict[str, Any]) -> Any:
         return await self._request(
