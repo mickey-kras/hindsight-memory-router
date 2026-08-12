@@ -136,6 +136,26 @@
               }
             }
           },
+          "502": {
+            "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Hindsight timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "4XX": {
             "description": "The HTTP server rejected a malformed client request before invoking the version handler."
           }
