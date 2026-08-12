@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 3452b511f1f7ea34bf21d63eb9fa0ca447abf63a5019116b8cc601ede049a522
+# integration-behavior-sha256: 3d9374c6030450c85439bc55166884fe4192febe33e0d948ee22557166053d60
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -126,7 +126,7 @@ for _ in {1..60}; do
   sleep 1
 done
 live_response="$(curl -fsS "${router_url}/health/live")"
-printf '%s' "$live_response" | python3 -c 'import json,sys; assert json.load(sys.stdin) == {"status":"healthy"}' || fail_check "router /health/live response was unexpected"
+printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "alive"; assert isinstance(data["version"], str) and data["version"]; assert isinstance(data["uptime_seconds"], (int, float)) and data["uptime_seconds"] >= 0' || fail_check "router /health/live response was unexpected"
 pass_check
 
 begin_check "router readiness and internal Hindsight become reachable"
@@ -149,13 +149,14 @@ docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 
 pass_check
 
 begin_check "authentication and network boundaries hold"
-status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/version")"
-[[ "$status" == "401" ]] || fail_check "expected /version 401, got ${status}"
+version="$(curl -fsS "${router_url}/version")"
+upstream_version="$(docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; print(urllib.request.urlopen('http://hindsight:8888/version', timeout=2).read().decode())")"
+python3 -c 'import json,sys; assert json.loads(sys.argv[1]) == json.loads(sys.argv[2])' "$version" "$upstream_version" || fail_check "router /version did not preserve Hindsight response"
+retain_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
+[[ "$retain_status" == "401" ]] || fail_check "expected unauthenticated retain 401, got ${retain_status}"
 if curl --max-time 2 -fsS "http://127.0.0.1:8888/health" >/dev/null 2>&1; then
   fail_check "internal Hindsight service is exposed on host port 8888"
 fi
-version="$(curl -fsS -H "Authorization: Bearer ${router_token}" "${router_url}/version")"
-printf '%s' "$version" | grep -q 'quarantine_database' || fail_check "router version missing quarantine_database"
 pass_check
 
 post_router() {
@@ -232,7 +233,7 @@ begin_check "safe recall endpoint succeeds"
 safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
 printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("results"), list)'
 if [[ "$mode" == "fake" ]]; then
-  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from main"'
+  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
 fi
 pass_check
 
