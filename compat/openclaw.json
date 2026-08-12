@@ -1,0 +1,35 @@
+{
+  "upstream": "vectorize-io/hindsight",
+  "observed_main_sha": "bad06de5add5360d3c729c16cd4469fada555193",
+  "sources": {
+    "plugin": "hindsight-integrations/openclaw/src/index.ts",
+    "bank_defaults": "hindsight-integrations/openclaw/src/bank-defaults.ts",
+    "agent_sdk": "hindsight-tools/hindsight-agent-sdk/src/index.ts",
+    "client": "hindsight-clients/typescript/src/index.ts"
+  },
+  "plugin_client_methods": ["createBank", "recall", "retain"],
+  "agent_sdk_methods": [
+    "createMentalModel",
+    "deleteMentalModel",
+    "getMentalModel",
+    "listMentalModels",
+    "recall",
+    "reflect",
+    "retainBatch",
+    "updateMentalModel"
+  ],
+  "endpoints": [
+    ["GET", "/health"],
+    ["GET", "/version"],
+    ["POST", "/v1/default/banks/{bank_id}/memories"],
+    ["POST", "/v1/default/banks/{bank_id}/memories/recall"],
+    ["PUT", "/v1/default/banks/{bank_id}"],
+    ["PATCH", "/v1/default/banks/{bank_id}/config"],
+    ["GET", "/v1/default/banks/{bank_id}/mental-models"],
+    ["POST", "/v1/default/banks/{bank_id}/mental-models"],
+    ["GET", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["PATCH", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["DELETE", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["POST", "/v1/default/banks/{bank_id}/reflect"]
+  ]
+}
