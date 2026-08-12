@@ -20,20 +20,38 @@ EXPECTED_ROUTES = {
     "/admin/quarantine/items/{quarantine_id}/reject": {"post"},
     "/admin/quarantine/items/{quarantine_id}/postpone": {"post"},
 }
+OPENCLAW_ROUTES = {
+    "/v1/default/banks/{bank_id}": {"put"},
+    "/v1/default/banks/{bank_id}/config": {"patch"},
+    "/v1/default/banks/{bank_id}/mental-models": {"get", "post"},
+    "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": {
+        "get",
+        "patch",
+        "delete",
+    },
+    "/v1/default/banks/{bank_id}/reflect": {"post"},
+}
 
 
 def _spec() -> dict[str, object]:
     return json.loads(pathlib.Path("openapi/openapi.json").read_text())
 
 
-def test_openapi_paths_and_methods_match_router_surface() -> None:
-    spec = _spec()
+def _openclaw_spec() -> dict[str, object]:
+    return json.loads(pathlib.Path("openapi/openclaw.json").read_text())
+
+
+def _methods(spec: dict[str, object]) -> dict[str, set[str]]:
     paths = spec["paths"]
     assert isinstance(paths, dict)
-    actual = {
+    return {
         path: set(value) & HTTP_METHODS for path, value in paths.items() if isinstance(value, dict)
     }
-    assert actual == EXPECTED_ROUTES
+
+
+def test_openapi_paths_and_methods_match_composed_router_surface() -> None:
+    assert _methods(_spec()) == EXPECTED_ROUTES
+    assert _methods(_openclaw_spec()) == OPENCLAW_ROUTES
 
 
 def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
@@ -58,6 +76,17 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     for path, marker in markers.items():
         assert marker in source, f"OpenAPI path has no dispatcher marker: {path}"
 
+    openclaw_markers = {
+        "/v1/default/banks/{bank_id}": "bank_match = re.fullmatch",
+        "/v1/default/banks/{bank_id}/config": "config_match = re.fullmatch",
+        "/v1/default/banks/{bank_id}/mental-models": "mental_list_match = re.fullmatch",
+        "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": "mental_item_match = re.fullmatch",
+        "/v1/default/banks/{bank_id}/reflect": "reflect_match = re.fullmatch",
+    }
+    assert set(openclaw_markers) == set(OPENCLAW_ROUTES)
+    for path, marker in openclaw_markers.items():
+        assert marker in source, f"OpenClaw OpenAPI path has no dispatcher marker: {path}"
+
 
 def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     spec = _spec()
@@ -81,3 +110,20 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
         "source_facts",
         "trace",
     }
+
+
+def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> None:
+    spec = _openclaw_spec()
+    paths = spec["paths"]
+    assert isinstance(paths, dict)
+    for path_item in paths.values():
+        assert isinstance(path_item, dict)
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS:
+                continue
+            assert operation["security"] == [{"RouterToken": []}]
+            responses = operation["responses"]
+            assert "401" in responses
+            assert "422" in responses
+            assert "4XX" in responses
+            assert "502" in responses

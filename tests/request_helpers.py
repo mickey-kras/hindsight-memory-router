@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlsplit
 
 from fastapi import Request
 
@@ -22,13 +23,16 @@ def request(
     header_values = [
         (key.lower().encode(), value.encode()) for key, value in (headers or {}).items()
     ]
+    parsed = urlsplit(path)
+    pathname = parsed.path
+    query_string = query or parsed.query
     scope = {
         "type": "http",
         "method": method,
-        "path": path,
-        "raw_path": path.encode(),
+        "path": pathname,
+        "raw_path": pathname.encode(),
         "headers": header_values,
-        "query_string": query.encode(),
+        "query_string": query_string.encode(),
     }
     sent = False
 

@@ -13,15 +13,12 @@ from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallResponse
 from .observability import current_request_id
-from .security import scan_recall_result
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
-_RECALL_SUPPLEMENTAL_MAP_FIELDS = ("chunks", "entities", "source_facts")
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
-    "bank_config_api",
     "bank_llm_health",
     "file_upload_api",
     "document_export_api",
@@ -68,6 +65,7 @@ class HindsightGatewayError(HttpError):
         operation: str | None = None,
         method: str | None = None,
         timeout_ms: int | None = None,
+        client_status: int | None = None,
     ) -> None:
         code = {
             "timeout": "hindsight_timeout",
@@ -83,7 +81,8 @@ class HindsightGatewayError(HttpError):
             "network": "Upstream memory service is unavailable",
             "response-too-large": "Upstream memory service response exceeded the size limit",
         }[kind]
-        super().__init__(504 if kind == "timeout" else 502, code, message)
+        status = client_status if client_status is not None else (504 if kind == "timeout" else 502)
+        super().__init__(status, code, message)
         self.kind = kind
         self.upstream_status = upstream_status
         self.context = {"operation": operation, "method": method, "timeout_ms": timeout_ms}
@@ -124,24 +123,6 @@ def _assert_finite_numbers(value: Any) -> None:
 
 def _reject_non_finite(value: str) -> None:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
-
-
-def _sanitize_recall_supplementals(value: dict[str, Any]) -> dict[str, Any]:
-    sanitized = dict(value)
-    for field in _RECALL_SUPPLEMENTAL_MAP_FIELDS:
-        entries = value.get(field)
-        if not isinstance(entries, dict):
-            continue
-        sanitized[field] = {
-            key: entry
-            for key, entry in entries.items()
-            if scan_recall_result({field: {key: entry}}).safe
-        }
-
-    trace = value.get("trace")
-    if isinstance(trace, dict) and not scan_recall_result({"trace": trace}).safe:
-        sanitized.pop("trace", None)
-    return sanitized
 
 
 class HindsightGateway:
@@ -206,7 +187,13 @@ class HindsightGateway:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
-        return _sanitize_recall_supplementals(cast(dict[str, Any], value))
+        return cast(dict[str, Any], value)
+
+    async def openclaw_request(
+        self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> Any:
+        """Forward one allowlisted OpenClaw-facing Hindsight operation."""
+        return await self._request(operation, method, path, body, preserve_http_status=True)
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
@@ -216,7 +203,15 @@ class HindsightGateway:
             {"state": "invalidated", "reason": reason},
         )
 
-    async def _request(self, operation: str, method: str, path: str, body: Any = None) -> Any:
+    async def _request(
+        self,
+        operation: str,
+        method: str,
+        path: str,
+        body: Any = None,
+        *,
+        preserve_http_status: bool = False,
+    ) -> Any:
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
@@ -239,6 +234,7 @@ class HindsightGateway:
                         upstream_status=response.status_code,
                         operation=operation,
                         method=method,
+                        client_status=response.status_code if preserve_http_status else None,
                     )
                 content_length = response.headers.get("content-length")
                 if (
