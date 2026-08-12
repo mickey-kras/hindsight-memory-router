@@ -185,6 +185,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
     hindsight.version.assert_awaited_once()
 
     app_module.runtime.allow_anonymous = True
+    app_module.runtime.router_token = None
     response = await app_module.dispatch(
         "v1/default/banks/main/memories",
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
