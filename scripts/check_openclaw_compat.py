@@ -11,6 +11,17 @@ def _methods(source: str, receivers: tuple[str, ...]) -> set[str]:
     return set(re.findall(rf"(?:{joined})\.([A-Za-z][A-Za-z0-9_]*)\s*\(", source))
 
 
+def _documented_endpoints(path: Path) -> set[tuple[str, str]]:
+    spec = json.loads(path.read_text(encoding="utf-8"))
+    endpoints: set[tuple[str, str]] = set()
+    for route, path_item in spec["paths"].items():
+        normalized = route.replace("{writer_id}", "{bank_id}")
+        for method in ("get", "post", "put", "patch", "delete"):
+            if method in path_item:
+                endpoints.add((method.upper(), normalized))
+    return endpoints
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: check_openclaw_compat.py <hindsight-checkout>")
@@ -22,18 +33,7 @@ def main() -> int:
     sdk = (root / inventory["sources"]["agent_sdk"]).read_text(encoding="utf-8")
 
     expected_plugin = set(inventory["plugin_client_methods"])
-    actual_plugin = _methods(plugin, ("client", "c")) & {
-        "createBank",
-        "recall",
-        "retain",
-        "retainBatch",
-        "reflect",
-        "listMentalModels",
-        "getMentalModel",
-        "createMentalModel",
-        "updateMentalModel",
-        "deleteMentalModel",
-    }
+    actual_plugin = _methods(plugin, ("client", "c"))
     if actual_plugin != expected_plugin:
         raise SystemExit(
             f"OpenClaw Hindsight client surface changed: expected {sorted(expected_plugin)}, "
@@ -41,18 +41,7 @@ def main() -> int:
         )
 
     expected_sdk = set(inventory["agent_sdk_methods"])
-    actual_sdk = _methods(sdk, ("client", "sdk")) & {
-        "createBank",
-        "recall",
-        "retain",
-        "retainBatch",
-        "reflect",
-        "listMentalModels",
-        "getMentalModel",
-        "createMentalModel",
-        "updateMentalModel",
-        "deleteMentalModel",
-    }
+    actual_sdk = _methods(sdk, ("client", "sdk"))
     if actual_sdk != expected_sdk:
         raise SystemExit(
             f"OpenClaw agent SDK surface changed: expected {sorted(expected_sdk)}, "
@@ -83,6 +72,34 @@ def main() -> int:
     }
     if expected_endpoints != required_endpoints:
         raise SystemExit("compat/openclaw.json endpoint inventory changed without updating checker")
+
+    documented = _documented_endpoints(Path("openapi/openapi.json")) | _documented_endpoints(
+        Path("openapi/openclaw.json")
+    )
+    missing_docs = sorted(expected_endpoints - documented)
+    if missing_docs:
+        raise SystemExit(f"OpenClaw inventory endpoints missing from OpenAPI: {missing_docs}")
+
+    compatibility_tests = (
+        Path("tests/test_openclaw_compat.py").read_text(encoding="utf-8")
+        + Path("tests/test_openclaw_routes.py").read_text(encoding="utf-8")
+        + Path("tests/integration/openclaw-compat.sh").read_text(encoding="utf-8")
+    )
+    required_coverage_markers = {
+        "configured bank defaults",
+        "auto-retain",
+        "auto-recall",
+        "knowledge-page list get create update delete",
+        "knowledge reflect",
+        "document ingest",
+        "strings_keys_and_values_are_scanned",
+        "unsafe_provider_content_never_reaches_agent",
+    }
+    missing_coverage = sorted(
+        marker for marker in required_coverage_markers if marker not in compatibility_tests
+    )
+    if missing_coverage:
+        raise SystemExit(f"OpenClaw compatibility coverage markers missing: {missing_coverage}")
 
     print("OpenClaw compatibility inventory matches current upstream call surface")
     return 0
