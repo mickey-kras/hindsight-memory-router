@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -16,7 +16,11 @@ def _policy(response: object) -> SimpleNamespace:
     return SimpleNamespace(
         registry=SimpleNamespace(writers={"openclaw": writer}),
         hindsight=SimpleNamespace(openclaw_request=AsyncMock(return_value=response)),
-        limits=SimpleNamespace(consume_retain=AsyncMock(), consume_recall=AsyncMock()),
+        limits=SimpleNamespace(
+            assert_recall_bounds=Mock(),
+            consume_retain=AsyncMock(),
+            consume_recall=AsyncMock(),
+        ),
         _quarantine=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 
