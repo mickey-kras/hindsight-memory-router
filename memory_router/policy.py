@@ -121,14 +121,25 @@ class RouterPolicy:
             merged: dict[str, Any] = {}
             present = False
             map_present = False
-            for _, response in responses:
+            for bank_id, response in responses:
                 if field not in response:
                     continue
                 present = True
                 value = response[field]
-                if isinstance(value, dict):
-                    merged.update(value)
-                    map_present = True
+                if not isinstance(value, dict):
+                    continue
+                map_present = True
+                if field == "trace":
+                    if await self._allow_recall_supplemental_or_degrade(
+                        writer_id, source, bank_id, field, None, value
+                    ):
+                        merged.update(value)
+                    continue
+                for key, entry in value.items():
+                    if await self._allow_recall_supplemental_or_degrade(
+                        writer_id, source, bank_id, field, str(key), entry
+                    ):
+                        merged[key] = entry
             if present:
                 combined[field] = merged if map_present else None
         return combined
@@ -169,6 +180,50 @@ class RouterPolicy:
                 continue
             responses.append((bank, cast(dict[str, Any], outcome)))
         return responses
+
+    async def _allow_recall_supplemental_or_degrade(
+        self,
+        writer_id: str,
+        source: str,
+        bank_id: str,
+        field: str,
+        key: str | None,
+        value: Any,
+    ) -> bool:
+        evidence = {field: value} if key is None else {field: {key: value}}
+        scan = scan_recall_result(evidence)
+        if scan.safe:
+            return True
+        digest = _audit_digest(evidence)
+        try:
+            await self._quarantine(
+                {
+                    "writerId": writer_id,
+                    "source": source,
+                    "kind": "security_event",
+                    "reason": "recalled_suspicious_supplemental",
+                    "dedupeKey": f"recalled-supplemental:{bank_id}:{field}:{key or '-'}:{digest}",
+                    "payload": {
+                        "action": "recalled_supplemental_blocked",
+                        "bank_id": bank_id,
+                        "field": field,
+                        "entry_key_sha256": sha256_hex(key) if key is not None else None,
+                        "content_sha256": digest,
+                        "findings": [finding.public() for finding in scan.findings],
+                    },
+                }
+            )
+        except Exception as exc:
+            self._log_degradation(
+                "recall_supplemental_audit_unavailable",
+                {
+                    "writer_id": writer_id,
+                    "bank_id": bank_id,
+                    "field": field,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        return False
 
     async def _allow_recalled_or_degrade(
         self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
