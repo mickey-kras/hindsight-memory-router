@@ -47,7 +47,10 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     app_module.runtime.repository = repository
     app_module.runtime.hindsight = hindsight
 
-    assert await app_module.health_live() == {"status": "healthy"}
+    live = await app_module.health_live()
+    assert live["status"] == "alive"
+    assert isinstance(live["version"], str) and live["version"]
+    assert isinstance(live["uptime_seconds"], float) and live["uptime_seconds"] >= 0
     repository.ping.assert_not_awaited()
     hindsight.health.assert_not_awaited()
 
@@ -154,11 +157,33 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         recall=AsyncMock(return_value={"results": []}),
         deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
     )
+    version_response = {
+        "api_version": "0.9.0",
+        "features": {
+            "observations": True,
+            "mcp": True,
+            "worker": True,
+            "bank_config_api": True,
+            "bank_llm_health": True,
+            "file_upload_api": True,
+            "document_export_api": True,
+            "document_import_api": True,
+            "audit_log": True,
+            "llm_trace": True,
+            "store_document_text": True,
+        },
+    }
+    hindsight = SimpleNamespace(version=AsyncMock(return_value=version_response))
     app_module.runtime.policy = policy
+    app_module.runtime.hindsight = hindsight
 
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.router_token = "router-token"
     response = await app_module.dispatch("version", request("GET", "/version"))
-    assert response.status_code == 200 and payload(response)["api_version"] == "0.9.0"
+    assert response.status_code == 200 and payload(response) == version_response
+    hindsight.version.assert_awaited_once()
 
+    app_module.runtime.allow_anonymous = True
     response = await app_module.dispatch(
         "v1/default/banks/main/memories",
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
@@ -183,7 +208,10 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
     assert response.status_code == 404 and payload(response)["error"] == "endpoint_not_allowed"
 
     app_module.runtime.allow_anonymous = False
-    response = await app_module.dispatch("version", request("GET", "/version"))
+    response = await app_module.dispatch(
+        "v1/default/banks/main/memories",
+        request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
+    )
     assert response.status_code == 401
 
 
