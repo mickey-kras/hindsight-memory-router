@@ -61,6 +61,108 @@ generate_svg() {
     die "Structurizr SVG export produced no SVG files."
 }
 
+add_site_view_selector() {
+  command -v python3 >/dev/null 2>&1 || die "Python 3 is required to enhance the architecture site."
+  python3 - "$ROOT/$SITE/index.html" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+html = path.read_text(encoding="utf-8")
+
+style = """    <style>
+        #architecture-view-nav {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 1100;
+            max-width: min(520px, calc(100vw - 24px));
+        }
+        #architecture-view-select {
+            width: 100%;
+            min-width: 320px;
+            max-width: min(520px, calc(100vw - 24px));
+            padding: 7px 10px;
+            border: 1px solid GrayText;
+            border-radius: 6px;
+            background: Canvas;
+            color: CanvasText;
+            color-scheme: light dark;
+            font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        @media (max-width: 480px) {
+            #architecture-view-select {
+                min-width: 0;
+            }
+        }
+    </style>
+"""
+nav = """    <nav id="architecture-view-nav" aria-label="Architecture view">
+        <select id="architecture-view-select" aria-label="Architecture view"></select>
+    </nav>
+"""
+init_call = """        if (!embed) {
+            initArchitectureViewNavigation();
+        }
+"""
+functions = """    function architectureViewLabel(view) {
+        const labels = {
+            SystemContext: 'C1: System Context — Memory Router',
+            Containers: 'C2: Containers — Memory Router',
+            Components: 'C3: Components — Memory Router API',
+            Retain: 'Dynamic: Retain',
+            Recall: 'Dynamic: Recall',
+            CompatibilityOperations: 'Dynamic: Compatibility Operations',
+            QuarantineReview: 'Dynamic: Quarantine Review',
+            StartupShutdown: 'Dynamic: Startup / Shutdown',
+            SingleNode: 'Deployment: Single Node',
+            Clustered: 'Deployment: Clustered'
+        };
+        return labels[view.key] || structurizr.ui.getTitleForView(view);
+    }
+
+    function initArchitectureViewNavigation() {
+        const select = document.getElementById('architecture-view-select');
+        structurizr.workspace.getViews().forEach(function(view) {
+            const option = document.createElement('option');
+            option.value = view.key;
+            option.textContent = architectureViewLabel(view);
+            select.appendChild(option);
+        });
+        select.addEventListener('change', function() {
+            window.location.hash = '#' + select.value;
+        });
+    }
+
+    function syncArchitectureViewNavigation(viewKey) {
+        const select = document.getElementById('architecture-view-select');
+        if (select) {
+            select.value = viewKey;
+        }
+    }
+
+"""
+
+replacements = [
+    ("</head>", style + "</head>"),
+    ("<body>\n", "<body>\n" + nav),
+    ("        const embed = getParameter('embed');\n", "        const embed = getParameter('embed');\n" + init_call),
+    ("    function postDiagramAspectRatioToParentWindow() {\n", functions + "    function postDiagramAspectRatioToParentWindow() {\n"),
+    (
+        "            const view = structurizr.workspace.findViewByKey(diagramIdentifier);\n            if (view) {\n",
+        "            const view = structurizr.workspace.findViewByKey(diagramIdentifier);\n            if (view) {\n                syncArchitectureViewNavigation(view.key);\n",
+    ),
+]
+
+for before, after in replacements:
+    if before not in html:
+        raise SystemExit(f"architecture: static-site navigation marker not found: {before!r}")
+    html = html.replace(before, after, 1)
+
+path.write_text(html, encoding="utf-8")
+PY
+}
+
 generate_site() {
   rm -rf "$ROOT/$SITE"
   mkdir -p "$ROOT/$SITE"
@@ -68,6 +170,7 @@ generate_site() {
     die "Structurizr static-site export failed."
   [[ -f "$ROOT/$SITE/index.html" ]] ||
     die "Structurizr static-site export produced no index.html."
+  add_site_view_selector
 }
 
 pull_image
