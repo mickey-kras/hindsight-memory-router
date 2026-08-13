@@ -47,4 +47,18 @@ jobs:
         run: make architecture
 
       - name: Generated architecture is current
-        run: git diff --exit-code -- docs/architecture/generated
+        run: |
+          git diff --exit-code -- docs/architecture/generated
+          untracked="$(git ls-files --others --exclude-standard docs/architecture/generated)"
+          if [ -n "$untracked" ]; then
+            printf 'Uncommitted generated architecture files:\n%s\n' "$untracked" >&2
+            exit 1
+          fi
+
+      - name: Upload generated architecture diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generated-architecture
+          path: docs/architecture/generated
+          if-no-files-found: error
