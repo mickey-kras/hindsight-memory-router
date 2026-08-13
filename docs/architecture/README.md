@@ -42,6 +42,6 @@ Security gates are shown where requests/provider responses cross policy boundari
 make architecture
 ```
 
-Requires Java 21+, `curl`, `unzip`, and `sha256sum`. The command validates the DSL and regenerates committed Mermaid from the pinned Structurizr CLI release.
+Requires Python, Java 21+, `curl`, and `unzip`. The command validates the DSL and regenerates committed Mermaid from the checksum-pinned Structurizr CLI release.
 
 Architecture-affecting PRs update `workspace.dsl` and commit the refreshed generated files in the same PR.

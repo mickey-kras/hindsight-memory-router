@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORKSPACE="$ROOT/docs/architecture/workspace.dsl"
 GENERATED="$ROOT/docs/architecture/generated"
-CACHE="$ROOT/.cache/structurizr"
+CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/hindsight-memory-router/structurizr"
 VERSION="2025.11.09"
 ARCHIVE="$CACHE/structurizr-cli-$VERSION.zip"
 CLI_DIR="$CACHE/structurizr-cli-$VERSION"
@@ -15,7 +15,19 @@ mkdir -p "$CACHE"
 if [[ ! -f "$ARCHIVE" ]]; then
   curl --fail --location --silent --show-error "$URL" --output "$ARCHIVE"
 fi
-printf '%s  %s\n' "$SHA256" "$ARCHIVE" | sha256sum --check --status
+python - "$ARCHIVE" "$SHA256" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import sys
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+expected = sys.argv[2]
+actual = hashlib.sha256(archive.read_bytes()).hexdigest()
+if actual != expected:
+    raise SystemExit(f"Structurizr CLI checksum mismatch: {actual}")
+PY
 
 if [[ ! -x "$CLI_DIR/structurizr.sh" ]]; then
   rm -rf "$CLI_DIR"
