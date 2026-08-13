@@ -72,13 +72,19 @@ html = path.read_text(encoding="utf-8")
 
 style = """    <style>
         #architecture-view-nav {
-            position: fixed;
-            top: 12px;
-            left: 12px;
-            z-index: 1100;
+            position: fixed !important;
+            top: 12px !important;
+            left: 12px !important;
+            z-index: 2147483647 !important;
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
             max-width: min(520px, calc(100vw - 24px));
         }
         #architecture-view-select {
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
             width: 100%;
             min-width: 320px;
             max-width: min(520px, calc(100vw - 24px));
