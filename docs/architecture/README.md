@@ -1,47 +1,44 @@
 # Architecture
 
-Canonical model: [`workspace.dsl`](workspace.dsl). Generated files under [`generated/`](generated/) are not hand-edited.
+Canonical model: [`workspace.dsl`](workspace.dsl)  
+Interactive model: [GitHub Pages](https://mickey-kras.github.io/hindsight-memory-router/)
 
-## System Context
+C1–C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated; do not hand-edit them.
 
-[System Context](generated/structurizr-SystemContext.md)
+## C1 — System Context
 
-- Current topology: OpenClaw (Hindsight plugin) → Memory Router → Hindsight.
-- Hindsight is the only implemented backend.
-- Review/decryption keeps the private key outside the Memory Router process.
+Who uses Memory Router and which external systems it talks to.
 
-## Container
+![C1 — System Context](generated/structurizr-SystemContext.svg)
 
-[Container](generated/structurizr-Containers.md)
+## C2 — Containers
 
-- SQLite is the single-node quarantine store.
-- PostgreSQL is required for clustered quarantine/shared router rate-limit state.
-- Clustered admin traffic requires an external shared rate limiter before router replicas.
+Runtime processes and data stores.
 
-## Component
+![C2 — Containers](generated/structurizr-Containers.svg)
 
-[Component](generated/structurizr-Components.md)
+## C3 — Components
 
-Security gates are shown where requests/provider responses cross policy boundaries.
+Responsibilities inside Memory Router API.
 
-## Dynamic
+![C3 — Components](generated/structurizr-Components.svg)
 
-- [Startup / shutdown](generated/structurizr-StartupShutdown.md)
-- [Retain](generated/structurizr-Retain.md)
-- [Recall](generated/structurizr-Recall.md)
-- [Quarantine / review](generated/structurizr-QuarantineReview.md)
+## Dynamic views
+
+- [Startup / shutdown](generated/structurizr-StartupShutdown.svg)
+- [Retain](generated/structurizr-Retain.svg)
+- [Recall](generated/structurizr-Recall.svg)
+- [Quarantine / review](generated/structurizr-QuarantineReview.svg)
 
 ## Deployment
 
-- [Single-node + SQLite](generated/structurizr-SingleNode.md)
-- [Clustered + PostgreSQL](generated/structurizr-Clustered.md)
+- [Single-node + SQLite](generated/structurizr-SingleNode.svg)
+- [Clustered + PostgreSQL](generated/structurizr-Clustered.svg)
 
-## Regenerate
+## Updating
 
 ```bash
 make architecture
 ```
 
-Requires Python, Java 21+, `curl`, and `unzip`. The command validates the DSL and regenerates committed Mermaid from the checksum-pinned Structurizr CLI release.
-
-Architecture-affecting PRs update `workspace.dsl` and commit the refreshed generated files in the same PR.
+Requires Docker. `make architecture-site` builds the uncommitted static site used by GitHub Pages.

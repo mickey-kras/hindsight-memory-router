@@ -18,6 +18,9 @@ __pycache__/
 quarantine-*.pem
 .DS_Store
 
+# Generated architecture site
+.architecture-site/
+
 # Integration smoke state
 tests/integration/tmp/
 
