@@ -1,0 +1,30 @@
+<!-- Generated from ../workspace.dsl by make architecture. Do not edit. -->
+
+```mermaid
+sequenceDiagram
+
+  participant 10 as Policy Orchestration<br />[Component]
+  participant 14 as Quarantine Admission / Storage<br />[Component]
+  participant 12 as Request/Response Limits & Rate Limiting<br />[Component]
+  participant 18 as Quarantine Storage<br />[Container: SQLite (single-node) or PostgreSQL (clustered)]
+  actor 1 as Operator / Reviewer<br />[Person]
+  participant 7 as HTTP/API Entry & Auth<br />[Component]
+  participant 19 as Offline Review Tooling<br />[Container: Python CLI]
+  participant 15 as Review Lifecycle<br />[Component]
+  participant 11 as Security Scanning<br />[Component]
+  participant 13 as Hindsight Gateway<br />[Component]
+  participant 3 as Hindsight<br />[Software System]
+
+  10->>14: Submit unknown/suspicious evidence
+  14->>12: Apply quarantine write/requarantine/distinct-family limits
+  14->>18: Encrypt with public key, enforce capacity, persist state/audit<br />[SQL]
+  1->>7: Read encrypted quarantine item<br />[Admin HTTP/JSON + scoped Bearer]
+  1->>19: Decrypt exported envelope locally with private key<br />[Local CLI/stdin + file]
+  1->>7: Submit exact decrypted evidence with approve/reject/postpone decision<br />[Admin HTTP/JSON + scoped Bearer]
+  7->>15: Authenticate scoped admin request and dispatch review
+  15->>14: Verify exact digest and claim review state
+  15->>11: For retain approval: parse, bound, and re-scan original request
+  15->>13: When required: perform checkpointed Hindsight retain/invalidate side effect
+  13->>3: Retain approved request or invalidate rejected memory<br />[HTTP/JSON]
+  15->>14: Finalize review state/audit; encrypted payload removed where applicable
+```
