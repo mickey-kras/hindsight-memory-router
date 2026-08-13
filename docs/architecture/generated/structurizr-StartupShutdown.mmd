@@ -1,0 +1,17 @@
+sequenceDiagram
+
+  participant 6 as Runtime Lifecycle<br />[Component]
+  participant 18 as Quarantine Storage<br />[Container: SQLite (single-node) or PostgreSQL (clustered)]
+  participant 12 as Request/Response Limits & Rate Limiting<br />[Component]
+  participant 9 as Writer Registry / Bank Routing<br />[Component]
+  participant 13 as Hindsight Gateway<br />[Component]
+  participant 16 as Maintenance<br />[Component]
+
+  6->>18: Open and validate quarantine storage; recover stale review state<br />[SQL]
+  6->>12: Initialize process-local or PostgreSQL-backed limiters
+  6->>9: Load writer registry
+  6->>13: Create Hindsight gateway
+  6->>16: Start maintenance task when enabled
+  6->>16: On shutdown: cancel maintenance task
+  6->>13: Close Hindsight gateway
+  6->>18: Close storage and PostgreSQL limiter pool<br />[SQL]
