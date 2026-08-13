@@ -129,7 +129,32 @@ functions = """    function architectureViewLabel(view) {
 
     function initArchitectureViewNavigation() {
         const select = document.getElementById('architecture-view-select');
+        const order = [
+            'SystemContext',
+            'Containers',
+            'Components',
+            'Retain',
+            'Recall',
+            'CompatibilityOperations',
+            'QuarantineReview',
+            'StartupShutdown',
+            'SingleNode',
+            'Clustered'
+        ];
+        const viewsByKey = new Map(
+            structurizr.workspace.getViews().map(function(view) {
+                return [view.key, view];
+            })
+        );
+        const orderedViews = order
+            .map(function(key) { return viewsByKey.get(key); })
+            .filter(Boolean);
         structurizr.workspace.getViews().forEach(function(view) {
+            if (!order.includes(view.key)) {
+                orderedViews.push(view);
+            }
+        });
+        orderedViews.forEach(function(view) {
             const option = document.createElement('option');
             option.value = view.key;
             option.textContent = architectureViewLabel(view);
