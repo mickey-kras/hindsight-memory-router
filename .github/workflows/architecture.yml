@@ -1,0 +1,50 @@
+name: architecture
+
+on:
+  pull_request:
+    paths:
+      - 'docs/architecture/**'
+      - 'docs/architecture.md'
+      - 'memory_router/**'
+      - 'compat/openclaw.json'
+      - 'compose.yaml'
+      - 'scripts/architecture.sh'
+      - 'scripts/wrap_architecture_mermaid.py'
+      - 'Makefile'
+      - '.github/workflows/architecture.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/architecture/**'
+      - 'docs/architecture.md'
+      - 'memory_router/**'
+      - 'compat/openclaw.json'
+      - 'compose.yaml'
+      - 'scripts/architecture.sh'
+      - 'scripts/wrap_architecture_mermaid.py'
+      - 'Makefile'
+      - '.github/workflows/architecture.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2
+        with:
+          egress-policy: audit
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Validate and regenerate architecture
+        run: make architecture
+
+      - name: Generated architecture is current
+        run: git diff --exit-code -- docs/architecture/generated
