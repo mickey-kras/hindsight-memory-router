@@ -168,6 +168,21 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             autoLayout lr
         }
 
+        dynamic api "CompatibilityOperations" "Shared policy flow for additional Hindsight endpoints used by the OpenClaw plugin." {
+            openclaw -> http "Bank/config/mental-model/reflect request"
+            http -> facade "Dispatch supported OpenClaw compatibility operation"
+            facade -> registry "Resolve writer to configured Hindsight bank"
+            facade -> quarantine "If writer is unknown: audit bounded security event and reject"
+            facade -> scanning "Scan path/query/body using read or write semantics"
+            facade -> quarantine "If request is suspicious: audit and reject"
+            facade -> limits "Apply reflect bounds when needed; consume recall or retain budget"
+            facade -> gateway "Rewrite writer ID to assigned bank and forward allowed operation"
+            gateway -> hindsight "PUT/PATCH/GET/POST/DELETE supported operation"
+            facade -> scanning "Scan provider response before release"
+            facade -> quarantine "If provider response is unsafe: audit and reject"
+            autoLayout lr
+        }
+
         dynamic api "QuarantineReview" "Quarantine admission and human review flow." {
             policy -> quarantine "Submit unknown/suspicious evidence"
             quarantine -> limits "Apply quarantine write/requarantine/distinct-family limits"
