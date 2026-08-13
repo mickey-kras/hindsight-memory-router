@@ -207,8 +207,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         }
 
         properties {
-            "mermaid.title" "true"
-            "mermaid.sequenceDiagram" "true"
+            "structurizr.metadata" "false"
         }
     }
 }
