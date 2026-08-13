@@ -2,19 +2,29 @@ name: branch-policy
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+    tags: ['v*']
 
 permissions:
   contents: read
 
+env:
+  WORK_BRANCH_RE: '^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$'
+  RELEASE_TAG_RE: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+
 jobs:
   branch-name:
     name: branch name
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Validate same-repository branch name
         env:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_REF: ${{ github.head_ref }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           REPOSITORY: ${{ github.repository }}
         shell: bash
         run: |
@@ -24,12 +34,68 @@ jobs:
             exit 0
           fi
 
-          if [[ "$HEAD_REF" == dependabot/* ]]; then
+          if [[ "$PR_AUTHOR" == "dependabot[bot]" && "$HEAD_REF" == dependabot/* ]]; then
             exit 0
           fi
 
-          if [[ ! "$HEAD_REF" =~ ^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
-            echo "Branch must match <type>/<short-description>." >&2
-            echo "Allowed types: feat, fix, refactor, docs, ci, security." >&2
+          if [[ ! "$HEAD_REF" =~ $WORK_BRANCH_RE ]]; then
+            echo "Branch must match: $WORK_BRANCH_RE" >&2
             exit 1
+          fi
+
+  validate-release-tag:
+    name: validate release tag
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REF_NAME: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$REF_NAME" =~ $RELEASE_TAG_RE ]]; then
+            echo "Release tag must match SemVer: $REF_NAME" >&2
+            exit 1
+          fi
+
+          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${REF_NAME}")"
+          object_sha="$(jq -r '.object.sha' <<<"$object")"
+          object_type="$(jq -r '.object.type' <<<"$object")"
+
+          while [[ "$object_type" == "tag" ]]; do
+            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
+            object_sha="$(jq -r '.object.sha' <<<"$object")"
+            object_type="$(jq -r '.object.type' <<<"$object")"
+          done
+
+          if [[ "$object_type" != "commit" ]]; then
+            echo "Release tag must resolve to a commit: $REF_NAME" >&2
+            exit 1
+          fi
+
+          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${object_sha}...main" --jq '.status')"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "Release tag must point to a commit reachable from main: $REF_NAME" >&2
+            exit 1
+          fi
+
+  remove-legacy-pages-branch:
+    name: remove legacy pages branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Remove obsolete gh-pages branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/gh-pages" >/dev/null 2>&1; then
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/gh-pages"
           fi
