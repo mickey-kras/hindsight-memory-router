@@ -1,7 +1,7 @@
 # Architecture
 
 Canonical model: [`workspace.dsl`](workspace.dsl)  
-Interactive model: [GitHub Pages](https://mickey-kras.github.io/hindsight-memory-router/)
+Interactive architecture: [Structurizr site](https://mickey-kras.github.io/hindsight-memory-router/)
 
 C1–C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated; do not hand-edit them.
 

@@ -30,15 +30,15 @@ jobs:
       - name: Build interactive architecture
         run: make architecture-site
 
-      - name: Publish gh-pages branch
+      - name: Publish architecture-pages branch
         run: |
           cp -a .architecture-site "$RUNNER_TEMP/architecture-site"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch --orphan gh-pages
+          git switch --orphan architecture-pages
           rm -rf .architecture-site
           cp -a "$RUNNER_TEMP/architecture-site/." .
           touch .nojekyll
           git add -A
           git commit -m 'Publish architecture'
-          git push --force origin gh-pages
+          git push --force origin architecture-pages
