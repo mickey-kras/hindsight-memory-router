@@ -18,8 +18,37 @@
     <link href="./css/bootstrap-5.3.7.min.css" rel="stylesheet" media="screen" />
     <link href="./css/structurizr-static.css" rel="stylesheet" media="screen" />
     <link href="./css/structurizr.css" rel="stylesheet" media="screen" />
+    <style>
+        #architecture-view-nav {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            z-index: 1100;
+            max-width: min(520px, calc(100vw - 24px));
+        }
+        #architecture-view-select {
+            width: 100%;
+            min-width: 320px;
+            max-width: min(520px, calc(100vw - 24px));
+            padding: 7px 10px;
+            border: 1px solid GrayText;
+            border-radius: 6px;
+            background: Canvas;
+            color: CanvasText;
+            color-scheme: light dark;
+            font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+        @media (max-width: 480px) {
+            #architecture-view-select {
+                min-width: 0;
+            }
+        }
+    </style>
 </head>
 <body>
+    <nav id="architecture-view-nav" aria-label="Architecture view">
+        <select id="architecture-view-select" aria-label="Architecture view"></select>
+    </nav>
     <span style="font-family: Tahoma, Verdana, Arial, sans-serif; opacity: 0;"></span>
     <div id="diagram">
         <div class="modal fade" id="introductionModal" tabindex="-1">
@@ -124,6 +153,9 @@
 
     function init() {
         const embed = getParameter('embed');
+        if (!embed) {
+            initArchitectureViewNavigation();
+        }
         structurizr.ui.initDarkMode('./css/structurizr-static-dark.css');
 
         structurizr.diagram = new structurizr.ui.Diagram('diagram', false, function () {
@@ -379,6 +411,42 @@
         }
     }
 
+    function architectureViewLabel(view) {
+        const labels = {
+            SystemContext: 'C1: System Context — Memory Router',
+            Containers: 'C2: Containers — Memory Router',
+            Components: 'C3: Components — Memory Router API',
+            Retain: 'Dynamic: Retain',
+            Recall: 'Dynamic: Recall',
+            CompatibilityOperations: 'Dynamic: Compatibility Operations',
+            QuarantineReview: 'Dynamic: Quarantine Review',
+            StartupShutdown: 'Dynamic: Startup / Shutdown',
+            SingleNode: 'Deployment: Single Node',
+            Clustered: 'Deployment: Clustered'
+        };
+        return labels[view.key] || structurizr.ui.getTitleForView(view);
+    }
+
+    function initArchitectureViewNavigation() {
+        const select = document.getElementById('architecture-view-select');
+        structurizr.workspace.getViews().forEach(function(view) {
+            const option = document.createElement('option');
+            option.value = view.key;
+            option.textContent = architectureViewLabel(view);
+            select.appendChild(option);
+        });
+        select.addEventListener('change', function() {
+            window.location.hash = '#' + select.value;
+        });
+    }
+
+    function syncArchitectureViewNavigation(viewKey) {
+        const select = document.getElementById('architecture-view-select');
+        if (select) {
+            select.value = viewKey;
+        }
+    }
+
     function postDiagramAspectRatioToParentWindow() {
         window.parent.postMessage({
             src: window.location.toString(),
@@ -401,6 +469,7 @@
 
             const view = structurizr.workspace.findViewByKey(diagramIdentifier);
             if (view) {
+                syncArchitectureViewNavigation(view.key);
                 setTimeout(function() {
                     structurizr.diagram.changeView(view.key, function() {
                     });
