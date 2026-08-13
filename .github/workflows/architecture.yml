@@ -9,9 +9,9 @@ on:
       - 'compat/openclaw.json'
       - 'compose.yaml'
       - 'scripts/architecture.sh'
-      - 'scripts/wrap_architecture_mermaid.py'
       - 'Makefile'
       - '.github/workflows/architecture.yml'
+      - '.github/workflows/architecture-pages.yml'
   push:
     branches: [main]
     paths:
@@ -21,9 +21,9 @@ on:
       - 'compat/openclaw.json'
       - 'compose.yaml'
       - 'scripts/architecture.sh'
-      - 'scripts/wrap_architecture_mermaid.py'
       - 'Makefile'
       - '.github/workflows/architecture.yml'
+      - '.github/workflows/architecture-pages.yml'
 
 permissions:
   contents: read
@@ -38,13 +38,11 @@ jobs:
         with:
           egress-policy: audit
 
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
-        with:
-          distribution: temurin
-          java-version: '21'
-
       - name: Validate and regenerate architecture
         run: make architecture
+
+      - name: Build interactive architecture site
+        run: make architecture-site
 
       - name: Generated architecture is current
         run: |
