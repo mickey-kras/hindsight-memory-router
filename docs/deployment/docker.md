@@ -31,7 +31,7 @@ Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Me
 
 ## Container healthcheck
 
-The image includes a readiness healthcheck implemented with Python stdlib only. It checks the configured router port and canonical readiness endpoint:
+The image includes a readiness healthcheck implemented with Python stdlib only. It checks the configured router port and canonical readiness endpoint, and explicitly disables environment proxy discovery so local readiness never depends on `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` configuration:
 
 ```yaml
 healthcheck:
@@ -40,7 +40,7 @@ healthcheck:
       "CMD",
       "python",
       "-c",
-      "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('MEMORY_ROUTER_PORT', '8890')}/health/ready\", timeout=2).close()",
+      "import os, urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); opener.open(f\"http://127.0.0.1:{os.environ.get('MEMORY_ROUTER_PORT', '8890')}/health/ready\", timeout=2).close()",
     ]
 ```
 
