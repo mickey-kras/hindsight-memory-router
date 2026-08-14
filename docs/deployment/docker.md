@@ -29,6 +29,25 @@ docker compose up -d
 
 Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys. The `${QUARANTINE_PUBLIC_KEY:?...}` guard is evaluated by Compose itself, so commands such as `docker compose down`, `ps`, and `logs` also require the variable. Keep `QUARANTINE_PUBLIC_KEY` in `.env` as the canonical Compose location.
 
+## Container healthcheck
+
+The image includes a readiness healthcheck implemented with Python stdlib only. It checks the configured router port and canonical readiness endpoint:
+
+```yaml
+healthcheck:
+  test:
+    [
+      "CMD",
+      "python",
+      "-c",
+      "import os, urllib.request; urllib.request.urlopen(f\"http://127.0.0.1:{os.environ.get('MEMORY_ROUTER_PORT', '8890')}/health/ready\", timeout=2).close()",
+    ]
+```
+
+Normally omit an explicit Compose healthcheck and inherit the image definition. Use the equivalent probe above only when an orchestrator requires an override. Do not add Node, curl, or wget solely for healthchecking.
+
+`/health/ready` checks router quarantine storage and Hindsight health. `/health/live` remains the router-only liveness endpoint; `/health` is a readiness alias and `/ready` is deprecated.
+
 ## Upgrading from key-init deployments
 
 Preserve the existing keypair before removing the old key volumes. Replacing it with a new keypair makes all existing quarantine items undecryptable.

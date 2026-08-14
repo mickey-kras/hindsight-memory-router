@@ -50,6 +50,15 @@ assert_not_ready_without_hindsight
 
 router_id="$("${compose[@]}" ps -q memory-router)"
 test -n "$router_id"
+healthcheck_test="$(docker inspect -f '{{json .Config.Healthcheck.Test}}' "$router_id")"
+grep -Fq '"python"' <<<"$healthcheck_test"
+grep -Fq 'urllib.request' <<<"$healthcheck_test"
+grep -Fq 'MEMORY_ROUTER_PORT' <<<"$healthcheck_test"
+grep -Fq '/health/ready' <<<"$healthcheck_test"
+if grep -Eq 'node|curl|wget' <<<"$healthcheck_test"; then
+  echo "runtime healthcheck depends on an unsupported executable" >&2
+  exit 1
+fi
 test "$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}' "$router_id")" = "${COMPOSE_PROJECT_NAME}_memory-router-data"
 test -z "$(docker inspect -f '{{range .Mounts}}{{if or (eq .Destination "/app/bootstrap/private") (eq .Destination "/app/bootstrap/public")}}{{.Destination}}{{end}}{{end}}' "$router_id")"
 

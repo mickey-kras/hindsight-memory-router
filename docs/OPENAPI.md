@@ -47,7 +47,7 @@ The contract defines two bearer mechanisms:
 - cleanup accepts the cleanup token;
 - the legacy admin token is accepted everywhere only during migration.
 
-`GET /health` and `GET /ready` are anonymous.
+`GET /health/live`, `GET /health`, `GET /health/ready`, and deprecated `GET /ready` are anonymous.
 
 Admin credentials are for human-operated or tightly controlled service clients only and must not be exposed to agents. Configure scoped credentials, migrate clients, then leave `MEMORY_ROUTER_ADMIN_TOKEN` unset.
 
