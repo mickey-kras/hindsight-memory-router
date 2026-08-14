@@ -29,7 +29,7 @@ QUARANTINE_PUBLIC_KEY=<base64-public-key>
 
 ```bash
 docker compose up -d
-curl --fail http://localhost:8890/health
+curl --fail http://localhost:8890/health/ready
 ```
 
 Compose:

@@ -82,7 +82,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; response=urllib.request.urlopen('http://127.0.0.1:8890/health/ready', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)",
+          "import urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); response=opener.open('http://127.0.0.1:8890/health/ready', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)",
         ]
       interval: 5s
       timeout: 5s

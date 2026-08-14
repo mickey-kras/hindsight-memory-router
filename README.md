@@ -33,7 +33,7 @@ Store `quarantine-private.pem` in your password manager, secret manager, or encr
 
 ```bash
 docker compose up -d
-curl --fail http://localhost:8890/health
+curl --fail http://localhost:8890/health/ready
 ```
 
 Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
