@@ -153,18 +153,23 @@ jobs:
             fake-postgres-smoke.log
           if-no-files-found: error
 
-      - name: Real Hindsight compose smoke
+      - name: Real Hindsight router-storage parity
         id: real-smoke
         run: |
-          set -o pipefail
-          bash tests/integration/smoke.sh real 2>&1 | tee real-smoke.log
+          set -uo pipefail
+          status=0
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real sqlite > >(tee real-sqlite-smoke.log) 2>&1 || status=1
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real postgres > >(tee real-postgres-smoke.log) 2>&1 || status=1
+          exit "$status"
 
       - name: Upload real smoke diagnostics
         if: failure() && steps.real-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: real-smoke-diagnostics
-          path: real-smoke.log
+          path: |
+            real-sqlite-smoke.log
+            real-postgres-smoke.log
           if-no-files-found: error
 
   aislop:
