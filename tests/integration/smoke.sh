@@ -17,10 +17,6 @@ if [[ "$router_db" != "sqlite" && "$router_db" != "postgres" ]]; then
   echo "router database must be sqlite or postgres" >&2
   exit 2
 fi
-if [[ "$mode" == "real" && "$router_db" != "postgres" ]]; then
-  echo "real Hindsight smoke keeps the router on its existing PostgreSQL stack" >&2
-  exit 2
-fi
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
@@ -52,6 +48,17 @@ current_check="startup"
 export MEMORY_ROUTER_TEST_PORT="$router_port"
 export FAKE_HINDSIGHT_STATE_DIR="./tmp/${mode}-${router_db}/state"
 export QUARANTINE_STATE_DIR="./tmp/${mode}-${router_db}/quarantine"
+if [[ "$mode" == "real" ]]; then
+  if [[ "$router_db" == "sqlite" ]]; then
+    export MEMORY_ROUTER_TEST_DEPLOYMENT_MODE="single"
+    export MEMORY_ROUTER_TEST_EXTERNAL_ADMIN_RATE_LIMIT="false"
+    export MEMORY_ROUTER_TEST_QUARANTINE_DATABASE_URL="sqlite:/state/quarantine.db"
+  else
+    export MEMORY_ROUTER_TEST_DEPLOYMENT_MODE="cluster"
+    export MEMORY_ROUTER_TEST_EXTERNAL_ADMIN_RATE_LIMIT="true"
+    export MEMORY_ROUTER_TEST_QUARANTINE_DATABASE_URL="postgresql://hindsight:hindsight@postgres:5432/quarantine"
+  fi
+fi
 
 begin_check() {
   current_check="$1"
@@ -260,6 +267,25 @@ if printf '%s' "$read_response" | grep -q "$unknown_marker"; then
   fail_check "admin item leaked plaintext"
 fi
 pass_check
+
+if [[ "$router_db" == "sqlite" ]]; then
+  begin_check "SQLite quarantine survives router container recreation"
+  [[ -s "${tmp_dir}/quarantine/quarantine.db" ]] || fail_check "SQLite quarantine database was not persisted on mounted storage"
+  docker compose -p "$project" -f "$compose_file" up -d --force-recreate --no-deps memory-router >/dev/null
+  for _ in {1..60}; do
+    if curl -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  persisted_queue="$(admin_get "/admin/quarantine/queue")"
+  printf '%s' "$persisted_queue" | grep -q "$unknown_id" || fail_check "SQLite quarantine item disappeared after router container recreation"
+  read_response="$(admin_get "/admin/quarantine/items/${unknown_id}")"
+  if printf '%s' "$read_response" | grep -q "$unknown_marker"; then
+    fail_check "persisted SQLite quarantine item leaked plaintext"
+  fi
+  pass_check
+fi
 
 begin_check "local decryption recovers exact original outside router"
 encrypted_file="${root}/${tmp_dir}/encrypted-response.json"
