@@ -13,7 +13,7 @@ from pytest_httpx import HTTPXMock
 import memory_router.app as app_module
 from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
-from memory_router.logging import configure_logging, log_event
+from memory_router.logging import configure_logging
 from memory_router.observability import RequestIdMiddleware, current_request_id
 from tests.request_helpers import request
 
@@ -205,7 +205,7 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
     assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 1
 
 
-def test_runtime_formatter_emits_json_with_only_explicit_safe_fields(
+def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output = io.StringIO()
@@ -213,20 +213,24 @@ def test_runtime_formatter_emits_json_with_only_explicit_safe_fields(
     configure_logging()
     logger = logging.getLogger("memory_router.test")
 
-    log_event(
-        logger,
-        "warning",
+    logger.warning(
         "safe_event",
-        request_id="req-1",
-        operation="recall",
-        method="POST",
-        error_kind="network",
-        status=502,
-        duration_ms=1.25,
-        route_class="memory",
-        headers={"authorization": _SENTINEL},
-        path=f"/private/{_SENTINEL}",
-        body={"query": _SENTINEL},
+        extra={
+            "request_id": "req-1",
+            "operation": "recall",
+            "method": "POST",
+            "error_kind": "network",
+            "status": 502,
+            "duration_ms": 1.25,
+            "route_class": "memory",
+            "headers": {"authorization": _SENTINEL},
+            "url": f"https://example.invalid/{_SENTINEL}",
+            "path": f"/private/{_SENTINEL}",
+            "body": {"query": _SENTINEL},
+            "query": _SENTINEL,
+            "memory": _SENTINEL,
+            "decrypted": _SENTINEL,
+        },
     )
 
     record = json.loads(output.getvalue())
@@ -234,7 +238,19 @@ def test_runtime_formatter_emits_json_with_only_explicit_safe_fields(
     assert record["request_id"] == "req-1"
     assert record["route_class"] == "memory"
     assert _SENTINEL not in output.getvalue()
-    assert not ({"headers", "url", "path", "body", "query", "exception"} & record.keys())
+    assert not (
+        {
+            "headers",
+            "url",
+            "path",
+            "body",
+            "query",
+            "memory",
+            "decrypted",
+            "exception",
+        }
+        & record.keys()
+    )
 
     logger.error("exception_event", exc_info=RuntimeError(_SENTINEL), stack_info=True)
     exception_record = json.loads(output.getvalue().splitlines()[-1])

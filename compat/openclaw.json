@@ -1,6 +1,6 @@
 {
   "upstream": "vectorize-io/hindsight",
-  "observed_main_sha": "bad06de5add5360d3c729c16cd4469fada555193",
+  "observed_main_sha": "edd0d0c5bba6c92a8e4c705143f2d2afaff377e1",
   "sources": {
     "plugin": "hindsight-integrations/openclaw/src/index.ts",
     "bank_defaults": "hindsight-integrations/openclaw/src/bank-defaults.ts",
@@ -11,7 +11,7 @@
     "plugin": "fd3bd44028a5475b8a09ee2068acb0136bc250d1",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
-    "client": "7ddc437988e4ba3b9730fd209c9a1cbb08f88ccd"
+    "client": "de87efb133ce0979f4be0b7f5a7eb80d4d83746e"
   },
   "plugin_client_methods": ["createBank", "recall", "retain"],
   "agent_sdk_methods": [

@@ -16,6 +16,8 @@ _SAFE_FIELDS = {
     "duration_ms",
     "route_class",
 }
+_OUTPUT_FIELDS = {"event", "level", "timestamp", *_SAFE_FIELDS}
+_JSON_RENDERER = structlog.processors.JSONRenderer(sort_keys=True)
 
 
 class _ApplicationLogFilter(logging.Filter):
@@ -33,6 +35,12 @@ def _drop_exception_data(_: logging.Logger, __: str, event_dict: dict[str, Any])
     return event_dict
 
 
+def _render_safe_json(logger: logging.Logger, method_name: str, event_dict: dict[str, Any]) -> str:
+    """Render only the application log schema, including for foreign log records."""
+    safe_event = {key: value for key, value in event_dict.items() if key in _OUTPUT_FIELDS}
+    return _JSON_RENDERER(logger, method_name, safe_event)
+
+
 def configure_logging() -> None:
     """Configure one-line JSON logs for Memory Router application loggers."""
     shared_processors: list[Any] = [
@@ -42,7 +50,7 @@ def configure_logging() -> None:
         _drop_exception_data,
     ]
     formatter = structlog.stdlib.ProcessorFormatter(
-        processor=structlog.processors.JSONRenderer(sort_keys=True),
+        processor=_render_safe_json,
         foreign_pre_chain=[
             structlog.stdlib.ExtraAdder(),
             *shared_processors,
