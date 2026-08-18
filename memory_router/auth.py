@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any
 
+from .logging import log_event
 from .observability import current_request_id
 from .timestamps import iso_now
 
@@ -51,8 +52,15 @@ class AuthFailureAuditor:
         event_key = f"event:{route_group}"
         if now - self.last.get(event_key, 0) >= 60_000:
             self.last[event_key] = now
-            logger.warning(
-                "auth failed route_group=%s request_id=%s", route_group, current_request_id()
+            log_event(
+                logger,
+                "warning",
+                "authentication_failed",
+                request_id=current_request_id(),
+                operation="authenticate",
+                error_kind="invalid_credentials",
+                status=401,
+                route_class=route_group,
             )
         try:
             await self.store.put(
@@ -69,9 +77,13 @@ class AuthFailureAuditor:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
-                logger.error(
-                    "could not record auth_failed security event route_group=%s request_id=%s error_type=%s",
-                    route_group,
-                    current_request_id(),
-                    type(exc).__name__,
+                log_event(
+                    logger,
+                    "error",
+                    "authentication_audit_failed",
+                    request_id=current_request_id(),
+                    operation="security_audit",
+                    error_kind=type(exc).__name__,
+                    status="failed",
+                    route_class=route_group,
                 )

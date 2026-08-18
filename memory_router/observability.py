@@ -2,18 +2,27 @@ from __future__ import annotations
 
 import re
 import secrets
+import time
 from contextvars import ContextVar, Token
 
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 _REQUEST_ID = ContextVar[str | None]("memory_router_request_id", default=None)
+_REQUEST_STARTED = ContextVar[float | None]("memory_router_request_started", default=None)
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 _HEADER = b"x-request-id"
 
 
 def current_request_id() -> str | None:
     return _REQUEST_ID.get()
+
+
+def current_duration_ms() -> float | None:
+    started = _REQUEST_STARTED.get()
+    if started is None:
+        return None
+    return round((time.monotonic() - started) * 1000, 3)
 
 
 def _resolve_request_id(scope: Scope) -> str:
@@ -34,6 +43,7 @@ class RequestIdMiddleware:
 
         request_id = _resolve_request_id(scope)
         token: Token[str | None] = _REQUEST_ID.set(request_id)
+        started_token: Token[float | None] = _REQUEST_STARTED.set(time.monotonic())
 
         async def send_with_request_id(message: Message) -> None:
             if message.get("type") == "http.response.start":
@@ -45,4 +55,5 @@ class RequestIdMiddleware:
         try:
             await self.app(scope, receive, send_with_request_id)
         finally:
+            _REQUEST_STARTED.reset(started_token)
             _REQUEST_ID.reset(token)

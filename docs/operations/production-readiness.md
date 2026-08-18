@@ -1,5 +1,7 @@
 # Production readiness
 
+See [Application logs](logging.md) for the JSON event schema, readiness transitions, and the fields that must never be logged.
+
 This document tracks production-readiness findings against the current runtime interaction map. It is intentionally separate from the architecture reference so current behavior and recommended changes remain distinct.
 
 See [Runtime interaction map](../architecture/runtime-interactions.md) for the as-built workflows.

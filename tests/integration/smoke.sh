@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: b61767b2bddc559ccdae6fc2467f4313df45c2f7f39b8e5c51fd68529c3c25ad
+# integration-behavior-sha256: 0a5c76b7f1b5e17ea001e8511461a45df8d8ffd3afffe221541ae2bebdc449fe
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -153,6 +153,20 @@ for readiness_response in "$health_response" "$ready_response" "$legacy_ready_re
   printf '%s' "$readiness_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, dict) and "status" in data and "router_health" not in data' || fail_check "router readiness alias returned unexpected health JSON"
 done
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
+pass_check
+
+begin_check "application logs are safe structured JSON"
+router_container="$(docker compose -p "$project" -f "$compose_file" ps -q memory-router)"
+router_logs="$(docker logs "$router_container" 2>&1)"
+printf '%s\n' "$router_logs" | python3 -c 'import json,sys; forbidden={"headers","url","path","body","query","exception","exc_info","stack_info"}; lines=[line for line in sys.stdin.read().splitlines() if line]; records=[json.loads(line) for line in lines]; assert all("event" in record for record in records); assert all(not (forbidden & record.keys()) for record in records)' || fail_check "memory-router emitted a non-JSON or forbidden log field"
+for secret in "$router_token" "$admin_read_token" "$admin_review_token" "$admin_cleanup_token"; do
+  if printf '%s' "$router_logs" | grep -Fq "$secret"; then
+    fail_check "memory-router logs exposed a sentinel credential"
+  fi
+done
+if printf '%s' "$router_logs" | grep -Eq '"(GET|POST|PATCH|PUT|DELETE) /'; then
+  fail_check "Uvicorn access log was enabled"
+fi
 pass_check
 
 begin_check "authentication and network boundaries hold"

@@ -37,8 +37,9 @@ from .db import (
 from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
+from .logging import log_event
 from .maintenance import prune_events_before, sweep_expired
-from .observability import current_request_id
+from .observability import current_duration_ms, current_request_id
 from .openclaw import OpenClawFacade
 from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
@@ -53,6 +54,7 @@ _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
 _PROCESS_START = time.monotonic()
+_READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -69,6 +71,83 @@ def _scope(method: str, path: str) -> str:
     if method == "POST" and path == "/admin/quarantine/cleanup":
         return "cleanup"
     return "review"
+
+
+def _route_class(request: Request) -> str:
+    path = request.url.path
+    if path in {"/health", "/health/ready", "/ready"}:
+        return "readiness"
+    if path == "/health/live":
+        return "liveness"
+    if path == "/version":
+        return "version"
+    if path.startswith("/admin/"):
+        return "admin"
+    if path.startswith("/v1/default/banks/"):
+        return "memory"
+    if path.startswith("/v1/default/"):
+        return "openclaw"
+    return "unmatched"
+
+
+def _hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
+    return {
+        "request_id": current_request_id(),
+        "operation": error.context.get("operation"),
+        "method": error.context.get("method"),
+        "error_kind": error.kind,
+        "upstream_status": error.upstream_status,
+        "status": error.status,
+        "duration_ms": current_duration_ms(),
+    }
+
+
+class _ReadinessLogState:
+    def __init__(self) -> None:
+        self.healthy: bool | None = None
+        self.last_error_kind: str | None = None
+        self.last_failure_log = 0.0
+
+    def record(self, error: Exception | None, duration_ms: float) -> None:
+        now = time.monotonic()
+        if error is None:
+            if self.healthy is False:
+                log_event(
+                    logger,
+                    "warning",
+                    "hindsight_readiness_recovered",
+                    request_id=current_request_id(),
+                    operation="health",
+                    method="GET",
+                    status="healthy",
+                    duration_ms=duration_ms,
+                    route_class="readiness",
+                )
+            self.healthy = True
+            self.last_error_kind = None
+            return
+
+        error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unexpected"
+        repeated = self.healthy is False and self.last_error_kind == error_kind
+        if not repeated or now - self.last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS:
+            fields: dict[str, Any] = {
+                "request_id": current_request_id(),
+                "operation": "health",
+                "method": "GET",
+                "error_kind": error_kind,
+                "status": "unhealthy",
+                "duration_ms": duration_ms,
+                "route_class": "readiness",
+            }
+            if isinstance(error, HindsightGatewayError):
+                fields["upstream_status"] = error.upstream_status
+            log_event(logger, "warning", "hindsight_readiness_failed", **fields)
+            self.last_failure_log = now
+        self.healthy = False
+        self.last_error_kind = error_kind
+
+
+_readiness_log_state = _ReadinessLogState()
 
 
 def _require_runtime[T](value: T | None, component: str) -> T:
@@ -273,7 +352,14 @@ class Runtime:
                     )
                     await prune_events_before(repository, cutoff, at)
             except Exception as exc:
-                logger.error("quarantine sweeper failed error_type=%s", type(exc).__name__)
+                log_event(
+                    logger,
+                    "error",
+                    "quarantine_sweeper_failed",
+                    operation="quarantine_maintenance",
+                    error_kind=type(exc).__name__,
+                    status="failed",
+                )
 
 
 runtime = Runtime()
@@ -292,18 +378,31 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 
 @app.exception_handler(HttpError)
-async def http_error_handler(_: Request, exc: HttpError) -> JSONResponse:
+async def http_error_handler(request: Request, exc: HttpError) -> JSONResponse:
     if isinstance(exc, HindsightGatewayError):
-        logger.warning(
-            "upstream request failed request_id=%s details=%s", current_request_id(), exc.details()
+        log_event(
+            logger,
+            "warning",
+            "hindsight_request_failed",
+            **_hindsight_log_fields(exc),
+            route_class=_route_class(request),
         )
     return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
 
 
 @app.exception_handler(Exception)
-async def unhandled_handler(_: Request, exc: Exception) -> JSONResponse:
-    logger.error(
-        "request failed request_id=%s error_type=%s", current_request_id(), type(exc).__name__
+async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
+    log_event(
+        logger,
+        "error",
+        "request_failed",
+        request_id=current_request_id(),
+        operation="request",
+        method=request.method,
+        error_kind=type(exc).__name__,
+        status=500,
+        duration_ms=current_duration_ms(),
+        route_class=_route_class(request),
     )
     return JSONResponse({"error": "internal error"}, status_code=500)
 
@@ -396,10 +495,14 @@ async def _database_health(repository: QuarantineRepository) -> bool:
 
 
 async def _hindsight_health(hindsight: HindsightGateway) -> tuple[bool, Any]:
+    started = time.monotonic()
     try:
-        return True, await hindsight.health()
-    except Exception:
+        response = await hindsight.health()
+    except Exception as exc:
+        _readiness_log_state.record(exc, round((time.monotonic() - started) * 1000, 3))
         return False, None
+    _readiness_log_state.record(None, round((time.monotonic() - started) * 1000, 3))
+    return True, response
 
 
 async def _health_ready_response() -> Response:

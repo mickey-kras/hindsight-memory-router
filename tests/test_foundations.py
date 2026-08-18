@@ -37,14 +37,14 @@ async def test_auth_failure_auditor_records_and_survives_store_failure(
     await auditor.record("router")
     await auditor.record("router")
     assert store.put.await_count == 2
-    assert caplog.text.count("auth failed route_group=router") == 1
+    assert caplog.text.count("authentication_failed") == 1
 
     caplog.clear()
     store.put.side_effect = RuntimeError("down")
     auditor.last.clear()
     await auditor.record("admin")
     await auditor.record("admin")
-    assert caplog.text.count("could not record auth_failed security event route_group=admin") == 1
+    assert caplog.text.count("authentication_audit_failed") == 1
 
 
 def test_environment_parsers(monkeypatch: pytest.MonkeyPatch) -> None:

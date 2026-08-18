@@ -85,11 +85,11 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     gateway = HindsightGatewayError("network", operation="recall", method="POST")
     response = await app_module.http_error_handler(request("GET", "/"), gateway)
     assert response.status_code == 502 and payload(response)["error"] == "hindsight_unavailable"
-    assert "upstream request failed" in caplog.text
+    assert "hindsight_request_failed" in caplog.text
     caplog.clear()
     response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("failure"))
     assert response.status_code == 500 and payload(response) == {"error": "internal error"}
-    assert "request failed" in caplog.text
+    assert "request_failed" in caplog.text
 
 
 @pytest.mark.asyncio

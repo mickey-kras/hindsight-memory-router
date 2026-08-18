@@ -8,6 +8,7 @@ from .canonical import canonical_json, sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
+from .logging import log_event
 from .observability import current_request_id
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 from .timestamps import iso_now
@@ -503,9 +504,16 @@ class RouterPolicy:
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
-        logger.warning(
-            "recall degraded event=%s request_id=%s details=%s",
+        error_kind = details.get("error_kind") or details.get("error_type") or details.get("code")
+        log_event(
+            logger,
+            "warning",
             event,
-            current_request_id(),
-            details,
+            request_id=current_request_id(),
+            operation="recall",
+            method="POST",
+            error_kind=error_kind,
+            upstream_status=details.get("upstream_status"),
+            status=details.get("status", "degraded"),
+            route_class="memory",
         )
