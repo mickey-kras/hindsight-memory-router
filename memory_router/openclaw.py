@@ -133,7 +133,7 @@ class OpenClawFacade:
                     },
                 }
             )
-        except Exception as exc:
+        except Exception:
             # Blocking is independent from audit availability; never log raw payload/content.
             log_event(
                 logger,
@@ -141,7 +141,9 @@ class OpenClawFacade:
                 "openclaw_security_audit_failed",
                 request_id=current_request_id(),
                 operation="security_audit",
-                error_kind=type(exc).__name__,
-                status="failed",
+                error_kind="unexpected",
+                outcome="failed",
                 route_class="openclaw",
+                writer_id=writer_id,
+                reason=reason,
             )

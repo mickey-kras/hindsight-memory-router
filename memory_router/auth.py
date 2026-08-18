@@ -47,7 +47,7 @@ class AuthFailureAuditor:
         self.store = store
         self.last: dict[str, int] = {}
 
-    async def record(self, route_group: str) -> None:
+    async def record(self, route_group: str, route_class: str | None = None) -> None:
         now = int(time.time() * 1000)
         event_key = f"event:{route_group}"
         if now - self.last.get(event_key, 0) >= 60_000:
@@ -59,8 +59,8 @@ class AuthFailureAuditor:
                 request_id=current_request_id(),
                 operation="authenticate",
                 error_kind="invalid_credentials",
-                status=401,
-                route_class=route_group,
+                http_status=401,
+                route_class=route_class or "unmatched",
             )
         try:
             await self.store.put(
@@ -73,7 +73,7 @@ class AuthFailureAuditor:
                     "payload": {"action": "auth_failed", "route_group": route_group},
                 }
             )
-        except Exception as exc:
+        except Exception:
             error_key = f"error:{route_group}"
             if now - self.last.get(error_key, 0) >= 60_000:
                 self.last[error_key] = now
@@ -83,7 +83,7 @@ class AuthFailureAuditor:
                     "authentication_audit_failed",
                     request_id=current_request_id(),
                     operation="security_audit",
-                    error_kind=type(exc).__name__,
-                    status="failed",
-                    route_class=route_group,
+                    error_kind="unexpected",
+                    outcome="failed",
+                    route_class=route_class or "unmatched",
                 )

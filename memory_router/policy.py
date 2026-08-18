@@ -511,9 +511,10 @@ class RouterPolicy:
             event,
             request_id=current_request_id(),
             operation="recall",
-            method="POST",
+            upstream_method="POST",
             error_kind=error_kind,
             upstream_status=details.get("upstream_status"),
-            status=details.get("status", "degraded"),
+            http_status=details.get("status") if isinstance(details.get("status"), int) else None,
+            outcome="degraded",
             route_class="memory",
         )

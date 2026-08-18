@@ -18,6 +18,8 @@ def payload(response: object) -> object:
 
 @pytest.fixture(autouse=True)
 def runtime_state() -> None:
+    app_module._readiness_cache = None
+    app_module._readiness_lock = None
     app_module.runtime.allow_anonymous = True
     app_module.runtime.router_token = None
     app_module.runtime.admin_tokens = {
@@ -65,15 +67,17 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     assert payload(response) == upstream_health
 
     repository.ping.side_effect = RuntimeError("database down")
+    app_module._readiness_cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
-    assert hindsight.health.await_count == 3
+    assert hindsight.health.await_count == 2
 
     repository.ping.side_effect = None
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
+    app_module._readiness_cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -118,12 +122,12 @@ async def test_router_and_admin_auth_failures_are_audited() -> None:
     auth_value = "route" + "r"
     app_module.runtime.router_token = auth_value
     assert not await app_module._router_auth(request("GET", "/version"))
-    app_module.runtime.auditor.record.assert_awaited_with("router")
+    app_module.runtime.auditor.record.assert_awaited_with("router", "version")
     assert await app_module._router_auth(
         request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"})
     )
     assert not await app_module._admin_auth(request("GET", "/admin/quarantine/stats"), "read")
-    app_module.runtime.auditor.record.assert_awaited_with("admin")
+    app_module.runtime.auditor.record.assert_awaited_with("admin", "admin")
     assert await app_module._admin_auth(
         request(
             "GET",

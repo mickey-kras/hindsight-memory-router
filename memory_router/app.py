@@ -37,7 +37,7 @@ from .db import (
 from .errors import HttpError
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
-from .logging import log_event
+from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
 from .openclaw import OpenClawFacade
@@ -50,6 +50,7 @@ from .timestamps import iso_now
 from .validation import parse_recall_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
+configure_logging()
 _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
@@ -74,7 +75,7 @@ def _scope(method: str, path: str) -> str:
 
 
 def _route_class(request: Request) -> str:
-    path = request.url.path
+    path = _raw_pathname(request)
     if path in {"/health", "/health/ready", "/ready"}:
         return "readiness"
     if path == "/health/live":
@@ -83,9 +84,9 @@ def _route_class(request: Request) -> str:
         return "version"
     if path.startswith("/admin/"):
         return "admin"
-    if path.startswith("/v1/default/banks/"):
+    if re.fullmatch(r"/v1/default/banks/[^/]+/memories(?:/recall)?", path):
         return "memory"
-    if path.startswith("/v1/default/"):
+    if path.startswith("/v1/default/banks/"):
         return "openclaw"
     return "unmatched"
 
@@ -94,11 +95,12 @@ def _hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
     return {
         "request_id": current_request_id(),
         "operation": error.context.get("operation"),
-        "method": error.context.get("method"),
+        "upstream_method": error.context.get("method"),
         "error_kind": error.kind,
         "upstream_status": error.upstream_status,
-        "status": error.status,
-        "duration_ms": current_duration_ms(),
+        "timeout_ms": error.context.get("timeout_ms"),
+        "http_status": error.status,
+        "request_duration_ms": current_duration_ms(),
     }
 
 
@@ -107,36 +109,47 @@ class _ReadinessLogState:
         self.healthy: bool | None = None
         self.last_error_kind: str | None = None
         self.last_failure_log = 0.0
+        self.candidate: bool | None = None
+        self.consecutive = 0
 
     def record(self, error: Exception | None, duration_ms: float) -> None:
         now = time.monotonic()
+        next_healthy = error is None
+        if self.candidate == next_healthy:
+            self.consecutive += 1
+        else:
+            self.candidate = next_healthy
+            self.consecutive = 1
+        if self.consecutive < 2:
+            return
         if error is None:
-            if self.healthy is False:
+            if (
+                self.healthy is False
+                and now - self.last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS
+            ):
                 log_event(
                     logger,
-                    "warning",
+                    "info",
                     "hindsight_readiness_recovered",
-                    request_id=current_request_id(),
                     operation="health",
-                    method="GET",
-                    status="healthy",
-                    duration_ms=duration_ms,
+                    upstream_method="GET",
+                    outcome="healthy",
+                    operation_duration_ms=duration_ms,
                     route_class="readiness",
                 )
+                self.last_failure_log = now
             self.healthy = True
             self.last_error_kind = None
             return
 
         error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unexpected"
-        repeated = self.healthy is False and self.last_error_kind == error_kind
-        if not repeated or now - self.last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS:
+        if now - self.last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS:
             fields: dict[str, Any] = {
-                "request_id": current_request_id(),
                 "operation": "health",
-                "method": "GET",
+                "upstream_method": "GET",
                 "error_kind": error_kind,
-                "status": "unhealthy",
-                "duration_ms": duration_ms,
+                "outcome": "unhealthy",
+                "operation_duration_ms": duration_ms,
                 "route_class": "readiness",
             }
             if isinstance(error, HindsightGatewayError):
@@ -148,6 +161,9 @@ class _ReadinessLogState:
 
 
 _readiness_log_state = _ReadinessLogState()
+_READINESS_CACHE_SECONDS = 1.0
+_readiness_cache: tuple[float, int, Any] | None = None
+_readiness_lock: asyncio.Lock | None = None
 
 
 def _require_runtime[T](value: T | None, component: str) -> T:
@@ -351,23 +367,40 @@ class Runtime:
                         .replace("+00:00", "Z")
                     )
                     await prune_events_before(repository, cutoff, at)
-            except Exception as exc:
+            except Exception:
                 log_event(
                     logger,
                     "error",
                     "quarantine_sweeper_failed",
                     operation="quarantine_maintenance",
-                    error_kind=type(exc).__name__,
-                    status="failed",
+                    error_kind="unexpected",
+                    outcome="failed",
                 )
 
 
 runtime = Runtime()
 
 
+class _FailureLogThrottle:
+    def __init__(self) -> None:
+        self.last: dict[tuple[str, str], float] = {}
+
+    def allow(self, route_class: str, error_kind: str) -> bool:
+        key = (route_class, error_kind)
+        now = time.monotonic()
+        if now - self.last.get(key, 0.0) < 60.0:
+            return False
+        self.last[key] = now
+        return True
+
+
+_failure_log_throttle = _FailureLogThrottle()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await runtime.start()
+    log_event(logger, "info", "application_started", operation="startup", outcome="healthy")
     try:
         yield
     finally:
@@ -380,13 +413,15 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 @app.exception_handler(HttpError)
 async def http_error_handler(request: Request, exc: HttpError) -> JSONResponse:
     if isinstance(exc, HindsightGatewayError):
-        log_event(
-            logger,
-            "warning",
-            "hindsight_request_failed",
-            **_hindsight_log_fields(exc),
-            route_class=_route_class(request),
-        )
+        route_class = _route_class(request)
+        if _failure_log_throttle.allow(route_class, exc.kind):
+            log_event(
+                logger,
+                "warning",
+                "hindsight_request_failed",
+                **_hindsight_log_fields(exc),
+                route_class=route_class,
+            )
     return JSONResponse(exc.body(), status_code=exc.status, headers=exc.headers)
 
 
@@ -398,10 +433,10 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
         "request_failed",
         request_id=current_request_id(),
         operation="request",
-        method=request.method,
-        error_kind=type(exc).__name__,
-        status=500,
-        duration_ms=current_duration_ms(),
+        request_method=request.method,
+        error_kind="unexpected",
+        http_status=500,
+        request_duration_ms=current_duration_ms(),
         route_class=_route_class(request),
     )
     return JSONResponse({"error": "internal error"}, status_code=500)
@@ -446,7 +481,7 @@ async def _router_auth(request: Request) -> bool:
         return True
     await _auth_failure_rate("router")
     auditor = _require_runtime(runtime.auditor, "auth auditor")
-    await auditor.record("router")
+    await auditor.record("router", _route_class(request))
     return False
 
 
@@ -458,7 +493,7 @@ async def _admin_auth(request: Request, scope: str) -> bool:
         return False
     await _auth_failure_rate("admin")
     auditor = _require_runtime(runtime.auditor, "auth auditor")
-    await auditor.record("admin")
+    await auditor.record("admin", _route_class(request))
     return False
 
 
@@ -506,18 +541,33 @@ async def _hindsight_health(hindsight: HindsightGateway) -> tuple[bool, Any]:
 
 
 async def _health_ready_response() -> Response:
-    try:
-        repository = _require_runtime(runtime.repository, "repository")
-        hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
-        database_healthy, hindsight_check = await asyncio.gather(
-            _database_health(repository), _hindsight_health(hindsight)
-        )
-    except Exception:
-        return JSONResponse({"status": "unhealthy"}, status_code=503)
-    hindsight_healthy, hindsight_response = hindsight_check
-    if not database_healthy or not hindsight_healthy:
-        return JSONResponse({"status": "unhealthy"}, status_code=503)
-    return JSONResponse(hindsight_response)
+    global _readiness_cache, _readiness_lock
+    now = time.monotonic()
+    if _readiness_cache is not None and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
+        return JSONResponse(_readiness_cache[2], status_code=_readiness_cache[1])
+    if _readiness_lock is None:
+        _readiness_lock = asyncio.Lock()
+    async with _readiness_lock:
+        now = time.monotonic()
+        if _readiness_cache is not None and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
+            return JSONResponse(_readiness_cache[2], status_code=_readiness_cache[1])
+        status_code = 200
+        payload: Any
+        try:
+            repository = _require_runtime(runtime.repository, "repository")
+            hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
+            database_healthy, hindsight_check = await asyncio.gather(
+                _database_health(repository), _hindsight_health(hindsight)
+            )
+            hindsight_healthy, hindsight_response = hindsight_check
+            if not database_healthy or not hindsight_healthy:
+                status_code, payload = 503, {"status": "unhealthy"}
+            else:
+                payload = hindsight_response
+        except Exception:
+            status_code, payload = 503, {"status": "unhealthy"}
+        _readiness_cache = (time.monotonic(), status_code, payload)
+        return JSONResponse(payload, status_code=status_code)
 
 
 @app.get("/health")

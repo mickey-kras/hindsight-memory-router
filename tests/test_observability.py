@@ -11,6 +11,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 import memory_router.app as app_module
+import memory_router.logging as logging_module
 from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.logging import configure_logging
@@ -18,6 +19,32 @@ from memory_router.observability import RequestIdMiddleware, current_request_id
 from tests.request_helpers import request
 
 _SENTINEL = "SENTINEL-secret-header-url-body-query-decrypted-exception"
+
+
+@pytest.fixture(autouse=True)
+def reset_log_throttles() -> None:
+    logging_module._last_emitted.clear()
+    app_module._failure_log_throttle.last.clear()
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/health", "readiness"),
+        ("/health/ready", "readiness"),
+        ("/ready", "readiness"),
+        ("/health/live", "liveness"),
+        ("/version", "version"),
+        ("/admin/quarantine/queue", "admin"),
+        ("/v1/default/banks/main/memories", "memory"),
+        ("/v1/default/banks/main/memories/recall", "memory"),
+        ("/v1/default/banks/main/config", "openclaw"),
+        ("/v1/default/banks/main/mental-models", "openclaw"),
+        ("/private/identifier", "unmatched"),
+    ],
+)
+def test_route_class_uses_bounded_normalized_categories(path: str, expected: str) -> None:
+    assert app_module._route_class(request("GET", path)) == expected
 
 
 async def _respond_with_request_id(scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -88,12 +115,12 @@ async def test_unhandled_failure_log_does_not_emit_exception_details(
     )
 
     assert response.status_code == 500
-    assert any(getattr(record, "error_kind", None) == "RuntimeError" for record in caplog.records)
+    assert any(getattr(record, "error_kind", None) == "unexpected" for record in caplog.records)
     assert sensitive_detail not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
     record = next(record for record in caplog.records if record.msg == "request_failed")
     assert record.operation == "request"  # type: ignore[attr-defined]
-    assert record.method == "POST"  # type: ignore[attr-defined]
+    assert record.request_method == "POST"  # type: ignore[attr-defined]
     assert record.route_class == "unmatched"  # type: ignore[attr-defined]
     assert not hasattr(record, "path")
 
@@ -136,7 +163,7 @@ async def test_every_hindsight_failure_kind_has_safe_structured_context(
     assert response.status_code == error.status
     record = next(record for record in caplog.records if record.msg == "hindsight_request_failed")
     assert record.operation == "recall"  # type: ignore[attr-defined]
-    assert record.method == "POST"  # type: ignore[attr-defined]
+    assert record.upstream_method == "POST"  # type: ignore[attr-defined]
     assert record.error_kind == kind  # type: ignore[attr-defined]
     assert record.route_class == "unmatched"  # type: ignore[attr-defined]
     assert getattr(record, "upstream_status", None) == upstream_status
@@ -151,8 +178,9 @@ async def test_every_hindsight_failure_kind_has_safe_structured_context(
 async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     kind: str,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app_module._readiness_log_state = app_module._ReadinessLogState()
+    monkeypatch.setattr(app_module, "_readiness_log_state", app_module._ReadinessLogState())
     error = HindsightGatewayError(  # type: ignore[arg-type]
         kind,
         upstream_status=503 if kind == "http" else None,
@@ -163,13 +191,14 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     hindsight = type("Hindsight", (), {"health": AsyncFail(error)})()
     caplog.set_level(logging.WARNING, logger="memory_router.app")
 
+    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     healthy, response = await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
 
     assert (healthy, response) == (False, None)
     record = next(record for record in caplog.records if record.msg == "hindsight_readiness_failed")
     assert record.error_kind == kind  # type: ignore[attr-defined]
     assert record.route_class == "readiness"  # type: ignore[attr-defined]
-    assert isinstance(record.duration_ms, float)  # type: ignore[attr-defined]
+    assert isinstance(record.operation_duration_ms, float)  # type: ignore[attr-defined]
     assert _SENTINEL not in caplog.text
     assert record.exc_info is None
 
@@ -185,16 +214,19 @@ class AsyncFail:
 @pytest.mark.asyncio
 async def test_readiness_logs_failure_once_and_recovery_transition(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    app_module._readiness_log_state = app_module._ReadinessLogState()
+    state = app_module._ReadinessLogState()
+    monkeypatch.setattr(app_module, "_readiness_log_state", state)
     error = HindsightGatewayError("network", operation="health", method="GET")
     health = AsyncFail(error)
     hindsight = type("Hindsight", (), {"health": health})()
-    caplog.set_level(logging.WARNING, logger="memory_router.app")
+    caplog.set_level(logging.INFO, logger="memory_router.app")
 
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 1
+    state.last_failure_log -= 61
 
     async def recovered() -> dict[str, str]:
         return {"status": "healthy", "database": "connected"}
@@ -218,10 +250,10 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
         extra={
             "request_id": "req-1",
             "operation": "recall",
-            "method": "POST",
+            "upstream_method": "POST",
             "error_kind": "network",
-            "status": 502,
-            "duration_ms": 1.25,
+            "http_status": 502,
+            "operation_duration_ms": 1.25,
             "route_class": "memory",
             "headers": {"authorization": _SENTINEL},
             "url": f"https://example.invalid/{_SENTINEL}",
@@ -272,7 +304,7 @@ async def test_auth_audit_failure_log_does_not_emit_exception_details(
     caplog.set_level(logging.ERROR, logger="memory_router.auth")
     await AuthFailureAuditor(FailingStore()).record("router")
 
-    assert any(getattr(record, "error_kind", None) == "RuntimeError" for record in caplog.records)
+    assert any(getattr(record, "error_kind", None) == "unexpected" for record in caplog.records)
     assert sensitive_detail not in caplog.text
     assert all(
         record.exc_info is None for record in caplog.records if record.levelno >= logging.ERROR
@@ -305,6 +337,6 @@ async def test_sweeper_failure_log_does_not_emit_exception_details(
     with pytest.raises(asyncio.CancelledError):
         await runtime._sweep_loop(1, 0)
 
-    assert any(getattr(record, "error_kind", None) == "RuntimeError" for record in caplog.records)
+    assert any(getattr(record, "error_kind", None) == "unexpected" for record in caplog.records)
     assert sensitive_detail not in caplog.text
     assert all(record.exc_info is None for record in caplog.records)
