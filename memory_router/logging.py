@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from collections.abc import MutableMapping
 from typing import Any, Literal
 
 import structlog
@@ -35,7 +36,9 @@ def _drop_exception_data(_: logging.Logger, __: str, event_dict: dict[str, Any])
     return event_dict
 
 
-def _render_safe_json(logger: logging.Logger, method_name: str, event_dict: dict[str, Any]) -> str:
+def _render_safe_json(
+    logger: Any, method_name: str, event_dict: MutableMapping[str, Any]
+) -> str | bytes:
     """Render only the application log schema, including for foreign log records."""
     safe_event = {key: value for key, value in event_dict.items() if key in _OUTPUT_FIELDS}
     return _JSON_RENDERER(logger, method_name, safe_event)
