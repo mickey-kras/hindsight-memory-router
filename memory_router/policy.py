@@ -504,7 +504,17 @@ class RouterPolicy:
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
-        error_kind = details.get("error_kind") or details.get("error_type") or details.get("code")
+        raw_error_kind = (
+            details.get("error_kind") or details.get("error_type") or details.get("code")
+        )
+        error_kind = {
+            "quarantine_capacity_exceeded": "capacity",
+            "quarantine_writer_capacity_exceeded": "capacity",
+            "quarantine_rate_limited": "rate-limit",
+            "quarantine_item_too_large": "payload-too-large",
+            "quarantine_request_in_review": "conflict",
+            "quarantine_item_in_review": "conflict",
+        }.get(str(raw_error_kind), raw_error_kind)
         log_event(
             logger,
             "warning",

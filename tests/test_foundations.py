@@ -41,7 +41,6 @@ async def test_auth_failure_auditor_records_and_survives_store_failure(
 
     caplog.clear()
     store.put.side_effect = RuntimeError("down")
-    auditor.last.clear()
     await auditor.record("admin")
     await auditor.record("admin")
     assert caplog.text.count("authentication_audit_failed") == 1
@@ -154,12 +153,25 @@ def test_environment_assertions(
     monkeypatch.delenv("QUARANTINE_PRIVATE_KEY")
 
     config.assert_auth_environment()
-    assert "fail-closed" in caplog.text
+    assert {
+        record.reason  # type: ignore[attr-defined]
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    } == {
+        "router-token-missing",
+        "admin-read-token-missing",
+        "admin-review-token-missing",
+        "admin-cleanup-token-missing",
+    }
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
     monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
     config.assert_auth_environment()
-    assert "Development only" in caplog.text and "legacy admin" in caplog.text
+    assert {
+        record.reason  # type: ignore[attr-defined]
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    } == {"anonymous-mode", "legacy-admin-token"}
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:

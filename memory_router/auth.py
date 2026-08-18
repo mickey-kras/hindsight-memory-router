@@ -3,10 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import time
 from typing import Any
 
-from .logging import log_event
+from .logging import error_fingerprint, log_event
 from .observability import current_request_id
 from .timestamps import iso_now
 
@@ -45,23 +44,19 @@ def admin_token_recognized(authorization: str | None, tokens: dict[str, str | No
 class AuthFailureAuditor:
     def __init__(self, store: Any) -> None:
         self.store = store
-        self.last: dict[str, int] = {}
 
     async def record(self, route_group: str, route_class: str | None = None) -> None:
-        now = int(time.time() * 1000)
-        event_key = f"event:{route_group}"
-        if now - self.last.get(event_key, 0) >= 60_000:
-            self.last[event_key] = now
-            log_event(
-                logger,
-                "warning",
-                "authentication_failed",
-                request_id=current_request_id(),
-                operation="authenticate",
-                error_kind="invalid_credentials",
-                http_status=401,
-                route_class=route_class or "unmatched",
-            )
+        log_event(
+            logger,
+            "warning",
+            "authentication_failed",
+            request_id=current_request_id(),
+            operation="authenticate",
+            error_kind="invalid-credentials",
+            http_status=401,
+            outcome="failed",
+            route_class=route_class or "unmatched",
+        )
         try:
             await self.store.put(
                 {
@@ -73,17 +68,15 @@ class AuthFailureAuditor:
                     "payload": {"action": "auth_failed", "route_group": route_group},
                 }
             )
-        except Exception:
-            error_key = f"error:{route_group}"
-            if now - self.last.get(error_key, 0) >= 60_000:
-                self.last[error_key] = now
-                log_event(
-                    logger,
-                    "error",
-                    "authentication_audit_failed",
-                    request_id=current_request_id(),
-                    operation="security_audit",
-                    error_kind="unexpected",
-                    outcome="failed",
-                    route_class=route_class or "unmatched",
-                )
+        except Exception as exc:
+            log_event(
+                logger,
+                "error",
+                "authentication_audit_failed",
+                request_id=current_request_id(),
+                operation="security_audit",
+                error_kind="unexpected",
+                error_fingerprint=error_fingerprint(exc),
+                outcome="failed",
+                route_class=route_class or "unmatched",
+            )

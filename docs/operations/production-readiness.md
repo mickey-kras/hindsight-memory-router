@@ -132,6 +132,8 @@ Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
 An alert on any sustained `review_side_effect_started` item is especially important until explicit reconciliation exists.
 
+Structured logs in this PR intentionally do not add per-request events for quarantine 413/429/507 admission failures, general 429 rate-limit rejections, or the age/count of `review_side_effect_started` items. Those signals require counters and gauges in the metrics/alerts follow-up so sustained magnitude is observable without creating request-amplified logs.
+
 ## Review order
 
 Work through unresolved items in this order:

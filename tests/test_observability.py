@@ -5,26 +5,20 @@ import io
 import json
 import logging
 from typing import Any
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
 import memory_router.app as app_module
-import memory_router.logging as logging_module
 from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
-from memory_router.logging import configure_logging
+from memory_router.logging import _ProtocolNoiseFilter, configure_logging, log_event
 from memory_router.observability import RequestIdMiddleware, current_request_id
 from tests.request_helpers import request
 
 _SENTINEL = "SENTINEL-secret-header-url-body-query-decrypted-exception"
-
-
-@pytest.fixture(autouse=True)
-def reset_log_throttles() -> None:
-    logging_module._last_emitted.clear()
-    app_module._failure_log_throttle.last.clear()
 
 
 @pytest.mark.parametrize(
@@ -192,7 +186,7 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     caplog.set_level(logging.WARNING, logger="memory_router.app")
 
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    healthy, response = await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    healthy, response, _, _ = await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
 
     assert (healthy, response) == (False, None)
     record = next(record for record in caplog.records if record.msg == "hindsight_readiness_failed")
@@ -226,7 +220,6 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 1
-    state.last_failure_log -= 61
 
     async def recovered() -> dict[str, str]:
         return {"status": "healthy", "database": "connected"}
@@ -235,6 +228,146 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 1
+    assert state.last_recovery_log > 0
+    assert state.last_failure_log["network"] < state.last_recovery_log
+
+    hindsight.health = health
+    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 2
+
+
+@pytest.mark.asyncio
+async def test_readiness_logs_new_failure_kind_without_waiting(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = app_module._ReadinessLogState()
+    first = HindsightGatewayError("network", operation="health", method="GET")
+    second = HindsightGatewayError("timeout", operation="health", method="GET")
+
+    state.record(first, 1.0)
+    state.record(first, 1.0)
+    state.record(second, 1.0)
+
+    failures = [record for record in caplog.records if record.msg == "hindsight_readiness_failed"]
+    assert [record.error_kind for record in failures] == ["network", "timeout"]  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_storage_readiness_failure_and_recovery_are_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    repository = type("Repository", (), {"ping": AsyncFail(RuntimeError("database down"))})()
+
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+    assert [record.msg for record in caplog.records].count("storage_readiness_failed") == 1
+
+    async def recovered() -> None:
+        return None
+
+    repository.ping = recovered
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+    assert [record.msg for record in caplog.records].count("storage_readiness_recovered") == 1
+
+
+@pytest.mark.asyncio
+async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None:
+    app_module._readiness_cache = (0.0, 200, b'{"status":"healthy"}')
+    app_module._readiness_lock = asyncio.Lock()
+    await app_module._readiness_lock.acquire()
+    try:
+        response = await app_module._health_ready_response()
+    finally:
+        app_module._readiness_lock.release()
+
+    assert response.status_code == 200
+    assert response.body == b'{"status":"healthy"}'
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_startup_success_and_failure(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = AsyncMock()
+    stopped = AsyncMock()
+    monkeypatch.setattr(app_module.runtime, "start", started)
+    monkeypatch.setattr(app_module.runtime, "stop", stopped)
+
+    async with app_module.lifespan(app_module.app):
+        pass
+    assert any(record.msg == "application_started" for record in caplog.records)
+    stopped.assert_awaited_once()
+
+    caplog.clear()
+    started.side_effect = RuntimeError("startup secret")
+    with pytest.raises(RuntimeError, match="startup secret"):
+        async with app_module.lifespan(app_module.app):
+            pass
+    record = next(record for record in caplog.records if record.msg == "application_start_failed")
+    assert record.error_fingerprint == "RuntimeError"  # type: ignore[attr-defined]
+    assert "startup secret" not in caplog.text
+
+
+def test_log_contract_normalization_throttle_and_suppressed_count(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    logger = logging.getLogger("memory_router.test")
+    log_event(logger, "warning", "not_registered")
+    log_event(logger, "warning", "request_failed", timestamp="unsafe")
+    violations = [record for record in caplog.records if record.msg == "logging_contract_violation"]
+    assert [record.reason for record in violations] == [  # type: ignore[attr-defined]
+        "unregistered-event",
+        "reserved-field",
+    ]
+
+    for _ in range(2):
+        log_event(
+            logger,
+            "warning",
+            "hindsight_request_failed",
+            route_class="memory",
+            error_kind="network",
+            outcome="failed",
+            writer_id="w" * 500,
+        )
+    key = ("hindsight_request_failed", "memory", "network")
+    import memory_router.logging as logging_module
+
+    logging_module._last_emitted[key] -= 61
+    log_event(
+        logger,
+        "warning",
+        "hindsight_request_failed",
+        route_class="memory",
+        error_kind="network",
+        outcome="failed",
+        writer_id="w" * 500,
+    )
+    records = [record for record in caplog.records if record.msg == "hindsight_request_failed"]
+    assert len(records) == 2
+    assert records[-1].suppressed == 1  # type: ignore[attr-defined]
+    assert len(records[-1].writer_id) == 128  # type: ignore[attr-defined]
+
+
+def test_protocol_noise_filter_counts_suppressed_records() -> None:
+    noise_filter = _ProtocolNoiseFilter()
+    first = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", (), None
+    )
+    second = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", (), None
+    )
+    assert noise_filter.filter(first)
+    assert not noise_filter.filter(second)
+    noise_filter.last -= 61
+    third = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", (), None
+    )
+    assert noise_filter.filter(third)
+    assert third.suppressed == 1  # type: ignore[attr-defined]
 
 
 def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
@@ -242,53 +375,110 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
 ) -> None:
     output = io.StringIO()
     monkeypatch.setattr("memory_router.logging.sys.stdout", output)
-    configure_logging()
-    logger = logging.getLogger("memory_router.test")
+    application_logger = logging.getLogger("memory_router")
+    original_handlers = list(application_logger.handlers)
+    original_level = application_logger.level
+    original_propagate = application_logger.propagate
+    uvicorn_logger = logging.getLogger("uvicorn.error")
+    original_uvicorn_handlers = list(uvicorn_logger.handlers)
+    original_uvicorn_level = uvicorn_logger.level
+    original_uvicorn_propagate = uvicorn_logger.propagate
+    try:
+        configure_logging()
+        logger = logging.getLogger("memory_router.test")
+        log_event(
+            logger,
+            "warning",
+            "hindsight_request_failed",
+            request_id="req-1",
+            operation="recall",
+            upstream_method="POST",
+            error_kind="network",
+            http_status=502,
+            operation_duration_ms=1.25,
+            route_class="memory",
+            headers={"authorization": _SENTINEL},
+            url=f"https://example.invalid/{_SENTINEL}",
+            path=f"/private/{_SENTINEL}",
+            body={"query": _SENTINEL},
+            query=_SENTINEL,
+            memory=_SENTINEL,
+            decrypted=_SENTINEL,
+        )
 
-    logger.warning(
-        "safe_event",
-        extra={
-            "request_id": "req-1",
-            "operation": "recall",
-            "upstream_method": "POST",
-            "error_kind": "network",
-            "http_status": 502,
-            "operation_duration_ms": 1.25,
-            "route_class": "memory",
-            "headers": {"authorization": _SENTINEL},
-            "url": f"https://example.invalid/{_SENTINEL}",
-            "path": f"/private/{_SENTINEL}",
-            "body": {"query": _SENTINEL},
-            "query": _SENTINEL,
-            "memory": _SENTINEL,
-            "decrypted": _SENTINEL,
-        },
-    )
+        record = json.loads(output.getvalue())
+        assert record["event"] == "hindsight_request_failed"
+        assert record["request_id"] == "req-1"
+        assert record["route_class"] == "memory"
+        assert _SENTINEL not in output.getvalue()
+        assert not (
+            {
+                "headers",
+                "url",
+                "path",
+                "body",
+                "query",
+                "memory",
+                "decrypted",
+                "exception",
+            }
+            & record.keys()
+        )
 
-    record = json.loads(output.getvalue())
-    assert record["event"] == "safe_event"
-    assert record["request_id"] == "req-1"
-    assert record["route_class"] == "memory"
-    assert _SENTINEL not in output.getvalue()
-    assert not (
-        {
-            "headers",
-            "url",
-            "path",
-            "body",
-            "query",
-            "memory",
-            "decrypted",
-            "exception",
-        }
-        & record.keys()
-    )
+        logger.error("exception_event\n", exc_info=RuntimeError(_SENTINEL), stack_info=True)
+        exception_record = json.loads(output.getvalue().splitlines()[-1])
+        assert exception_record["event"] == "exception_event"
+        assert _SENTINEL not in output.getvalue()
+        assert not ({"exception", "exc_info", "stack_info"} & exception_record.keys())
+    finally:
+        for handler in list(application_logger.handlers):
+            if handler not in original_handlers:
+                application_logger.removeHandler(handler)
+                handler.close()
+        application_logger.handlers[:] = original_handlers
+        application_logger.setLevel(original_level)
+        application_logger.propagate = original_propagate
+        uvicorn_logger.handlers[:] = original_uvicorn_handlers
+        uvicorn_logger.setLevel(original_uvicorn_level)
+        uvicorn_logger.propagate = original_uvicorn_propagate
 
-    logger.error("exception_event", exc_info=RuntimeError(_SENTINEL), stack_info=True)
-    exception_record = json.loads(output.getvalue().splitlines()[-1])
-    assert _SENTINEL not in output.getvalue()
-    assert not ({"exception", "exc_info", "stack_info"} & exception_record.keys())
-    logging.basicConfig(handlers=[logging.NullHandler()], force=True)
+
+def test_configure_logging_preserves_root_and_suppresses_http_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = logging.getLogger()
+    existing = logging.NullHandler()
+    original_handlers = list(root.handlers)
+    original_level = root.level
+    application_logger = logging.getLogger("memory_router")
+    original_application_handlers = list(application_logger.handlers)
+    original_application_level = application_logger.level
+    original_application_propagate = application_logger.propagate
+    uvicorn_logger = logging.getLogger("uvicorn.error")
+    original_uvicorn_handlers = list(uvicorn_logger.handlers)
+    original_uvicorn_level = uvicorn_logger.level
+    original_uvicorn_propagate = uvicorn_logger.propagate
+    root.handlers[:] = [existing]
+    root.setLevel(logging.WARNING)
+    output = io.StringIO()
+    monkeypatch.setattr("memory_router.logging.sys.stdout", output)
+    try:
+        configure_logging()
+        assert root.handlers == [existing]
+        assert root.level == logging.WARNING
+        assert logging.getLogger("httpx").level == logging.WARNING
+        assert logging.getLogger("httpcore").level == logging.WARNING
+        logging.getLogger("httpx").info("HTTP Request: GET https://example.invalid/%s", _SENTINEL)
+        assert _SENTINEL not in output.getvalue()
+    finally:
+        root.handlers[:] = original_handlers
+        root.setLevel(original_level)
+        application_logger.handlers[:] = original_application_handlers
+        application_logger.setLevel(original_application_level)
+        application_logger.propagate = original_application_propagate
+        uvicorn_logger.handlers[:] = original_uvicorn_handlers
+        uvicorn_logger.setLevel(original_uvicorn_level)
+        uvicorn_logger.propagate = original_uvicorn_propagate
 
 
 @pytest.mark.asyncio

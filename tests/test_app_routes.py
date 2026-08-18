@@ -18,8 +18,10 @@ def payload(response: object) -> object:
 
 @pytest.fixture(autouse=True)
 def runtime_state() -> None:
-    app_module._readiness_cache = None
-    app_module._readiness_lock = None
+    app_module._readiness_log_state = app_module._ReadinessLogState()
+    app_module._storage_readiness_log_state = app_module._ReadinessLogState(
+        "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
+    )
     app_module.runtime.allow_anonymous = True
     app_module.runtime.router_token = None
     app_module.runtime.admin_tokens = {
@@ -65,13 +67,17 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     response = await app_module.ready()
     assert response.status_code == 200
     assert payload(response) == upstream_health
+    cached = app_module._readiness_cache
+    assert cached is not None and isinstance(cached[2], bytes)
+    assert app_module._readiness_cache is cached
 
     repository.ping.side_effect = RuntimeError("database down")
+    hindsight.health.reset_mock()
     app_module._readiness_cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
-    assert hindsight.health.await_count == 2
+    hindsight.health.assert_awaited_once()
 
     repository.ping.side_effect = None
     hindsight.health.side_effect = HindsightGatewayError(
