@@ -8,6 +8,6 @@ Readiness results are cached and concurrent probes are coalesced. Two consecutiv
 
 Event catalog: `application_started` (info); `hindsight_readiness_recovered` (info); `authentication_failed`, `bank_unavailable`, `hindsight_readiness_failed`, `hindsight_request_failed`, `openclaw_security_audit_failed`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, and `recall_supplemental_audit_unavailable` (warning); `authentication_audit_failed`, `quarantine_sweeper_failed`, and `request_failed` (error). Route security audit warnings and upstream/request failures are rate-limited; alert routing should page on error events, alert on sustained warning events, and treat info events as lifecycle context.
 
-`structlog` 25.5.0 is intentionally pinned with hashes in the runtime lock. The project updates dependencies through reviewed lock refreshes rather than selecting the newest release during builds.
+`structlog` 26.1.0 is pinned with hashes in the runtime lock. Dependency updates use reviewed lock refreshes rather than selecting releases during builds.
 
 Logs intentionally exclude credentials, headers, URLs, paths, request and response bodies, memory or query text, decrypted quarantine data, exception messages, and stack traces. Use `request_id` to correlate a router failure with Hindsight without enabling access logs or adding payload data.
