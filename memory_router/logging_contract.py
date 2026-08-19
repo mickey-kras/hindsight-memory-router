@@ -207,6 +207,26 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
             "_", "-"
         )
         safe_fields["reason"] = reason if reason in REASONS else "runtime-other"
+    if "request_id" in safe_fields:
+        request_id = safe_text(safe_fields["request_id"], fallback="", limit=129)
+        if REQUEST_ID_PATTERN.fullmatch(request_id):
+            safe_fields["request_id"] = request_id
+        else:
+            safe_fields.pop("request_id")
+    if "writer_id" in safe_fields:
+        writer_id = safe_text(safe_fields["writer_id"], fallback="", limit=129)
+        safe_fields["writer_id"] = (
+            writer_id
+            if WRITER_ID_PATTERN.fullmatch(writer_id)
+            else _opaque_text(safe_fields["writer_id"], "writer")
+        )
+    if "logger" in safe_fields:
+        logger_name = safe_text(safe_fields["logger"], fallback="", limit=129)
+        safe_fields["logger"] = (
+            logger_name
+            if LOGGER_PATTERN.fullmatch(logger_name)
+            else _opaque_text(safe_fields["logger"], "logger")
+        )
     for field, limit in TEXT_LIMITS.items():
         if field in safe_fields:
             safe_fields[field] = safe_text(safe_fields[field], fallback="unavailable", limit=limit)
@@ -218,12 +238,6 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
             safe_fields[field] = method
             if method not in METHODS:
                 safe_fields.pop(field)
-    if "request_id" in safe_fields and not REQUEST_ID_PATTERN.fullmatch(safe_fields["request_id"]):
-        safe_fields.pop("request_id")
-    if "writer_id" in safe_fields and not WRITER_ID_PATTERN.fullmatch(safe_fields["writer_id"]):
-        safe_fields["writer_id"] = _opaque_text(safe_fields["writer_id"], "writer")
-    if "logger" in safe_fields and not LOGGER_PATTERN.fullmatch(safe_fields["logger"]):
-        safe_fields["logger"] = _opaque_text(safe_fields["logger"], "logger")
     for field in INTEGER_FIELDS | DURATION_FIELDS:
         if field in safe_fields:
             value = sanitize_output_field(field, safe_fields[field])

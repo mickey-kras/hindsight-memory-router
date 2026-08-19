@@ -9,7 +9,7 @@ from memory_router import app as app_module
 
 
 @pytest.mark.asyncio
-async def test_postgres_runtime_uses_shared_auth_failure_limiter(
+async def test_postgres_runtime_keeps_auth_failure_limiter_in_memory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://db")
@@ -44,5 +44,5 @@ async def test_postgres_runtime_uses_shared_auth_failure_limiter(
     runtime = app_module.Runtime()
     await runtime.start()
     assert runtime.quarantine_limiter is shared_limiter
-    assert runtime.auth_limiter is shared_limiter
+    assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
     await runtime.stop()
