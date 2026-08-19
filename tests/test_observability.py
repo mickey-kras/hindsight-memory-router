@@ -24,7 +24,7 @@ from memory_router.logging import (
     log_event,
     reset_log_state,
 )
-from memory_router.logging_contract import sanitize_output_field
+from memory_router.logging_contract import sanitize_fields, sanitize_output_field
 from memory_router.observability import RequestIdMiddleware, current_request_id
 from memory_router.openclaw import OpenClawFacade
 from memory_router.policy import RouterPolicy
@@ -575,6 +575,13 @@ def test_invalid_logger_name_is_fingerprinted() -> None:
 
     assert isinstance(logger_name, str)
     assert logger_name.startswith("logger:")
+
+
+def test_overlong_request_id_is_deliberately_dropped() -> None:
+    valid = "r" * 128
+
+    assert sanitize_fields({"request_id": valid})["request_id"] == valid
+    assert "request_id" not in sanitize_fields({"request_id": f"{valid}r"})
 
 
 @pytest.mark.asyncio

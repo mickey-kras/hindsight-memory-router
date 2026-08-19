@@ -8,6 +8,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from .logging import log_event
+from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
 
 logger = logging.getLogger(__name__)
@@ -64,8 +65,8 @@ def load_registry(path: str | None = None) -> WriterRegistry:
     except ValidationError as exc:
         raise RuntimeError("invalid writer registry") from exc
     for writer_id in registry.writers:
-        if not writer_id.strip():
-            raise RuntimeError("writer id cannot be empty")
+        if not WRITER_ID_PATTERN.fullmatch(writer_id):
+            raise RuntimeError("writer id must match [A-Za-z0-9._:-]{1,128}")
     return registry
 
 

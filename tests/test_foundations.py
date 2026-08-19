@@ -116,8 +116,22 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
             }
         )
     )
-    with pytest.raises(RuntimeError, match="writer id cannot be empty"):
+    with pytest.raises(RuntimeError, match="writer id must match"):
         config.load_registry(str(blank))
+
+    invalid_writer = json.loads(valid.read_text())
+    for writer_id in ("my writer", "agent-ü", "w" * 129):
+        invalid_writer["writers"] = {
+            writer_id: {
+                "role": "dev",
+                "source": "application",
+                "write_bank": "dev",
+                "read_banks": ["dev"],
+            }
+        }
+        invalid.write_text(json.dumps(invalid_writer))
+        with pytest.raises(RuntimeError, match="writer id must match"):
+            config.load_registry(str(invalid))
 
     cross = tmp_path / "cross.json"
     cross.write_text(
