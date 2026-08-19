@@ -164,11 +164,7 @@ def safe_text(value: Any, *, fallback: str, limit: int) -> str:
 def sanitize_output_field(key: str, value: Any) -> Any | None:
     if key == "logger":
         logger_name = safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
-        return (
-            logger_name
-            if LOGGER_PATTERN.fullmatch(logger_name)
-            else _opaque_text(value, "logger")
-        )
+        return logger_name if LOGGER_PATTERN.fullmatch(logger_name) else _opaque_text(value, "logger")
     if key in TEXT_LIMITS:
         return safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
     if key in INTEGER_FIELDS:

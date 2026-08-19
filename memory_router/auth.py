@@ -82,4 +82,3 @@ class AuthFailureAuditor:
                 outcome="failed",
                 route_class=route_class or "unmatched",
             )
-

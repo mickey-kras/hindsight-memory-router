@@ -38,9 +38,7 @@ def runtime_state() -> None:
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.auth_failure_max = 120
     app_module.runtime.auth_failure_window = 60_000
-    app_module.runtime.auditor = SimpleNamespace(
-        log_failure=Mock(), persist=AsyncMock()
-    )
+    app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
 
 
 @pytest.mark.asyncio

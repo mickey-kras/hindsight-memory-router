@@ -733,9 +733,7 @@ async def test_lifespan_logs_cancelled_shutdown_and_preserves_primary_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(app_module.runtime, "start", AsyncMock())
-    monkeypatch.setattr(
-        app_module.runtime, "stop", AsyncMock(side_effect=asyncio.CancelledError())
-    )
+    monkeypatch.setattr(app_module.runtime, "stop", AsyncMock(side_effect=asyncio.CancelledError()))
 
     with pytest.raises(ValueError, match="primary"):
         async with app_module.lifespan(app_module.app):
