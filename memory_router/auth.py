@@ -45,7 +45,7 @@ class AuthFailureAuditor:
     def __init__(self, store: Any) -> None:
         self.store = store
 
-    async def record(self, route_group: str, route_class: str | None = None) -> None:
+    def log_failure(self, route_class: str | None = None) -> None:
         log_event(
             logger,
             "warning",
@@ -57,6 +57,8 @@ class AuthFailureAuditor:
             outcome="failed",
             route_class=route_class or "unmatched",
         )
+
+    async def persist(self, route_group: str, route_class: str | None = None) -> None:
         try:
             await self.store.put(
                 {
@@ -80,3 +82,8 @@ class AuthFailureAuditor:
                 outcome="failed",
                 route_class=route_class or "unmatched",
             )
+
+    async def record(self, route_group: str, route_class: str | None = None) -> None:
+        """Record a failure outside HTTP admission flows."""
+        self.log_failure(route_class)
+        await self.persist(route_group, route_class)

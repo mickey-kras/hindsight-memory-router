@@ -22,8 +22,10 @@ from memory_router.logging import (
     configure_logging,
     error_fingerprint,
     log_event,
+    reset_log_state,
 )
 from memory_router.observability import RequestIdMiddleware, current_request_id
+from memory_router.openclaw import OpenClawFacade
 from memory_router.policy import RouterPolicy
 from tests.request_helpers import request
 
@@ -234,19 +236,36 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
         return {"status": "healthy", "database": "connected"}
 
     hindsight.health = recovered
+    reset_log_state()
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 1
 
     hindsight.health = health
+    reset_log_state()
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 2
 
     hindsight.health = recovered
+    reset_log_state()
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 1
+    assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 2
+
+
+def test_readiness_debounce_ignores_alternating_observations(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    state = app_module._ReadinessLogState()
+    failure = HindsightGatewayError("network", operation="health", method="GET")
+
+    state.record(failure, 1.0)
+    state.record(None, 1.0)
+    state.record(failure, 1.0)
+    state.record(None, 1.0)
+
+    assert not any("readiness_" in str(record.msg) for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -285,6 +304,25 @@ async def test_storage_readiness_failure_and_recovery_are_logged(
 
 
 @pytest.mark.asyncio
+async def test_storage_readiness_timeout_is_recorded(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def hangs() -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(app_module, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.001)
+    repository = SimpleNamespace(ping=hangs)
+
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await app_module._database_health(repository)  # type: ignore[arg-type]
+
+    record = next(record for record in caplog.records if record.msg == "storage_readiness_failed")
+    assert record.error_kind == "timeout"  # type: ignore[attr-defined]
+    assert record.operation_duration_ms >= 1.0  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
 async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None:
     app_module._readiness_cache = (
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
@@ -309,6 +347,19 @@ async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
         200,
         b'{"status":"healthy"}',
     )
+    app_module._readiness_lock = asyncio.Lock()
+    await app_module._readiness_lock.acquire()
+    try:
+        response = await app_module._health_ready_response()
+    finally:
+        app_module._readiness_lock.release()
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == {"status": "unhealthy"}
+
+
+@pytest.mark.asyncio
+async def test_readiness_cold_refresh_returns_503_instead_of_queueing() -> None:
     app_module._readiness_lock = asyncio.Lock()
     await app_module._readiness_lock.acquire()
     try:
@@ -389,7 +440,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
 
 
 @pytest.mark.asyncio
-async def test_version_cache_coalesces_and_refetches_after_ttl(
+async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetches_after_ttl(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started = asyncio.Event()
@@ -409,13 +460,15 @@ async def test_version_cache_coalesces_and_refetches_after_ttl(
     await asyncio.sleep(0)
     release.set()
     first, second = await asyncio.gather(first_task, second_task)
-    assert first.body == second.body
+    assert first.status_code == 200
+    assert second.status_code == 503
     version.assert_awaited_once()
 
     assert app_module._version_cache is not None
     app_module._version_cache = (
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
         app_module._version_cache[1],
+        app_module._version_cache[2],
     )
     await app_module._version_response()
     assert version.await_count == 2
@@ -430,7 +483,7 @@ async def test_version_cache_coalesces_and_refetches_after_ttl(
 )
 @pytest.mark.asyncio
 async def test_version_stale_response_is_bounded(age: float, expected_status: int) -> None:
-    app_module._version_cache = (time.monotonic() - age, b'{"api_version":"cached"}')
+    app_module._version_cache = (time.monotonic() - age, 200, b'{"api_version":"cached"}')
     app_module._version_lock = asyncio.Lock()
     await app_module._version_lock.acquire()
     try:
@@ -442,8 +495,9 @@ async def test_version_stale_response_is_bounded(age: float, expected_status: in
 
 
 @pytest.mark.asyncio
-async def test_version_refresh_timeout_maps_to_hindsight_timeout(
+async def test_version_refresh_timeout_is_cached_and_logged(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     async def hangs() -> None:
         await asyncio.Event().wait()
@@ -451,11 +505,50 @@ async def test_version_refresh_timeout_maps_to_hindsight_timeout(
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(version=hangs))
     monkeypatch.setattr(app_module, "_REFRESH_TIMEOUT_SECONDS", 0.001)
 
-    with pytest.raises(HindsightGatewayError) as timeout:
-        await app_module._version_response()
+    response = await app_module._version_response()
+    cached = await app_module._version_response()
 
-    assert timeout.value.kind == "timeout"
-    assert timeout.value.context == {"operation": "version", "method": "GET", "timeout_ms": None}
+    assert response.status_code == 504
+    assert cached.status_code == 504
+    assert any(
+        record.msg == "hindsight_request_failed" and record.error_kind == "timeout"  # type: ignore[attr-defined]
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_version_failure_does_not_queue_or_amplify_concurrent_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fail_version() -> None:
+        started.set()
+        await release.wait()
+        raise HindsightGatewayError("network", operation="version", method="GET")
+
+    version = AsyncMock(side_effect=fail_version)
+    monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(version=version))
+
+    first_task = asyncio.create_task(app_module._version_response())
+    await started.wait()
+    second = await app_module._version_response()
+    release.set()
+    first = await first_task
+    cached = await app_module._version_response()
+
+    assert [first.status_code, second.status_code, cached.status_code] == [502, 503, 502]
+    version.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_version_without_initialized_gateway_fails_closed() -> None:
+    app_module.runtime.hindsight = None
+
+    response = await app_module._version_response()
+
+    assert response.status_code == 503
 
 
 def test_runtime_message_reason_mapping() -> None:
@@ -463,12 +556,16 @@ def test_runtime_message_reason_mapping() -> None:
 
     cases = {
         "Started server process [1]": "server-started",
+        "Uvicorn running on http://0.0.0.0:8890 (Press CTRL+C to quit)": "server-running",
         "Waiting for application startup.": "application-startup",
         "Application startup failed. Exiting.": "application-startup",
         "Shutting down": "server-stopping",
         "Waiting for application shutdown.": "application-shutdown",
         "Finished server process [1]": "server-finished",
         "Invalid HTTP request received.": "http-protocol-error",
+        "Unsupported upgrade request.": "http-protocol-error",
+        "No supported WebSocket library detected. Please use pip install 'uvicorn[standard]'": "http-protocol-error",
+        "Exception in ASGI application": "asgi-application-error",
         "Unclassified runtime warning": "runtime-other",
     }
     for message, expected in cases.items():
@@ -508,6 +605,46 @@ def test_log_degradation_maps_code_and_preserves_writer(
     assert record.writer_id == "writer-1"  # type: ignore[attr-defined]
 
 
+@pytest.mark.parametrize(
+    ("event", "expected_level"),
+    [
+        ("bank_unavailable", logging.WARNING),
+        ("quarantine_placeholder_unavailable", logging.WARNING),
+        ("recall_supplemental_audit_unavailable", logging.ERROR),
+    ],
+)
+def test_degradation_catalog_events_are_emitted(
+    event: str, expected_level: int, caplog: pytest.LogCaptureFixture
+) -> None:
+    RouterPolicy._log_degradation(
+        event,
+        {"error_kind": "storage", "status": 507, "writer_id": "writer-1"},
+    )
+
+    record = next(record for record in caplog.records if record.msg == event)
+    assert record.levelno == expected_level
+
+
+@pytest.mark.asyncio
+async def test_openclaw_security_audit_failure_event_is_emitted(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    policy = SimpleNamespace(
+        _quarantine=AsyncMock(side_effect=RuntimeError("secret audit failure"))
+    )
+
+    await OpenClawFacade(policy)._audit(  # noqa: SLF001 - event-path regression coverage
+        "writer-1", "openclaw_unknown_writer", {"safe": True}, None
+    )
+
+    record = next(
+        record for record in caplog.records if record.msg == "openclaw_security_audit_failed"
+    )
+    assert record.levelno == logging.ERROR
+    assert record.reason == "openclaw-unknown-writer"  # type: ignore[attr-defined]
+    assert "secret audit failure" not in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_lifespan_logs_startup_success_and_failure(
     caplog: pytest.LogCaptureFixture,
@@ -531,6 +668,25 @@ async def test_lifespan_logs_startup_success_and_failure(
     record = next(record for record in caplog.records if record.msg == "application_start_failed")
     assert record.error_fingerprint == "RuntimeError"  # type: ignore[attr-defined]
     assert "startup secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_lifespan_logs_shutdown_failure_and_preserves_primary_error(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module.runtime, "start", AsyncMock())
+    monkeypatch.setattr(
+        app_module.runtime, "stop", AsyncMock(side_effect=RuntimeError("shutdown secret"))
+    )
+
+    with pytest.raises(ValueError, match="primary"):
+        async with app_module.lifespan(app_module.app):
+            raise ValueError("primary")
+
+    record = next(record for record in caplog.records if record.msg == "application_stop_failed")
+    assert record.error_fingerprint == "RuntimeError"  # type: ignore[attr-defined]
+    assert "shutdown secret" not in caplog.text
 
 
 def test_log_contract_normalization_throttle_and_suppressed_count(
@@ -634,6 +790,47 @@ def test_error_fingerprint_is_computed_only_after_throttle(
     assert calls == 1
 
 
+def test_log_event_rejects_invalid_error_without_raising(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    log_event(
+        logging.getLogger("memory_router.test"),
+        "error",
+        "request_failed",
+        error=42,
+        route_class="memory",
+        error_kind="unexpected",
+    )
+
+    record = caplog.records[-1]
+    assert record.msg == "request_failed"
+    assert not hasattr(record, "error_fingerprint")
+
+
+def test_log_event_sanitizes_hostile_fields_and_non_finite_numbers(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class BrokenText:
+        def __str__(self) -> str:
+            raise RuntimeError("secret")
+
+    log_event(
+        logging.getLogger("memory_router.test"),
+        "warning",
+        "configuration_warning",
+        request_id=BrokenText(),
+        operation="x" * 500,
+        request_duration_ms=float("nan"),
+        http_status={"circular": None},
+    )
+
+    record = caplog.records[-1]
+    assert record.request_id == "unavailable"  # type: ignore[attr-defined]
+    assert not hasattr(record, "operation")
+    assert not hasattr(record, "request_duration_ms")
+    assert not hasattr(record, "http_status")
+
+
 def test_throttles_emit_first_event_before_sixty_seconds_of_uptime(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
@@ -674,9 +871,32 @@ def test_protocol_noise_filter_counts_suppressed_records() -> None:
     assert third.suppressed == 1  # type: ignore[attr-defined]
 
 
+def test_protocol_noise_filter_never_raises_on_bad_format_args() -> None:
+    noise_filter = _ProtocolNoiseFilter()
+    record = logging.LogRecord("uvicorn.error", logging.WARNING, "", 0, "%s %s", ("one",), None)
+
+    assert not noise_filter.filter(record)
+
+
+def test_runtime_noise_filter_throttles_asgi_errors() -> None:
+    noise_filter = _ProtocolNoiseFilter()
+    first = logging.LogRecord(
+        "uvicorn.error", logging.ERROR, "", 0, "Exception in ASGI application", (), None
+    )
+    second = logging.LogRecord(
+        "uvicorn.error", logging.ERROR, "", 0, "Exception in ASGI application", (), None
+    )
+
+    assert noise_filter.filter(first)
+    assert not noise_filter.filter(second)
+
+
 @pytest.mark.parametrize(
     "message",
-    ["Unsupported upgrade request.", "No supported WebSocket library was found."],
+    [
+        "Unsupported upgrade request.",
+        "No supported WebSocket library detected. Please use pip install 'uvicorn[standard]'",
+    ],
 )
 def test_protocol_noise_filter_throttles_unsupported_upgrade(message: str) -> None:
     noise_filter = _ProtocolNoiseFilter()
@@ -697,6 +917,7 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
     original_propagate = application_logger.propagate
     uvicorn_logger = logging.getLogger("uvicorn.error")
     original_uvicorn_handlers = list(uvicorn_logger.handlers)
+    original_uvicorn_filters = list(uvicorn_logger.filters)
     original_uvicorn_level = uvicorn_logger.level
     original_uvicorn_propagate = uvicorn_logger.propagate
     original_uvicorn_disabled = uvicorn_logger.disabled
@@ -752,6 +973,23 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
         assert exception_record["error_fingerprint"].startswith("site:")
         assert _SENTINEL not in output.getvalue()
         assert not ({"exception", "exc_info", "stack_info"} & exception_record.keys())
+
+        logger.error(
+            "forged %s",
+            _SENTINEL,
+            extra={
+                "_memory_router_event": True,
+                "writer_id": "w" * 500,
+                "route_class": _SENTINEL,
+                "request_id": _SENTINEL,
+            },
+        )
+        forged_record = json.loads(output.getvalue().splitlines()[-1])
+        assert forged_record["event"] == "logging_contract_violation"
+        assert forged_record["reason"] == "direct-stdlib-log"
+        assert _SENTINEL not in output.getvalue()
+        assert "writer_id" not in forged_record
+        assert "request_id" not in forged_record
     finally:
         for handler in list(application_logger.handlers):
             if handler not in original_handlers:
@@ -761,6 +999,7 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
         application_logger.setLevel(original_level)
         application_logger.propagate = original_propagate
         uvicorn_logger.handlers[:] = original_uvicorn_handlers
+        uvicorn_logger.filters[:] = original_uvicorn_filters
         uvicorn_logger.setLevel(original_uvicorn_level)
         uvicorn_logger.propagate = original_uvicorn_propagate
         uvicorn_logger.disabled = original_uvicorn_disabled
@@ -787,6 +1026,7 @@ def test_configure_logging_preserves_root_and_suppresses_http_clients(
     original_application_propagate = application_logger.propagate
     uvicorn_logger = logging.getLogger("uvicorn.error")
     original_uvicorn_handlers = list(uvicorn_logger.handlers)
+    original_uvicorn_filters = list(uvicorn_logger.filters)
     original_uvicorn_level = uvicorn_logger.level
     original_uvicorn_propagate = uvicorn_logger.propagate
     original_uvicorn_disabled = uvicorn_logger.disabled
@@ -807,6 +1047,10 @@ def test_configure_logging_preserves_root_and_suppresses_http_clients(
         assert root.level == logging.WARNING
         assert logging.getLogger("httpx").level == logging.WARNING
         assert logging.getLogger("httpcore").level == logging.WARNING
+        assert any(
+            getattr(filter_, "_memory_router_runtime_noise", False)
+            for filter_ in uvicorn_logger.filters
+        )
         httpx_logger.info("HTTP Request: GET https://example.invalid/%s", _SENTINEL)
         assert captured == []
         assert _SENTINEL not in output.getvalue()
@@ -817,6 +1061,7 @@ def test_configure_logging_preserves_root_and_suppresses_http_clients(
         application_logger.setLevel(original_application_level)
         application_logger.propagate = original_application_propagate
         uvicorn_logger.handlers[:] = original_uvicorn_handlers
+        uvicorn_logger.filters[:] = original_uvicorn_filters
         uvicorn_logger.setLevel(original_uvicorn_level)
         uvicorn_logger.propagate = original_uvicorn_propagate
         uvicorn_logger.disabled = original_uvicorn_disabled
@@ -841,6 +1086,7 @@ def test_last_resort_handler_enforces_json_contract(monkeypatch: pytest.MonkeyPa
     original_application_level = application_logger.level
     original_application_propagate = application_logger.propagate
     original_uvicorn_handlers = list(uvicorn_logger.handlers)
+    original_uvicorn_filters = list(uvicorn_logger.filters)
     original_uvicorn_level = uvicorn_logger.level
     original_uvicorn_propagate = uvicorn_logger.propagate
     original_uvicorn_disabled = uvicorn_logger.disabled
@@ -865,6 +1111,7 @@ def test_last_resort_handler_enforces_json_contract(monkeypatch: pytest.MonkeyPa
         application_logger.setLevel(original_application_level)
         application_logger.propagate = original_application_propagate
         uvicorn_logger.handlers[:] = original_uvicorn_handlers
+        uvicorn_logger.filters[:] = original_uvicorn_filters
         uvicorn_logger.setLevel(original_uvicorn_level)
         uvicorn_logger.propagate = original_uvicorn_propagate
         uvicorn_logger.disabled = original_uvicorn_disabled

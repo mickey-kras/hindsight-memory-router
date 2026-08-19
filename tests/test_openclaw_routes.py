@@ -19,7 +19,9 @@ def runtime_state() -> None:
     app_module.runtime.allow_anonymous = True
     app_module.runtime.router_token = None
     app_module.runtime.max_body_bytes = 1024 * 1024
-    app_module.runtime.auditor = SimpleNamespace(record=AsyncMock())
+    app_module.runtime.auditor = SimpleNamespace(
+        log_failure=Mock(), persist=AsyncMock(), record=AsyncMock()
+    )
 
 
 def _policy(response: object) -> SimpleNamespace:

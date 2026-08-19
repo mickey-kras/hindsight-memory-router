@@ -38,7 +38,9 @@ def runtime_state() -> None:
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.auth_failure_max = 120
     app_module.runtime.auth_failure_window = 60_000
-    app_module.runtime.auditor = SimpleNamespace(record=AsyncMock())
+    app_module.runtime.auditor = SimpleNamespace(
+        log_failure=Mock(), persist=AsyncMock(), record=AsyncMock()
+    )
 
 
 @pytest.mark.asyncio
@@ -131,12 +133,14 @@ async def test_router_and_admin_auth_failures_are_audited() -> None:
     auth_value = "route" + "r"
     app_module.runtime.router_token = auth_value
     assert not await app_module._router_auth(request("GET", "/version"))
-    app_module.runtime.auditor.record.assert_awaited_with("router", "version")
+    app_module.runtime.auditor.log_failure.assert_called_with("version")
+    app_module.runtime.auditor.persist.assert_awaited_with("router", "version")
     assert await app_module._router_auth(
         request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"})
     )
     assert not await app_module._admin_auth(request("GET", "/admin/quarantine/stats"), "read")
-    app_module.runtime.auditor.record.assert_awaited_with("admin", "admin")
+    app_module.runtime.auditor.log_failure.assert_called_with("admin")
+    app_module.runtime.auditor.persist.assert_awaited_with("admin", "admin")
     assert await app_module._admin_auth(
         request(
             "GET",
@@ -148,7 +152,7 @@ async def test_router_and_admin_auth_failures_are_audited() -> None:
 
 
 @pytest.mark.asyncio
-async def test_auth_failure_is_audited_before_limiter_rejects() -> None:
+async def test_auth_failure_is_logged_but_not_persisted_after_limiter_rejects() -> None:
     app_module.runtime.allow_anonymous = False
     app_module.runtime.router_token = "router-token"  # noqa: S105 - synthetic test credential
     app_module.runtime.auth_limiter.consume_many.side_effect = HttpError(429, "limited", "limited")
@@ -157,7 +161,8 @@ async def test_auth_failure_is_audited_before_limiter_rejects() -> None:
         await app_module._router_auth(request("GET", "/version"))
 
     assert limited.value.code == "auth_rate_limited"
-    app_module.runtime.auditor.record.assert_awaited_once_with("router", "version")
+    app_module.runtime.auditor.log_failure.assert_called_once_with("version")
+    app_module.runtime.auditor.persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -84,7 +84,9 @@ async def test_dispatch_auth_precedes_malformed_path_fallback() -> None:
         app_module.runtime.allow_anonymous = False
         router_token = "sec" + "ret"
         app_module.runtime.router_token = router_token
-        app_module.runtime.auditor = SimpleNamespace(record=AsyncMock())
+        app_module.runtime.auditor = SimpleNamespace(
+            log_failure=Mock(), persist=AsyncMock(), record=AsyncMock()
+        )
         app_module.runtime.policy = SimpleNamespace(
             deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
         )

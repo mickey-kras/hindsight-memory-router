@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: cf165476c6b711caae6c69103a2a818ed9f30fa9a4034235571e24dfe486fae7
+# integration-behavior-sha256: 01c2b60b799709cd7b9a16e5d8c8eba2d472352385c9212075128a38b961c388
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -127,28 +127,28 @@ pass_check
 
 begin_check "router liveness is dependency independent"
 for _ in {1..60}; do
-  if curl -fsS "${router_url}/health/live" >/dev/null 2>&1; then
+  if curl --max-time 5 -fsS "${router_url}/health/live" >/dev/null 2>&1; then
     break
   fi
   sleep 1
 done
-live_response="$(curl -fsS "${router_url}/health/live")"
+live_response="$(curl --max-time 5 -fsS "${router_url}/health/live")"
 printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "alive"; assert isinstance(data["version"], str) and data["version"]; assert isinstance(data["uptime_seconds"], (int, float)) and data["uptime_seconds"] >= 0' || fail_check "router /health/live response was unexpected"
 pass_check
 
 begin_check "router readiness and internal Hindsight become reachable"
 for _ in {1..60}; do
-  if curl -fsS "${router_url}/health" >/dev/null 2>&1 && \
-    curl -fsS "${router_url}/health/ready" >/dev/null 2>&1 && \
-    curl -fsS "${router_url}/ready" >/dev/null 2>&1 && \
+  if curl --max-time 5 -fsS "${router_url}/health" >/dev/null 2>&1 && \
+    curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null 2>&1 && \
+    curl --max-time 5 -fsS "${router_url}/ready" >/dev/null 2>&1 && \
     docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
-health_response="$(curl -fsS "${router_url}/health")"
-ready_response="$(curl -fsS "${router_url}/health/ready")"
-legacy_ready_response="$(curl -fsS "${router_url}/ready")"
+health_response="$(curl --max-time 5 -fsS "${router_url}/health")"
+ready_response="$(curl --max-time 5 -fsS "${router_url}/health/ready")"
+legacy_ready_response="$(curl --max-time 5 -fsS "${router_url}/ready")"
 for readiness_response in "$health_response" "$ready_response" "$legacy_ready_response"; do
   printf '%s' "$readiness_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, dict) and "status" in data and "router_health" not in data' || fail_check "router readiness alias returned unexpected health JSON"
 done
@@ -156,10 +156,10 @@ docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 
 pass_check
 
 begin_check "authentication and network boundaries hold"
-version="$(curl -fsS "${router_url}/version")"
+version="$(curl --max-time 5 -fsS "${router_url}/version")"
 upstream_version="$(docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; print(urllib.request.urlopen('http://hindsight:8888/version', timeout=2).read().decode())")"
 python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","bank_config_api","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==set(upstream["features"]); assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose Hindsight-compatible facade capabilities"
-retain_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
+retain_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
 [[ "$retain_status" == "401" ]] || fail_check "expected unauthenticated retain 401, got ${retain_status}"
 if curl --max-time 2 -fsS "http://127.0.0.1:8888/health" >/dev/null 2>&1; then
   fail_check "internal Hindsight service is exposed on host port 8888"
@@ -169,14 +169,14 @@ pass_check
 post_router() {
   local path="$1"
   local body="$2"
-  curl -fsS \
+  curl --max-time 5 -fsS \
     -H "Authorization: Bearer ${router_token}" \
     -H "Content-Type: application/json" \
     -X POST "${router_url}${path}" -d "$body"
 }
 
 admin_get() {
-  curl -fsS -H "Authorization: Bearer ${admin_read_token}" "${router_url}$1"
+  curl --max-time 5 -fsS -H "Authorization: Bearer ${admin_read_token}" "${router_url}$1"
 }
 
 admin_review_post() {
@@ -185,7 +185,7 @@ admin_review_post() {
   if [[ $# -lt 2 ]]; then
     body='{}'
   fi
-  curl -fsS \
+  curl --max-time 5 -fsS \
     -H "Authorization: Bearer ${admin_review_token}" \
     -H "Content-Type: application/json" \
     -X POST "${router_url}${path}" -d "$body"
@@ -194,7 +194,7 @@ admin_review_post() {
 admin_cleanup_post() {
   local path="$1"
   local body="$2"
-  curl -fsS \
+  curl --max-time 5 -fsS \
     -H "Authorization: Bearer ${admin_cleanup_token}" \
     -H "Content-Type: application/json" \
     -X POST "${router_url}${path}" -d "$body"
@@ -223,11 +223,11 @@ decrypt_local() {
 }
 
 begin_check "scoped admin tokens enforce read review and cleanup boundaries"
-review_read_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" "${router_url}/admin/quarantine/queue")"
+review_read_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" "${router_url}/admin/quarantine/queue")"
 [[ "$review_read_status" == "200" ]] || fail_check "review token could not access admin read endpoint: ${review_read_status}"
-wrong_review_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/not-a-valid-id/reject" -d '{}')"
+wrong_review_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/not-a-valid-id/reject" -d '{}')"
 [[ "$wrong_review_status" == "401" ]] || fail_check "read token unexpectedly accessed admin review endpoint"
-wrong_cleanup_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/cleanup" -d '{"dry_run":true}')"
+wrong_cleanup_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/cleanup" -d '{"dry_run":true}')"
 [[ "$wrong_cleanup_status" == "401" ]] || fail_check "review token unexpectedly accessed admin cleanup endpoint"
 pass_check
 
@@ -255,7 +255,7 @@ fi
 pass_check
 
 begin_check "admin queue and item expose metadata plus ciphertext only"
-admin_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/admin/quarantine/queue")"
+admin_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/admin/quarantine/queue")"
 [[ "$admin_status" == "401" ]] || fail_check "router token accessed admin queue"
 queue_response="$(admin_get "/admin/quarantine/queue")"
 printf '%s' "$queue_response" | grep -q "$unknown_id" || fail_check "admin queue missing unknown item"
@@ -273,7 +273,7 @@ if [[ "$router_db" == "sqlite" ]]; then
   [[ -s "${tmp_dir}/quarantine/quarantine.db" ]] || fail_check "SQLite quarantine database was not persisted on mounted storage"
   docker compose -p "$project" -f "$compose_file" up -d --force-recreate --no-deps memory-router >/dev/null
   for _ in {1..60}; do
-    if curl -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
+    if curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
       break
     fi
     sleep 1
@@ -331,17 +331,17 @@ printf '%s' "$tamper_read" > "$encrypted_file"
 tamper_plaintext="$(decrypt_local "$encrypted_file")"
 tamper_body="$(printf '%s' "$tamper_plaintext" | python3 -c 'import json,sys; value=json.load(sys.stdin); value["payload"]["body"]["items"][0]["content"]="changed"; print(json.dumps({"decrypted":value}, separators=(",", ":")))')"
 tamper_output="${root}/${tmp_dir}/tamper-response.json"
-tamper_status="$(curl -sS -o "$tamper_output" -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/approve" -d "$tamper_body")"
+tamper_status="$(curl --max-time 5 -sS -o "$tamper_output" -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/approve" -d "$tamper_body")"
 [[ "$tamper_status" == "409" ]] || fail_check "altered approval returned ${tamper_status}"
 grep -q 'quarantine_hash_mismatch' "$tamper_output" || fail_check "altered approval did not report hash mismatch"
 pass_check
 
 begin_check "unsupported router and admin endpoints fail closed"
 denied_output="${root}/${tmp_dir}/denied-response.json"
-denied_status="$(curl -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/memories/not-supported")"
+denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/memories/not-supported")"
 [[ "$denied_status" == "404" ]] || fail_check "unsupported router endpoint returned ${denied_status}"
 grep -q 'endpoint denied by memory-router policy' "$denied_output" || fail_check "unsupported router endpoint did not use policy denial"
-admin_denied_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
+admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
@@ -408,19 +408,19 @@ if [[ "$mode" == "fake" ]]; then
   begin_check "readiness logs Hindsight outage and recovery"
   docker compose -p "$project" -f "$compose_file" stop hindsight >/dev/null
   sleep 2
-  first_outage_status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
+  first_outage_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
   sleep 2
-  second_outage_status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
+  second_outage_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
   [[ "$first_outage_status" == "503" && "$second_outage_status" == "503" ]] || fail_check "readiness did not fail during Hindsight outage"
   docker compose -p "$project" -f "$compose_file" start hindsight >/dev/null
   for _ in {1..30}; do
-    if curl -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
+    if curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
       break
     fi
     sleep 1
   done
   sleep 2
-  curl -fsS "${router_url}/health/ready" >/dev/null || fail_check "readiness did not recover with Hindsight"
+  curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null || fail_check "readiness did not recover with Hindsight"
   pass_check
 fi
 

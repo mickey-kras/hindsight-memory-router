@@ -147,13 +147,17 @@ class _ReadinessLogState:
         error_kind = (
             error.kind
             if isinstance(error, HindsightGatewayError)
+            else "timeout"
+            if isinstance(error, TimeoutError)
             else "storage"
             if self.operation == "storage_health"
             else "unexpected"
         )
-        last_failure_log = self.last_failure_log.get(error_kind, 0.0)
-        if self.healthy is not False or (
-            now - last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS
+        last_failure_log = self.last_failure_log.get(error_kind)
+        if (
+            self.healthy is not False
+            or last_failure_log is None
+            or now - last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS
         ):
             fields: dict[str, Any] = {
                 "operation": self.operation,
@@ -177,9 +181,10 @@ _storage_readiness_log_state = _ReadinessLogState(
 _READINESS_CACHE_SECONDS = 1.0
 _CACHE_MAX_STALENESS_SECONDS = 5.0
 _REFRESH_TIMEOUT_SECONDS = 15.0
+_DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
 _readiness_cache: tuple[float, int, bytes] | None = None
 _readiness_lock: asyncio.Lock | None = None
-_version_cache: tuple[float, bytes] | None = None
+_version_cache: tuple[float, int, bytes] | None = None
 _version_lock: asyncio.Lock | None = None
 
 
@@ -417,8 +422,34 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     log_event(logger, "info", "application_started", operation="startup", outcome="healthy")
     try:
         yield
-    finally:
-        await runtime.stop()
+    except BaseException:
+        try:
+            await runtime.stop()
+        except Exception as exc:
+            log_event(
+                logger,
+                "error",
+                "application_stop_failed",
+                operation="shutdown",
+                error_kind="unexpected",
+                error=exc,
+                outcome="failed",
+            )
+        raise
+    else:
+        try:
+            await runtime.stop()
+        except Exception as exc:
+            log_event(
+                logger,
+                "error",
+                "application_stop_failed",
+                operation="shutdown",
+                error_kind="unexpected",
+                error=exc,
+                outcome="failed",
+            )
+            raise
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -497,8 +528,10 @@ async def _router_auth(request: Request) -> bool:
     ):
         return True
     auditor = _require_runtime(runtime.auditor, "auth auditor")
-    await auditor.record("router", _route_class(request))
+    route_class = _route_class(request)
+    auditor.log_failure(route_class)
     await _auth_failure_rate("router")
+    await auditor.persist("router", route_class)
     return False
 
 
@@ -509,8 +542,10 @@ async def _admin_auth(request: Request, scope: str) -> bool:
     if admin_token_recognized(authorization, runtime.admin_tokens):
         return False
     auditor = _require_runtime(runtime.auditor, "auth auditor")
-    await auditor.record("admin", _route_class(request))
+    route_class = _route_class(request)
+    auditor.log_failure(route_class)
     await _auth_failure_rate("admin")
+    await auditor.persist("admin", route_class)
     return False
 
 
@@ -543,7 +578,7 @@ async def _database_health(
 ) -> tuple[bool, Exception | None, float]:
     started = time.monotonic()
     try:
-        await repository.ping()
+        await asyncio.wait_for(repository.ping(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS)
     except Exception as exc:
         duration_ms = round((time.monotonic() - started) * 1000, 3)
         _storage_readiness_log_state.record(exc, duration_ms)
@@ -579,8 +614,11 @@ async def _health_ready_response() -> Response:
         return _cached_readiness_response(_readiness_cache)
     if _readiness_lock is None:
         _readiness_lock = asyncio.Lock()
-    if _readiness_lock.locked() and _readiness_cache is not None:
-        if now - _readiness_cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
+    if _readiness_lock.locked():
+        if (
+            _readiness_cache is not None
+            and now - _readiness_cache[0] <= _CACHE_MAX_STALENESS_SECONDS
+        ):
             return _cached_readiness_response(_readiness_cache)
         return JSONResponse({"status": "unhealthy"}, status_code=503)
     async with _readiness_lock:
@@ -624,25 +662,63 @@ async def _version_response() -> Response:
     global _version_cache, _version_lock
     now = time.monotonic()
     if _version_cache is not None and now - _version_cache[0] < _READINESS_CACHE_SECONDS:
-        return Response(content=_version_cache[1], media_type="application/json")
+        return Response(
+            content=_version_cache[2],
+            status_code=_version_cache[1],
+            media_type="application/json",
+        )
     if _version_lock is None:
         _version_lock = asyncio.Lock()
-    if _version_lock.locked() and _version_cache is not None:
-        if now - _version_cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
-            return Response(content=_version_cache[1], media_type="application/json")
+    if _version_lock.locked():
+        if _version_cache is not None and now - _version_cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
+            return Response(
+                content=_version_cache[2],
+                status_code=_version_cache[1],
+                media_type="application/json",
+            )
         return JSONResponse({"error": "upstream unavailable"}, status_code=503)
     async with _version_lock:
         now = time.monotonic()
         if _version_cache is not None and now - _version_cache[0] < _READINESS_CACHE_SECONDS:
-            return Response(content=_version_cache[1], media_type="application/json")
-        hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
+            return Response(
+                content=_version_cache[2],
+                status_code=_version_cache[1],
+                media_type="application/json",
+            )
         try:
+            hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
             payload = await asyncio.wait_for(hindsight.version(), timeout=_REFRESH_TIMEOUT_SECONDS)
         except TimeoutError as exc:
-            raise HindsightGatewayError("timeout", operation="version", method="GET") from exc
+            error = HindsightGatewayError("timeout", operation="version", method="GET")
+            error.__cause__ = exc
+            return _cache_version_failure(error)
+        except HindsightGatewayError as exc:
+            return _cache_version_failure(exc)
+        except Exception as exc:
+            error = HindsightGatewayError(
+                "network", operation="version", method="GET", client_status=503
+            )
+            error.__cause__ = exc
+            return _cache_version_failure(error)
         response = JSONResponse(payload)
-        _version_cache = (time.monotonic(), bytes(response.body))
+        _version_cache = (time.monotonic(), response.status_code, bytes(response.body))
         return response
+
+
+def _cache_version_failure(error: HindsightGatewayError) -> Response:
+    global _version_cache
+    log_event(
+        logger,
+        "warning",
+        "hindsight_request_failed",
+        **_hindsight_log_fields(error),
+        error=error,
+        outcome="failed",
+        route_class="version",
+    )
+    response = JSONResponse(error.body(), status_code=error.status, headers=error.headers)
+    _version_cache = (time.monotonic(), response.status_code, bytes(response.body))
+    return response
 
 
 @app.api_route(
