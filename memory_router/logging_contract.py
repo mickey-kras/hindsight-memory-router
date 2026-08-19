@@ -208,7 +208,7 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
         )
         safe_fields["reason"] = reason if reason in REASONS else "runtime-other"
     if "request_id" in safe_fields:
-        request_id = safe_text(safe_fields["request_id"], fallback="", limit=129)
+        request_id = safe_text(safe_fields["request_id"], fallback="unavailable", limit=129)
         if REQUEST_ID_PATTERN.fullmatch(request_id):
             safe_fields["request_id"] = request_id
         else:
