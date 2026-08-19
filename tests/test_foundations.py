@@ -34,15 +34,17 @@ async def test_auth_failure_auditor_records_and_survives_store_failure(
 ) -> None:
     store = SimpleNamespace(put=AsyncMock())
     auditor = auth.AuthFailureAuditor(store)
-    await auditor.record("router")
-    await auditor.record("router")
+    auditor.log_failure()
+    await auditor.persist("router")
+    auditor.log_failure()
+    await auditor.persist("router")
     assert store.put.await_count == 2
     assert caplog.text.count("authentication_failed") == 1
 
     caplog.clear()
     store.put.side_effect = RuntimeError("down")
-    await auditor.record("admin")
-    await auditor.record("admin")
+    await auditor.persist("admin")
+    await auditor.persist("admin")
     assert caplog.text.count("authentication_audit_failed") == 1
 
 

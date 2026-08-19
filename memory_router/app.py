@@ -298,10 +298,9 @@ class Runtime:
             await self.rate_limit_database.initialize()
             self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
-            self.auth_limiter = self.quarantine_limiter
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
-            self.auth_limiter = InMemoryRateLimiter()
+        self.auth_limiter = InMemoryRateLimiter()
         public_key = os.environ.get("QUARANTINE_PUBLIC_KEY", "")
         limits = QuarantineLimits(
             max_item_bytes=integer_env("QUARANTINE_MAX_ITEM_BYTES", 1_048_576),
@@ -425,7 +424,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     except BaseException:
         try:
             await runtime.stop()
-        except Exception as exc:
+        except BaseException as exc:
             log_event(
                 logger,
                 "error",
@@ -439,7 +438,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     else:
         try:
             await runtime.stop()
-        except Exception as exc:
+        except BaseException as exc:
             log_event(
                 logger,
                 "error",
@@ -539,10 +538,12 @@ async def _admin_auth(request: Request, scope: str) -> bool:
     authorization = request.headers.get("authorization")
     if admin_authorized(authorization, scope, runtime.admin_tokens):
         return True
-    if admin_token_recognized(authorization, runtime.admin_tokens):
-        return False
     auditor = _require_runtime(runtime.auditor, "auth auditor")
     route_class = _route_class(request)
+    if admin_token_recognized(authorization, runtime.admin_tokens):
+        auditor.log_failure(route_class)
+        await _auth_failure_rate("admin")
+        return False
     auditor.log_failure(route_class)
     await _auth_failure_rate("admin")
     await auditor.persist("admin", route_class)
@@ -593,7 +594,9 @@ async def _hindsight_health(
 ) -> tuple[bool, Any, Exception | None, float]:
     started = time.monotonic()
     try:
-        response = await hindsight.health()
+        response = await asyncio.wait_for(
+            hindsight.health(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS
+        )
     except Exception as exc:
         duration_ms = round((time.monotonic() - started) * 1000, 3)
         _readiness_log_state.record(exc, duration_ms)
@@ -676,7 +679,10 @@ async def _version_response() -> Response:
                 status_code=_version_cache[1],
                 media_type="application/json",
             )
-        return JSONResponse({"error": "upstream unavailable"}, status_code=503)
+        return JSONResponse(
+            {"error": "hindsight_unavailable", "message": "Upstream memory service is unavailable"},
+            status_code=503,
+        )
     async with _version_lock:
         now = time.monotonic()
         if _version_cache is not None and now - _version_cache[0] < _READINESS_CACHE_SECONDS:

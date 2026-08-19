@@ -10,8 +10,8 @@ import memory_router.logging as logging_module
 
 @pytest.fixture(autouse=True)
 def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
-    previous_router_token = app_module.runtime.router_token
-    previous_allow_anonymous = app_module.runtime.allow_anonymous
+    previous_runtime = vars(app_module.runtime).copy()
+    previous_admin_tokens = dict(app_module.runtime.admin_tokens)
     application_logger = logging.getLogger("memory_router")
     application_logger.addHandler(caplog.handler)
     logging_module.reset_log_state()
@@ -24,7 +24,8 @@ def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
     app_module._version_cache = None
     app_module._version_lock = None
     yield
-    app_module.runtime.router_token = previous_router_token
-    app_module.runtime.allow_anonymous = previous_allow_anonymous
+    vars(app_module.runtime).clear()
+    vars(app_module.runtime).update(previous_runtime)
+    app_module.runtime.admin_tokens = previous_admin_tokens
     logging_module.reset_log_state()
     application_logger.removeHandler(caplog.handler)

@@ -4,7 +4,9 @@ One bounded JSON object is written to stdout per event. Required fields: `event`
 
 Optional fields: `request_id`, `operation`, `request_method`, `upstream_method`, `error_kind`, `error_fingerprint`, `upstream_status`, `http_status`, `outcome`, `request_duration_ms`, `operation_duration_ms`, `route_class`, `writer_id`, `reason`, `timeout_ms`, `suppressed`.
 
-`request_id` and `writer_id` are capped at 128 characters. `error_fingerprint` is an allowlisted exception class or opaque raise-site hash.
+Text caps: request and writer IDs 128, logger 128, operation 64, methods 16. `request_id` accepts client-provided `[A-Za-z0-9._:-]`; clients must not put secrets in it. Invalid request IDs are replaced by generated IDs. Invalid writer IDs and logger names are fingerprinted. `error_fingerprint` is an allowlisted exception class or opaque raise-site hash.
+
+Unknown fields and invalid numbers are dropped. Invalid enums use their safe fallback. Records that cannot be safely formatted are dropped; logging never fails application flow.
 
 ## Values
 
@@ -25,16 +27,18 @@ Optional fields: `request_id`, `operation`, `request_method`, `upstream_method`,
 
 Never logged: credentials, headers, URLs, paths, bodies, memory/query text, decrypted quarantine data, exception messages, or stack traces. `httpx` and `httpcore` logs below warning are suppressed. Uvicorn access logs are disabled.
 
-Use `python -m memory_router` or the `memory-router` script. Direct Uvicorn launch is unsupported. Embedders must call `configure_logging()` after their logging setup and run Uvicorn with `log_config=None` and `access_log=False`. Pre-attached `uvicorn.error` handlers remain deployer-owned; they must use the same safe JSON format.
+Use `python -m memory_router` or the `memory-router` script. Direct Uvicorn CLI launch skips `RequestIdMiddleware`; programmatic Uvicorn defaults may replace safe handlers. Embedders must call `configure_logging()` after their logging setup and use `log_config=None` and `access_log=False`. Pre-attached `uvicorn.error` handlers remain deployer-owned and must use the safe JSON format.
 
 ## Throttling and probe cache
 
 - High-volume events: one per `(event, route_class, error_kind)` per minute. The next record includes `suppressed=N`.
-- Uvicorn noise: one per `reason` per minute.
-- Readiness failures: one per dependency/error kind per minute after two matching observations. Recoveries also require two observations.
+- Uvicorn warning/error noise: one per `reason` per minute. Critical records are never throttled.
+- Readiness log transitions require two matching observations. HTTP readiness responses use each probe result immediately.
 - Readiness and anonymous `/version`: cache success and failure for one second; serve stale data for at most five seconds during one bounded refresh; cold concurrent callers get 503.
-- Auth failures are logged before rate limiting. Only admitted attempts are persisted.
+- Auth failures are logged before the process-local in-memory failure gate. Only admitted invalid-token attempts are persisted.
 - Each worker maintains its own cache and throttle state.
+
+`logging_contract_violation` is intentionally unthrottled so developer contract bugs fail loud.
 
 Not logged per request: quarantine 413/429/507 responses, general 429 responses, or aged `review_side_effect_started` items. Track these with metrics; see [Production readiness](production-readiness.md).
 

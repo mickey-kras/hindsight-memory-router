@@ -198,7 +198,9 @@ class _ProtocolNoiseFilter(logging.Filter):
             message = record.getMessage()
         except Exception:
             return False
-        reason = _runtime_reason(message)
+        if record.levelno >= logging.CRITICAL:
+            return True
+        reason = _runtime_reason(safe_text(message, fallback="", limit=512))
         if record.levelno < logging.WARNING or reason not in {
             "http-protocol-error",
             "asgi-application-error",

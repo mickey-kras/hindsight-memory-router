@@ -24,6 +24,7 @@ from memory_router.logging import (
     log_event,
     reset_log_state,
 )
+from memory_router.logging_contract import sanitize_output_field
 from memory_router.observability import RequestIdMiddleware, current_request_id
 from memory_router.openclaw import OpenClawFacade
 from memory_router.policy import RouterPolicy
@@ -206,6 +207,29 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     assert isinstance(record.operation_duration_ms, float)  # type: ignore[attr-defined]
     assert _SENTINEL not in caplog.text
     assert record.exc_info is None
+
+
+@pytest.mark.asyncio
+async def test_hindsight_readiness_probe_has_its_own_timeout(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = asyncio.Event()
+
+    async def hang() -> None:
+        await release.wait()
+
+    monkeypatch.setattr(app_module, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(app_module, "_readiness_log_state", app_module._ReadinessLogState())
+    hindsight = SimpleNamespace(health=hang)
+
+    for _ in range(2):
+        healthy, response, error, _ = await app_module._hindsight_health(hindsight)
+        assert (healthy, response) == (False, None)
+        assert isinstance(error, TimeoutError)
+
+    record = next(record for record in caplog.records if record.msg == "hindsight_readiness_failed")
+    assert record.error_kind == "timeout"  # type: ignore[attr-defined]
 
 
 class AsyncFail:
@@ -539,7 +563,18 @@ async def test_version_failure_does_not_queue_or_amplify_concurrent_requests(
     cached = await app_module._version_response()
 
     assert [first.status_code, second.status_code, cached.status_code] == [502, 503, 502]
+    assert json.loads(second.body) == {
+        "error": "hindsight_unavailable",
+        "message": "Upstream memory service is unavailable",
+    }
     version.assert_awaited_once()
+
+
+def test_invalid_logger_name_is_fingerprinted() -> None:
+    logger_name = sanitize_output_field("logger", "runtime credential shaped logger")
+
+    assert isinstance(logger_name, str)
+    assert logger_name.startswith("logger:")
 
 
 @pytest.mark.asyncio
@@ -564,7 +599,10 @@ def test_runtime_message_reason_mapping() -> None:
         "Finished server process [1]": "server-finished",
         "Invalid HTTP request received.": "http-protocol-error",
         "Unsupported upgrade request.": "http-protocol-error",
-        "No supported WebSocket library detected. Please use pip install 'uvicorn[standard]'": "http-protocol-error",
+        (
+            "No supported WebSocket library detected. Please use "
+            "'pip install uvicorn[standard]', or install 'websockets' or 'wsproto' manually."
+        ): "http-protocol-error",
         "Exception in ASGI application": "asgi-application-error",
         "Unclassified runtime warning": "runtime-other",
     }
@@ -689,6 +727,23 @@ async def test_lifespan_logs_shutdown_failure_and_preserves_primary_error(
     assert "shutdown secret" not in caplog.text
 
 
+@pytest.mark.asyncio
+async def test_lifespan_logs_cancelled_shutdown_and_preserves_primary_error(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module.runtime, "start", AsyncMock())
+    monkeypatch.setattr(
+        app_module.runtime, "stop", AsyncMock(side_effect=asyncio.CancelledError())
+    )
+
+    with pytest.raises(ValueError, match="primary"):
+        async with app_module.lifespan(app_module.app):
+            raise ValueError("primary")
+
+    assert any(record.msg == "application_stop_failed" for record in caplog.records)
+
+
 def test_log_contract_normalization_throttle_and_suppressed_count(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -728,7 +783,7 @@ def test_log_contract_normalization_throttle_and_suppressed_count(
     records = [record for record in caplog.records if record.msg == "hindsight_request_failed"]
     assert len(records) == 2
     assert records[-1].suppressed == 1  # type: ignore[attr-defined]
-    assert len(records[-1].writer_id) == 128  # type: ignore[attr-defined]
+    assert records[-1].writer_id.startswith("writer:")  # type: ignore[attr-defined]
 
     log_event(
         logger,
@@ -891,11 +946,36 @@ def test_runtime_noise_filter_throttles_asgi_errors() -> None:
     assert not noise_filter.filter(second)
 
 
+def test_runtime_noise_filter_throttles_reasons_independently() -> None:
+    noise_filter = _ProtocolNoiseFilter()
+    protocol = logging.LogRecord(
+        "uvicorn.error", logging.WARNING, "", 0, "Invalid HTTP request received.", (), None
+    )
+    asgi = logging.LogRecord(
+        "uvicorn.error", logging.ERROR, "", 0, "Exception in ASGI application", (), None
+    )
+
+    assert noise_filter.filter(protocol)
+    assert noise_filter.filter(asgi)
+
+
+def test_runtime_noise_filter_never_throttles_critical() -> None:
+    noise_filter = _ProtocolNoiseFilter()
+    first = logging.LogRecord("runtime", logging.CRITICAL, "", 0, "unclassified", (), None)
+    second = logging.LogRecord("runtime", logging.CRITICAL, "", 0, "unclassified", (), None)
+
+    assert noise_filter.filter(first)
+    assert noise_filter.filter(second)
+
+
 @pytest.mark.parametrize(
     "message",
     [
         "Unsupported upgrade request.",
-        "No supported WebSocket library detected. Please use pip install 'uvicorn[standard]'",
+        (
+            "No supported WebSocket library detected. Please use "
+            "'pip install uvicorn[standard]', or install 'websockets' or 'wsproto' manually."
+        ),
     ],
 )
 def test_protocol_noise_filter_throttles_unsupported_upgrade(message: str) -> None:
@@ -948,6 +1028,19 @@ def test_runtime_formatter_fail_closed_for_direct_stdlib_logs(
         )
 
         record = json.loads(output.getvalue())
+        assert set(record) == {
+            "event",
+            "level",
+            "logger",
+            "timestamp",
+            "request_id",
+            "operation",
+            "upstream_method",
+            "error_kind",
+            "http_status",
+            "operation_duration_ms",
+            "route_class",
+        }
         assert record["event"] == "hindsight_request_failed"
         assert record["request_id"] == "req-1"
         assert record["route_class"] == "memory"
@@ -1043,14 +1136,17 @@ def test_configure_logging_preserves_root_and_suppresses_http_clients(
     monkeypatch.setattr("memory_router.logging.sys.stdout", output)
     try:
         configure_logging()
+        configure_logging()
         assert root.handlers == [existing]
         assert root.level == logging.WARNING
         assert logging.getLogger("httpx").level == logging.WARNING
         assert logging.getLogger("httpcore").level == logging.WARNING
-        assert any(
-            getattr(filter_, "_memory_router_runtime_noise", False)
+        owned_noise_filters = [
+            filter_
             for filter_ in uvicorn_logger.filters
-        )
+            if getattr(filter_, "_memory_router_runtime_noise", False)
+        ]
+        assert len(owned_noise_filters) == 1
         httpx_logger.info("HTTP Request: GET https://example.invalid/%s", _SENTINEL)
         assert captured == []
         assert _SENTINEL not in output.getvalue()
@@ -1130,7 +1226,7 @@ async def test_auth_audit_failure_log_does_not_emit_exception_details(
             raise RuntimeError(sensitive_detail)
 
     caplog.set_level(logging.ERROR, logger="memory_router.auth")
-    await AuthFailureAuditor(FailingStore()).record("router")
+    await AuthFailureAuditor(FailingStore()).persist("router")
 
     assert any(getattr(record, "error_kind", None) == "unexpected" for record in caplog.records)
     assert sensitive_detail not in caplog.text

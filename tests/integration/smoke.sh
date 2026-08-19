@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 01c2b60b799709cd7b9a16e5d8c8eba2d472352385c9212075128a38b961c388
+# integration-behavior-sha256: 6d3180463bbae4a98fea92544d0a2e428185976db5ea37a8bf1ef32876be69d6
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -427,7 +427,7 @@ fi
 begin_check "application logs are safe structured JSON after authenticated traffic"
 router_container="$(docker compose -p "$project" -f "$compose_file" ps -q memory-router)"
 router_logs="$(docker logs "$router_container" 2>&1)"
-event_catalog="$(docker exec "$router_container" python -c 'import json; from memory_router.logging import event_catalog; print(json.dumps(sorted(event_catalog())))')"
+event_catalog="$(docker exec "$router_container" python -c 'import json; from memory_router.logging import event_catalog; catalog=event_catalog(); required={"application_stop_failed","runtime_message","storage_readiness_failed","storage_readiness_recovered"}; assert required <= catalog; print(json.dumps(sorted(catalog)))')"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; lines=[line for line in sys.stdin.read().splitlines() if line]; assert lines and all(isinstance(json.loads(line),dict) for line in lines)' || fail_check "memory-router emitted a non-JSON log line"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; catalog=set(json.loads(sys.argv[1])); records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(record.get("event") in catalog for record in records)' "$event_catalog" || fail_check "memory-router emitted an event outside the catalog"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; forbidden={"headers","url","path","body","query","memory","decrypted","exception","exc_info","stack_info"}; records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(not (forbidden & record.keys()) for record in records)' || fail_check "memory-router emitted a forbidden log field"

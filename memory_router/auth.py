@@ -83,7 +83,3 @@ class AuthFailureAuditor:
                 route_class=route_class or "unmatched",
             )
 
-    async def record(self, route_group: str, route_class: str | None = None) -> None:
-        """Record a failure outside HTTP admission flows."""
-        self.log_failure(route_class)
-        await self.persist(route_group, route_class)

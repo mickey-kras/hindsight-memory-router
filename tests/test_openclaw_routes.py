@@ -20,7 +20,7 @@ def runtime_state() -> None:
     app_module.runtime.router_token = None
     app_module.runtime.max_body_bytes = 1024 * 1024
     app_module.runtime.auditor = SimpleNamespace(
-        log_failure=Mock(), persist=AsyncMock(), record=AsyncMock()
+        log_failure=Mock(), persist=AsyncMock()
     )
 
 

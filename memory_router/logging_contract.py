@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import re
@@ -143,6 +144,14 @@ INTEGER_FIELDS = frozenset({"upstream_status", "http_status", "timeout_ms", "sup
 DURATION_FIELDS = frozenset({"request_duration_ms", "operation_duration_ms"})
 FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+WRITER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+LOGGER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
+
+
+def _opaque_text(value: Any, prefix: str) -> str:
+    raw = safe_text(value, fallback="unavailable", limit=512)
+    digest = hashlib.sha256(raw.encode(errors="replace")).hexdigest()[:16]
+    return f"{prefix}:{digest}"
 
 
 def safe_text(value: Any, *, fallback: str, limit: int) -> str:
@@ -153,6 +162,13 @@ def safe_text(value: Any, *, fallback: str, limit: int) -> str:
 
 
 def sanitize_output_field(key: str, value: Any) -> Any | None:
+    if key == "logger":
+        logger_name = safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
+        return (
+            logger_name
+            if LOGGER_PATTERN.fullmatch(logger_name)
+            else _opaque_text(value, "logger")
+        )
     if key in TEXT_LIMITS:
         return safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
     if key in INTEGER_FIELDS:
@@ -206,6 +222,10 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
                 safe_fields.pop(field)
     if "request_id" in safe_fields and not REQUEST_ID_PATTERN.fullmatch(safe_fields["request_id"]):
         safe_fields.pop("request_id")
+    if "writer_id" in safe_fields and not WRITER_ID_PATTERN.fullmatch(safe_fields["writer_id"]):
+        safe_fields["writer_id"] = _opaque_text(safe_fields["writer_id"], "writer")
+    if "logger" in safe_fields and not LOGGER_PATTERN.fullmatch(safe_fields["logger"]):
+        safe_fields["logger"] = _opaque_text(safe_fields["logger"], "logger")
     for field in INTEGER_FIELDS | DURATION_FIELDS:
         if field in safe_fields:
             value = sanitize_output_field(field, safe_fields[field])

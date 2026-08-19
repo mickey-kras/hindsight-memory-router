@@ -333,6 +333,8 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     assert runtime.database is primary_db
     assert runtime.rate_limit_database is rate_db
     assert runtime.quarantine_limiter is rate_limiter
+    assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
+    assert runtime.auth_limiter is not rate_limiter
     assert hindsight_limiter_calls == [rate_limiter]
     assert runtime.hindsight is hindsight
     assert runtime.policy is policy

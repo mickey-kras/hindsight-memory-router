@@ -118,7 +118,7 @@ Health endpoint semantics are now complete:
 /ready        -> deprecated alias of /health/ready
 ```
 
-The readiness checks run router storage and Hindsight health concurrently. Success returns the validated Hindsight `/health` JSON unchanged; either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
+The readiness checks run router storage and Hindsight health concurrently. Success returns Hindsight's validated supported health fields; unknown upstream fields are omitted. Either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
 
 Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
