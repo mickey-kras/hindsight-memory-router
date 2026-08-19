@@ -1,0 +1,222 @@
+from __future__ import annotations
+
+import logging
+import math
+import re
+from typing import Any
+
+SAFE_FIELDS = frozenset(
+    {
+        "request_id",
+        "operation",
+        "upstream_method",
+        "request_method",
+        "error_kind",
+        "error_fingerprint",
+        "upstream_status",
+        "http_status",
+        "outcome",
+        "request_duration_ms",
+        "operation_duration_ms",
+        "route_class",
+        "writer_id",
+        "reason",
+        "timeout_ms",
+        "suppressed",
+    }
+)
+OUTPUT_FIELDS = frozenset({"event", "level", "timestamp", "logger", *SAFE_FIELDS})
+LEVELS = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
+EVENTS = frozenset(
+    {
+        "application_start_failed",
+        "application_stop_failed",
+        "application_started",
+        "authentication_failed",
+        "authentication_audit_failed",
+        "bank_unavailable",
+        "configuration_warning",
+        "hindsight_readiness_failed",
+        "hindsight_readiness_recovered",
+        "hindsight_request_failed",
+        "logging_contract_violation",
+        "openclaw_security_audit_failed",
+        "quarantine_placeholder_unavailable",
+        "quarantine_sweeper_failed",
+        "quarantine_write_unavailable",
+        "recall_supplemental_audit_unavailable",
+        "request_failed",
+        "runtime_message",
+        "storage_readiness_failed",
+        "storage_readiness_recovered",
+    }
+)
+ERROR_KINDS = frozenset(
+    {
+        "capacity",
+        "conflict",
+        "http",
+        "invalid-credentials",
+        "invalid-response",
+        "network",
+        "payload-too-large",
+        "rate-limit",
+        "response-too-large",
+        "storage",
+        "timeout",
+        "unexpected",
+    }
+)
+OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
+ROUTE_CLASSES = frozenset(
+    {"readiness", "liveness", "version", "admin", "memory", "openclaw", "unmatched"}
+)
+OPERATIONS = frozenset(
+    {
+        "authenticate",
+        "configuration",
+        "health",
+        "invalidate_memory",
+        "openclaw_bank",
+        "openclaw_config",
+        "openclaw_mental-models",
+        "openclaw_reflect",
+        "quarantine_maintenance",
+        "recall",
+        "request",
+        "retain",
+        "security_audit",
+        "shutdown",
+        "startup",
+        "storage_health",
+        "version",
+    }
+)
+METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"})
+REASONS = frozenset(
+    {
+        "admin-cleanup-token-missing",
+        "admin-read-token-missing",
+        "admin-review-token-missing",
+        "anonymous-mode",
+        "application-shutdown",
+        "application-startup",
+        "asgi-application-error",
+        "http-protocol-error",
+        "legacy-admin-token",
+        "direct-stdlib-log",
+        "openclaw-suspicious-provider-response",
+        "openclaw-suspicious-request",
+        "openclaw-unknown-writer",
+        "reserved-field",
+        "router-token-missing",
+        "runtime-other",
+        "server-finished",
+        "server-started",
+        "server-running",
+        "server-stopping",
+        "unregistered-event",
+    }
+)
+RESERVED_FIELDS = frozenset({"event", "level", "timestamp", "logger"})
+THROTTLED_EVENTS = EVENTS - {
+    "application_start_failed",
+    "application_started",
+    "configuration_warning",
+    "hindsight_readiness_failed",
+    "logging_contract_violation",
+    "runtime_message",
+    "storage_readiness_failed",
+}
+TEXT_LIMITS = {
+    "request_id": 128,
+    "operation": 64,
+    "upstream_method": 16,
+    "request_method": 16,
+    "writer_id": 128,
+    "logger": 128,
+    "level": 16,
+    "timestamp": 64,
+    "event": 64,
+}
+INTEGER_FIELDS = frozenset({"upstream_status", "http_status", "timeout_ms", "suppressed"})
+DURATION_FIELDS = frozenset({"request_duration_ms", "operation_duration_ms"})
+FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
+REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+def safe_text(value: Any, *, fallback: str, limit: int) -> str:
+    try:
+        return str(value)[:limit]
+    except Exception:
+        return fallback
+
+
+def sanitize_output_field(key: str, value: Any) -> Any | None:
+    if key in TEXT_LIMITS:
+        return safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
+    if key in INTEGER_FIELDS:
+        return (
+            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+        )
+    if key in DURATION_FIELDS:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            numeric = float(value)
+            return numeric if math.isfinite(numeric) and numeric >= 0 else None
+        return None
+    if key in {"error_kind", "error_fingerprint", "outcome", "route_class", "reason"}:
+        return safe_text(value, fallback="unavailable", limit=128)
+    return None
+
+
+def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
+    safe_fields = {
+        key: value for key, value in fields.items() if key in SAFE_FIELDS and value is not None
+    }
+    if "error_kind" in safe_fields and (
+        not isinstance(safe_fields["error_kind"], str)
+        or safe_fields["error_kind"] not in ERROR_KINDS
+    ):
+        safe_fields["error_kind"] = "unexpected"
+    if "error_fingerprint" in safe_fields:
+        fingerprint = safe_text(safe_fields["error_fingerprint"], fallback="", limit=80)
+        if FINGERPRINT_PATTERN.fullmatch(fingerprint):
+            safe_fields["error_fingerprint"] = fingerprint
+        else:
+            safe_fields.pop("error_fingerprint")
+    if "outcome" in safe_fields and (
+        not isinstance(safe_fields["outcome"], str) or safe_fields["outcome"] not in OUTCOMES
+    ):
+        safe_fields["outcome"] = "failed"
+    if "reason" in safe_fields:
+        reason = safe_text(safe_fields["reason"], fallback="runtime-other", limit=128).replace(
+            "_", "-"
+        )
+        safe_fields["reason"] = reason if reason in REASONS else "runtime-other"
+    for field, limit in TEXT_LIMITS.items():
+        if field in safe_fields:
+            safe_fields[field] = safe_text(safe_fields[field], fallback="unavailable", limit=limit)
+    if safe_fields.get("operation") not in OPERATIONS:
+        safe_fields.pop("operation", None)
+    for field in ("request_method", "upstream_method"):
+        if field in safe_fields:
+            method = safe_fields[field].upper()
+            safe_fields[field] = method
+            if method not in METHODS:
+                safe_fields.pop(field)
+    if "request_id" in safe_fields and not REQUEST_ID_PATTERN.fullmatch(safe_fields["request_id"]):
+        safe_fields.pop("request_id")
+    for field in INTEGER_FIELDS | DURATION_FIELDS:
+        if field in safe_fields:
+            value = sanitize_output_field(field, safe_fields[field])
+            if value is None:
+                safe_fields.pop(field)
+            else:
+                safe_fields[field] = value
+    route_class = safe_fields.get("route_class")
+    safe_fields["route_class"] = (
+        route_class
+        if isinstance(route_class, str) and route_class in ROUTE_CLASSES
+        else "unmatched"
+    )
+    return safe_fields

@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
-import re
 import sys
 import time
 from collections.abc import MutableMapping
@@ -13,151 +11,26 @@ from typing import Any, Literal
 
 import structlog
 
-_SAFE_FIELDS = {
-    "request_id",
-    "operation",
-    "upstream_method",
-    "request_method",
-    "error_kind",
-    "error_fingerprint",
-    "upstream_status",
-    "http_status",
-    "outcome",
-    "request_duration_ms",
-    "operation_duration_ms",
-    "route_class",
-    "writer_id",
-    "reason",
-    "timeout_ms",
-    "suppressed",
-}
-_OUTPUT_FIELDS = {"event", "level", "timestamp", "logger", *_SAFE_FIELDS}
+from .logging_contract import (
+    EVENTS,
+    LEVELS,
+    OUTPUT_FIELDS,
+    RESERVED_FIELDS,
+    THROTTLED_EVENTS,
+    safe_text,
+    sanitize_fields,
+    sanitize_output_field,
+)
+
 _JSON_RENDERER = structlog.processors.JSONRenderer(sort_keys=True)
 _MEMORY_ROUTER_EVENT = object()
-_LEVELS = {"info": logging.INFO, "warning": logging.WARNING, "error": logging.ERROR}
-_EVENTS = frozenset(
-    {
-        "application_start_failed",
-        "application_stop_failed",
-        "application_started",
-        "authentication_failed",
-        "authentication_audit_failed",
-        "bank_unavailable",
-        "configuration_warning",
-        "hindsight_readiness_failed",
-        "hindsight_readiness_recovered",
-        "hindsight_request_failed",
-        "logging_contract_violation",
-        "openclaw_security_audit_failed",
-        "quarantine_placeholder_unavailable",
-        "quarantine_sweeper_failed",
-        "quarantine_write_unavailable",
-        "recall_supplemental_audit_unavailable",
-        "request_failed",
-        "runtime_message",
-        "storage_readiness_failed",
-        "storage_readiness_recovered",
-    }
-)
-_ERROR_KINDS = frozenset(
-    {
-        "capacity",
-        "conflict",
-        "http",
-        "invalid-credentials",
-        "invalid-response",
-        "network",
-        "payload-too-large",
-        "rate-limit",
-        "response-too-large",
-        "storage",
-        "timeout",
-        "unexpected",
-    }
-)
-_OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
-_ROUTE_CLASSES = frozenset(
-    {"readiness", "liveness", "version", "admin", "memory", "openclaw", "unmatched"}
-)
-_OPERATIONS = frozenset(
-    {
-        "authenticate",
-        "configuration",
-        "health",
-        "invalidate_memory",
-        "openclaw_bank",
-        "openclaw_config",
-        "openclaw_mental-models",
-        "openclaw_reflect",
-        "quarantine_maintenance",
-        "recall",
-        "request",
-        "retain",
-        "security_audit",
-        "shutdown",
-        "startup",
-        "storage_health",
-        "version",
-    }
-)
-_METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"})
-_REASONS = frozenset(
-    {
-        "admin-cleanup-token-missing",
-        "admin-read-token-missing",
-        "admin-review-token-missing",
-        "anonymous-mode",
-        "application-shutdown",
-        "application-startup",
-        "asgi-application-error",
-        "http-protocol-error",
-        "legacy-admin-token",
-        "direct-stdlib-log",
-        "openclaw-suspicious-provider-response",
-        "openclaw-suspicious-request",
-        "openclaw-unknown-writer",
-        "reserved-field",
-        "router-token-missing",
-        "runtime-other",
-        "server-finished",
-        "server-started",
-        "server-running",
-        "server-stopping",
-        "unregistered-event",
-    }
-)
-_RESERVED = frozenset({"event", "level", "timestamp", "logger"})
-_THROTTLED_EVENTS = _EVENTS - {
-    "application_start_failed",
-    "application_started",
-    "configuration_warning",
-    "hindsight_readiness_failed",
-    "logging_contract_violation",
-    "runtime_message",
-    "storage_readiness_failed",
-}
-_TEXT_LIMITS = {
-    "request_id": 128,
-    "operation": 64,
-    "upstream_method": 16,
-    "request_method": 16,
-    "writer_id": 128,
-    "logger": 128,
-    "level": 16,
-    "timestamp": 64,
-    "event": 64,
-}
-_INTEGER_FIELDS = {"upstream_status", "http_status", "timeout_ms", "suppressed"}
-_DURATION_FIELDS = {"request_duration_ms", "operation_duration_ms"}
-_FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
-_REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 LOG_THROTTLE_INTERVAL_SECONDS = 60.0
 _last_emitted: dict[tuple[str, str, str], float] = {}
 _suppressed: dict[tuple[str, str, str], int] = {}
 
 
 def event_catalog() -> frozenset[str]:
-    return _EVENTS
+    return EVENTS
 
 
 def reset_log_state() -> None:
@@ -202,18 +75,11 @@ def _site_fingerprint(source: str) -> str:
 
 def _caller_fingerprint(logger: logging.Logger) -> str:
     try:
-        frame = sys._getframe(2)  # noqa: SLF001 - bounded call-site diagnostic
+        frame = sys._getframe(3)  # noqa: SLF001 - bounded call-site diagnostic
         source = f"{logger.name}:{frame.f_code.co_name}:{frame.f_lineno}"
     except (AttributeError, ValueError):
         source = "memory_router:unknown-caller"
     return _site_fingerprint(source)
-
-
-def _safe_text(value: Any, *, fallback: str, limit: int) -> str:
-    try:
-        return str(value)[:limit]
-    except Exception:
-        return fallback
 
 
 def _runtime_reason(message: str) -> str:
@@ -256,8 +122,8 @@ def _normalize_foreign_event(
 ) -> MutableMapping[str, Any]:
     if event_dict.get("_memory_router_event") is _MEMORY_ROUTER_EVENT:
         return event_dict
-    message = _safe_text(event_dict.get("event", ""), fallback="", limit=512).strip()
-    logger_name = _safe_text(event_dict.get("logger", ""), fallback="", limit=128)
+    message = safe_text(event_dict.get("event", ""), fallback="", limit=512).strip()
+    logger_name = safe_text(event_dict.get("logger", ""), fallback="", limit=128)
     normalized: dict[str, Any] = {
         key: event_dict[key]
         for key in ("_record", "_from_structlog", "level", "logger", "timestamp")
@@ -281,23 +147,6 @@ def _normalize_foreign_event(
     return normalized
 
 
-def _sanitize_output_field(key: str, value: Any) -> Any | None:
-    if key in _TEXT_LIMITS:
-        return _safe_text(value, fallback="unavailable", limit=_TEXT_LIMITS[key])
-    if key in _INTEGER_FIELDS:
-        return (
-            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-        )
-    if key in _DURATION_FIELDS:
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            numeric = float(value)
-            return numeric if math.isfinite(numeric) and numeric >= 0 else None
-        return None
-    if key in {"error_kind", "error_fingerprint", "outcome", "route_class", "reason"}:
-        return _safe_text(value, fallback="unavailable", limit=128)
-    return None
-
-
 def _render_safe_json(
     logger: Any, method_name: str, event_dict: MutableMapping[str, Any]
 ) -> str | bytes:
@@ -305,7 +154,7 @@ def _render_safe_json(
     safe_event = {
         key: sanitized
         for key, value in event_dict.items()
-        if key in _OUTPUT_FIELDS and (sanitized := _sanitize_output_field(key, value)) is not None
+        if key in OUTPUT_FIELDS and (sanitized := sanitize_output_field(key, value)) is not None
     }
     try:
         return _JSON_RENDERER(logger, method_name, safe_event)
@@ -464,92 +313,52 @@ def _log_event(
     error: Any = None,
     **fields: Any,
 ) -> None:
-    contract_reason: str | None = None
-    if not isinstance(event, str) or event not in _EVENTS:
-        event = "logging_contract_violation"
-        contract_reason = "unregistered-event"
-    if _RESERVED & fields.keys():
-        fields = {key: value for key, value in fields.items() if key not in _RESERVED}
-        event = "logging_contract_violation"
-        contract_reason = "reserved-field"
-    safe_fields = {
-        key: value for key, value in fields.items() if key in _SAFE_FIELDS and value is not None
-    }
-    if contract_reason is not None:
-        safe_fields["reason"] = contract_reason
-        safe_fields["error_fingerprint"] = _caller_fingerprint(logger)
-        level = "error"
-    if "error_kind" in safe_fields and (
-        not isinstance(safe_fields["error_kind"], str)
-        or safe_fields["error_kind"] not in _ERROR_KINDS
-    ):
-        safe_fields["error_kind"] = "unexpected"
-    if "error_fingerprint" in safe_fields:
-        fingerprint = _safe_text(safe_fields["error_fingerprint"], fallback="", limit=80)
-        if _FINGERPRINT_PATTERN.fullmatch(fingerprint):
-            safe_fields["error_fingerprint"] = fingerprint
-        else:
-            safe_fields.pop("error_fingerprint")
-    if "outcome" in safe_fields and (
-        not isinstance(safe_fields["outcome"], str) or safe_fields["outcome"] not in _OUTCOMES
-    ):
-        safe_fields["outcome"] = "failed"
-    if "reason" in safe_fields:
-        normalized_reason = _safe_text(
-            safe_fields["reason"], fallback="runtime-other", limit=128
-        ).replace("_", "-")
-        safe_fields["reason"] = (
-            normalized_reason if normalized_reason in _REASONS else "runtime-other"
-        )
-    for field, limit in _TEXT_LIMITS.items():
-        if field in safe_fields:
-            safe_fields[field] = _safe_text(safe_fields[field], fallback="unavailable", limit=limit)
-    if safe_fields.get("operation") not in _OPERATIONS:
-        safe_fields.pop("operation", None)
-    for field in ("request_method", "upstream_method"):
-        if field in safe_fields:
-            method = safe_fields[field].upper()
-            if method in _METHODS:
-                safe_fields[field] = method
-            else:
-                safe_fields.pop(field)
-    if "request_id" in safe_fields and not _REQUEST_ID_PATTERN.fullmatch(safe_fields["request_id"]):
-        safe_fields.pop("request_id")
-    for field in _INTEGER_FIELDS:
-        if field in safe_fields and _sanitize_output_field(field, safe_fields[field]) is None:
-            safe_fields.pop(field)
-    for field in _DURATION_FIELDS:
-        if field in safe_fields:
-            sanitized = _sanitize_output_field(field, safe_fields[field])
-            if sanitized is None:
-                safe_fields.pop(field)
-            else:
-                safe_fields[field] = sanitized
-    route_class = safe_fields.get("route_class")
-    safe_fields["route_class"] = (
-        route_class
-        if isinstance(route_class, str) and route_class in _ROUTE_CLASSES
-        else "unmatched"
-    )
-    if event in _THROTTLED_EVENTS:
-        key = (
-            event,
-            safe_fields["route_class"],
-            _safe_text(
-                safe_fields.get("error_kind", "unexpected"), fallback="unexpected", limit=32
-            ),
-        )
-        now = time.monotonic()
-        last_emitted = _last_emitted.get(key)
-        if last_emitted is not None and now - last_emitted < LOG_THROTTLE_INTERVAL_SECONDS:
-            _suppressed[key] = _suppressed.get(key, 0) + 1
-            return
-        _last_emitted[key] = now
-        suppressed = _suppressed.pop(key, 0)
-        if suppressed:
-            safe_fields["suppressed"] = suppressed
+    event, level, safe_fields = _prepare_event(logger, event, level, fields)
+    if not _admit_event(event, safe_fields):
+        return
     if isinstance(error, BaseException):
         safe_fields["error_fingerprint"] = error_fingerprint(error)
     safe_fields["_memory_router_event"] = _MEMORY_ROUTER_EVENT
-    numeric_level = _LEVELS.get(level, logging.ERROR) if isinstance(level, str) else logging.ERROR
+    numeric_level = LEVELS.get(level, logging.ERROR) if isinstance(level, str) else logging.ERROR
     logger.log(numeric_level, event, extra=safe_fields, stacklevel=2)
+
+
+def _prepare_event(
+    logger: logging.Logger,
+    event: str,
+    level: Literal["info", "warning", "error"],
+    fields: dict[str, Any],
+) -> tuple[str, Literal["info", "warning", "error"], dict[str, Any]]:
+    contract_reason: str | None = None
+    if not isinstance(event, str) or event not in EVENTS:
+        event = "logging_contract_violation"
+        contract_reason = "unregistered-event"
+    if RESERVED_FIELDS & fields.keys():
+        fields = {key: value for key, value in fields.items() if key not in RESERVED_FIELDS}
+        event = "logging_contract_violation"
+        contract_reason = "reserved-field"
+    if contract_reason is not None:
+        fields["reason"] = contract_reason
+        fields["error_fingerprint"] = _caller_fingerprint(logger)
+        level = "error"
+    return event, level, sanitize_fields(fields)
+
+
+def _admit_event(event: str, fields: dict[str, Any]) -> bool:
+    if event not in THROTTLED_EVENTS:
+        return True
+    key = (
+        event,
+        fields["route_class"],
+        safe_text(fields.get("error_kind", "unexpected"), fallback="unexpected", limit=32),
+    )
+    now = time.monotonic()
+    last_emitted = _last_emitted.get(key)
+    if last_emitted is not None and now - last_emitted < LOG_THROTTLE_INTERVAL_SECONDS:
+        _suppressed[key] = _suppressed.get(key, 0) + 1
+        return False
+    _last_emitted[key] = now
+    suppressed = _suppressed.pop(key, 0)
+    if suppressed:
+        fields["suppressed"] = suppressed
+    return True

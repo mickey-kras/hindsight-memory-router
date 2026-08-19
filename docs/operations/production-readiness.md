@@ -1,6 +1,6 @@
 # Production readiness
 
-See [Application logs](logging.md) for the JSON event schema, readiness transitions, and the fields that must never be logged.
+[Application log schema and safety rules](logging.md).
 
 This document tracks production-readiness findings against the current runtime interaction map. It is intentionally separate from the architecture reference so current behavior and recommended changes remain distinct.
 
@@ -99,7 +99,7 @@ Add SonarQube Community as a static quality gate on `main`. Keep the existing CI
 
 ## Structured logging and centralized logs
 
-Structured JSON application logging is implemented. Centralizing the stream with Grafana Loki + Grafana remains pending.
+Structured JSON logging is done. Grafana Loki + Grafana deployment is pending.
 
 Logging must expose stable machine-queryable fields such as request ID, event, operation, writer/bank identity where safe, status/error code, and duration while never logging request bodies, recalled memory content, credentials, secrets, or decrypted quarantine payloads.
 
@@ -132,7 +132,7 @@ Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
 An alert on any sustained `review_side_effect_started` item is especially important until explicit reconciliation exists.
 
-Structured logs in this PR intentionally do not add per-request events for quarantine 413/429/507 admission failures, general 429 rate-limit rejections, or the age/count of `review_side_effect_started` items. Those signals require counters and gauges in the metrics/alerts follow-up so sustained magnitude is observable without creating request-amplified logs.
+Use metrics, not per-request logs, for quarantine 413/429/507 responses, general 429 responses, and aged `review_side_effect_started` items.
 
 ## Review order
 
