@@ -25,7 +25,7 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Router provenance source | Needs correction | Runtime defaults policy source to `openclaw` instead of using the agent-neutral registry source |
 | Build/publish artifact identity | Blocked | Trivy scans one build; publish jobs rebuild independently before pushing/signing |
 | SonarQube Community gate | Pending | Planned static quality gate on `main` is not present |
-| Structured logging / centralized logs | Pending | Adopt structured JSON logging with Grafana Loki + Grafana |
+| Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
 | Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
 
 ## Blocker: ambiguous review side-effect reconciliation
@@ -99,7 +99,7 @@ Add SonarQube Community as a static quality gate on `main`. Keep the existing CI
 
 ## Structured logging and centralized logs
 
-Adopt structured JSON application logging and centralize logs with Grafana Loki + Grafana.
+Structured JSON application logging is implemented. Centralizing the stream with Grafana Loki + Grafana remains pending.
 
 Logging must expose stable machine-queryable fields such as request ID, event, operation, writer/bank identity where safe, status/error code, and duration while never logging request bodies, recalled memory content, credentials, secrets, or decrypted quarantine payloads.
 
@@ -142,7 +142,7 @@ Work through unresolved items in this order:
 2. build-once / scan-once / publish-same-artifact;
 3. provenance source correction;
 4. SonarQube Community gate;
-5. structured JSON logging + Grafana Loki/Grafana;
+5. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
 6. production metrics and alerts.
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.

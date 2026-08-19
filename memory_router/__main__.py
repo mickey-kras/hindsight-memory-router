@@ -22,6 +22,7 @@ def main() -> None:
         port=port,
         access_log=False,
         log_config=None,
+        log_level="info",
     )
 
 

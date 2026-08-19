@@ -5,7 +5,7 @@ import hmac
 import logging
 from typing import Any
 
-from .logging import error_fingerprint, log_event
+from .logging import log_event
 from .observability import current_request_id
 from .timestamps import iso_now
 
@@ -73,10 +73,10 @@ class AuthFailureAuditor:
                 logger,
                 "error",
                 "authentication_audit_failed",
+                error=exc,
                 request_id=current_request_id(),
                 operation="security_audit",
                 error_kind="unexpected",
-                error_fingerprint=error_fingerprint(exc),
                 outcome="failed",
                 route_class=route_class or "unmatched",
             )

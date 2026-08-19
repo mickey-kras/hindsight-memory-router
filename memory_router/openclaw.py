@@ -7,7 +7,7 @@ from urllib.parse import quote, urlencode
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
-from .logging import error_fingerprint, log_event
+from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_openclaw_response
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
@@ -137,12 +137,12 @@ class OpenClawFacade:
             # Blocking is independent from audit availability; never log raw payload/content.
             log_event(
                 logger,
-                "warning",
+                "error",
                 "openclaw_security_audit_failed",
+                error=exc,
                 request_id=current_request_id(),
                 operation="security_audit",
                 error_kind="unexpected",
-                error_fingerprint=error_fingerprint(exc),
                 outcome="failed",
                 route_class="openclaw",
                 writer_id=writer_id,

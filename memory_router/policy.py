@@ -517,7 +517,7 @@ class RouterPolicy:
         }.get(str(raw_error_kind), raw_error_kind)
         log_event(
             logger,
-            "warning",
+            "error" if event == "recall_supplemental_audit_unavailable" else "warning",
             event,
             request_id=current_request_id(),
             operation="recall",
@@ -527,4 +527,5 @@ class RouterPolicy:
             http_status=details.get("status") if isinstance(details.get("status"), int) else None,
             outcome="degraded",
             route_class="memory",
+            writer_id=details.get("writer_id"),
         )

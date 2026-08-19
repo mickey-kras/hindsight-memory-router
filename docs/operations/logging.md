@@ -14,14 +14,22 @@ Bounded enums:
 Event catalog:
 
 - info: `application_started`, `hindsight_readiness_recovered`, `storage_readiness_recovered`;
-- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `hindsight_readiness_failed`, `hindsight_request_failed`, `openclaw_security_audit_failed`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `recall_supplemental_audit_unavailable`, `storage_readiness_failed`;
-- error: `application_start_failed`, `authentication_audit_failed`, `logging_contract_violation`, `quarantine_sweeper_failed`, `request_failed`.
+- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `hindsight_readiness_failed`, `hindsight_request_failed`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `storage_readiness_failed`;
+- error: `application_start_failed`, `authentication_audit_failed`, `logging_contract_violation`, `openclaw_security_audit_failed`, `quarantine_sweeper_failed`, `recall_supplemental_audit_unavailable`, `request_failed`.
 
-Uvicorn lifecycle and protocol records use `event=runtime_message` plus a bounded `reason` and retain Uvicorn's level; their original prose is not passed through. Malformed-request protocol warnings are rate-limited. When Gunicorn or another process manager installs or reroutes `uvicorn.error` handlers after application import, that deployer owns their format; configure its error handler as JSON or keep the supported direct Uvicorn launch.
+Uvicorn lifecycle and protocol records use `event=runtime_message` plus a bounded `reason` and retain Uvicorn's level; their original prose is not passed through. Malformed-request and unsupported-upgrade warnings are rate-limited.
 
-Readiness results are cached, concurrent probes are coalesced, and a stale cached response is served while one refresh is in flight. Two consecutive observations confirm a dependency transition. Failure events are emitted at most once per minute per dependency and error kind. Every confirmed recovery is emitted immediately so alerts can clear. Multi-worker deployments can emit one transition per worker.
+The supported server launch is `python -m memory_router` (or the installed `memory-router` console script). It passes `log_config=None`, disables access logs, and explicitly enables Uvicorn INFO lifecycle records. Plain `uvicorn memory_router.app:app` and programmatic `uvicorn.run(app)` with Uvicorn's default logging configuration are unsupported because that configuration is installed after import and can replace the safe handlers, re-enable plaintext access targets, or disable application loggers.
 
-High-volume failure events are throttled per event, route class, and error kind. The next emitted record includes `suppressed=N` when records were dropped during the interval.
+Embedders must call `configure_logging()` after installing their own logging configuration, run Uvicorn with `log_config=None` and `access_log=False`, and preserve the handler attached to `memory_router`. The application logger does not propagate by default; an embedder may opt into propagation only when its parent handler enforces the same JSON contract. The owned `logging.lastResort` handler safely normalizes otherwise-unhandled warning/error records when no regular handler exists. Deployer-owned root handlers remain outside this contract.
+
+Readiness results are cached, concurrent probes are coalesced, and a stale cached response is served for at most five seconds while one refresh is in flight. Refresh work is time-bounded and readiness fails closed when stale data exceeds that limit. Two consecutive observations confirm a dependency transition. Failure events are emitted at most once per minute per dependency and error kind. Confirmed recoveries are also throttled to prevent flapping dependencies from flooding logs. Multi-worker deployments can emit one transition per worker.
+
+Anonymous `/version` responses use the same one-second cache, coalescing lock, bounded stale window, and refresh timeout so probes do not amplify Hindsight traffic.
+
+High-volume failure and recovery events are throttled per event, route class, and error kind. The next emitted record includes `suppressed=N` when records were dropped during the interval. If an event stream ends while records are suppressed, there is no later record on which to report that final suppressed count.
+
+Authentication attempts are audited before the authentication-failure limiter rejects excess attempts, so limiter-triggered 429 responses do not create an audit blind spot. The corresponding high-volume application log remains throttled.
 
 `structlog` 26.1.0 is pinned with hashes in the runtime lock. The pinned base image supplies pip; all installed runtime packages are hash-verified.
 

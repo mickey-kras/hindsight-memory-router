@@ -263,6 +263,7 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
                 "port": 8891,
                 "access_log": False,
                 "log_config": None,
+                "log_level": "info",
             },
         )
     ]

@@ -72,6 +72,9 @@ _ERROR_KINDS = frozenset(
     }
 )
 _OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
+_ROUTE_CLASSES = frozenset(
+    {"readiness", "liveness", "version", "admin", "memory", "openclaw", "unmatched"}
+)
 _REASONS = frozenset(
     {
         "admin-cleanup-token-missing",
@@ -82,7 +85,7 @@ _REASONS = frozenset(
         "application-startup",
         "http-protocol-error",
         "legacy-admin-token",
-        "lifespan-error",
+        "direct-stdlib-log",
         "openclaw-suspicious-provider-response",
         "openclaw-suspicious-request",
         "openclaw-unknown-writer",
@@ -101,14 +104,13 @@ _THROTTLED_EVENTS = _EVENTS - {
     "application_started",
     "configuration_warning",
     "hindsight_readiness_failed",
-    "hindsight_readiness_recovered",
     "logging_contract_violation",
     "runtime_message",
     "storage_readiness_failed",
-    "storage_readiness_recovered",
 }
 _MAX_WRITER_ID_LENGTH = 128
 _FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
+LOG_THROTTLE_INTERVAL_SECONDS = 60.0
 _last_emitted: dict[tuple[str, str, str], float] = {}
 _suppressed: dict[tuple[str, str, str], int] = {}
 
@@ -144,7 +146,17 @@ def error_fingerprint(exc: BaseException) -> str:
             traceback = traceback.tb_next
         code = traceback.tb_frame.f_code
         source = f"{traceback.tb_frame.f_globals.get('__name__', '')}:{code.co_name}:{traceback.tb_lineno}"
+    return _site_fingerprint(source)
+
+
+def _site_fingerprint(source: str) -> str:
     return f"site:{hashlib.sha256(source.encode()).hexdigest()[:16]}"
+
+
+def _caller_fingerprint(logger: logging.Logger) -> str:
+    frame = sys._getframe(2)  # noqa: SLF001 - bounded call-site diagnostic
+    source = f"{logger.name}:{frame.f_code.co_name}:{frame.f_lineno}"
+    return _site_fingerprint(source)
 
 
 def _drop_exception_data(_: logging.Logger, __: str, event_dict: dict[str, Any]) -> dict[str, Any]:
@@ -162,16 +174,22 @@ def _normalize_foreign_event(
 ) -> MutableMapping[str, Any]:
     if event_dict.get("_from_structlog"):
         return event_dict
+    if event_dict.get("_memory_router_event") is True:
+        return event_dict
     message = str(event_dict.get("event", "")).strip()
     if str(event_dict.get("logger", "")).startswith("memory_router"):
-        event_dict["event"] = message
+        record = event_dict.get("_record")
+        source = "memory_router:unknown:0"
+        if isinstance(record, logging.LogRecord):
+            source = f"{record.name}:{record.funcName}:{record.lineno}"
+        event_dict["event"] = "logging_contract_violation"
+        event_dict["reason"] = "direct-stdlib-log"
+        event_dict["error_fingerprint"] = _site_fingerprint(source)
         return event_dict
     lowered = message.lower()
     reason = "runtime-other"
     if "invalid http request" in lowered:
         reason = "http-protocol-error"
-    elif "exception in 'lifespan' protocol" in lowered:
-        reason = "lifespan-error"
     elif "started server process" in lowered:
         reason = "server-started"
     elif "application startup" in lowered:
@@ -198,14 +216,23 @@ def _render_safe_json(
 class _ProtocolNoiseFilter(logging.Filter):
     def __init__(self) -> None:
         super().__init__()
-        self.last = 0.0
+        self.last: float | None = None
         self.suppressed = 0
 
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.levelno < logging.WARNING or "Invalid HTTP request" not in record.getMessage():
+        message = record.getMessage()
+        noisy = any(
+            value in message
+            for value in (
+                "Invalid HTTP request",
+                "Unsupported upgrade request",
+                "No supported WebSocket library was found",
+            )
+        )
+        if record.levelno < logging.WARNING or not noisy:
             return True
         now = time.monotonic()
-        if now - self.last < 60.0:
+        if self.last is not None and now - self.last < LOG_THROTTLE_INTERVAL_SECONDS:
             self.suppressed += 1
             return False
         if self.suppressed:
@@ -264,16 +291,21 @@ def configure_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
+    logging.lastResort = _json_handler()
+    logging.lastResort.setLevel(logging.WARNING)
+
 
 def log_event(
     logger: logging.Logger,
     level: Literal["info", "warning", "error"],
     event: str,
+    *,
+    error: BaseException | None = None,
     **fields: Any,
 ) -> None:
     """Emit a bounded event; contract mistakes never mask the original failure."""
     contract_reason: str | None = None
-    if event not in _EVENTS:
+    if not isinstance(event, str) or event not in _EVENTS:
         event = "logging_contract_violation"
         contract_reason = "unregistered-event"
     if _RESERVED & fields.keys():
@@ -285,14 +317,20 @@ def log_event(
     }
     if contract_reason is not None:
         safe_fields["reason"] = contract_reason
+        safe_fields["error_fingerprint"] = _caller_fingerprint(logger)
         level = "error"
-    if "error_kind" in safe_fields and safe_fields["error_kind"] not in _ERROR_KINDS:
+    if "error_kind" in safe_fields and (
+        not isinstance(safe_fields["error_kind"], str)
+        or safe_fields["error_kind"] not in _ERROR_KINDS
+    ):
         safe_fields["error_kind"] = "unexpected"
     if "error_fingerprint" in safe_fields and not _FINGERPRINT_PATTERN.fullmatch(
         str(safe_fields["error_fingerprint"])
     ):
         safe_fields.pop("error_fingerprint")
-    if "outcome" in safe_fields and safe_fields["outcome"] not in _OUTCOMES:
+    if "outcome" in safe_fields and (
+        not isinstance(safe_fields["outcome"], str) or safe_fields["outcome"] not in _OUTCOMES
+    ):
         safe_fields["outcome"] = "failed"
     if "reason" in safe_fields:
         normalized_reason = str(safe_fields["reason"]).replace("_", "-")
@@ -301,18 +339,29 @@ def log_event(
         )
     if "writer_id" in safe_fields:
         safe_fields["writer_id"] = str(safe_fields["writer_id"])[:_MAX_WRITER_ID_LENGTH]
+    route_class = safe_fields.get("route_class")
+    safe_fields["route_class"] = (
+        route_class
+        if isinstance(route_class, str) and route_class in _ROUTE_CLASSES
+        else "unmatched"
+    )
     if event in _THROTTLED_EVENTS:
         key = (
             event,
-            str(safe_fields.get("route_class", "unmatched")),
+            safe_fields["route_class"],
             str(safe_fields.get("error_kind", "unexpected")),
         )
         now = time.monotonic()
-        if now - _last_emitted.get(key, 0.0) < 60.0:
+        last_emitted = _last_emitted.get(key)
+        if last_emitted is not None and now - last_emitted < LOG_THROTTLE_INTERVAL_SECONDS:
             _suppressed[key] = _suppressed.get(key, 0) + 1
             return
         _last_emitted[key] = now
         suppressed = _suppressed.pop(key, 0)
         if suppressed:
             safe_fields["suppressed"] = suppressed
-    logger.log(_LEVELS.get(level, logging.ERROR), event, extra=safe_fields)
+    if error is not None:
+        safe_fields["error_fingerprint"] = error_fingerprint(error)
+    safe_fields["_memory_router_event"] = True
+    numeric_level = _LEVELS.get(level, logging.ERROR) if isinstance(level, str) else logging.ERROR
+    logger.log(numeric_level, event, extra=safe_fields, stacklevel=2)

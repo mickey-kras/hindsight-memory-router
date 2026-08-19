@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 0fdc26194285bf24f9882b146d6a919796b4fe34fc2c14c297163697138995c5
+# integration-behavior-sha256: cf165476c6b711caae6c69103a2a818ed9f30fa9a4034235571e24dfe486fae7
 
 mode="${1:-}"
 router_db="${2:-}"
@@ -404,6 +404,26 @@ cleanup_result="$(admin_cleanup_post "/admin/quarantine/cleanup" "{\"scope\":\"p
 printf '%s' "$cleanup_result" | grep -q '"dry_run":false' || fail_check "cleanup execution failed"
 pass_check
 
+if [[ "$mode" == "fake" ]]; then
+  begin_check "readiness logs Hindsight outage and recovery"
+  docker compose -p "$project" -f "$compose_file" stop hindsight >/dev/null
+  sleep 2
+  first_outage_status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
+  sleep 2
+  second_outage_status="$(curl -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
+  [[ "$first_outage_status" == "503" && "$second_outage_status" == "503" ]] || fail_check "readiness did not fail during Hindsight outage"
+  docker compose -p "$project" -f "$compose_file" start hindsight >/dev/null
+  for _ in {1..30}; do
+    if curl -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  sleep 2
+  curl -fsS "${router_url}/health/ready" >/dev/null || fail_check "readiness did not recover with Hindsight"
+  pass_check
+fi
+
 begin_check "application logs are safe structured JSON after authenticated traffic"
 router_container="$(docker compose -p "$project" -f "$compose_file" ps -q memory-router)"
 router_logs="$(docker logs "$router_container" 2>&1)"
@@ -411,6 +431,7 @@ event_catalog="$(docker exec "$router_container" python -c 'import json; from me
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; lines=[line for line in sys.stdin.read().splitlines() if line]; assert lines and all(isinstance(json.loads(line),dict) for line in lines)' || fail_check "memory-router emitted a non-JSON log line"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; catalog=set(json.loads(sys.argv[1])); records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(record.get("event") in catalog for record in records)' "$event_catalog" || fail_check "memory-router emitted an event outside the catalog"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; forbidden={"headers","url","path","body","query","memory","decrypted","exception","exc_info","stack_info"}; records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(not (forbidden & record.keys()) for record in records)' || fail_check "memory-router emitted a forbidden log field"
+printf '%s\n' "$router_logs" | python3 -c 'import json,sys; mode=sys.argv[1]; events=[json.loads(line).get("event") for line in sys.stdin.read().splitlines() if line]; assert "application_started" in events; assert mode != "fake" or {"hindsight_readiness_failed","hindsight_readiness_recovered"} <= set(events)' "$mode" || fail_check "memory-router logs were missing required lifecycle or dependency events"
 for secret in "$router_token" "$admin_read_token" "$admin_review_token" "$admin_cleanup_token"; do
   if printf '%s' "$router_logs" | grep -Fq "$secret"; then
     fail_check "memory-router logs exposed a sentinel credential"

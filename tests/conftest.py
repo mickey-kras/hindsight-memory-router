@@ -19,6 +19,8 @@ def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
     )
     app_module._readiness_cache = None
     app_module._readiness_lock = None
+    app_module._version_cache = None
+    app_module._version_lock = None
     yield
     logging_module.reset_log_state()
     application_logger.removeHandler(caplog.handler)
