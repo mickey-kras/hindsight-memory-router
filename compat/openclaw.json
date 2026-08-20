@@ -1,6 +1,6 @@
 {
   "upstream": "vectorize-io/hindsight",
-  "observed_main_sha": "a544b1965e0646ee230fa59b00ff5d791f77501c",
+  "observed_main_sha": "2e0af7550d047ce7eae2ada55a88bbb7a444c5de",
   "sources": {
     "plugin": "hindsight-integrations/openclaw/src/index.ts",
     "bank_defaults": "hindsight-integrations/openclaw/src/bank-defaults.ts",
@@ -8,12 +8,16 @@
     "client": "hindsight-clients/typescript/src/index.ts"
   },
   "source_blob_shas": {
-    "plugin": "63b92d310cb82a65f6ae4fb497cb0b41ac1d6e60",
+    "plugin": "743f52ddb9ca936e1520a305bd53450c31117cd1",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
     "client": "ff60d34f56f8ba58714bf4cde7588a7a903898f4"
   },
-  "plugin_client_methods": ["createBank", "recall", "retain"],
+  "plugin_client_methods": [
+    "createBank",
+    "recall",
+    "retain"
+  ],
   "agent_sdk_methods": [
     "createMentalModel",
     "deleteMentalModel",
@@ -25,17 +29,53 @@
     "updateMentalModel"
   ],
   "endpoints": [
-    ["GET", "/health"],
-    ["GET", "/version"],
-    ["POST", "/v1/default/banks/{bank_id}/memories"],
-    ["POST", "/v1/default/banks/{bank_id}/memories/recall"],
-    ["PUT", "/v1/default/banks/{bank_id}"],
-    ["PATCH", "/v1/default/banks/{bank_id}/config"],
-    ["GET", "/v1/default/banks/{bank_id}/mental-models"],
-    ["POST", "/v1/default/banks/{bank_id}/mental-models"],
-    ["GET", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["PATCH", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["DELETE", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["POST", "/v1/default/banks/{bank_id}/reflect"]
+    [
+      "GET",
+      "/health"
+    ],
+    [
+      "GET",
+      "/version"
+    ],
+    [
+      "POST",
+      "/v1/default/banks/{bank_id}/memories"
+    ],
+    [
+      "POST",
+      "/v1/default/banks/{bank_id}/memories/recall"
+    ],
+    [
+      "PUT",
+      "/v1/default/banks/{bank_id}"
+    ],
+    [
+      "PATCH",
+      "/v1/default/banks/{bank_id}/config"
+    ],
+    [
+      "GET",
+      "/v1/default/banks/{bank_id}/mental-models"
+    ],
+    [
+      "POST",
+      "/v1/default/banks/{bank_id}/mental-models"
+    ],
+    [
+      "GET",
+      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
+    ],
+    [
+      "PATCH",
+      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
+    ],
+    [
+      "DELETE",
+      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
+    ],
+    [
+      "POST",
+      "/v1/default/banks/{bank_id}/reflect"
+    ]
   ]
 }
