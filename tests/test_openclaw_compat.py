@@ -410,6 +410,7 @@ def test_exact_current_openclaw_auto_retain_and_document_ingest_shapes() -> None
             }
         ],
         "async": True,
+        "operation_id": "123e4567-e89b-12d3-a456-426614174000",
     }
     document_ingest = {
         "items": [{"content": "Full raw document", "document_id": "project-notes"}],
