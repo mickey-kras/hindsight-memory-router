@@ -48,17 +48,23 @@ def _facade_version_response() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_health_validates_contract_and_preserves_upstream_response() -> None:
+async def test_health_validates_contract_and_drops_unrecognized_upstream_fields() -> None:
     response = {
         "status": "healthy",
         "database": "connected",
         "db_acquire_ms": 0.4,
         "db_pool_waiting": 0,
+        "internal_detail": "must-not-pass-through",
     }
     gateway = HindsightGateway("http://hindsight", None)
     gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
     try:
-        assert await gateway.health() is response
+        assert await gateway.health() == {
+            "status": "healthy",
+            "database": "connected",
+            "db_acquire_ms": 0.4,
+            "db_pool_waiting": 0,
+        }
     finally:
         await gateway.close()
 

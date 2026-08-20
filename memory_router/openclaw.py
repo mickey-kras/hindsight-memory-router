@@ -7,6 +7,7 @@ from urllib.parse import quote, urlencode
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
+from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_openclaw_response
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
@@ -134,10 +135,16 @@ class OpenClawFacade:
             )
         except Exception as exc:
             # Blocking is independent from audit availability; never log raw payload/content.
-            logger.warning(
-                "openclaw security audit unavailable request_id=%s reason=%s writer_id=%s error_type=%s",
-                current_request_id(),
-                reason,
-                writer_id,
-                type(exc).__name__,
+            log_event(
+                logger,
+                "error",
+                "openclaw_security_audit_failed",
+                error=exc,
+                request_id=current_request_id(),
+                operation="security_audit",
+                error_kind="unexpected",
+                outcome="failed",
+                route_class="openclaw",
+                writer_id=writer_id,
+                reason=reason,
             )

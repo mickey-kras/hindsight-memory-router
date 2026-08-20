@@ -7,6 +7,10 @@ from pathlib import Path
 APP_PATH = Path("memory_router/app.py")
 POLICY_PATH = Path("memory_router/policy.py")
 ADMIN_PATH = Path("memory_router/admin.py")
+AUTH_PATH = Path("memory_router/auth.py")
+HINDSIGHT_PATH = Path("memory_router/hindsight.py")
+LOGGING_PATH = Path("memory_router/logging.py")
+LOGGING_CONTRACT_PATH = Path("memory_router/logging_contract.py")
 SMOKE_PATH = Path("tests/integration/smoke.sh")
 OPENCLAW_SMOKE_PATH = Path("tests/integration/openclaw-compat.sh")
 
@@ -100,7 +104,15 @@ REQUIRED_WORKFLOW_CHECKS = {
     "OpenClaw auto-recall and knowledge recall shapes succeed",
     "OpenClaw conditional requests reject nested injection before Hindsight",
 }
-INTEGRATION_BEHAVIOR_PATHS = {APP_PATH, POLICY_PATH, ADMIN_PATH}
+INTEGRATION_BEHAVIOR_PATHS = {
+    APP_PATH,
+    POLICY_PATH,
+    ADMIN_PATH,
+    AUTH_PATH,
+    HINDSIGHT_PATH,
+    LOGGING_PATH,
+    LOGGING_CONTRACT_PATH,
+}
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
 
 

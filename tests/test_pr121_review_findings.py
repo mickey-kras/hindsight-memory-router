@@ -440,7 +440,7 @@ async def test_unknown_writer_approval_is_scanned_before_hindsight(
 
 
 @pytest.mark.asyncio
-async def test_mis_scoped_valid_admin_token_does_not_consume_failure_budget(
+async def test_mis_scoped_valid_admin_token_is_logged_and_rate_limited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     request = Request(
@@ -457,12 +457,13 @@ async def test_mis_scoped_valid_admin_token_does_not_consume_failure_budget(
         {"legacy": None, "read": "read", "review": "review", "cleanup": "cleanup"},
     )
     failure_rate = AsyncMock()
-    auditor = SimpleNamespace(record=AsyncMock())
+    auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
     monkeypatch.setattr(app_module, "_auth_failure_rate", failure_rate)
     monkeypatch.setattr(app_module.runtime, "auditor", auditor)
     assert await app_module._admin_auth(request, "review") is False
-    failure_rate.assert_not_awaited()
-    auditor.record.assert_not_awaited()
+    auditor.log_failure.assert_called_once_with("admin")
+    failure_rate.assert_awaited_once_with("admin")
+    auditor.persist.assert_not_awaited()
 
 
 def test_cleanup_all_deliberately_preserves_reviewed_decisions() -> None:

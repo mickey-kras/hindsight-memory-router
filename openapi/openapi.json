@@ -34,12 +34,12 @@
       "get": {
         "operationId": "getHealth",
         "summary": "Check router readiness",
-        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response is the validated Hindsight /health JSON returned unchanged.",
+        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
         "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
+            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -90,12 +90,12 @@
       "get": {
         "operationId": "getHealthReadiness",
         "summary": "Check router readiness",
-        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response is the validated Hindsight /health JSON returned unchanged.",
+        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
         "tags": ["Service"],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
+            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -138,6 +138,16 @@
           },
           "502": {
             "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The router has no initialized Hindsight gateway or a cold concurrent probe failed fast.",
             "content": {
               "application/json": {
                 "schema": {
@@ -612,7 +622,7 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. The Hindsight health response is returned unchanged.",
+            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
             "content": {
               "application/json": {
                 "schema": {}

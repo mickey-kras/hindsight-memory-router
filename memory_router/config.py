@@ -7,6 +7,8 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from .logging import log_event
+from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
 
 logger = logging.getLogger(__name__)
@@ -63,8 +65,8 @@ def load_registry(path: str | None = None) -> WriterRegistry:
     except ValidationError as exc:
         raise RuntimeError("invalid writer registry") from exc
     for writer_id in registry.writers:
-        if not writer_id.strip():
-            raise RuntimeError("writer id cannot be empty")
+        if not WRITER_ID_PATTERN.fullmatch(writer_id):
+            raise RuntimeError("writer id must match [A-Za-z0-9._:-]{1,128}")
     return registry
 
 
@@ -81,23 +83,63 @@ def assert_auth_environment() -> None:
     anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
     if not router_token:
         if anonymous:
-            logger.warning("MEMORY_ROUTER_ALLOW_ANONYMOUS=true; Development only")
+            log_event(
+                logger,
+                "warning",
+                "configuration_warning",
+                operation="configuration",
+                outcome="degraded",
+                reason="anonymous-mode",
+            )
         else:
-            logger.warning("MEMORY_ROUTER_TOKEN is not set; router endpoints fail-closed")
+            log_event(
+                logger,
+                "warning",
+                "configuration_warning",
+                operation="configuration",
+                outcome="degraded",
+                reason="router-token-missing",
+            )
     legacy = os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN")
     if legacy:
-        logger.warning(
-            "legacy admin migration superuser is active; migrate clients to scoped tokens and unset MEMORY_ROUTER_ADMIN_TOKEN"
+        log_event(
+            logger,
+            "warning",
+            "configuration_warning",
+            operation="configuration",
+            outcome="degraded",
+            reason="legacy-admin-token",
         )
         return
     if not os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN") and not os.environ.get(
         "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"
     ):
-        logger.warning("admin read token is not set; admin read endpoints fail-closed")
+        log_event(
+            logger,
+            "warning",
+            "configuration_warning",
+            operation="configuration",
+            outcome="degraded",
+            reason="admin-read-token-missing",
+        )
     if not os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"):
-        logger.warning("admin review token is not set; review endpoints fail-closed")
+        log_event(
+            logger,
+            "warning",
+            "configuration_warning",
+            operation="configuration",
+            outcome="degraded",
+            reason="admin-review-token-missing",
+        )
     if not os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"):
-        logger.warning("admin cleanup token is not set; cleanup endpoint fails-closed")
+        log_event(
+            logger,
+            "warning",
+            "configuration_warning",
+            operation="configuration",
+            outcome="degraded",
+            reason="admin-cleanup-token-missing",
+        )
 
 
 def assert_deployment_mode(database_url: str) -> None:

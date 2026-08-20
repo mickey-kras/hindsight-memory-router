@@ -34,17 +34,18 @@ async def test_auth_failure_auditor_records_and_survives_store_failure(
 ) -> None:
     store = SimpleNamespace(put=AsyncMock())
     auditor = auth.AuthFailureAuditor(store)
-    await auditor.record("router")
-    await auditor.record("router")
+    auditor.log_failure()
+    await auditor.persist("router")
+    auditor.log_failure()
+    await auditor.persist("router")
     assert store.put.await_count == 2
-    assert caplog.text.count("auth failed route_group=router") == 1
+    assert caplog.text.count("authentication_failed") == 1
 
     caplog.clear()
     store.put.side_effect = RuntimeError("down")
-    auditor.last.clear()
-    await auditor.record("admin")
-    await auditor.record("admin")
-    assert caplog.text.count("could not record auth_failed security event route_group=admin") == 1
+    await auditor.persist("admin")
+    await auditor.persist("admin")
+    assert caplog.text.count("authentication_audit_failed") == 1
 
 
 def test_environment_parsers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,8 +116,22 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
             }
         )
     )
-    with pytest.raises(RuntimeError, match="writer id cannot be empty"):
+    with pytest.raises(RuntimeError, match="writer id must match"):
         config.load_registry(str(blank))
+
+    invalid_writer = json.loads(valid.read_text())
+    for writer_id in ("my writer", "agent-ü", "w" * 129):
+        invalid_writer["writers"] = {
+            writer_id: {
+                "role": "dev",
+                "source": "application",
+                "write_bank": "dev",
+                "read_banks": ["dev"],
+            }
+        }
+        invalid.write_text(json.dumps(invalid_writer))
+        with pytest.raises(RuntimeError, match="writer id must match"):
+            config.load_registry(str(invalid))
 
     cross = tmp_path / "cross.json"
     cross.write_text(
@@ -154,12 +169,25 @@ def test_environment_assertions(
     monkeypatch.delenv("QUARANTINE_PRIVATE_KEY")
 
     config.assert_auth_environment()
-    assert "fail-closed" in caplog.text
+    assert {
+        record.reason  # type: ignore[attr-defined]
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    } == {
+        "router-token-missing",
+        "admin-read-token-missing",
+        "admin-review-token-missing",
+        "admin-cleanup-token-missing",
+    }
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
     monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
     config.assert_auth_environment()
-    assert "Development only" in caplog.text and "legacy admin" in caplog.text
+    assert {
+        record.reason  # type: ignore[attr-defined]
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    } == {"anonymous-mode", "legacy-admin-token"}
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import time
 from typing import Any
 
+from .logging import log_event
 from .observability import current_request_id
 from .timestamps import iso_now
 
@@ -44,16 +44,21 @@ def admin_token_recognized(authorization: str | None, tokens: dict[str, str | No
 class AuthFailureAuditor:
     def __init__(self, store: Any) -> None:
         self.store = store
-        self.last: dict[str, int] = {}
 
-    async def record(self, route_group: str) -> None:
-        now = int(time.time() * 1000)
-        event_key = f"event:{route_group}"
-        if now - self.last.get(event_key, 0) >= 60_000:
-            self.last[event_key] = now
-            logger.warning(
-                "auth failed route_group=%s request_id=%s", route_group, current_request_id()
-            )
+    def log_failure(self, route_class: str | None = None) -> None:
+        log_event(
+            logger,
+            "warning",
+            "authentication_failed",
+            request_id=current_request_id(),
+            operation="authenticate",
+            error_kind="invalid-credentials",
+            http_status=401,
+            outcome="failed",
+            route_class=route_class or "unmatched",
+        )
+
+    async def persist(self, route_group: str, route_class: str | None = None) -> None:
         try:
             await self.store.put(
                 {
@@ -66,12 +71,14 @@ class AuthFailureAuditor:
                 }
             )
         except Exception as exc:
-            error_key = f"error:{route_group}"
-            if now - self.last.get(error_key, 0) >= 60_000:
-                self.last[error_key] = now
-                logger.error(
-                    "could not record auth_failed security event route_group=%s request_id=%s error_type=%s",
-                    route_group,
-                    current_request_id(),
-                    type(exc).__name__,
-                )
+            log_event(
+                logger,
+                "error",
+                "authentication_audit_failed",
+                error=exc,
+                request_id=current_request_id(),
+                operation="security_audit",
+                error_kind="unexpected",
+                outcome="failed",
+                route_class=route_class or "unmatched",
+            )

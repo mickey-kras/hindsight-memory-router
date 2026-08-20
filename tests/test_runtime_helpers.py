@@ -258,7 +258,13 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     assert calls == [
         (
             (main_module.app,),
-            {"host": str(IPv4Address(0)), "port": 8891, "access_log": False},
+            {
+                "host": str(IPv4Address(0)),
+                "port": 8891,
+                "access_log": False,
+                "log_config": None,
+                "log_level": "info",
+            },
         )
     ]
 
@@ -327,6 +333,8 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     assert runtime.database is primary_db
     assert runtime.rate_limit_database is rate_db
     assert runtime.quarantine_limiter is rate_limiter
+    assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
+    assert runtime.auth_limiter is not rate_limiter
     assert hindsight_limiter_calls == [rate_limiter]
     assert runtime.hindsight is hindsight
     assert runtime.policy is policy
@@ -365,4 +373,4 @@ async def test_runtime_stop_and_sweep(
     monkeypatch.setattr(app_module, "sweep_expired", AsyncMock(side_effect=RuntimeError("boom")))
     with pytest.raises(RuntimeError, match="stop"):
         await rt._sweep_loop(1, 0)
-    assert "sweeper failed" in caplog.text
+    assert "quarantine_sweeper_failed" in caplog.text

@@ -27,10 +27,12 @@ _UNSUPPORTED_FACADE_FEATURES = (
 
 
 class _HindsightHealthResponse(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     status: Literal["healthy"]
     database: Literal["connected"]
+    db_acquire_ms: float | None = None
+    db_pool_waiting: int | None = None
 
 
 class _HindsightFeaturesInfo(BaseModel):
@@ -149,12 +151,12 @@ class HindsightGateway:
     async def health(self) -> dict[str, Any]:
         value = await self._request("health", "GET", "/health")
         try:
-            _HindsightHealthResponse.model_validate(value)
+            response = _HindsightHealthResponse.model_validate(value)
         except ValidationError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation="health", method="GET"
             ) from exc
-        return cast(dict[str, Any], value)
+        return response.model_dump(exclude_none=True)
 
     async def version(self) -> dict[str, Any]:
         value = await self._request("version", "GET", "/version")

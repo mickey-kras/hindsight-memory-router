@@ -8,6 +8,7 @@ from .canonical import canonical_json, sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
+from .logging import log_event
 from .observability import current_request_id
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 from .timestamps import iso_now
@@ -503,9 +504,28 @@ class RouterPolicy:
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
-        logger.warning(
-            "recall degraded event=%s request_id=%s details=%s",
+        raw_error_kind = (
+            details.get("error_kind") or details.get("error_type") or details.get("code")
+        )
+        error_kind = {
+            "quarantine_capacity_exceeded": "capacity",
+            "quarantine_writer_capacity_exceeded": "capacity",
+            "quarantine_rate_limited": "rate-limit",
+            "quarantine_item_too_large": "payload-too-large",
+            "quarantine_request_in_review": "conflict",
+            "quarantine_item_in_review": "conflict",
+        }.get(str(raw_error_kind), raw_error_kind)
+        log_event(
+            logger,
+            "error" if event == "recall_supplemental_audit_unavailable" else "warning",
             event,
-            current_request_id(),
-            details,
+            request_id=current_request_id(),
+            operation="recall",
+            upstream_method="POST",
+            error_kind=error_kind,
+            upstream_status=details.get("upstream_status"),
+            http_status=details.get("status") if isinstance(details.get("status"), int) else None,
+            outcome="degraded",
+            route_class="memory",
+            writer_id=details.get("writer_id"),
         )

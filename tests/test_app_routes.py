@@ -18,6 +18,10 @@ def payload(response: object) -> object:
 
 @pytest.fixture(autouse=True)
 def runtime_state() -> None:
+    app_module._readiness_log_state = app_module._ReadinessLogState()
+    app_module._storage_readiness_log_state = app_module._ReadinessLogState(
+        "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
+    )
     app_module.runtime.allow_anonymous = True
     app_module.runtime.router_token = None
     app_module.runtime.admin_tokens = {
@@ -31,7 +35,10 @@ def runtime_state() -> None:
     app_module.runtime.admin_write_max = 30
     app_module.runtime.admin_window = 60_000
     app_module.runtime.admin_limiter = SimpleNamespace(consume_many=AsyncMock())
-    app_module.runtime.auditor = SimpleNamespace(record=AsyncMock())
+    app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.auth_failure_max = 120
+    app_module.runtime.auth_failure_window = 60_000
+    app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
 
 
 @pytest.mark.asyncio
@@ -63,17 +70,23 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     response = await app_module.ready()
     assert response.status_code == 200
     assert payload(response) == upstream_health
+    cached = app_module._readiness_cache
+    assert cached is not None and isinstance(cached[2], bytes)
+    assert app_module._readiness_cache is cached
 
     repository.ping.side_effect = RuntimeError("database down")
+    hindsight.health.reset_mock()
+    app_module._readiness_cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
-    assert hindsight.health.await_count == 3
+    hindsight.health.assert_awaited_once()
 
     repository.ping.side_effect = None
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
+    app_module._readiness_cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -85,11 +98,11 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     gateway = HindsightGatewayError("network", operation="recall", method="POST")
     response = await app_module.http_error_handler(request("GET", "/"), gateway)
     assert response.status_code == 502 and payload(response)["error"] == "hindsight_unavailable"
-    assert "upstream request failed" in caplog.text
+    assert "hindsight_request_failed" in caplog.text
     caplog.clear()
     response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("failure"))
     assert response.status_code == 500 and payload(response) == {"error": "internal error"}
-    assert "request failed" in caplog.text
+    assert "request_failed" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -118,12 +131,14 @@ async def test_router_and_admin_auth_failures_are_audited() -> None:
     auth_value = "route" + "r"
     app_module.runtime.router_token = auth_value
     assert not await app_module._router_auth(request("GET", "/version"))
-    app_module.runtime.auditor.record.assert_awaited_with("router")
+    app_module.runtime.auditor.log_failure.assert_called_with("version")
+    app_module.runtime.auditor.persist.assert_awaited_with("router", "version")
     assert await app_module._router_auth(
         request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"})
     )
     assert not await app_module._admin_auth(request("GET", "/admin/quarantine/stats"), "read")
-    app_module.runtime.auditor.record.assert_awaited_with("admin")
+    app_module.runtime.auditor.log_failure.assert_called_with("admin")
+    app_module.runtime.auditor.persist.assert_awaited_with("admin", "admin")
     assert await app_module._admin_auth(
         request(
             "GET",
@@ -132,6 +147,20 @@ async def test_router_and_admin_auth_failures_are_audited() -> None:
         ),
         "read",
     )
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_is_logged_but_not_persisted_after_limiter_rejects() -> None:
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.router_token = "router-token"  # noqa: S105 - synthetic test credential
+    app_module.runtime.auth_limiter.consume_many.side_effect = HttpError(429, "limited", "limited")
+
+    with pytest.raises(HttpError) as limited:
+        await app_module._router_auth(request("GET", "/version"))
+
+    assert limited.value.code == "auth_rate_limited"
+    app_module.runtime.auditor.log_failure.assert_called_once_with("version")
+    app_module.runtime.auditor.persist.assert_not_awaited()
 
 
 @pytest.mark.asyncio

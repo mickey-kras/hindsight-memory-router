@@ -2,7 +2,7 @@
 
 Memory Router separates router access from quarantine administration.
 
-Router retain/recall/version access uses `MEMORY_ROUTER_TOKEN`. If no router token is configured, those endpoints fail closed unless the development-only `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` override is explicitly enabled.
+Router retain/recall access uses `MEMORY_ROUTER_TOKEN`. If no router token is configured, those endpoints fail closed unless the development-only `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` override is enabled. `/version` is unauthenticated for Hindsight compatibility.
 
 Admin capabilities use separate scoped tokens:
 
@@ -12,7 +12,7 @@ Admin capabilities use separate scoped tokens:
 
 `MEMORY_ROUTER_ADMIN_TOKEN` remains a legacy migration superuser for every admin route and should be unset after clients move to scoped tokens.
 
-Token comparison is constant-time. Token values are never logged or stored in quarantine. Failed authentication creates one deduplicated `auth_failed` item per route group and does not consume normal admin quota. Admin reads and writes have separate process-local sliding-window limits.
+Token comparison is constant-time. Token values are never logged or stored. Failed authentication is logged and passes through a process-local failure gate. Admitted invalid-token attempts create one deduplicated `auth_failed` item per route group; gate-rejected and valid-but-mis-scoped attempts are not persisted. Mis-scoped attempts consume the failure budget. Admin reads and writes have separate process-local limits.
 
 ## Scope boundaries
 
