@@ -63,11 +63,11 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout reviewed Hindsight OpenClaw sources
+      - name: Checkout current Hindsight OpenClaw sources
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: vectorize-io/hindsight
-          ref: a544b1965e0646ee230fa59b00ff5d791f77501c
+          ref: main
           path: .upstream/hindsight
           persist-credentials: false
 
