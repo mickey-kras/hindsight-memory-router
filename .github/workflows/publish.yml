@@ -121,7 +121,7 @@ jobs:
           --ignore-unfixed
           "${SOURCE_IMAGE}"
 
-      - name: Trivy publish gate
+      - name: Trivy critical gate
         if: github.event_name != 'pull_request'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
