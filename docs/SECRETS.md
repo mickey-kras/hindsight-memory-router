@@ -25,7 +25,7 @@ Rotate it if it is ever pasted into chat, logs, shell history, or a public place
 
 ```text
 SONAR_TOKEN=<project analysis token>
-SONAR_HOST_URL=http://infosphere.bullhead-kitefin.ts.net:9000
+SONAR_HOST_URL=<SonarQube base URL reachable from the GitHub runner>
 ```
 
 The SonarQube project must already exist with key `hindsight-memory-router`.
@@ -36,7 +36,7 @@ The SonarQube project must already exist with key `hindsight-memory-router`.
 TAILSCALE_AUTHKEY=<Tailscale auth key>
 ```
 
-Current setup: reusable, ephemeral, pre-approved, 90-day expiry. It is untagged because OAuth clients are not available in this tailnet's current plan/UI. Replace it with a tagged OAuth client when that becomes available, and rotate it before expiry.
+Use a reusable, ephemeral, pre-approved key with the minimum ACL scope. Prefer a tagged OAuth client when the tailnet supports it. Set an expiry and rotate before it.
 
 ## Built-in GitHub secrets/tokens
 
