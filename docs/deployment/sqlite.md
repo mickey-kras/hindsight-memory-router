@@ -12,10 +12,10 @@ In the Docker image, the working directory is `/app`, so the default resolves to
 
 ## Upgrade from the former default path
 
-The built-in default database URL changed from the host-specific path:
+The built-in default database URL changed from a host-specific absolute path:
 
 ```text
-sqlite:/volume1/reports/hindsight-quarantine/quarantine.db
+sqlite:<legacy-host-path>/quarantine.db
 ```
 
 to:
