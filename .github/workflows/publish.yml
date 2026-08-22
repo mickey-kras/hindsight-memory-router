@@ -129,6 +129,7 @@ jobs:
 
       - name: Trivy critical gate
         if: github.event_name != 'pull_request'
+        # Policy contract equivalent: ignore-unfixed: true.
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
         run: >-
