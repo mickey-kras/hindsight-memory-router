@@ -10,7 +10,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 permissions:
   contents: read
@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       packages: write
       security-events: write
       id-token: write
@@ -32,13 +33,14 @@ jobs:
       SOURCE_IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-
-      - uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40 # v2
-        with:
-          egress-policy: audit
+          persist-credentials: false
 
       - name: Connect to the tailnet
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -50,7 +52,7 @@ jobs:
 
       - name: Set up Python
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.12'
           cache: pip
@@ -74,19 +76,22 @@ jobs:
 
       - name: SonarQube quality gate
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        timeout-minutes: 5
+        timeout-minutes: 6
         uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
+        with:
+          pollingTimeoutSec: 270
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
 
       - name: Build image once
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           load: true
+          provenance: false
           tags: ${{ env.SOURCE_IMAGE }}
 
       - name: Trivy image report
@@ -98,14 +103,15 @@ jobs:
           severity: ${{ github.event_name == 'pull_request' && 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL' || 'CRITICAL,HIGH' }}
           ignore-unfixed: ${{ github.event_name != 'pull_request' }}
           exit-code: 0
+          limit-severities-for-sarif: true
           version: v0.71.2
 
       - name: Verify Trivy SARIF
         run: test -s trivy-results.sarif
 
       - name: Upload Trivy SARIF
-        if: success() && hashFiles('trivy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@5595ccaf912efad79be6eef63a5619ff05969be3 # v4.37.6
         with:
           sarif_file: trivy-results.sarif
 
@@ -123,19 +129,22 @@ jobs:
 
       - name: Trivy critical gate
         if: github.event_name != 'pull_request'
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ env.SOURCE_IMAGE }}
-          format: table
-          severity: HIGH,CRITICAL
-          ignore-unfixed: true
-          exit-code: 1
-          version: v0.71.2
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+        run: >-
+          trivy image
+          --exit-code 1
+          --exit-on-eol 1
+          --severity HIGH,CRITICAL
+          --ignore-unfixed
+          "${SOURCE_IMAGE}"
 
       - name: Select publish tags
         if: github.event_name == 'push'
         id: release
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -148,13 +157,20 @@ jobs:
               ;;
             refs/tags/v*)
               version="${GITHUB_REF_NAME}"
-              if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+              if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
                 echo "Invalid release tag: ${version}" >&2
                 exit 1
               fi
               git fetch --no-tags origin main
               if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
                 echo "Tag ${version} is not reachable from main." >&2
+                exit 1
+              fi
+              if ! gh api --paginate \
+                "/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?branch=main&event=push&status=success&per_page=100" \
+                --jq '.workflow_runs[] | select(.head_sha == env.GITHUB_SHA) | .id' \
+                | grep -q .; then
+                echo "Commit ${GITHUB_SHA} has no successful main publish run." >&2
                 exit 1
               fi
               channel=stable-tag
@@ -219,9 +235,12 @@ jobs:
 
       - name: Sign published images
         if: github.event_name == 'push'
+        env:
+          GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
+          DOCKERHUB_DIGEST: ${{ steps.push.outputs.dockerhub_digest }}
         run: |
-          cosign sign --yes "${IMAGE_GHCR}@${{ steps.push.outputs.ghcr_digest }}"
-          cosign sign --yes "${IMAGE_DOCKERHUB}@${{ steps.push.outputs.dockerhub_digest }}"
+          cosign sign --yes "${IMAGE_GHCR}@${GHCR_DIGEST}"
+          cosign sign --yes "${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}"
 
       - name: Attest GHCR image
         if: github.event_name == 'push'
@@ -230,6 +249,7 @@ jobs:
           subject-name: ${{ env.IMAGE_GHCR }}
           subject-digest: ${{ steps.push.outputs.ghcr_digest }}
           push-to-registry: true
+          create-storage-record: false
 
       - name: Attest Docker Hub image
         if: github.event_name == 'push'
@@ -238,24 +258,30 @@ jobs:
           subject-name: ${{ env.IMAGE_DOCKERHUB }}
           subject-digest: ${{ steps.push.outputs.dockerhub_digest }}
           push-to-registry: true
+          create-storage-record: false
 
       - name: Record image digests
         if: github.event_name == 'push'
+        env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
+          VERSION: ${{ steps.release.outputs.version }}
+          GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
+          DOCKERHUB_DIGEST: ${{ steps.push.outputs.dockerhub_digest }}
         run: |
           {
             echo "commit=${GITHUB_SHA}"
-            echo "channel=${{ steps.release.outputs.channel }}"
-            echo "version=${{ steps.release.outputs.version }}"
-            echo "ghcr=${IMAGE_GHCR}@${{ steps.push.outputs.ghcr_digest }}"
-            echo "dockerhub=${IMAGE_DOCKERHUB}@${{ steps.push.outputs.dockerhub_digest }}"
+            echo "channel=${CHANNEL}"
+            echo "version=${VERSION}"
+            echo "ghcr=${IMAGE_GHCR}@${GHCR_DIGEST}"
+            echo "dockerhub=${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}"
           } | tee image-digests.txt
           {
             echo "## Published image digests"
             echo
-            echo "- Channel: \`${{ steps.release.outputs.channel }}\`"
-            echo "- Version: \`${{ steps.release.outputs.version }}\`"
-            echo "- \`${IMAGE_GHCR}@${{ steps.push.outputs.ghcr_digest }}\`"
-            echo "- \`${IMAGE_DOCKERHUB}@${{ steps.push.outputs.dockerhub_digest }}\`"
+            echo "- Channel: \`${CHANNEL}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- \`${IMAGE_GHCR}@${GHCR_DIGEST}\`"
+            echo "- \`${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image digests
@@ -280,7 +306,7 @@ jobs:
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           EOF
           )
-          number="$(gh issue list --state open --limit 100 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
+          number="$(gh issue list --state open --search 'in:title "Main publish pipeline blocked"' --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
           if [ -n "$number" ]; then
             gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
           else
