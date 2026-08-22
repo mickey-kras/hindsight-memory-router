@@ -353,7 +353,11 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
 async def test_runtime_stop_cancels_sweeper_and_closes_resources() -> None:
     runtime = app_module.Runtime()
     blocker = asyncio.Event()
-    runtime.sweeper = asyncio.create_task(blocker.wait())
+
+    async def wait_forever() -> None:
+        await blocker.wait()
+
+    runtime.sweeper = asyncio.create_task(wait_forever())
     runtime.hindsight = SimpleNamespace(close=AsyncMock())
     runtime.repository = SimpleNamespace(close=AsyncMock())
 
