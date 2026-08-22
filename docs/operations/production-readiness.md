@@ -1,5 +1,7 @@
 # Production readiness
 
+[Application log schema and safety rules](logging.md).
+
 This document tracks production-readiness findings against the current runtime interaction map. It is intentionally separate from the architecture reference so current behavior and recommended changes remain distinct.
 
 See [Runtime interaction map](../architecture/runtime-interactions.md) for the as-built workflows.
@@ -23,7 +25,7 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Router provenance source | Needs correction | Runtime defaults policy source to `openclaw` instead of using the agent-neutral registry source |
 | Build/publish artifact identity | Implemented; live validation pending | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
 | SonarQube Community gate | Implemented; live validation pending | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
-| Structured logging / centralized logs | Pending | Adopt structured JSON logging with Grafana Loki + Grafana |
+| Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
 | Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
 
 ## Blocker: ambiguous review side-effect reconciliation
@@ -81,7 +83,7 @@ SonarQube Community is an additional `main` maintainability/code-quality gate. A
 
 ## Structured logging and centralized logs
 
-Adopt structured JSON application logging and centralize logs with Grafana Loki + Grafana.
+Structured JSON logging is done. Grafana Loki + Grafana deployment is pending.
 
 Logging must expose stable machine-queryable fields such as request ID, event, operation, writer/bank identity where safe, status/error code, and duration while never logging request bodies, recalled memory content, credentials, secrets, or decrypted quarantine payloads.
 
@@ -100,7 +102,7 @@ Health endpoint semantics are now complete:
 /ready        -> deprecated alias of /health/ready
 ```
 
-The readiness checks run router storage and Hindsight health concurrently. Success returns the validated Hindsight `/health` JSON unchanged; either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
+The readiness checks run router storage and Hindsight health concurrently. Success returns Hindsight's validated supported health fields; unknown upstream fields are omitted. Either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
 
 Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
@@ -114,6 +116,8 @@ Operational telemetry is still incomplete. Recommended metrics/alerts include:
 
 An alert on any sustained `review_side_effect_started` item is especially important until explicit reconciliation exists.
 
+Use metrics, not per-request logs, for quarantine 413/429/507 responses, general 429 responses, and aged `review_side_effect_started` items.
+
 ## Review order
 
 Work through unresolved items in this order:
@@ -121,7 +125,7 @@ Work through unresolved items in this order:
 1. ambiguous review side-effect reconciliation;
 2. provenance source correction;
 3. validate the build/publish and SonarQube gates on the first `main` run;
-4. structured JSON logging + Grafana Loki/Grafana;
+4. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
 5. production metrics and alerts.
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.
