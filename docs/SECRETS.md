@@ -21,6 +21,23 @@ Scope it only for publishing this image if Docker Hub allows scoped tokens for y
 Rotate it if it is ever pasted into chat, logs, shell history, or a public place.
 ```
 
+## Required for SonarQube
+
+```text
+SONAR_TOKEN=<project analysis token>
+SONAR_HOST_URL=http://infosphere.bullhead-kitefin.ts.net:9000
+```
+
+The SonarQube project must already exist with key `hindsight-memory-router`.
+
+## Required for private SonarQube access
+
+```text
+TAILSCALE_AUTHKEY=<Tailscale auth key>
+```
+
+Current setup: reusable, ephemeral, pre-approved, 90-day expiry. It is untagged because OAuth clients are not available in this tailnet's current plan/UI. Replace it with a tagged OAuth client when that becomes available, and rotate it before expiry.
+
 ## Built-in GitHub secrets/tokens
 
 No manual setup needed:
