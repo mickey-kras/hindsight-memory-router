@@ -362,10 +362,11 @@ class Runtime:
     async def stop(self) -> None:
         if self.sweeper:
             self.sweeper.cancel()
-            try:
-                await self.sweeper
-            except asyncio.CancelledError:
-                pass
+            (sweeper_result,) = await asyncio.gather(self.sweeper, return_exceptions=True)
+            if isinstance(sweeper_result, BaseException) and not isinstance(
+                sweeper_result, asyncio.CancelledError
+            ):
+                raise sweeper_result
         if self.hindsight:
             await self.hindsight.close()
         if self.rate_limit_database:
