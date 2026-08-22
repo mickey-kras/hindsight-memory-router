@@ -51,7 +51,7 @@ jobs:
 
       - name: Set up Python
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.12'
           cache: pip
@@ -118,26 +118,28 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
-        run: >-
-          trivy image
-          --exit-code 1
-          --exit-on-eol 1
-          --severity MEDIUM,HIGH,CRITICAL
-          --ignore-unfixed
-          "${SOURCE_IMAGE}"
+        run: |
+          command -v trivy >/dev/null
+          trivy image \
+            --exit-code 1 \
+            --exit-on-eol 1 \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --ignore-unfixed \
+            "${SOURCE_IMAGE}"
 
       - name: Trivy critical gate
         if: github.event_name != 'pull_request'
         # Policy contract equivalent: ignore-unfixed: true.
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
-        run: >-
-          trivy image
-          --exit-code 1
-          --exit-on-eol 1
-          --severity HIGH,CRITICAL
-          --ignore-unfixed
-          "${SOURCE_IMAGE}"
+        run: |
+          command -v trivy >/dev/null
+          trivy image \
+            --exit-code 1 \
+            --exit-on-eol 1 \
+            --severity HIGH,CRITICAL \
+            --ignore-unfixed \
+            "${SOURCE_IMAGE}"
 
       - name: Select publish tags
         if: github.event_name == 'push'
@@ -166,10 +168,10 @@ jobs:
                 echo "Tag ${version} is not reachable from main." >&2
                 exit 1
               fi
-              if ! gh api --paginate \
-                "/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?branch=main&event=push&status=success&per_page=100" \
-                --jq '.workflow_runs[] | select(.head_sha == env.GITHUB_SHA) | .id' \
-                | grep -q .; then
+              run_ids="$(gh api \
+                "/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?branch=main&event=push&status=success&head_sha=${GITHUB_SHA}&per_page=100" \
+                --jq '.workflow_runs[] | select(.head_sha == env.GITHUB_SHA) | .id')"
+              if [[ -z "${run_ids}" ]]; then
                 echo "Commit ${GITHUB_SHA} has no successful main publish run." >&2
                 exit 1
               fi
@@ -209,10 +211,19 @@ jobs:
         if: github.event_name == 'push'
         id: push
         env:
+          CHANNEL: ${{ steps.release.outputs.channel }}
           GHCR_TAGS: ${{ steps.release.outputs.ghcr_tags }}
           DOCKERHUB_TAGS: ${{ steps.release.outputs.dockerhub_tags }}
         run: |
           set -euo pipefail
+
+          if [[ "${CHANNEL}" == "main" ]]; then
+            git fetch --no-tags origin main
+            if [[ "${GITHUB_SHA}" != "$(git rev-parse origin/main)" ]]; then
+              echo "Refusing to publish an outdated main commit." >&2
+              exit 1
+            fi
+          fi
 
           for tag in ${GHCR_TAGS} ${DOCKERHUB_TAGS}; do
             docker tag "${SOURCE_IMAGE}" "$tag"
@@ -306,7 +317,7 @@ jobs:
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           EOF
           )
-          number="$(gh issue list --state open --search 'in:title "Main publish pipeline blocked"' --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
+          number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
           if [ -n "$number" ]; then
             gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
           else
