@@ -23,8 +23,8 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Non-idempotent review side-effect protection | Ready | Explicit side-effect checkpoint states prevent blind replay |
 | Ambiguous review side-effect reconciliation | Blocked | No supported transition out of `review_side_effect_started` after an ambiguous provider outcome |
 | Router provenance source | Needs correction | Runtime defaults policy source to `openclaw` instead of using the agent-neutral registry source |
-| Build/publish artifact identity | Blocked | Trivy scans one build; publish jobs rebuild independently before pushing/signing |
-| SonarQube Community gate | Pending | Planned static quality gate on `main` is not present |
+| Build/publish artifact identity | Implemented; live validation pending | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
+| SonarQube Community gate | Implemented; live validation pending | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
 | Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
 | Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
 
@@ -54,36 +54,20 @@ review_side_effect_started
 
 Both transitions should require the expected quarantine snapshot/hash and append explicit audit events.
 
-## Blocker: scanned image is not guaranteed to be the published image
+## Build/publish artifact identity
 
-The current publish workflow performs:
-
-```text
-container job:
-  build image A
-  scan image A
-
-publish job:
-  build image B -> GHCR
-  build image C -> Docker Hub
-  sign/attest B and C
-```
-
-Therefore the image that passes Trivy is not guaranteed to be byte-identical to either published image.
-
-The Dockerfile also runs `apk upgrade --no-cache`, so two builds from the same source commit can consume different mutable Alpine repository state even though the base image is digest-pinned.
-
-Required target:
+The publish workflow now performs:
 
 ```text
 source commit
 -> build once
--> immutable OCI artifact/digest
--> scan exact artifact
--> publish exact artifact to both registries
--> verify digest identity
--> sign/attest exact published digest
+-> scan exact local image
+-> push the same image to GHCR and Docker Hub
+-> assert registry digest equality
+-> sign/attest exact published digests
 ```
+
+Live validation remains pending for the first successful `main` publication.
 
 ## Provenance source mismatch
 
@@ -95,7 +79,7 @@ Target: derive the provenance source from the resolved writer/registry policy or
 
 ## SonarQube Community
 
-Add SonarQube Community as a static quality gate on `main`. Keep the existing CI/security gates; SonarQube is an additional maintainability/code-quality signal rather than a replacement for them.
+SonarQube Community is an additional `main` maintainability/code-quality gate. A failed gate prevents publication and creates or updates the main-pipeline tech-debt issue. Release tags publish only commits that already completed this workflow successfully on `main`.
 
 ## Structured logging and centralized logs
 
@@ -139,10 +123,9 @@ Use metrics, not per-request logs, for quarantine 413/429/507 responses, general
 Work through unresolved items in this order:
 
 1. ambiguous review side-effect reconciliation;
-2. build-once / scan-once / publish-same-artifact;
-3. provenance source correction;
-4. SonarQube Community gate;
-5. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
-6. production metrics and alerts.
+2. provenance source correction;
+3. validate the build/publish and SonarQube gates on the first `main` run;
+4. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
+5. production metrics and alerts.
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.
