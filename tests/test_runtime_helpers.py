@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-
 from ipaddress import IPv4Address
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
