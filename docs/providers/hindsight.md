@@ -16,6 +16,8 @@ http://hindsight:8888
 
 Override it with `HINDSIGHT_BASE_URL`. Set `HINDSIGHT_API_KEY` when the Hindsight deployment requires authentication.
 
+The default HTTP endpoint is for an isolated Docker network shared only by Memory Router and Hindsight. Use HTTPS whenever Hindsight is routed outside that private network, especially when sending `HINDSIGHT_API_KEY`.
+
 Memory Router maps writer policy to Hindsight banks and enforces separate retain/recall request bounds and quotas before Hindsight calls.
 
 ## Failure mapping
