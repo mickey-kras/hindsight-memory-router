@@ -47,7 +47,6 @@ jobs:
         uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
-          targets: infosphere.bullhead-kitefin.ts.net
           use-cache: 'true'
 
       - name: Set up Python
