@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from ipaddress import IPv4Address
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -346,6 +348,44 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     hindsight.close.assert_awaited_once()
     rate_db.close.assert_awaited_once()
     repository.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_stop_cancels_sweeper_and_closes_resources() -> None:
+    runtime = app_module.Runtime()
+    blocker = asyncio.Event()
+    runtime.sweeper = asyncio.create_task(blocker.wait())
+    runtime.hindsight = SimpleNamespace(close=AsyncMock())
+    runtime.repository = SimpleNamespace(close=AsyncMock())
+
+    await runtime.stop()
+
+    assert runtime.sweeper.cancelled()
+    runtime.hindsight.close.assert_awaited_once()
+    runtime.repository.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_runtime_stop_propagates_external_cancellation() -> None:
+    runtime = app_module.Runtime()
+    cleanup_started = asyncio.Event()
+    cleanup_release = asyncio.Event()
+
+    async def sweep() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await cleanup_release.wait()
+
+    runtime.sweeper = asyncio.create_task(sweep())
+    stop_task = asyncio.create_task(runtime.stop())
+    await cleanup_started.wait()
+
+    stop_task.cancel()
+    cleanup_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await stop_task
 
 
 @pytest.mark.asyncio
