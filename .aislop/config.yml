@@ -1,5 +1,5 @@
 ci:
-  failBelow: 85
+  failBelow: 95
 
 exclude:
   - dist
@@ -11,3 +11,7 @@ rules:
   security/hardcoded-secret: error
   # Replaced by the deterministic allowlist in tests/test_hardcoded_urls.py.
   ai-slop/hardcoded-url: off
+
+quality:
+  maxFileLoc: 900
+  maxFunctionLoc: 150
