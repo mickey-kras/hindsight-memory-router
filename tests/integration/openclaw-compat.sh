@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: d11a312df2967e58f28287f1676150057ff5cba7fd85cbdf83a796c0cafe3623
+# integration-behavior-sha256: 0c5cb13b5d669c8f85b13fa0836eba5e7f96008dcded6d30ef049b159280deb4
 
 openclaw_request() {
   local method="$1"
@@ -62,6 +62,10 @@ openclaw_request POST "/v1/default/banks/main/memories/dry-run-extract" '{"items
 openclaw_request GET "/v1/default/banks/main/directives" >/dev/null
 openclaw_request POST "/v1/default/banks/main/operations/op-1/retry" >/dev/null
 openclaw_request GET "/v1/default/banks/main/knowledge-base/tree" >/dev/null
+folder_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/folders" -d '{"name":"Runbooks"}')"
+[[ "$folder_status" == "201" ]] || fail_check "knowledge-base folder create returned ${folder_status}"
+page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/pages" -d '{"title":"Runbook","content":"safe content"}')"
+[[ "$page_status" == "201" ]] || fail_check "knowledge-base page create returned ${page_status}"
 openclaw_request PATCH "/v1/default/banks/main/knowledge-base/nodes/node-1" '{"title":"Runbook"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests/stats" >/dev/null
