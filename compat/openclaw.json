@@ -15,11 +15,7 @@
     "client": "cd10dd9ca732b119977e1612c7010d4de9d7cc66",
     "facade_spec": "82dfec612de5e2d1a1da8088fc299e2308564c57"
   },
-  "plugin_client_methods": [
-    "createBank",
-    "recall",
-    "retain"
-  ],
+  "plugin_client_methods": ["createBank", "recall", "retain"],
   "agent_sdk_methods": [
     "createMentalModel",
     "deleteMentalModel",
@@ -31,53 +27,17 @@
     "updateMentalModel"
   ],
   "endpoints": [
-    [
-      "GET",
-      "/health"
-    ],
-    [
-      "GET",
-      "/version"
-    ],
-    [
-      "POST",
-      "/v1/default/banks/{bank_id}/memories"
-    ],
-    [
-      "POST",
-      "/v1/default/banks/{bank_id}/memories/recall"
-    ],
-    [
-      "PUT",
-      "/v1/default/banks/{bank_id}"
-    ],
-    [
-      "PATCH",
-      "/v1/default/banks/{bank_id}/config"
-    ],
-    [
-      "GET",
-      "/v1/default/banks/{bank_id}/mental-models"
-    ],
-    [
-      "POST",
-      "/v1/default/banks/{bank_id}/mental-models"
-    ],
-    [
-      "GET",
-      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
-    ],
-    [
-      "PATCH",
-      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
-    ],
-    [
-      "DELETE",
-      "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"
-    ],
-    [
-      "POST",
-      "/v1/default/banks/{bank_id}/reflect"
-    ]
+    ["GET", "/health"],
+    ["GET", "/version"],
+    ["POST", "/v1/default/banks/{bank_id}/memories"],
+    ["POST", "/v1/default/banks/{bank_id}/memories/recall"],
+    ["PUT", "/v1/default/banks/{bank_id}"],
+    ["PATCH", "/v1/default/banks/{bank_id}/config"],
+    ["GET", "/v1/default/banks/{bank_id}/mental-models"],
+    ["POST", "/v1/default/banks/{bank_id}/mental-models"],
+    ["GET", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["PATCH", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["DELETE", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
+    ["POST", "/v1/default/banks/{bank_id}/reflect"]
   ]
 }
