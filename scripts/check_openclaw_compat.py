@@ -33,7 +33,7 @@ def _upstream_success_statuses(source: str) -> dict[tuple[str, str], set[int]]:
             in_responses = False
         elif line == "      responses:":
             in_responses = True
-        elif in_responses and (match := re.fullmatch(r'        "(2\\d\\d)":', line)):
+        elif in_responses and (match := re.fullmatch(r'        "(2\d\d)":', line)):
             if path is not None and method is not None:
                 endpoints.setdefault((method, path), set()).add(int(match.group(1)))
     return endpoints
