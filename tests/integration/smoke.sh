@@ -338,7 +338,7 @@ pass_check
 
 begin_check "unsupported router and admin endpoints fail closed"
 denied_output="${root}/${tmp_dir}/denied-response.json"
-denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/memories/not-supported")"
+denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/export")"
 [[ "$denied_status" == "404" ]] || fail_check "unsupported router endpoint returned ${denied_status}"
 grep -q 'endpoint denied by memory-router policy' "$denied_output" || fail_check "unsupported router endpoint did not use policy denial"
 admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
