@@ -261,6 +261,22 @@ createServer(async (req, res) => {
       return send(res, 200, { success: true, memory_id: memoryIdValue });
     }
 
+    const facade = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/(.+)$/);
+    if (facade) {
+      const bankId = decodeURIComponent(facade[1]);
+      if (rejectForbiddenRouterTraffic(res, "facade", bankId)) return;
+      const body = method === "GET" || method === "DELETE" ? null : await readJson(req);
+      record({
+        kind: "facade",
+        method,
+        bank_id: bankId,
+        path: decodeURIComponent(facade[2]),
+        query: url.search,
+        body,
+      });
+      return send(res, 200, { ok: true });
+    }
+
     return send(res, 404, { error: "not found" });
   } catch {
     return send(res, 500, { error: "internal error" });
