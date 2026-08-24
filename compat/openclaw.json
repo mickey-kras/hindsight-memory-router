@@ -6,14 +6,14 @@
     "bank_defaults": "hindsight-integrations/openclaw/src/bank-defaults.ts",
     "agent_sdk": "hindsight-tools/hindsight-agent-sdk/src/index.ts",
     "client": "hindsight-clients/typescript/src/index.ts",
-    "facade_api": "hindsight-clients/go/api/openapi.yaml"
+    "facade_spec": "hindsight-clients/go/api/openapi.yaml"
   },
   "source_blob_shas": {
     "plugin": "280cca94dc412a81f06301e53985a2062d77f663",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
     "client": "cd10dd9ca732b119977e1612c7010d4de9d7cc66",
-    "facade_api": "82dfec612de5e2d1a1da8088fc299e2308564c57"
+    "facade_spec": "82dfec612de5e2d1a1da8088fc299e2308564c57"
   },
   "plugin_client_methods": [
     "createBank",
