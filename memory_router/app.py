@@ -35,6 +35,7 @@ from .db import (
     validate_storage,
 )
 from .errors import HttpError
+from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
@@ -795,78 +796,27 @@ async def dispatch(path: str, request: Request) -> Response:
         policy.limits.assert_retain_bounds(body)
         return JSONResponse(await policy.retain(writer_id, body))
 
-    bank_match = re.fullmatch(r"/v1/default/banks/([^/]+)", pathname)
-    config_match = re.fullmatch(r"/v1/default/banks/([^/]+)/config", pathname)
-    mental_list_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models", pathname)
-    mental_item_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models/([^/]+)", pathname)
-    reflect_match = re.fullmatch(r"/v1/default/banks/([^/]+)/reflect", pathname)
     facade = OpenClawFacade(policy)
-
-    if method == "PUT" and bank_match:
-        writer_id = _decode_path_segment(bank_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "bank body must be an object")
-        return JSONResponse(
-            await facade.forward(writer_id=writer_id, method=method, resource="", body=body)
-        )
-    if method == "PATCH" and config_match:
-        writer_id = _decode_path_segment(config_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "bank config body must be an object")
-        return JSONResponse(
-            await facade.forward(writer_id=writer_id, method=method, resource="config", body=body)
-        )
-    if method in {"GET", "POST"} and mental_list_match:
-        writer_id = _decode_path_segment(mental_list_match.group(1))
-        mental_body: dict[str, Any] | None = None
-        if method == "POST":
+    matched = match_facade_route(method, pathname)
+    if matched is not None:
+        route, route_match = matched
+        writer_id = _decode_path_segment(route_match.group("bank"))
+        params = {name: _decode_path_segment(route_match.group(name)) for name in route.params}
+        body: dict[str, Any] | None = None
+        if route.body != "none":
             raw_body = await _json_body(request)
             if not isinstance(raw_body, dict):
-                raise HttpError(400, "invalid_request", "mental-model body must be an object")
-            mental_body = raw_body
-        return JSONResponse(
-            await facade.forward(
-                writer_id=writer_id,
-                method=method,
-                resource="mental-models",
-                body=mental_body,
-                query=list(request.query_params.multi_items()),
-                read_operation=method == "GET",
-            )
-        )
-    if method in {"GET", "PATCH", "DELETE"} and mental_item_match:
-        writer_id = _decode_path_segment(mental_item_match.group(1))
-        mental_model_id = _decode_path_segment(mental_item_match.group(2))
-        body = None
-        if method == "PATCH":
-            raw_body = await _json_body(request)
-            if not isinstance(raw_body, dict):
-                raise HttpError(400, "invalid_request", "mental-model body must be an object")
+                raise HttpError(
+                    400, "invalid_request", f"{route.body_label} body must be an object"
+                )
             body = raw_body
-        value = await facade.forward(
-            writer_id=writer_id,
-            method=method,
-            resource="mental-models",
-            mental_model_id=mental_model_id,
-            body=body,
-            query=list(request.query_params.multi_items()),
-            read_operation=method == "GET",
-        )
-        return JSONResponse(value)
-    if method == "POST" and reflect_match:
-        writer_id = _decode_path_segment(reflect_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "reflect body must be an object")
         return JSONResponse(
             await facade.forward(
+                route=route,
                 writer_id=writer_id,
-                method=method,
-                resource="reflect",
+                params=params,
                 body=body,
-                read_operation=True,
+                query=list(request.query_params.multi_items()) or None,
             )
         )
 
