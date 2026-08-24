@@ -108,6 +108,19 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     }
 
 
+def test_openclaw_openapi_success_statuses_match_dispatch() -> None:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    paths = _openclaw_spec()["paths"]
+    assert isinstance(paths, dict)
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        responses = paths[path][route.method.lower()]["responses"]
+        assert str(route.success_status) in responses
+
+
 def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> None:
     spec = _openclaw_spec()
     paths = spec["paths"]
