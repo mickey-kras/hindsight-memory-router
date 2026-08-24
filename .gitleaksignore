@@ -1,2 +1,5 @@
 # Non-secret quarantine envelope schema field name required for wire/AAD compatibility.
 1e7bfc2871181baa0a056a5891586c5842b11775:memory_router/envelope.py:generic-api-key:15
+
+# Non-secret upstream OpenAPI path in the compatibility inventory.
+82543ed697a087f490fc728ccad32c273d331da3:compat/openclaw.json:generic-api-key:16
