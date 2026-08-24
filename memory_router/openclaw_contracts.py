@@ -41,6 +41,12 @@ class ReflectResponse(_Response):
     text: StrictStr
 
 
+def validate_facade_response(value: Any) -> None:
+    if value is None or isinstance(value, dict):
+        return
+    raise ValueError("facade response must be a JSON object or empty")
+
+
 def validate_openclaw_response(
     method: str, resource: str, mental_model_id: str | None, value: Any
 ) -> None:

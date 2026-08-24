@@ -6,15 +6,14 @@ from urllib.parse import quote, urlencode
 
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
+from .facade_routes import FacadeRoute
 from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
-from .openclaw_contracts import validate_openclaw_response
+from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 
 logger = logging.getLogger(__name__)
-
-_WRITE_METHODS = {"PUT", "PATCH", "POST", "DELETE"}
 
 
 class OpenClawFacade:
@@ -26,63 +25,60 @@ class OpenClawFacade:
     async def forward(
         self,
         *,
+        route: FacadeRoute,
         writer_id: str,
-        method: str,
-        resource: str,
+        params: dict[str, str],
         body: dict[str, Any] | None = None,
         query: list[tuple[str, str]] | None = None,
-        mental_model_id: str | None = None,
-        read_operation: bool = False,
     ) -> Any:
         writer = self.policy.registry.writers.get(writer_id)
         if writer is None:
             await self._audit(
                 writer_id,
                 "openclaw_unknown_writer",
-                {"method": method, "resource": resource},
+                {"method": route.method, "resource": route.resource},
                 None,
             )
             raise HttpError(404, "unknown_writer", "writer is not registered")
 
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
-            "resource": resource,
+            "resource": route.resource,
             "query": [{"key": key, "value": value} for key, value in (query or [])],
         }
-        if mental_model_id is not None:
-            request_evidence["mental_model_id"] = mental_model_id
+        for name in route.params:
+            request_evidence[name] = params[name]
         if body is not None:
             request_evidence["body"] = body
 
-        scan = (
-            scan_recall_body(request_evidence)
-            if read_operation
-            else scan_retain_body(request_evidence)
-        )
+        # "resource" is route-table metadata, not caller input; scanning it would
+        # self-flag multi-segment resource names as base64 payloads.
+        scan_input = {key: value for key, value in request_evidence.items() if key != "resource"}
+        scan = scan_recall_body(scan_input) if route.read else scan_retain_body(scan_input)
         if not scan.safe:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
             raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
-        if resource == "reflect" and body is not None:
+        if route.resource == "reflect" and body is not None:
             self.policy.limits.assert_recall_bounds(body)
 
-        if read_operation:
+        if route.read:
             await self.policy.limits.consume_recall(writer_id)
-        elif method in _WRITE_METHODS:
+        else:
             await self.policy.limits.consume_retain(writer_id)
 
         bank = quote(writer.write_bank, safe="")
+        suffix = route.template
+        for name in route.params:
+            suffix = suffix.replace("{" + name + "}", quote(params[name], safe=""))
         path = f"/v1/default/banks/{bank}"
-        if resource:
-            path += f"/{resource}"
-        if mental_model_id is not None:
-            path += f"/{quote(mental_model_id, safe='')}"
+        if suffix:
+            path += f"/{suffix}"
         if query:
             path += "?" + urlencode(query)
 
-        operation = resource.replace("/", "_") or "bank"
         value = await self.policy.hindsight.openclaw_request(
-            f"openclaw_{operation}", method, path, body
+            f"openclaw_{route.operation}", route.method, path, body
         )
         if value is not None:
             response_scan = scan_recall_result({"response": value})
@@ -90,7 +86,7 @@ class OpenClawFacade:
                 await self._audit(
                     writer_id,
                     "openclaw_suspicious_provider_response",
-                    {"resource": resource, "response": value},
+                    {"resource": route.resource, "response": value},
                     response_scan,
                 )
                 raise HttpError(
@@ -99,10 +95,15 @@ class OpenClawFacade:
                     "upstream memory service returned unsafe content",
                 )
         try:
-            validate_openclaw_response(method, resource, mental_model_id, value)
+            if route.strict_contract:
+                validate_openclaw_response(
+                    route.method, route.resource, params.get("mental_model_id"), value
+                )
+            else:
+                validate_facade_response(value)
         except ValueError as exc:
             raise HindsightGatewayError(
-                "invalid-response", operation=f"openclaw_{operation}", method=method
+                "invalid-response", operation=f"openclaw_{route.operation}", method=route.method
             ) from exc
         return value
 
