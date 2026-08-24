@@ -14,6 +14,7 @@ class FacadeRoute:
     read: bool
     body: BodyMode
     strict_contract: bool
+    success_status: int
     body_label: str
     resource: str
     operation: str
@@ -28,6 +29,7 @@ def _route(
     read: bool,
     body: BodyMode,
     strict: bool = False,
+    success_status: int = 200,
     body_label: str | None = None,
 ) -> FacadeRoute:
     params = tuple(re.findall(r"\{(\w+)\}", template))
@@ -49,6 +51,7 @@ def _route(
         read=read,
         body=body,
         strict_contract=strict,
+        success_status=success_status,
         body_label=label,
         resource=resource,
         operation=resource.replace("/", "_") or "bank",
@@ -133,8 +136,8 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     # Knowledge base.
     _route("GET", "knowledge-base/search", read=True, body="none"),
     _route("GET", "knowledge-base/tree", read=True, body="none"),
-    _route("POST", "knowledge-base/folders", read=False, body="required"),
-    _route("POST", "knowledge-base/pages", read=False, body="required"),
+    _route("POST", "knowledge-base/folders", read=False, body="required", success_status=201),
+    _route("POST", "knowledge-base/pages", read=False, body="required", success_status=201),
     _route("GET", "knowledge-base/pages/{page_id}", read=True, body="none"),
     _route("PATCH", "knowledge-base/nodes/{node_id}", read=False, body="required"),
     _route("DELETE", "knowledge-base/nodes/{node_id}", read=False, body="none"),
