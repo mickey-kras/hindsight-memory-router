@@ -819,7 +819,8 @@ async def dispatch(path: str, request: Request) -> Response:
                 params=route_params,
                 body=facade_body,
                 query=list(request.query_params.multi_items()) or None,
-            )
+            ),
+            status_code=route.success_status,
         )
 
     return JSONResponse(await policy.deny_endpoint(method, pathname), status_code=404)
