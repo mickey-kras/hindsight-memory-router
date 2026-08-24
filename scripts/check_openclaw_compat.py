@@ -78,7 +78,7 @@ def main() -> int:
 
     from memory_router.facade_routes import FACADE_ROUTES
 
-    facade_statuses = _upstream_success_statuses(sources["facade_api"])
+    facade_statuses = _upstream_success_statuses(sources["facade_spec"])
     missing_facade = []
     mismatched_statuses = []
     for route in FACADE_ROUTES:
