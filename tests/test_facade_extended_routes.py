@@ -153,6 +153,20 @@ async def test_extended_facade_routes_forward_to_resolved_bank(
     assert call.args[2] == upstream
 
 
+@pytest.mark.parametrize("resource", ["folders", "pages"])
+@pytest.mark.asyncio
+async def test_knowledge_base_create_preserves_created_status(resource: str) -> None:
+    policy = _policy({})
+    app_module.runtime.policy = policy
+    path = f"/v1/default/banks/openclaw/knowledge-base/{resource}"
+
+    result = await app_module.dispatch(
+        path.lstrip("/"), request("POST", path, body={"title": "Runbook"})
+    )
+
+    assert result.status_code == 201
+
+
 @pytest.mark.asyncio
 async def test_read_routes_consume_recall_quota_and_write_routes_retain_quota() -> None:
     policy = _policy({})
