@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 00cfafa00bb37ce7382ed1ca3a20b5811978626c1467c0d27906423f6d98bd79
-
 mode="${1:-}"
 router_db="${2:-}"
 if [[ "$mode" != "fake" && "$mode" != "real" ]]; then

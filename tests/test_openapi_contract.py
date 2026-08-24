@@ -132,7 +132,36 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
                 continue
             assert operation["security"] == [{"RouterToken": []}]
             responses = operation["responses"]
-            assert "401" in responses
-            assert "422" in responses
-            assert "4XX" in responses
-            assert "502" in responses
+            assert {"400", "401", "404", "422", "429", "4XX", "502", "504"} <= set(responses)
+            assert ("413" in responses) is ("requestBody" in operation)
+
+
+def test_openclaw_openapi_documents_route_metadata_and_response_schemas() -> None:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    paths = _openclaw_spec()["paths"]
+    assert isinstance(paths, dict)
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        operation = paths[path][route.method.lower()]
+        query = {
+            parameter["name"]: parameter.get("required") is True
+            for parameter in operation.get("parameters", [])
+            if parameter.get("in") == "query"
+        }
+        assert query == {name: name in route.required_query_params for name in route.query_params}
+        request_body = operation.get("requestBody")
+        if route.body == "none":
+            assert request_body is None
+        else:
+            assert request_body["required"] is (route.body == "required")
+        success = operation["responses"][str(route.success_status)]
+        assert "schema" in success["content"]["application/json"]
+
+    assert paths["/v1/default/banks/{bank_id}/audit-logs/stats"]["get"]["operationId"] == (
+        "hindsightGetAuditLogsStats"
+    )
+    rate_limited = _openclaw_spec()["components"]["responses"]["RateLimited"]
+    assert "Retry-After" in rate_limited["headers"]

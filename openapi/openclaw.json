@@ -43,25 +43,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible bank response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "patch": {
         "summary": "Update the resolved bank",
-        "operationId": "hindsightUpdatebank",
+        "operationId": "hindsightUpdateBank",
         "security": [
           {
             "RouterToken": []
@@ -85,25 +115,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Delete the resolved bank",
-        "operationId": "hindsightDeletebank",
+        "operationId": "hindsightDeleteBank",
         "security": [
           {
             "RouterToken": []
@@ -116,19 +176,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -136,7 +223,7 @@
     "/v1/default/banks/{bank_id}/audit-logs": {
       "get": {
         "summary": "List resolved bank audit log entries",
-        "operationId": "hindsightGetauditlogs",
+        "operationId": "hindsightGetAuditLogs",
         "security": [
           {
             "RouterToken": []
@@ -145,23 +232,135 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter by action type",
+            "explode": true,
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter by transport (http, mcp, system)",
+            "explode": true,
+            "in": "query",
+            "name": "transport",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter from this ISO datetime (inclusive)",
+            "explode": true,
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter until this ISO datetime (exclusive)",
+            "explode": true,
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Max items to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Max items to return",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Offset for pagination",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Offset for pagination",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -169,7 +368,7 @@
     "/v1/default/banks/{bank_id}/audit-logs/stats": {
       "get": {
         "summary": "Get resolved bank audit log statistics",
-        "operationId": "hindsightGetauditlogsstats",
+        "operationId": "hindsightGetAuditLogsStats",
         "security": [
           {
             "RouterToken": []
@@ -178,23 +377,77 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter by action type",
+            "explode": true,
+            "in": "query",
+            "name": "action",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Time period: 1d, 7d, or 30d",
+            "explode": true,
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "7d",
+              "description": "Time period: 1d, 7d, or 30d",
+              "type": "string"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -235,25 +488,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible bank config response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "get": {
         "summary": "Get the resolved bank configuration",
-        "operationId": "hindsightGetconfig",
+        "operationId": "hindsightGetConfig",
         "security": [
           {
             "RouterToken": []
@@ -266,25 +549,52 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Reset the resolved bank configuration overrides",
-        "operationId": "hindsightDeleteconfig",
+        "operationId": "hindsightDeleteConfig",
         "security": [
           {
             "RouterToken": []
@@ -297,19 +607,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -317,7 +654,7 @@
     "/v1/default/banks/{bank_id}/consolidate": {
       "post": {
         "summary": "Trigger memory consolidation in the resolved bank",
-        "operationId": "hindsightCreateconsolidate",
+        "operationId": "hindsightCreateConsolidate",
         "security": [
           {
             "RouterToken": []
@@ -341,19 +678,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -361,7 +728,7 @@
     "/v1/default/banks/{bank_id}/consolidation/recover": {
       "post": {
         "summary": "Recover stalled consolidation in the resolved bank",
-        "operationId": "hindsightCreateconsolidationrecover",
+        "operationId": "hindsightCreateConsolidationRecover",
         "security": [
           {
             "RouterToken": []
@@ -374,19 +741,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -394,7 +788,7 @@
     "/v1/default/banks/{bank_id}/directives": {
       "get": {
         "summary": "List directives in the resolved bank",
-        "operationId": "hindsightGetdirectives",
+        "operationId": "hindsightGetDirectives",
         "security": [
           {
             "RouterToken": []
@@ -403,29 +797,129 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter directives by execution scope. Omit or pass [] to list all directives.",
+            "explode": true,
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "How tagged directives match the requested scope. Untagged/global directives are included.",
+            "explode": true,
+            "in": "query",
+            "name": "tags_match",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "How tagged directives match the requested scope. Untagged/global directives are included.",
+              "enum": [
+                "any",
+                "all",
+                "exact"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Only return active directives",
+            "explode": true,
+            "in": "query",
+            "name": "active_only",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "Only return active directives",
+              "type": "boolean"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "post": {
         "summary": "Create a directive",
-        "operationId": "hindsightCreatedirectives",
+        "operationId": "hindsightCreateDirectives",
         "security": [
           {
             "RouterToken": []
@@ -449,19 +943,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -469,7 +993,7 @@
     "/v1/default/banks/{bank_id}/directives/{directive_id}": {
       "get": {
         "summary": "Get one directive",
-        "operationId": "hindsightGetdirectivesdirectiveid",
+        "operationId": "hindsightGetDirectivesDirectiveId",
         "security": [
           {
             "RouterToken": []
@@ -485,25 +1009,52 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "patch": {
         "summary": "Update one directive",
-        "operationId": "hindsightUpdatedirectivesdirectiveid",
+        "operationId": "hindsightUpdateDirectivesDirectiveId",
         "security": [
           {
             "RouterToken": []
@@ -530,25 +1081,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Delete one directive",
-        "operationId": "hindsightDeletedirectivesdirectiveid",
+        "operationId": "hindsightDeleteDirectivesDirectiveId",
         "security": [
           {
             "RouterToken": []
@@ -564,19 +1145,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -584,7 +1192,7 @@
     "/v1/default/banks/{bank_id}/documents": {
       "get": {
         "summary": "List documents in the resolved bank",
-        "operationId": "hindsightGetdocuments",
+        "operationId": "hindsightGetDocuments",
         "security": [
           {
             "RouterToken": []
@@ -593,23 +1201,118 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Case-insensitive substring filter on document ID (e.g. 'report' matches 'report-2024')",
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter documents by tags",
+            "explode": true,
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "How to match tags: 'any', 'all', 'any_strict', 'all_strict'",
+            "explode": true,
+            "in": "query",
+            "name": "tags_match",
+            "required": false,
+            "schema": {
+              "default": "any_strict",
+              "description": "How to match tags: 'any', 'all', 'any_strict', 'all_strict'",
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -617,7 +1320,7 @@
     "/v1/default/banks/{bank_id}/documents/{document_id}": {
       "get": {
         "summary": "Get one document",
-        "operationId": "hindsightGetdocumentsdocumentid",
+        "operationId": "hindsightGetDocumentsDocumentId",
         "security": [
           {
             "RouterToken": []
@@ -633,25 +1336,52 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "patch": {
         "summary": "Update one document",
-        "operationId": "hindsightUpdatedocumentsdocumentid",
+        "operationId": "hindsightUpdateDocumentsDocumentId",
         "security": [
           {
             "RouterToken": []
@@ -678,25 +1408,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Delete one document",
-        "operationId": "hindsightDeletedocumentsdocumentid",
+        "operationId": "hindsightDeleteDocumentsDocumentId",
         "security": [
           {
             "RouterToken": []
@@ -712,19 +1472,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -732,7 +1519,7 @@
     "/v1/default/banks/{bank_id}/documents/{document_id}/chunks": {
       "get": {
         "summary": "List document chunks",
-        "operationId": "hindsightGetdocumentsdocumentidchunks",
+        "operationId": "hindsightGetDocumentsDocumentIdChunks",
         "security": [
           {
             "RouterToken": []
@@ -744,23 +1531,79 @@
           },
           {
             "$ref": "#/components/parameters/DocumentId"
+          },
+          {
+            "description": "Maximum number of chunks to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of chunks to return",
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Offset for pagination",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Offset for pagination",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -768,7 +1611,7 @@
     "/v1/default/banks/{bank_id}/documents/{document_id}/reprocess": {
       "post": {
         "summary": "Reprocess one document",
-        "operationId": "hindsightCreatedocumentsdocumentidreprocess",
+        "operationId": "hindsightCreateDocumentsDocumentIdReprocess",
         "security": [
           {
             "RouterToken": []
@@ -784,19 +1627,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -804,7 +1674,7 @@
     "/v1/default/banks/{bank_id}/entities": {
       "get": {
         "summary": "List entities in the resolved bank",
-        "operationId": "hindsightGetentities",
+        "operationId": "hindsightGetEntities",
         "security": [
           {
             "RouterToken": []
@@ -813,23 +1683,78 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Maximum number of entities to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of entities to return",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Offset for pagination",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Offset for pagination",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -837,7 +1762,7 @@
     "/v1/default/banks/{bank_id}/entities/graph": {
       "get": {
         "summary": "Get the resolved bank entity graph",
-        "operationId": "hindsightGetentitiesgraph",
+        "operationId": "hindsightGetEntitiesGraph",
         "security": [
           {
             "RouterToken": []
@@ -846,23 +1771,77 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Maximum number of co-occurrence edges to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "description": "Maximum number of co-occurrence edges to return",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Minimum cooccurrence_count to include an edge",
+            "explode": true,
+            "in": "query",
+            "name": "min_count",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "Minimum cooccurrence_count to include an edge",
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -870,7 +1849,7 @@
     "/v1/default/banks/{bank_id}/entities/{entity_id}": {
       "get": {
         "summary": "Get one entity",
-        "operationId": "hindsightGetentitiesentityid",
+        "operationId": "hindsightGetEntitiesEntityId",
         "security": [
           {
             "RouterToken": []
@@ -886,19 +1865,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -906,7 +1912,7 @@
     "/v1/default/banks/{bank_id}/graph": {
       "get": {
         "summary": "Get the resolved bank memory graph",
-        "operationId": "hindsightGetgraph",
+        "operationId": "hindsightGetGraph",
         "security": [
           {
             "RouterToken": []
@@ -915,23 +1921,142 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "items": {
+                "nullable": true,
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "tags_match",
+            "required": false,
+            "schema": {
+              "default": "all_strict",
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "document_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "chunk_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -939,7 +2064,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/folders": {
       "post": {
         "summary": "Create a knowledge base folder",
-        "operationId": "hindsightCreateknowledgebasefolders",
+        "operationId": "hindsightCreateKnowledgeBaseFolders",
         "security": [
           {
             "RouterToken": []
@@ -963,19 +2088,49 @@
         },
         "responses": {
           "201": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -983,7 +2138,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/nodes/{node_id}": {
       "patch": {
         "summary": "Update one knowledge base node",
-        "operationId": "hindsightUpdateknowledgebasenodesnodeid",
+        "operationId": "hindsightUpdateKnowledgeBaseNodesNodeId",
         "security": [
           {
             "RouterToken": []
@@ -1010,25 +2165,55 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Delete one knowledge base node",
-        "operationId": "hindsightDeleteknowledgebasenodesnodeid",
+        "operationId": "hindsightDeleteKnowledgeBaseNodesNodeId",
         "security": [
           {
             "RouterToken": []
@@ -1044,19 +2229,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1064,7 +2276,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/pages": {
       "post": {
         "summary": "Create a knowledge base page",
-        "operationId": "hindsightCreateknowledgebasepages",
+        "operationId": "hindsightCreateKnowledgeBasePages",
         "security": [
           {
             "RouterToken": []
@@ -1088,19 +2300,49 @@
         },
         "responses": {
           "201": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1108,7 +2350,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/pages/{page_id}": {
       "get": {
         "summary": "Get one knowledge base page",
-        "operationId": "hindsightGetknowledgebasepagespageid",
+        "operationId": "hindsightGetKnowledgeBasePagesPageId",
         "security": [
           {
             "RouterToken": []
@@ -1124,19 +2366,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1144,7 +2413,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/search": {
       "get": {
         "summary": "Search the resolved bank knowledge base",
-        "operationId": "hindsightGetknowledgebasesearch",
+        "operationId": "hindsightGetKnowledgeBaseSearch",
         "security": [
           {
             "RouterToken": []
@@ -1153,23 +2422,78 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Search query",
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "Search query",
+              "minLength": 1,
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Maximum results to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "description": "Maximum results to return",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1177,7 +2501,7 @@
     "/v1/default/banks/{bank_id}/knowledge-base/tree": {
       "get": {
         "summary": "Get the resolved bank knowledge base tree",
-        "operationId": "hindsightGetknowledgebasetree",
+        "operationId": "hindsightGetKnowledgeBaseTree",
         "security": [
           {
             "RouterToken": []
@@ -1190,19 +2514,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1210,7 +2561,7 @@
     "/v1/default/banks/{bank_id}/llm-requests": {
       "get": {
         "summary": "List resolved bank LLM requests",
-        "operationId": "hindsightGetllmrequests",
+        "operationId": "hindsightGetLlmRequests",
         "security": [
           {
             "RouterToken": []
@@ -1219,23 +2570,218 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter by status (success, error)",
+            "explode": true,
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter by operation (retain, reflect, consolidation)",
+            "explode": true,
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter by call scope",
+            "explode": true,
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter by LLM provider",
+            "explode": true,
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter to one operation run (all LLM calls sharing a trace)",
+            "explode": true,
+            "in": "query",
+            "name": "trace_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter to LLM calls that processed a given document",
+            "explode": true,
+            "in": "query",
+            "name": "document_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter to the operation run(s) that produced or consumed a given memory_unit",
+            "explode": true,
+            "in": "query",
+            "name": "memory_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Paginate by operation run (trace) instead of by call; returns whole runs",
+            "explode": true,
+            "in": "query",
+            "name": "group",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Paginate by operation run (trace) instead of by call; returns whole runs",
+              "type": "boolean"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter from this ISO datetime (inclusive)",
+            "explode": true,
+            "in": "query",
+            "name": "start_date",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter until this ISO datetime (exclusive)",
+            "explode": true,
+            "in": "query",
+            "name": "end_date",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Max items to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "description": "Max items to return",
+              "maximum": 500,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Offset for pagination",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Offset for pagination",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1243,7 +2789,7 @@
     "/v1/default/banks/{bank_id}/llm-requests/stats": {
       "get": {
         "summary": "Get resolved bank LLM request statistics",
-        "operationId": "hindsightGetllmrequestsstats",
+        "operationId": "hindsightGetLlmRequestsStats",
         "security": [
           {
             "RouterToken": []
@@ -1252,23 +2798,77 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter by operation",
+            "explode": true,
+            "in": "query",
+            "name": "operation",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Time period: 1d, 7d, or 30d",
+            "explode": true,
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "7d",
+              "description": "Time period: 1d, 7d, or 30d",
+              "type": "string"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1276,7 +2876,7 @@
     "/v1/default/banks/{bank_id}/memories": {
       "delete": {
         "summary": "Delete memories in the resolved bank",
-        "operationId": "hindsightDeletememories",
+        "operationId": "hindsightDeleteMemories",
         "security": [
           {
             "RouterToken": []
@@ -1285,23 +2885,64 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Optional fact type filter (world, experience, observation)",
+            "explode": true,
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1309,7 +2950,7 @@
     "/v1/default/banks/{bank_id}/memories/dry-run-extract": {
       "post": {
         "summary": "Preview fact extraction without persisting",
-        "operationId": "hindsightCreatememoriesdryrunextract",
+        "operationId": "hindsightCreateMemoriesDryRunExtract",
         "security": [
           {
             "RouterToken": []
@@ -1333,19 +2974,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1353,7 +3024,7 @@
     "/v1/default/banks/{bank_id}/memories/list": {
       "get": {
         "summary": "List memories in the resolved bank",
-        "operationId": "hindsightGetmemorieslist",
+        "operationId": "hindsightGetMemoriesList",
         "security": [
           {
             "RouterToken": []
@@ -1362,23 +3033,186 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "consolidation_state",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "document_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "entity_id",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "tags",
+            "required": false,
+            "schema": {
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "tags_match",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1386,7 +3220,7 @@
     "/v1/default/banks/{bank_id}/memories/{memory_id}": {
       "get": {
         "summary": "Get one memory",
-        "operationId": "hindsightGetmemoriesmemoryid",
+        "operationId": "hindsightGetMemoriesMemoryId",
         "security": [
           {
             "RouterToken": []
@@ -1402,25 +3236,52 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "patch": {
         "summary": "Update one memory",
-        "operationId": "hindsightUpdatememoriesmemoryid",
+        "operationId": "hindsightUpdateMemoriesMemoryId",
         "security": [
           {
             "RouterToken": []
@@ -1447,19 +3308,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1467,7 +3358,7 @@
     "/v1/default/banks/{bank_id}/memories/{memory_id}/history": {
       "get": {
         "summary": "Get memory revision history",
-        "operationId": "hindsightGetmemoriesmemoryidhistory",
+        "operationId": "hindsightGetMemoriesMemoryIdHistory",
         "security": [
           {
             "RouterToken": []
@@ -1483,19 +3374,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1503,7 +3421,7 @@
     "/v1/default/banks/{bank_id}/memories/{memory_id}/observations": {
       "delete": {
         "summary": "Clear memory observations",
-        "operationId": "hindsightDeletememoriesmemoryidobservations",
+        "operationId": "hindsightDeleteMemoriesMemoryIdObservations",
         "security": [
           {
             "RouterToken": []
@@ -1519,19 +3437,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1550,33 +3495,126 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "name": "detail",
+            "description": "Filter by tags",
+            "explode": true,
             "in": "query",
+            "name": "tags",
+            "required": false,
             "schema": {
-              "type": "string",
+              "items": {
+                "type": "string"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "How to match tags",
+            "explode": true,
+            "in": "query",
+            "name": "tags_match",
+            "required": false,
+            "schema": {
+              "default": "any",
+              "description": "How to match tags",
+              "enum": [
+                "any",
+                "all",
+                "exact"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+            "explode": true,
+            "in": "query",
+            "name": "detail",
+            "required": false,
+            "schema": {
+              "default": "full",
+              "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
               "enum": [
                 "metadata",
                 "content",
                 "full"
-              ]
-            }
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 1000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible mental model list"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
@@ -1606,19 +3644,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible mental model creation response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1640,33 +3708,66 @@
             "$ref": "#/components/parameters/MentalModelId"
           },
           {
-            "name": "detail",
+            "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+            "explode": true,
             "in": "query",
+            "name": "detail",
+            "required": false,
             "schema": {
-              "type": "string",
+              "default": "full",
+              "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
               "enum": [
                 "metadata",
                 "content",
                 "full"
-              ]
-            }
+              ],
+              "type": "string"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible mental model response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
@@ -1699,19 +3800,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible mental model response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
@@ -1733,19 +3864,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible mental model delete response"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1753,7 +3911,7 @@
     "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}/clear": {
       "post": {
         "summary": "Clear one mental model's content",
-        "operationId": "hindsightCreatementalmodelsmentalmodelidclear",
+        "operationId": "hindsightCreateMentalModelsMentalModelIdClear",
         "security": [
           {
             "RouterToken": []
@@ -1769,19 +3927,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1789,7 +3974,7 @@
     "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}/dry-run-refresh": {
       "post": {
         "summary": "Preview a mental model refresh",
-        "operationId": "hindsightCreatementalmodelsmentalmodeliddryrunrefresh",
+        "operationId": "hindsightCreateMentalModelsMentalModelIdDryRunRefresh",
         "security": [
           {
             "RouterToken": []
@@ -1805,19 +3990,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1825,7 +4037,7 @@
     "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}/history": {
       "get": {
         "summary": "Get mental model refresh history",
-        "operationId": "hindsightGetmentalmodelsmentalmodelidhistory",
+        "operationId": "hindsightGetMentalModelsMentalModelIdHistory",
         "security": [
           {
             "RouterToken": []
@@ -1841,19 +4053,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {}
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1861,7 +4100,7 @@
     "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}/refresh": {
       "post": {
         "summary": "Refresh one mental model",
-        "operationId": "hindsightCreatementalmodelsmentalmodelidrefresh",
+        "operationId": "hindsightCreateMentalModelsMentalModelIdRefresh",
         "security": [
           {
             "RouterToken": []
@@ -1877,19 +4116,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1897,7 +4163,7 @@
     "/v1/default/banks/{bank_id}/observations": {
       "delete": {
         "summary": "Delete observations in the resolved bank",
-        "operationId": "hindsightDeleteobservations",
+        "operationId": "hindsightDeleteObservations",
         "security": [
           {
             "RouterToken": []
@@ -1910,19 +4176,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1930,7 +4223,7 @@
     "/v1/default/banks/{bank_id}/observations/scopes": {
       "get": {
         "summary": "List observation scopes in the resolved bank",
-        "operationId": "hindsightGetobservationsscopes",
+        "operationId": "hindsightGetObservationsScopes",
         "security": [
           {
             "RouterToken": []
@@ -1943,19 +4236,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1963,7 +4283,7 @@
     "/v1/default/banks/{bank_id}/operations": {
       "get": {
         "summary": "List background operations in the resolved bank",
-        "operationId": "hindsightGetoperations",
+        "operationId": "hindsightGetOperations",
         "security": [
           {
             "RouterToken": []
@@ -1972,23 +4292,120 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Filter by status: pending, processing, completed, failed, or cancelled",
+            "explode": true,
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Filter by operation type: retain, consolidation, refresh_mental_model, file_convert_retain, webhook_delivery",
+            "explode": true,
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Maximum number of operations to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "Maximum number of operations to return",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Number of operations to skip",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Number of operations to skip",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Exclude parent batch operations from results",
+            "explode": true,
+            "in": "query",
+            "name": "exclude_parents",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Exclude parent batch operations from results",
+              "type": "boolean"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -1996,7 +4413,7 @@
     "/v1/default/banks/{bank_id}/operations/{operation_id}": {
       "get": {
         "summary": "Get one background operation",
-        "operationId": "hindsightGetoperationsoperationid",
+        "operationId": "hindsightGetOperationsOperationId",
         "security": [
           {
             "RouterToken": []
@@ -2008,29 +4425,69 @@
           },
           {
             "$ref": "#/components/parameters/OperationId"
+          },
+          {
+            "description": "Include the raw task payload (submission params) in the response. May be large.",
+            "explode": true,
+            "in": "query",
+            "name": "include_payload",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include the raw task payload (submission params) in the response. May be large.",
+              "type": "boolean"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       },
       "delete": {
         "summary": "Cancel one background operation",
-        "operationId": "hindsightDeleteoperationsoperationid",
+        "operationId": "hindsightDeleteOperationsOperationId",
         "security": [
           {
             "RouterToken": []
@@ -2046,19 +4503,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2066,7 +4550,7 @@
     "/v1/default/banks/{bank_id}/operations/{operation_id}/delete": {
       "delete": {
         "summary": "Delete one background operation record",
-        "operationId": "hindsightDeleteoperationsoperationiddelete",
+        "operationId": "hindsightDeleteOperationsOperationIdDelete",
         "security": [
           {
             "RouterToken": []
@@ -2082,19 +4566,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2102,7 +4613,7 @@
     "/v1/default/banks/{bank_id}/operations/{operation_id}/retry": {
       "post": {
         "summary": "Retry one background operation",
-        "operationId": "hindsightCreateoperationsoperationidretry",
+        "operationId": "hindsightCreateOperationsOperationIdRetry",
         "security": [
           {
             "RouterToken": []
@@ -2118,94 +4629,46 @@
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "422": {
-            "$ref": "#/components/responses/Blocked"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/UpstreamClientError"
-          },
-          "502": {
-            "$ref": "#/components/responses/UpstreamFailure"
-          }
-        }
-      }
-    },
-    "/v1/default/banks/{bank_id}/profile": {
-      "get": {
-        "summary": "Get the resolved bank profile",
-        "operationId": "hindsightGetprofile",
-        "security": [
-          {
-            "RouterToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/BankId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          },
-          "422": {
-            "$ref": "#/components/responses/Blocked"
-          },
-          "4XX": {
-            "$ref": "#/components/responses/UpstreamClientError"
-          },
-          "502": {
-            "$ref": "#/components/responses/UpstreamFailure"
-          }
-        }
-      },
-      "put": {
-        "summary": "Update the resolved bank profile",
-        "operationId": "hindsightPutprofile",
-        "security": [
-          {
-            "RouterToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/BankId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "additionalProperties": true
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
               }
             }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2245,19 +4708,49 @@
         },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible reflect response after provider-content safety scanning"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2265,7 +4758,7 @@
     "/v1/default/banks/{bank_id}/stats": {
       "get": {
         "summary": "Get resolved bank statistics",
-        "operationId": "hindsightGetstats",
+        "operationId": "hindsightGetStats",
         "security": [
           {
             "RouterToken": []
@@ -2274,23 +4767,63 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Force a fresh recompute, bypassing the cached value (and refreshing the cache).",
+            "explode": true,
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Force a fresh recompute, bypassing the cached value (and refreshing the cache).",
+              "type": "boolean"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2298,7 +4831,7 @@
     "/v1/default/banks/{bank_id}/stats/memories-timeseries": {
       "get": {
         "summary": "Get memory count time series for the resolved bank",
-        "operationId": "hindsightGetstatsmemoriestimeseries",
+        "operationId": "hindsightGetStatsMemoriesTimeseries",
         "security": [
           {
             "RouterToken": []
@@ -2307,23 +4840,74 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "explode": true,
+            "in": "query",
+            "name": "period",
+            "required": false,
+            "schema": {
+              "default": "7d",
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Timestamp column to bucket on. `created_at` (default) = ingest time; `mentioned_at` / `occurred_start` = event time, useful for migrated corpora where ingest time is a single point and doesn't reflect the underlying knowledge timeline. Unknown values fall back to `created_at`.",
+            "explode": true,
+            "in": "query",
+            "name": "time_field",
+            "required": false,
+            "schema": {
+              "default": "created_at",
+              "description": "Timestamp column to bucket on. `created_at` (default) = ingest time; `mentioned_at` / `occurred_start` = event time, useful for migrated corpora where ingest time is a single point and doesn't reflect the underlying knowledge timeline. Unknown values fall back to `created_at`.",
+              "type": "string"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2331,7 +4915,7 @@
     "/v1/default/banks/{bank_id}/tags": {
       "get": {
         "summary": "List tags in the resolved bank",
-        "operationId": "hindsightGettags",
+        "operationId": "hindsightGetTags",
         "security": [
           {
             "RouterToken": []
@@ -2340,23 +4924,109 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "description": "Wildcard pattern to filter tags (e.g., 'user:*' for user:alice, '*-admin' for role-admin). Use '*' as wildcard. Case-insensitive.",
+            "explode": true,
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "style": "form"
+          },
+          {
+            "description": "Where to read tags from: 'memories' (memory_units, default) or 'mental_models'.",
+            "explode": true,
+            "in": "query",
+            "name": "source",
+            "required": false,
+            "schema": {
+              "default": "memories",
+              "description": "Where to read tags from: 'memories' (memory_units, default) or 'mental_models'.",
+              "enum": [
+                "memories",
+                "mental_models"
+              ],
+              "type": "string"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Maximum number of tags to return",
+            "explode": true,
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "description": "Maximum number of tags to return",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
+          },
+          {
+            "description": "Offset for pagination",
+            "explode": true,
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "description": "Offset for pagination",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "style": "form"
           }
         ],
         "responses": {
           "200": {
-            "description": "Hindsight-compatible response forwarded through Memory Router"
+            "description": "Hindsight-compatible response forwarded through Memory Router",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
           },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "422": {
-            "$ref": "#/components/responses/Blocked"
+            "$ref": "#/components/responses/ValidationOrBlocked"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
           },
           "4XX": {
             "$ref": "#/components/responses/UpstreamClientError"
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
+          },
+          "504": {
+            "$ref": "#/components/responses/UpstreamTimeout"
           }
         }
       }
@@ -2454,17 +5124,122 @@
       }
     },
     "responses": {
-      "Unauthorized": {
-        "description": "Missing or invalid router bearer token"
+      "BadRequest": {
+        "description": "Malformed path, JSON, body, or route-specific request",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
-      "Blocked": {
-        "description": "Request blocked by Memory Router security policy"
+      "Unauthorized": {
+        "description": "Missing or invalid router bearer token",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "Unknown writer or sanitized upstream not-found response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "Request exceeds the router body or route-specific bound",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "ValidationOrBlocked": {
+        "description": "Request blocked by router policy or rejected by Hindsight validation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Router retain/recall quota or upstream client rate limit exceeded",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds until the router quota window resets, when supplied",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "UpstreamClientError": {
-        "description": "Sanitized upstream Hindsight client-error response with the original HTTP status"
+        "description": "Any other sanitized upstream Hindsight 4xx response with its original status",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       },
       "UpstreamFailure": {
-        "description": "Hindsight unavailable, invalid, oversized, or unsafe provider response"
+        "description": "Hindsight unavailable, redirected, unauthorized, invalid, oversized, unsafe, or failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "UpstreamTimeout": {
+        "description": "Hindsight did not respond before the configured timeout",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

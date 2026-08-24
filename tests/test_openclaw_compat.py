@@ -244,14 +244,6 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
         ),
         (
             {
-                "method": "GET",
-                "resource": "mental-models",
-                "query": [(INJECTION, "metadata")],
-                "read_operation": True,
-            },
-        ),
-        (
-            {
                 "method": "POST",
                 "resource": "mental-models",
                 "body": {"id": "page", "name": INJECTION, "source_query": "safe"},

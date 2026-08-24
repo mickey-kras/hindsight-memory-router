@@ -48,7 +48,7 @@ from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .timestamps import iso_now
-from .validation import parse_recall_body, parse_retain_body
+from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
 configure_logging()
@@ -227,11 +227,23 @@ def _decode_path_segment(value: str) -> str:
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         )
     try:
-        return unquote(value, encoding="utf-8", errors="strict")
+        decoded = unquote(value, encoding="utf-8", errors="strict")
     except (UnicodeDecodeError, ValueError) as exc:
         raise HttpError(
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         ) from exc
+    probe = decoded
+    for _ in range(2):
+        if probe in {".", ".."}:
+            raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
+        try:
+            next_probe = unquote(probe, encoding="utf-8", errors="strict")
+        except (UnicodeDecodeError, ValueError):
+            break
+        if next_probe == probe:
+            break
+        probe = next_probe
+    return decoded
 
 
 def _assert_json_depth(value: Any) -> None:
@@ -491,7 +503,7 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
-async def _json_body(request: Request) -> Any:
+async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
         raise HttpError(413, "payload_too_large", "payload too large")
@@ -501,7 +513,7 @@ async def _json_body(request: Request) -> Any:
         if len(body) > runtime.max_body_bytes:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
-        return {}
+        return None if empty_as_none else {}
     try:
         value = json.loads(
             bytes(body), parse_constant=lambda raw: (_ for _ in ()).throw(ValueError(raw))
@@ -806,12 +818,18 @@ async def dispatch(path: str, request: Request) -> Response:
         }
         facade_body: dict[str, Any] | None = None
         if route.body != "none":
-            raw_body = await _json_body(request)
-            if not isinstance(raw_body, dict):
+            raw_body = await _json_body(request, empty_as_none=True)
+            if raw_body is None:
+                if route.body == "required":
+                    raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
+            elif not isinstance(raw_body, dict):
                 raise HttpError(
                     400, "invalid_request", f"{route.body_label} body must be an object"
                 )
-            facade_body = raw_body
+            else:
+                facade_body = raw_body
+        if route.template == "reflect" and facade_body is not None:
+            facade_body = parse_reflect_body(facade_body)
         return JSONResponse(
             await facade.forward(
                 route=route,

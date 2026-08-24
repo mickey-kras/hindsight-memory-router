@@ -11,7 +11,13 @@ from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
-from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
+from .security import (
+    SafetyResult,
+    scan_facade_result,
+    scan_query_values,
+    scan_recall_body,
+    scan_retain_body,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -41,20 +47,29 @@ class OpenClawFacade:
             )
             raise HttpError(404, "unknown_writer", "writer is not registered")
 
+        forwarded_query = [
+            (key, value) for key, value in (query or []) if key in route.query_params
+        ]
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
             "resource": route.resource,
-            "query": [{"key": key, "value": value} for key, value in (query or [])],
+            "query": [{"key": key, "value": value} for key, value in forwarded_query],
         }
         for name in route.params:
             request_evidence[name] = params[name]
         if body is not None:
             request_evidence["body"] = body
 
-        # "resource" is route-table metadata, not caller input; scanning it would
-        # self-flag multi-segment resource names as base64 payloads.
-        scan_input = {key: value for key, value in request_evidence.items() if key != "resource"}
+        # Route metadata and free-text query values are not persisted payload. Query
+        # values use a ruleset that detects instructions but does not classify URL
+        # syntax or ordinary base64-looking search text as an encoded payload.
+        scan_input = {
+            key: value
+            for key, value in request_evidence.items()
+            if key not in {"resource", "query"}
+        }
         scan = scan_recall_body(scan_input) if route.read else scan_retain_body(scan_input)
+        scan.extend(scan_query_values(forwarded_query))
         if not scan.safe:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
             raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
@@ -74,14 +89,14 @@ class OpenClawFacade:
         path = f"/v1/default/banks/{bank}"
         if suffix:
             path += f"/{suffix}"
-        if query:
-            path += "?" + urlencode(query)
+        if forwarded_query:
+            path += "?" + urlencode(forwarded_query)
 
         value = await self.policy.hindsight.openclaw_request(
             f"openclaw_{route.operation}", route.method, path, body
         )
         if value is not None:
-            response_scan = scan_recall_result({"response": value})
+            response_scan = scan_facade_result(value)
             if not response_scan.safe:
                 await self._audit(
                     writer_id,
@@ -100,7 +115,7 @@ class OpenClawFacade:
                     route.method, route.resource, params.get("mental_model_id"), value
                 )
             else:
-                validate_facade_response(value)
+                validate_facade_response(value, route.response)
         except ValueError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation=f"openclaw_{route.operation}", method=route.method

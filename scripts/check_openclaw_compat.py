@@ -5,6 +5,12 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
+
+import yaml
+
+HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
+MIN_FACADE_OPERATION_COUNT = 75
 
 
 def _methods(source: str, receivers: tuple[str, ...]) -> set[str]:
@@ -18,25 +24,57 @@ def _git_blob_sha(source: str) -> str:
     return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
 
 
-def _upstream_success_statuses(source: str) -> dict[tuple[str, str], set[int]]:
-    endpoints: dict[tuple[str, str], set[int]] = {}
-    path: str | None = None
-    method: str | None = None
-    in_responses = False
-    for line in source.splitlines():
-        if match := re.fullmatch(r"  (/[^:]+):", line):
-            path = match.group(1)
-            method = None
-            in_responses = False
-        elif match := re.fullmatch(r"    (get|post|put|patch|delete):", line):
-            method = match.group(1).upper()
-            in_responses = False
-        elif line == "      responses:":
-            in_responses = True
-        elif in_responses and (match := re.fullmatch(r'        "(2\d\d)":', line)):
-            if path is not None and method is not None:
-                endpoints.setdefault((method, path), set()).add(int(match.group(1)))
+def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, str], dict[str, Any]]:
+    document = yaml.safe_load(source)
+    if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
+        raise ValueError("upstream OpenAPI document has no paths object")
+    endpoints: dict[tuple[str, str], dict[str, Any]] = {}
+    for path, path_item in document["paths"].items():
+        if not isinstance(path, str) or not isinstance(path_item, dict):
+            continue
+        shared_parameters = path_item.get("parameters", [])
+        if not isinstance(shared_parameters, list):
+            shared_parameters = []
+        for method, operation in path_item.items():
+            if method not in HTTP_METHODS or not isinstance(operation, dict):
+                continue
+            request_body = operation.get("requestBody")
+            if request_body is None:
+                body_mode = "none"
+            elif isinstance(request_body, dict) and request_body.get("required") is True:
+                body_mode = "required"
+            else:
+                body_mode = "optional"
+            parameters = [*shared_parameters]
+            operation_parameters = operation.get("parameters", [])
+            if isinstance(operation_parameters, list):
+                parameters.extend(operation_parameters)
+            query = {
+                parameter["name"]: parameter.get("required") is True
+                for parameter in parameters
+                if isinstance(parameter, dict)
+                and parameter.get("in") == "query"
+                and isinstance(parameter.get("name"), str)
+            }
+            responses = operation.get("responses", {})
+            statuses = set()
+            if isinstance(responses, dict):
+                statuses = {str(status).upper() for status in responses}
+            endpoints[(method.upper(), path)] = {
+                "body": body_mode,
+                "deprecated": operation.get("deprecated") is True,
+                "query": query,
+                "statuses": statuses,
+            }
+    if len(endpoints) < minimum:
+        raise ValueError(
+            f"upstream OpenAPI parse yielded {len(endpoints)} operations; expected at least {minimum}"
+        )
     return endpoints
+
+
+def _supports_status(statuses: set[str], status: int) -> bool:
+    return str(status) in statuses or f"{status // 100}XX" in statuses
 
 
 def _documented_endpoints(path: Path) -> set[tuple[str, str]]:
@@ -78,24 +116,48 @@ def main() -> int:
 
     from memory_router.facade_routes import FACADE_ROUTES
 
-    facade_statuses = _upstream_success_statuses(sources["facade_spec"])
+    try:
+        facade_operations = _upstream_operations(
+            sources["facade_spec"], minimum=MIN_FACADE_OPERATION_COUNT
+        )
+    except (ValueError, yaml.YAMLError) as exc:
+        raise SystemExit(f"could not parse upstream facade OpenAPI: {exc}") from exc
     missing_facade = []
     mismatched_statuses = []
+    mismatched_bodies = []
+    mismatched_queries = []
+    deprecated_facade = []
     for route in FACADE_ROUTES:
         path = "/v1/default/banks/{bank_id}"
         if route.template:
             path += "/" + route.template
-        statuses = facade_statuses.get((route.method, path))
-        if statuses is None:
+        operation = facade_operations.get((route.method, path))
+        if operation is None:
             missing_facade.append((route.method, path))
-        elif route.success_status not in statuses:
-            mismatched_statuses.append(
-                (route.method, path, route.success_status, sorted(statuses))
-            )
+            continue
+        statuses = operation["statuses"]
+        if not _supports_status(statuses, route.success_status):
+            mismatched_statuses.append((route.method, path, route.success_status, sorted(statuses)))
+        if operation["body"] != route.body:
+            mismatched_bodies.append((route.method, path, route.body, operation["body"]))
+        upstream_query = operation["query"]
+        configured_query = {
+            name: name in route.required_query_params for name in route.query_params
+        }
+        if upstream_query != configured_query:
+            mismatched_queries.append((route.method, path, configured_query, upstream_query))
+        if operation["deprecated"]:
+            deprecated_facade.append((route.method, path))
     if missing_facade:
         raise SystemExit(f"facade routes missing upstream: {missing_facade}")
     if mismatched_statuses:
         raise SystemExit(f"facade success statuses differ from upstream: {mismatched_statuses}")
+    if mismatched_bodies:
+        raise SystemExit(f"facade body requiredness differs from upstream: {mismatched_bodies}")
+    if mismatched_queries:
+        raise SystemExit(f"facade query parameters differ from upstream: {mismatched_queries}")
+    if deprecated_facade:
+        raise SystemExit(f"deprecated upstream routes are exposed by facade: {deprecated_facade}")
 
     expected_plugin = set(inventory["plugin_client_methods"])
     actual_plugin = _methods(plugin, ("client", "c"))
@@ -117,7 +179,7 @@ def main() -> int:
     for marker in required_plugin_markers:
         if marker not in plugin:
             raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
-    if "/config" not in defaults or "method: \"PATCH\"" not in defaults:
+    if "/config" not in defaults or 'method: "PATCH"' not in defaults:
         raise SystemExit("OpenClaw bank config PATCH call changed")
 
     expected_endpoints = {tuple(item) for item in inventory["endpoints"]}

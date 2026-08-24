@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import ValidationError
@@ -48,19 +49,29 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
 
 
 def parse_recall_body(value: Any) -> dict[str, Any]:
+    return _parse_recall_like(value, "recall", _invalid_recall)
+
+
+def parse_reflect_body(value: Any) -> dict[str, Any]:
+    return _parse_recall_like(value, "reflect", _invalid_reflect)
+
+
+def _parse_recall_like(
+    value: Any, label: str, invalid: Callable[[str], HttpError]
+) -> dict[str, Any]:
     if not isinstance(value, dict):
-        raise _invalid_recall("recall body must be an object")
+        raise invalid(f"{label} body must be an object")
     try:
         canonical_json(value)
     except ValueError as exc:
-        raise _invalid_recall("recall body contains an unsupported JSON value") from exc
+        raise invalid(f"{label} body contains an unsupported JSON value") from exc
     try:
         parsed = RecallBody.model_validate(value)
     except ValidationError as exc:
         loc = _first_error_location(exc)
         field = loc[0] if loc and isinstance(loc[0], str) else ""
         mapping = {
-            "query": "recall query must be a non-empty string",
+            "query": f"{label} query must be a non-empty string",
             "max_tokens": "max_tokens must be a positive integer",
             "budget": "budget must be low, mid, or high",
             "types": "types must contain strings",
@@ -68,7 +79,7 @@ def parse_recall_body(value: Any) -> dict[str, Any]:
             "tags_match": "tags_match must be a string",
             "trace": "trace must be a boolean",
         }
-        raise _invalid_recall(mapping.get(field, "recall body is invalid")) from exc
+        raise invalid(mapping.get(field, f"{label} body is invalid")) from exc
     return parsed.model_dump(by_alias=True, exclude_unset=True)
 
 
@@ -85,3 +96,7 @@ def _invalid_retain(message: str) -> HttpError:
 
 def _invalid_recall(message: str) -> HttpError:
     return HttpError(400, "invalid_recall_body", message)
+
+
+def _invalid_reflect(message: str) -> HttpError:
+    return HttpError(400, "invalid_reflect_body", message)

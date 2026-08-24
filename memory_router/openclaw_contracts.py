@@ -41,10 +41,11 @@ class ReflectResponse(_Response):
     text: StrictStr
 
 
-def validate_facade_response(value: Any) -> None:
-    if value is None or isinstance(value, dict):
+def validate_facade_response(value: Any, response: str = "object") -> None:
+    expected = dict if response == "object" else list
+    if value is None or isinstance(value, expected):
         return
-    raise ValueError("facade response must be a JSON object or empty")
+    raise ValueError(f"facade response must be a JSON {response} or empty")
 
 
 def validate_openclaw_response(

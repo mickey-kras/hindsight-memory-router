@@ -261,6 +261,32 @@ createServer(async (req, res) => {
       return send(res, 200, { success: true, memory_id: memoryIdValue });
     }
 
+    const history = url.pathname.match(
+      /^\/v1\/default\/banks\/([^/]+)\/(memories|mental-models)\/([^/]+)\/history$/,
+    );
+    if (method === "GET" && history) {
+      const bankId = decodeURIComponent(history[1]);
+      if (rejectForbiddenRouterTraffic(res, "history", bankId)) return;
+      return send(res, 200, [{ id: "version-1", text: "safe history" }]);
+    }
+
+    const memoryList = url.pathname.match(
+      /^\/v1\/default\/banks\/([^/]+)\/memories\/list$/,
+    );
+    if (method === "GET" && memoryList) {
+      const bankId = decodeURIComponent(memoryList[1]);
+      if (rejectForbiddenRouterTraffic(res, "memory_list", bankId)) return;
+      const items = Array.from({ length: 5 }, (_, item) =>
+        Object.fromEntries(
+          Array.from({ length: 30 }, (_, field) => [
+            `field_${field}`,
+            `ordinary value ${item}-${field}`,
+          ]),
+        ),
+      );
+      return send(res, 200, { items });
+    }
+
     const facade = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)\/(.+)$/);
     if (facade) {
       const bankId = decodeURIComponent(facade[1]);

@@ -26,6 +26,8 @@ MAX_SPLIT_BASE64_FIELDS = 256
 MAX_SPLIT_BASE64_SKIPS = 2
 MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
+FACADE_SCAN_BATCH_FIELDS = 32
+FACADE_SCAN_CARRY_FIELDS = 48
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
 _BASE64_PARTS = re.compile(r"[A-Za-z0-9+/=]+")
@@ -195,6 +197,47 @@ def scan_recall_body(body: dict[str, Any]) -> SafetyResult:
 
 def scan_recall_result(result: dict[str, Any]) -> SafetyResult:
     return _scan_fields(_walk_strings(result, "recalled_memory"), operation="read")
+
+
+def scan_facade_result(result: Any) -> SafetyResult:
+    """Scan every facade response field without treating normal list size as unsafe.
+
+    Recall responses are quota-bounded and deliberately fail closed at the global
+    field/window caps. Facade list endpoints can validly return hundreds of records,
+    so they are scanned in overlapping bounded batches instead. The overlap keeps
+    split instructions and encoded fragments visible across batch boundaries.
+    """
+
+    combined = SafetyResult()
+    fields = iter(_walk_strings(result, "facade_response"))
+    carry: list[tuple[str, str, bool]] = []
+    while True:
+        batch: list[tuple[str, str, bool]] = []
+        for _ in range(FACADE_SCAN_BATCH_FIELDS):
+            try:
+                batch.append(next(fields))
+            except StopIteration:
+                break
+        if not batch:
+            return combined
+        combined.extend(_scan_fields([*carry, *batch], operation="read"))
+        carry = [*carry, *batch][-FACADE_SCAN_CARRY_FIELDS:]
+
+
+def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
+    """Scan free-text query values without payload/base64 heuristics."""
+
+    result = SafetyResult()
+    for key, raw in query:
+        canonical, transformations = canonicalize_content(raw)
+        result.transformations.update(transformations)
+        if "invisible" in transformations:
+            result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
+        for finding in _rule_scan(canonical):
+            result.add(finding)
+        for finding in _amg_scan(f"query.{key}", canonical, operation="read"):
+            result.add(finding)
+    return result
 
 
 def _walk_strings(

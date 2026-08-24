@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 0c5cb13b5d669c8f85b13fa0836eba5e7f96008dcded6d30ef049b159280deb4
+# integration-behavior-sha256: 13cbd89aa0eb9f85b8e7352dede0282ad3940b2da2915d0dd692519dd6ee990a
 
 openclaw_request() {
   local method="$1"
@@ -49,15 +49,17 @@ blocked_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bea
 pass_check
 
 begin_check "Extended Hindsight facade endpoints resolve through writer bank"
-openclaw_request GET "/v1/default/banks/main/profile" >/dev/null
 openclaw_request GET "/v1/default/banks/main/stats" >/dev/null
-openclaw_request GET "/v1/default/banks/main/tags" >/dev/null
+openclaw_request GET "/v1/default/banks/main/tags?q=hello%2Fworld" >/dev/null
 openclaw_request GET "/v1/default/banks/main/memories/list?limit=10" >/dev/null
-openclaw_request GET "/v1/default/banks/main/memories/mem-1/history" >/dev/null
+memory_history="$(openclaw_request GET "/v1/default/banks/main/memories/mem-1/history")"
+printf '%s' "$memory_history" | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), list)' || fail_check "memory history was not an array"
+model_history="$(openclaw_request GET "/v1/default/banks/main/mental-models/page-1/history")"
+printf '%s' "$model_history" | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin), list)' || fail_check "mental-model history was not an array"
 openclaw_request GET "/v1/default/banks/main/documents" >/dev/null
 openclaw_request POST "/v1/default/banks/main/documents/doc-1/reprocess" >/dev/null
 openclaw_request GET "/v1/default/banks/main/entities/graph" >/dev/null
-openclaw_request POST "/v1/default/banks/main/consolidate" '{}' >/dev/null
+openclaw_request POST "/v1/default/banks/main/consolidate" >/dev/null
 openclaw_request POST "/v1/default/banks/main/memories/dry-run-extract" '{"items":[{"content":"preview fact"}]}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/directives" >/dev/null
 openclaw_request POST "/v1/default/banks/main/operations/op-1/retry" >/dev/null
@@ -76,8 +78,12 @@ pass_check
 begin_check "Denied Hindsight surfaces fail closed at the router"
 webhook_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/webhooks" -d '{"url":"https://example.test/hook"}')"
 [[ "$webhook_status" == "404" ]] || fail_check "webhook endpoint was not denied: ${webhook_status}"
-banks_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks")"
+banks_output="${root}/${tmp_dir}/banks-denied-response.json"
+banks_status="$(curl -sS -o "$banks_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks")"
 [[ "$banks_status" == "404" ]] || fail_check "cross-writer bank list was not denied: ${banks_status}"
+grep -q 'endpoint denied by memory-router policy' "$banks_output" || fail_check "cross-writer bank list did not use policy denial"
+profile_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/profile")"
+[[ "$profile_status" == "404" ]] || fail_check "deprecated profile endpoint was not denied: ${profile_status}"
 export_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/export")"
 [[ "$export_status" == "404" ]] || fail_check "export endpoint was not denied: ${export_status}"
 pass_check

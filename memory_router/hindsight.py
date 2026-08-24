@@ -231,12 +231,19 @@ class HindsightGateway:
             async with asyncio.timeout(self.timeout_ms / 1000.0):
                 response = await self.client.send(request, stream=True)
                 if not response.is_success:
+                    client_status = None
+                    if (
+                        preserve_http_status
+                        and 400 <= response.status_code < 500
+                        and response.status_code not in {401, 403}
+                    ):
+                        client_status = response.status_code
                     raise HindsightGatewayError(
                         "http",
                         upstream_status=response.status_code,
                         operation=operation,
                         method=method,
-                        client_status=response.status_code if preserve_http_status else None,
+                        client_status=client_status,
                     )
                 content_length = response.headers.get("content-length")
                 if (
@@ -264,6 +271,8 @@ class HindsightGateway:
                     chunks.append(chunk)
                 raw = b"".join(chunks)
                 if not raw:
+                    # Callers validate whether an empty success is legal. Facade
+                    # routes pin their own client status and serialize it as JSON null.
                     return None
                 try:
                     value = json.loads(raw, parse_constant=_reject_non_finite)

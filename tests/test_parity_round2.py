@@ -125,3 +125,6 @@ async def test_dot_segments_and_trace_reach_normalized_deny_endpoint() -> None:
 def test_matched_segment_decode_remains_strict() -> None:
     with pytest.raises(HttpError, match="malformed percent-encoding"):
         app_module._decode_path_segment("bad%ZZ")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%252e%252e")
+    assert app_module._decode_path_segment("item%252ename") == "item%2ename"

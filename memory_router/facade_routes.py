@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 BodyMode = Literal["none", "optional", "required"]
+ResponseMode = Literal["object", "array"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +20,9 @@ class FacadeRoute:
     resource: str
     operation: str
     params: tuple[str, ...]
+    query_params: tuple[str, ...]
+    required_query_params: tuple[str, ...]
+    response: ResponseMode
     pattern: re.Pattern[str]
 
 
@@ -31,7 +35,12 @@ def _route(
     strict: bool = False,
     success_status: int = 200,
     body_label: str | None = None,
+    query: tuple[str, ...] = (),
+    required_query: tuple[str, ...] = (),
+    response: ResponseMode = "object",
 ) -> FacadeRoute:
+    if not set(required_query) <= set(query):
+        raise ValueError("required query parameters must be forwardable")
     params = tuple(re.findall(r"\{(\w+)\}", template))
     resource = "/".join(
         segment
@@ -56,6 +65,9 @@ def _route(
         resource=resource,
         operation=resource.replace("/", "_") or "bank",
         params=params,
+        query_params=query,
+        required_query_params=required_query,
+        response=response,
         pattern=pattern,
     )
 
@@ -66,11 +78,25 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     # OpenClaw plugin contract; upstream responses validated against strict models.
     _route("PUT", "", read=False, body="required", strict=True, body_label="bank"),
     _route("PATCH", "config", read=False, body="required", strict=True, body_label="bank config"),
-    _route("GET", "mental-models", read=True, body="none", strict=True),
+    _route(
+        "GET",
+        "mental-models",
+        read=True,
+        body="none",
+        strict=True,
+        query=("tags", "tags_match", "detail", "limit", "offset"),
+    ),
     _route(
         "POST", "mental-models", read=False, body="required", strict=True, body_label="mental-model"
     ),
-    _route("GET", "mental-models/{mental_model_id}", read=True, body="none", strict=True),
+    _route(
+        "GET",
+        "mental-models/{mental_model_id}",
+        read=True,
+        body="none",
+        strict=True,
+        query=("detail",),
+    ),
     _route(
         "PATCH",
         "mental-models/{mental_model_id}",
@@ -84,42 +110,93 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     # Bank management.
     _route("PATCH", "", read=False, body="required", body_label="bank"),
     _route("DELETE", "", read=False, body="none"),
-    _route("GET", "profile", read=True, body="none"),
-    _route("PUT", "profile", read=False, body="required"),
     _route("GET", "config", read=True, body="none"),
     _route("DELETE", "config", read=False, body="none"),
-    _route("GET", "stats", read=True, body="none"),
-    _route("GET", "stats/memories-timeseries", read=True, body="none"),
-    _route("GET", "tags", read=True, body="none"),
-    _route("GET", "graph", read=True, body="none"),
+    _route("GET", "stats", read=True, body="none", query=("refresh",)),
+    _route(
+        "GET",
+        "stats/memories-timeseries",
+        read=True,
+        body="none",
+        query=("period", "time_field"),
+    ),
+    _route("GET", "tags", read=True, body="none", query=("q", "source", "limit", "offset")),
+    _route(
+        "GET",
+        "graph",
+        read=True,
+        body="none",
+        query=("type", "limit", "q", "tags", "tags_match", "document_id", "chunk_id"),
+    ),
     _route("POST", "consolidate", read=False, body="optional"),
     _route("POST", "consolidation/recover", read=False, body="none"),
     # Memories.
-    _route("GET", "memories/list", read=True, body="none"),
-    _route("DELETE", "memories", read=False, body="none"),
+    _route(
+        "GET",
+        "memories/list",
+        read=True,
+        body="none",
+        query=(
+            "type",
+            "q",
+            "consolidation_state",
+            "state",
+            "document_id",
+            "entity_id",
+            "tags",
+            "tags_match",
+            "limit",
+            "offset",
+        ),
+    ),
+    _route("DELETE", "memories", read=False, body="none", query=("type",)),
     _route("POST", "memories/dry-run-extract", read=True, body="required"),
     _route("GET", "memories/{memory_id}", read=True, body="none"),
     _route("PATCH", "memories/{memory_id}", read=False, body="required"),
-    _route("GET", "memories/{memory_id}/history", read=True, body="none"),
+    _route("GET", "memories/{memory_id}/history", read=True, body="none", response="array"),
     _route("DELETE", "memories/{memory_id}/observations", read=False, body="none"),
     # Documents.
-    _route("GET", "documents", read=True, body="none"),
+    _route(
+        "GET",
+        "documents",
+        read=True,
+        body="none",
+        query=("q", "tags", "tags_match", "limit", "offset"),
+    ),
     _route("GET", "documents/{document_id}", read=True, body="none"),
     _route("PATCH", "documents/{document_id}", read=False, body="required"),
     _route("DELETE", "documents/{document_id}", read=False, body="none"),
-    _route("GET", "documents/{document_id}/chunks", read=True, body="none"),
+    _route(
+        "GET",
+        "documents/{document_id}/chunks",
+        read=True,
+        body="none",
+        query=("limit", "offset"),
+    ),
     _route("POST", "documents/{document_id}/reprocess", read=False, body="none"),
     # Entities.
-    _route("GET", "entities", read=True, body="none"),
-    _route("GET", "entities/graph", read=True, body="none"),
+    _route("GET", "entities", read=True, body="none", query=("limit", "offset")),
+    _route("GET", "entities/graph", read=True, body="none", query=("limit", "min_count")),
     _route("GET", "entities/{entity_id}", read=True, body="none"),
     # Mental model operations.
     _route("POST", "mental-models/{mental_model_id}/refresh", read=False, body="none"),
     _route("POST", "mental-models/{mental_model_id}/clear", read=False, body="none"),
     _route("POST", "mental-models/{mental_model_id}/dry-run-refresh", read=True, body="none"),
-    _route("GET", "mental-models/{mental_model_id}/history", read=True, body="none"),
+    _route(
+        "GET",
+        "mental-models/{mental_model_id}/history",
+        read=True,
+        body="none",
+        response="array",
+    ),
     # Directives.
-    _route("GET", "directives", read=True, body="none"),
+    _route(
+        "GET",
+        "directives",
+        read=True,
+        body="none",
+        query=("tags", "tags_match", "active_only", "limit", "offset"),
+    ),
     _route("POST", "directives", read=False, body="required"),
     _route("GET", "directives/{directive_id}", read=True, body="none"),
     _route("PATCH", "directives/{directive_id}", read=False, body="required"),
@@ -128,13 +205,32 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     _route("GET", "observations/scopes", read=True, body="none"),
     _route("DELETE", "observations", read=False, body="none"),
     # Background operations.
-    _route("GET", "operations", read=True, body="none"),
-    _route("GET", "operations/{operation_id}", read=True, body="none"),
+    _route(
+        "GET",
+        "operations",
+        read=True,
+        body="none",
+        query=("status", "type", "limit", "offset", "exclude_parents"),
+    ),
+    _route(
+        "GET",
+        "operations/{operation_id}",
+        read=True,
+        body="none",
+        query=("include_payload",),
+    ),
     _route("DELETE", "operations/{operation_id}", read=False, body="none"),
     _route("DELETE", "operations/{operation_id}/delete", read=False, body="none"),
     _route("POST", "operations/{operation_id}/retry", read=False, body="none"),
     # Knowledge base.
-    _route("GET", "knowledge-base/search", read=True, body="none"),
+    _route(
+        "GET",
+        "knowledge-base/search",
+        read=True,
+        body="none",
+        query=("q", "limit"),
+        required_query=("q",),
+    ),
     _route("GET", "knowledge-base/tree", read=True, body="none"),
     _route("POST", "knowledge-base/folders", read=False, body="required", success_status=201),
     _route("POST", "knowledge-base/pages", read=False, body="required", success_status=201),
@@ -142,10 +238,35 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     _route("PATCH", "knowledge-base/nodes/{node_id}", read=False, body="required"),
     _route("DELETE", "knowledge-base/nodes/{node_id}", read=False, body="none"),
     # Bank observability.
-    _route("GET", "audit-logs", read=True, body="none"),
-    _route("GET", "audit-logs/stats", read=True, body="none"),
-    _route("GET", "llm-requests", read=True, body="none"),
-    _route("GET", "llm-requests/stats", read=True, body="none"),
+    _route(
+        "GET",
+        "audit-logs",
+        read=True,
+        body="none",
+        query=("action", "transport", "start_date", "end_date", "limit", "offset"),
+    ),
+    _route("GET", "audit-logs/stats", read=True, body="none", query=("action", "period")),
+    _route(
+        "GET",
+        "llm-requests",
+        read=True,
+        body="none",
+        query=(
+            "status",
+            "operation",
+            "scope",
+            "provider",
+            "trace_id",
+            "document_id",
+            "memory_id",
+            "group",
+            "start_date",
+            "end_date",
+            "limit",
+            "offset",
+        ),
+    ),
+    _route("GET", "llm-requests/stats", read=True, body="none", query=("operation", "period")),
 )
 
 
