@@ -801,21 +801,23 @@ async def dispatch(path: str, request: Request) -> Response:
     if matched is not None:
         route, route_match = matched
         writer_id = _decode_path_segment(route_match.group("bank"))
-        params = {name: _decode_path_segment(route_match.group(name)) for name in route.params}
-        body: dict[str, Any] | None = None
+        route_params = {
+            name: _decode_path_segment(route_match.group(name)) for name in route.params
+        }
+        facade_body: dict[str, Any] | None = None
         if route.body != "none":
             raw_body = await _json_body(request)
             if not isinstance(raw_body, dict):
                 raise HttpError(
                     400, "invalid_request", f"{route.body_label} body must be an object"
                 )
-            body = raw_body
+            facade_body = raw_body
         return JSONResponse(
             await facade.forward(
                 route=route,
                 writer_id=writer_id,
-                params=params,
-                body=body,
+                params=route_params,
+                body=facade_body,
                 query=list(request.query_params.multi_items()) or None,
             )
         )
