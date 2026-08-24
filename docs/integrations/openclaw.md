@@ -23,4 +23,4 @@ enableKnowledgeTools = false initially
 
 Writer IDs must exist in the configured Memory Router registry or their requests follow the unknown-writer quarantine policy.
 
-Other agent/application integrations are future work; they are not part of the current supported runtime contract.
+Any agent that speaks the bank-scoped Hindsight HTTP API can use Memory Router the same way: point it at the router URL with a router token and use the writer ID as the bank ID. Endpoints outside the facade surface (webhooks, file transfer, import/export, metrics, cross-writer listings) remain denied.

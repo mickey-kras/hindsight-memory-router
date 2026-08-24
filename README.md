@@ -16,11 +16,12 @@ OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
 
 Today it:
 
-- accepts the Hindsight-compatible retain/recall traffic used by the OpenClaw Hindsight plugin;
+- accepts the Hindsight-compatible traffic used by the OpenClaw Hindsight plugin;
+- proxies the bank-scoped Hindsight HTTP API (banks, memories, documents, entities, mental models, reflect, directives, operations, knowledge base) so agents can use it as a drop-in Hindsight endpoint;
 - maps configured writers to Hindsight banks;
 - enforces authentication, bounds, quotas, safety scanning, and encrypted quarantine before or after Hindsight calls as appropriate.
 
-Memory Router is not yet a generic agent/application memory facade. Support for additional clients or memory providers is future work and is not implemented in the current runtime.
+Cross-writer, file-transfer, webhook, and metrics endpoints remain denied by policy. Support for additional (non-Hindsight) memory providers is future work and is not implemented in the current runtime.
 
 ## Quick start
 

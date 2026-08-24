@@ -137,8 +137,8 @@ async def test_unrelated_hindsight_endpoint_remains_denied() -> None:
     app_module.runtime.policy = policy
 
     response = await app_module.dispatch(
-        "v1/default/banks/openclaw/memories/list",
-        request("GET", "/v1/default/banks/openclaw/memories/list"),
+        "v1/default/banks/openclaw/webhooks",
+        request("POST", "/v1/default/banks/openclaw/webhooks", body={"url": "https://x.test"}),
     )
 
     assert response.status_code == 404

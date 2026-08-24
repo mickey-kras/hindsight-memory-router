@@ -20,17 +20,21 @@ EXPECTED_ROUTES = {
     "/admin/quarantine/items/{quarantine_id}/reject": {"post"},
     "/admin/quarantine/items/{quarantine_id}/postpone": {"post"},
 }
-OPENCLAW_ROUTES = {
-    "/v1/default/banks/{bank_id}": {"put"},
-    "/v1/default/banks/{bank_id}/config": {"patch"},
-    "/v1/default/banks/{bank_id}/mental-models": {"get", "post"},
-    "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": {
-        "get",
-        "patch",
-        "delete",
-    },
-    "/v1/default/banks/{bank_id}/reflect": {"post"},
-}
+
+
+def _facade_routes() -> dict[str, set[str]]:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    routes: dict[str, set[str]] = {}
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        routes.setdefault(path, set()).add(route.method.lower())
+    return routes
+
+
+OPENCLAW_ROUTES = _facade_routes()
 
 
 def _spec() -> dict[str, object]:
@@ -76,16 +80,7 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     for path, marker in markers.items():
         assert marker in source, f"OpenAPI path has no dispatcher marker: {path}"
 
-    openclaw_markers = {
-        "/v1/default/banks/{bank_id}": "bank_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/config": "config_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/mental-models": "mental_list_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": "mental_item_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/reflect": "reflect_match = re.fullmatch",
-    }
-    assert set(openclaw_markers) == set(OPENCLAW_ROUTES)
-    for path, marker in openclaw_markers.items():
-        assert marker in source, f"OpenClaw OpenAPI path has no dispatcher marker: {path}"
+    assert "match_facade_route(method, pathname)" in source
 
 
 def test_version_and_recall_openapi_match_hindsight_facade() -> None:
