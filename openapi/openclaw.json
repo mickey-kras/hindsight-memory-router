@@ -1967,8 +1967,10 @@
             "required": false,
             "schema": {
               "items": {
-                "nullable": true,
-                "type": "string"
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "type": [
                 "array",
