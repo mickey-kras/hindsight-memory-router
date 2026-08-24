@@ -18,6 +18,27 @@ def _git_blob_sha(source: str) -> str:
     return hashlib.sha1(header + data, usedforsecurity=False).hexdigest()
 
 
+def _upstream_success_statuses(source: str) -> dict[tuple[str, str], set[int]]:
+    endpoints: dict[tuple[str, str], set[int]] = {}
+    path: str | None = None
+    method: str | None = None
+    in_responses = False
+    for line in source.splitlines():
+        if match := re.fullmatch(r"  (/[^:]+):", line):
+            path = match.group(1)
+            method = None
+            in_responses = False
+        elif match := re.fullmatch(r"    (get|post|put|patch|delete):", line):
+            method = match.group(1).upper()
+            in_responses = False
+        elif line == "      responses:":
+            in_responses = True
+        elif in_responses and (match := re.fullmatch(r'        "(2\\d\\d)":', line)):
+            if path is not None and method is not None:
+                endpoints.setdefault((method, path), set()).add(int(match.group(1)))
+    return endpoints
+
+
 def _documented_endpoints(path: Path) -> set[tuple[str, str]]:
     spec = json.loads(path.read_text(encoding="utf-8"))
     endpoints: set[tuple[str, str]] = set()
@@ -54,6 +75,27 @@ def main() -> int:
     plugin = sources["plugin"]
     defaults = sources["bank_defaults"]
     sdk = sources["agent_sdk"]
+
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    facade_statuses = _upstream_success_statuses(sources["facade_api"])
+    missing_facade = []
+    mismatched_statuses = []
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        statuses = facade_statuses.get((route.method, path))
+        if statuses is None:
+            missing_facade.append((route.method, path))
+        elif route.success_status not in statuses:
+            mismatched_statuses.append(
+                (route.method, path, route.success_status, sorted(statuses))
+            )
+    if missing_facade:
+        raise SystemExit(f"facade routes missing upstream: {missing_facade}")
+    if mismatched_statuses:
+        raise SystemExit(f"facade success statuses differ from upstream: {mismatched_statuses}")
 
     expected_plugin = set(inventory["plugin_client_methods"])
     actual_plugin = _methods(plugin, ("client", "c"))
