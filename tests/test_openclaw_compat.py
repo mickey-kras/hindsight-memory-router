@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from memory_router.errors import HttpError
+from memory_router.facade_routes import facade_route
 from memory_router.hindsight import HindsightGatewayError
 from memory_router.openclaw import OpenClawFacade
 from memory_router.security import scan_recall_body, scan_retain_body
@@ -189,14 +190,13 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
     policy = make_policy(response)
     facade = OpenClawFacade(policy)
 
+    template = "mental-models/{mental_model_id}" if mental_model_id is not None else resource
     result = await facade.forward(
+        route=facade_route(method, template),
         writer_id="openclaw",
-        method=method,
-        resource=resource,
+        params={"mental_model_id": mental_model_id} if mental_model_id is not None else {},
         body=body,
         query=query,
-        mental_model_id=mental_model_id,
-        read_operation=read_operation,
     )
 
     assert result == response
@@ -324,8 +324,19 @@ async def test_openclaw_request_strings_keys_and_values_are_scanned(
     policy = make_policy({"text": "safe"})
     facade = OpenClawFacade(policy)
 
+    forward_kwargs = dict(kwargs)
+    method = str(forward_kwargs.pop("method"))
+    resource = str(forward_kwargs.pop("resource"))
+    mental_model_id = forward_kwargs.pop("mental_model_id", None)
+    forward_kwargs.pop("read_operation", None)
+    template = "mental-models/{mental_model_id}" if mental_model_id is not None else resource
     with pytest.raises(HttpError) as blocked:
-        await facade.forward(writer_id="openclaw", **kwargs)  # type: ignore[arg-type]
+        await facade.forward(
+            route=facade_route(method, template),
+            writer_id="openclaw",
+            params={"mental_model_id": str(mental_model_id)} if mental_model_id is not None else {},
+            **forward_kwargs,  # type: ignore[arg-type]
+        )
 
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
@@ -351,11 +362,10 @@ async def test_openclaw_unsafe_provider_content_never_reaches_agent_when_audit_f
 
     with pytest.raises(HttpError) as blocked:
         await facade.forward(
+            route=facade_route("POST", "reflect"),
             writer_id="openclaw",
-            method="POST",
-            resource="reflect",
+            params={},
             body={"query": "safe question"},
-            read_operation=True,
         )
 
     assert blocked.value.code == "hindsight_unsafe_response"
@@ -369,11 +379,10 @@ async def test_invalid_openclaw_provider_shape_is_rejected() -> None:
 
     with pytest.raises(HindsightGatewayError) as invalid:
         await facade.forward(
+            route=facade_route("POST", "reflect"),
             writer_id="openclaw",
-            method="POST",
-            resource="reflect",
+            params={},
             body={"query": "safe question"},
-            read_operation=True,
         )
 
     assert invalid.value.code == "hindsight_invalid_response"
@@ -386,11 +395,10 @@ async def test_unknown_plugin_bank_cannot_address_upstream_bank() -> None:
 
     with pytest.raises(HttpError) as blocked:
         await facade.forward(
+            route=facade_route("POST", "reflect"),
             writer_id="arbitrary-upstream-bank",
-            method="POST",
-            resource="reflect",
+            params={},
             body={"query": "safe"},
-            read_operation=True,
         )
 
     assert blocked.value.code == "unknown_writer"
