@@ -55,6 +55,7 @@ configure_logging()
 _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
+_MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 try:
@@ -233,19 +234,19 @@ def _decode_path_segment(value: str) -> str:
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         ) from exc
     probe = decoded
-    for _ in range(2):
+    for _ in range(_MAX_PATH_PROBE_DECODES):
         if probe in {".", ".."}:
             raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
         try:
             next_probe = unquote(probe, encoding="utf-8", errors="strict")
         except (UnicodeDecodeError, ValueError):
-            break
+            return decoded
         if next_probe == probe:
-            break
+            return decoded
         probe = next_probe
     if probe in {".", ".."}:
         raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
-    return decoded
+    raise HttpError(400, "invalid_path_encoding", "path segment has excessive nested encoding")
 
 
 def _assert_json_depth(value: Any) -> None:

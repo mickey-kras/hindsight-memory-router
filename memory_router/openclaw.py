@@ -15,7 +15,6 @@ from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .security import (
-    SafetyFinding,
     SafetyResult,
     scan_facade_result,
     scan_query_values,
@@ -24,21 +23,29 @@ from .security import (
 )
 
 logger = logging.getLogger(__name__)
-_FACADE_SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="facade-scan")
-_FACADE_SCAN_CAPACITY = BoundedSemaphore(value=4)
+FACADE_SCAN_WORKERS = 4
+FACADE_SCAN_CAPACITY = 4
+FACADE_SCAN_WAIT_SECONDS = 31.0
+_FACADE_SCAN_EXECUTOR = ThreadPoolExecutor(
+    max_workers=FACADE_SCAN_WORKERS, thread_name_prefix="facade-scan"
+)
+_FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 
 
 async def _scan_facade_response(value: Any) -> SafetyResult:
     capacity = _FACADE_SCAN_CAPACITY
     if not capacity.acquire(blocking=False):
-        return SafetyResult(findings=[SafetyFinding("facade_scan_busy", "span_limit")])
+        raise HttpError(503, "facade_scan_unavailable", "response safety scanner is busy")
     try:
         future = _FACADE_SCAN_EXECUTOR.submit(scan_facade_result, value)
     except Exception:
         capacity.release()
         raise
     future.add_done_callback(lambda _: capacity.release())
-    return await asyncio.wrap_future(future)
+    try:
+        return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
+    except TimeoutError as exc:
+        raise HttpError(503, "facade_scan_unavailable", "response safety scan timed out") from exc
 
 
 class OpenClawFacade:
@@ -124,6 +131,15 @@ class OpenClawFacade:
         )
         if value is not None:
             response_scan = await _scan_facade_response(value)
+            if response_scan.findings and all(
+                finding.matched in {"facade_field_limit", "facade_time_limit"}
+                for finding in response_scan.findings
+            ):
+                raise HttpError(
+                    503,
+                    "facade_scan_unavailable",
+                    "response exceeded safety scan limits",
+                )
             if not response_scan.safe:
                 await self._audit(
                     writer_id,

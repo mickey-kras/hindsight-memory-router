@@ -30,7 +30,7 @@ MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
 FACADE_SCAN_BATCH_FIELDS = 32
 FACADE_SCAN_CARRY_FIELDS = FACADE_SCAN_BATCH_FIELDS
 MAX_FACADE_SCAN_FIELDS = 8_192
-MAX_FACADE_SCAN_SECONDS = 5.0
+MAX_FACADE_SCAN_SECONDS = 30.0
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
 _BASE64_PARTS = re.compile(r"[A-Za-z0-9+/=]+")
@@ -164,6 +164,8 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         cp = ord(char)
         invisible = (
             cp in {0x200B, 0x200C, 0x200D, 0x2060}
+            or 0x202A <= cp <= 0x202E
+            or 0x2066 <= cp <= 0x2069
             or 0xFE00 <= cp <= 0xFE0F
             or 0xE0000 <= cp <= 0xE007F
         )
@@ -270,23 +272,26 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
         for finding in _amg_scan(f"query.{key}", canonical, operation="read"):
             result.add(finding)
     if len(canonical_values) >= 2:
-        combined = ""
+        spaced = ""
+        compact = ""
         for value in canonical_values:
-            combined = _bounded_append(combined, value)
-        for finding in _rule_scan(combined):
-            if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
-                result.add(SafetyFinding(finding.matched, "split_instruction"))
-        for finding in _amg_scan("query.combined", combined, operation="read"):
-            if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
-                result.add(
-                    SafetyFinding(
-                        finding.matched,
-                        "split_instruction",
-                        finding.detector,
-                        finding.severity,
-                        finding.hits,
+            spaced = _bounded_append(spaced, value)
+            compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
+        for combined in dict.fromkeys((spaced, compact)):
+            for finding in _rule_scan(combined):
+                if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
+                    result.add(SafetyFinding(finding.matched, "split_instruction"))
+            for finding in _amg_scan("query.combined", combined, operation="read"):
+                if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
+                    result.add(
+                        SafetyFinding(
+                            finding.matched,
+                            "split_instruction",
+                            finding.detector,
+                            finding.severity,
+                            finding.hits,
+                        )
                     )
-                )
     return result
 
 
@@ -427,12 +432,13 @@ def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[st
         if not add(next_candidates, fragment, 0):
             break
         for candidate, skipped in candidates:
-            combined = candidate + fragment
-            if len(combined) <= MAX_SPLIT_BASE64_CANDIDATE_BYTES and not add(
-                next_candidates, combined, skipped
-            ):
-                exhausted = True
-                break
+            if "=" not in candidate:
+                combined = candidate + fragment
+                if len(combined) <= MAX_SPLIT_BASE64_CANDIDATE_BYTES and not add(
+                    next_candidates, combined, skipped
+                ):
+                    exhausted = True
+                    break
             if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
                 next_candidates, candidate, skipped + 1
             ):

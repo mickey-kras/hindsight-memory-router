@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -12,7 +13,7 @@ from memory_router import openclaw as openclaw_module
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES, facade_route, match_facade_route
 from memory_router.openclaw import OpenClawFacade
-from memory_router.security import SafetyResult
+from memory_router.security import SafetyFinding, SafetyResult
 from tests.request_helpers import request
 
 
@@ -336,6 +337,18 @@ async def test_facade_list_scans_all_fields_without_recall_span_limit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_facade_response_allows_independent_padded_base64_values() -> None:
+    policy = _policy({"items": [{"id": "aWQtMA=="}, {"id": "aWQtMQ=="}]})
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/memories/list"
+
+    response = await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert response.status_code == 200
+    policy._quarantine.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_facade_list_still_blocks_unsafe_late_field() -> None:
     items = [
         {f"field_{field}": f"ordinary value {item}-{field}" for field in range(30)}
@@ -413,10 +426,11 @@ async def test_facade_response_scan_fails_closed_when_capacity_is_full(monkeypat
             route=facade_route("GET", "stats"), writer_id="openclaw", params={}
         )
 
-    assert blocked.value.code == "hindsight_unsafe_response"
+    assert blocked.value.status == 503
+    assert blocked.value.code == "facade_scan_unavailable"
     capacity.acquire.assert_called_once_with(blocking=False)
     capacity.release.assert_not_called()
-    policy._quarantine.assert_awaited_once()
+    policy._quarantine.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -430,6 +444,82 @@ async def test_facade_response_scan_releases_capacity_when_submit_fails(monkeypa
         await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
 
     capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_has_an_await_deadline(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    future: Future[SafetyResult] = Future()
+    assert future.set_running_or_notify_cancel()
+    executor = SimpleNamespace(submit=Mock(return_value=future))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+    monkeypatch.setattr(openclaw_module, "FACADE_SCAN_WAIT_SECONDS", 0.0)
+
+    with pytest.raises(HttpError) as blocked:
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    assert blocked.value.status == 503
+    assert blocked.value.code == "facade_scan_unavailable"
+    capacity.release.assert_not_called()
+    future.set_result(SafetyResult())
+    capacity.release.assert_called_once_with()
+
+
+def test_facade_scan_worker_bounds_are_pinned() -> None:
+    assert openclaw_module.FACADE_SCAN_WORKERS == 4
+    assert openclaw_module.FACADE_SCAN_CAPACITY == 4
+    assert openclaw_module.FACADE_SCAN_WAIT_SECONDS == 31.0
+
+
+@pytest.mark.parametrize("matched", ["facade_field_limit", "facade_time_limit"])
+@pytest.mark.asyncio
+async def test_facade_scan_limits_are_operational_failures_without_quarantine(
+    monkeypatch, matched: str
+) -> None:
+    policy = _policy({"safe": True})
+    monkeypatch.setattr(
+        openclaw_module,
+        "_scan_facade_response",
+        AsyncMock(return_value=SafetyResult(findings=[SafetyFinding(matched, "span_limit")])),
+    )
+
+    with pytest.raises(HttpError) as blocked:
+        await OpenClawFacade(policy).forward(
+            route=facade_route("GET", "stats"), writer_id="openclaw", params={}
+        )
+
+    assert blocked.value.status == 503
+    assert blocked.value.code == "facade_scan_unavailable"
+    policy._quarantine.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_facade_scan_keeps_detected_content_unsafe_when_a_limit_also_trips(
+    monkeypatch,
+) -> None:
+    policy = _policy({"safe": True})
+    monkeypatch.setattr(
+        openclaw_module,
+        "_scan_facade_response",
+        AsyncMock(
+            return_value=SafetyResult(
+                findings=[
+                    SafetyFinding("facade_field_limit", "span_limit"),
+                    SafetyFinding("ignore previous instructions", "prompt_injection"),
+                ]
+            )
+        ),
+    )
+
+    with pytest.raises(HttpError) as blocked:
+        await OpenClawFacade(policy).forward(
+            route=facade_route("GET", "stats"), writer_id="openclaw", params={}
+        )
+
+    assert blocked.value.status == 502
+    assert blocked.value.code == "hindsight_unsafe_response"
+    policy._quarantine.assert_awaited_once()
 
 
 @pytest.mark.asyncio

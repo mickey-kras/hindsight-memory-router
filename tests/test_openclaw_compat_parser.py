@@ -67,3 +67,30 @@ paths:
 
     with pytest.raises(ValueError, match=r"unsupported .+ \$ref"):
         _upstream_operations(source)
+
+
+def test_upstream_openapi_parser_rejects_path_item_ref() -> None:
+    source = """
+openapi: 3.1.0
+paths:
+  /first:
+    $ref: '#/components/pathItems/First'
+"""
+
+    with pytest.raises(ValueError, match=r"unsupported path-item \$ref"):
+        _upstream_operations(source)
+
+
+def test_upstream_openapi_parser_rejects_shared_parameter_ref() -> None:
+    source = """
+openapi: 3.1.0
+paths:
+  /first:
+    parameters:
+      - {$ref: '#/components/parameters/Query'}
+    get:
+      responses: {200: {description: ok}}
+"""
+
+    with pytest.raises(ValueError, match=r"unsupported parameter \$ref"):
+        _upstream_operations(source)
