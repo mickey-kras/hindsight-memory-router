@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import json
-import threading
-from concurrent.futures import Future
+from concurrent.futures import Future, ProcessPoolExecutor
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -396,27 +395,24 @@ async def test_required_query_is_rejected_before_quota() -> None:
 
 
 @pytest.mark.asyncio
-async def test_facade_response_scan_runs_off_event_loop(monkeypatch) -> None:
+async def test_facade_response_scan_uses_the_process_executor(monkeypatch) -> None:
     policy = _policy({"safe": True})
-    event_loop_thread = threading.get_ident()
-    scan_thread: list[int] = []
-
-    def scan(_value: object) -> SafetyResult:
-        scan_thread.append(threading.get_ident())
-        return SafetyResult()
-
-    monkeypatch.setattr(openclaw_module, "scan_facade_result", scan)
+    future: Future[SafetyResult] = Future()
+    future.set_result(SafetyResult())
+    executor = SimpleNamespace(submit=Mock(return_value=future))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
 
     await OpenClawFacade(policy).forward(
         route=facade_route("GET", "stats"), writer_id="openclaw", params={}
     )
 
-    assert scan_thread
-    assert scan_thread[0] != event_loop_thread
+    executor.submit.assert_called_once_with(openclaw_module.scan_facade_result, {"safe": True})
 
 
 @pytest.mark.asyncio
-async def test_facade_response_scan_fails_closed_when_capacity_is_full(monkeypatch) -> None:
+async def test_facade_response_scan_fails_closed_when_capacity_is_full(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
     policy = _policy({"safe": True})
     capacity = SimpleNamespace(acquire=Mock(return_value=False), release=Mock())
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
@@ -428,6 +424,10 @@ async def test_facade_response_scan_fails_closed_when_capacity_is_full(monkeypat
 
     assert blocked.value.status == 503
     assert blocked.value.code == "facade_scan_unavailable"
+    assert blocked.value.headers == {"Retry-After": "1"}
+    record = next(record for record in caplog.records if record.msg == "facade_scan_failed")
+    assert record.error_kind == "capacity"  # type: ignore[attr-defined]
+    assert record.writer_id == "openclaw"  # type: ignore[attr-defined]
     capacity.acquire.assert_called_once_with(blocking=False)
     capacity.release.assert_not_called()
     policy._quarantine.assert_not_awaited()
@@ -470,6 +470,7 @@ def test_facade_scan_worker_bounds_are_pinned() -> None:
     assert openclaw_module.FACADE_SCAN_WORKERS == 4
     assert openclaw_module.FACADE_SCAN_CAPACITY == 4
     assert openclaw_module.FACADE_SCAN_WAIT_SECONDS == 31.0
+    assert isinstance(openclaw_module._FACADE_SCAN_EXECUTOR, ProcessPoolExecutor)
 
 
 @pytest.mark.parametrize("matched", ["facade_field_limit", "facade_time_limit"])
@@ -491,7 +492,19 @@ async def test_facade_scan_limits_are_operational_failures_without_quarantine(
 
     assert blocked.value.status == 503
     assert blocked.value.code == "facade_scan_unavailable"
+    assert blocked.value.headers == {"Retry-After": "1"}
     policy._quarantine.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_security_audit_uses_a_bounded_fallback_digest_for_noncanonical_values() -> None:
+    policy = _policy()
+
+    await OpenClawFacade(policy)._audit(  # noqa: SLF001
+        "openclaw", "openclaw_suspicious_request", float("nan"), None
+    )
+
+    policy._quarantine.assert_awaited_once()
 
 
 @pytest.mark.asyncio

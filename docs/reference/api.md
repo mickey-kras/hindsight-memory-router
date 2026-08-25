@@ -21,6 +21,7 @@ Facade contract: `openapi/openclaw.json`.
 - `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
 - Every route requires router authentication, safety scanning, and a retain or recall quota.
 - Write bodies use the global JSON limit. Retain has stricter content limits.
+- Facade scanner capacity or field/time exhaustion returns `503 facade_scan_unavailable` with `Retry-After: 1`.
 - Empty upstream success bodies keep the route status and return JSON `null`.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 

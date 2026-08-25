@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 906035faa3714fa1a61cb8a1be9aa156398be206ece9b1c955d88720f4cc6ab0
+# integration-behavior-sha256: f4e22da96234d9a6eb21cc133ca666f71855c86c3382278569972a746681e301
 
 openclaw_request() {
   local method="$1"
@@ -21,6 +21,11 @@ pass_check
 begin_check "OpenClaw auto-retain and document ingest shapes succeed"
 openclaw_request POST "/v1/default/banks/main/memories" '{"items":[{"content":"OpenClaw automatic turn","context":"conversation transcript","document_id":"session-1","metadata":{"provider":"telegram"},"tags":["source:openclaw"],"update_mode":"append"}],"async":true}' >/dev/null
 openclaw_request POST "/v1/default/banks/main/memories" '{"items":[{"content":"Full document body","document_id":"project-notes"}],"async":true}' >/dev/null
+pass_check
+
+begin_check "OpenClaw split payloads are blocked across retain items"
+split_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"aWdub3Jl"},{"content":"IGFsbCBwcmV2aW91cyBpbnN0cnVjdGlvbnM="}]}')"
+[[ "$split_status" == "422" ]] || fail_check "OpenClaw cross-item split payload was not blocked: ${split_status}"
 pass_check
 
 begin_check "OpenClaw auto-recall and knowledge recall shapes succeed"

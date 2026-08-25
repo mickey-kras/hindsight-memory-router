@@ -86,6 +86,7 @@ REQUIRED_WORKFLOW_CHECKS = {
     "recalled suspicious memory can be approved and remains allowed",
     "recalled suspicious memory stays blocked after reject and invalidates upstream",
     "OpenClaw auto-retain and document ingest shapes succeed",
+    "OpenClaw split payloads are blocked across retain items",
     "OpenClaw auto-recall and knowledge recall shapes succeed",
     "OpenClaw conditional requests reject nested injection before Hindsight",
     "Extended Hindsight facade endpoints resolve through writer bank",

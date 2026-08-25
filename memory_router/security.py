@@ -7,6 +7,7 @@ import time
 import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any
 
 from agent_memory_guard.detectors import (
@@ -16,10 +17,11 @@ from agent_memory_guard.detectors import (
     SensitiveDataDetector,
     ToolAbuseDetector,
 )
+from confusables import normalize as normalize_confusables  # type: ignore[import-untyped]
 
-MAX_CANONICAL_BYTES = 64 * 1024
 MAX_SCAN_FIELDS = 128
 MAX_ROLLING_WINDOWS = 128
+MAX_SPLIT_WINDOW_BYTES = 512
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
 MAX_SPLIT_BASE64_CANDIDATES = 64
@@ -28,9 +30,10 @@ MAX_SPLIT_BASE64_SKIPS = 2
 MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
 FACADE_SCAN_BATCH_FIELDS = 32
-FACADE_SCAN_CARRY_FIELDS = FACADE_SCAN_BATCH_FIELDS
+FACADE_SCAN_CARRY_FIELDS = 2
 MAX_FACADE_SCAN_FIELDS = 8_192
 MAX_FACADE_SCAN_SECONDS = 30.0
+MAX_RETAIN_SCAN_FIELDS = MAX_FACADE_SCAN_FIELDS
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
 _BASE64_PARTS = re.compile(r"[A-Za-z0-9+/=]+")
@@ -59,59 +62,68 @@ def _decoded(value: str) -> str:
 
 _RULE_SPECS: tuple[tuple[str, str, str], ...] = (
     (
-        "69676e6f72655c732b28616c6c5c732b293f70726576696f75735c732b696e737472756374696f6e73",
+        "69676e6f72655c732b28616c6c5c732b293f70726576696f75735c732b696e737472756374696f6e735c62",
         "69676e6f72652070726576696f757320696e737472756374696f6e73",
         "prompt_injection",
     ),
-    ("73797374656d5c732b70726f6d7074", "73797374656d2070726f6d7074", "prompt_injection"),
+    ("73797374656d5c732b70726f6d70745c62", "73797374656d2070726f6d7074", "prompt_injection"),
     (
-        "646576656c6f7065725c732b6d657373616765",
+        "646576656c6f7065725c732b6d6573736167655c62",
         "646576656c6f706572206d657373616765",
         "prompt_injection",
     ),
     (
-        "6e65775c732b696e737472756374696f6e73",
+        "6e65775c732b696e737472756374696f6e735c62",
         "6e657720696e737472756374696f6e73",
         "prompt_injection",
     ),
-    ("796f755c732b6172655c732b6e6f77", "796f7520617265206e6f77", "prompt_injection"),
+    ("796f755c732b6172655c732b6e6f775c62", "796f7520617265206e6f77", "prompt_injection"),
     (
-        "77726974655c732b746869735c732b746f5c732b6d656d6f7279",
+        "77726974655c732b746869735c732b746f5c732b6d656d6f72795c62",
         "7772697465207468697320746f206d656d6f7279",
         "prompt_injection",
     ),
     (
-        "72656d656d6265725c732b746869735c732b61735c732b7472757468",
+        "72656d656d6265725c732b746869735c732b61735c732b74727574685c62",
         "72656d656d6265722074686973206173207472757468",
         "prompt_injection",
     ),
     (
-        "73746f72655c732b746869735c732b61735c732b636f72655c732b6d656d6f7279",
+        "73746f72655c732b746869735c732b61735c732b636f72655c732b6d656d6f72795c62",
         "73746f7265207468697320617320636f7265206d656d6f7279",
         "prompt_injection",
     ),
     (
-        "6f76657277726974655c732b7065726d697373696f6e73",
+        "6f76657277726974655c732b7065726d697373696f6e735c62",
         "6f7665727772697465207065726d697373696f6e73",
         "permission_rewrite",
     ),
     (
-        "72657665616c5c732b287468655c732b293f287365637265747c746f6b656e7c6b657929",
+        "72657665616c5c732b287468655c732b293f287365637265747c746f6b656e7c6b6579295c62",
         "72657665616c20736563726574",
         "secret_like",
     ),
     ("5c626170695b5f202d5d3f6b65795c62", "617069206b6579", "secret_like"),
-    ("707269766174655c732b6b6579", "70726976617465206b6579", "secret_like"),
+    ("707269766174655c732b6b65795c62", "70726976617465206b6579", "secret_like"),
     (
-        "424547494e5c732b4f50454e5353485c732b505249564154455c732b4b4559",
+        "424547494e5c732b4f50454e5353485c732b505249564154455c732b4b45595c62",
         "70726976617465206b657920626c6f636b",
         "secret_like",
     ),
-    ("657866696c7472617465", "657866696c7472617465", "secret_like"),
+    ("657866696c74726174655c62", "657866696c7472617465", "secret_like"),
 )
 _RULES: tuple[tuple[re.Pattern[str], str, str], ...] = tuple(
     (re.compile(_decoded(pattern), re.I), _decoded(matched), reason)
     for pattern, matched, reason in _RULE_SPECS
+)
+_NON_IMPERATIVE_SPLIT_MATCHES = frozenset(
+    {"system prompt", "developer message", "new instructions"}
+)
+_SPLIT_INSTRUCTION_RULES = tuple(
+    rule
+    for rule in _RULES
+    if rule[2] in {"prompt_injection", "permission_rewrite"}
+    and rule[1] not in _NON_IMPERATIVE_SPLIT_MATCHES
 )
 
 
@@ -153,6 +165,14 @@ class _EncodedState:
     seen: set[str] = field(default_factory=set)
 
 
+@lru_cache(maxsize=1_024)
+def _fold_confusable_char(char: str) -> str:
+    if char.isascii():
+        return char
+    folded = normalize_confusables(char, prioritize_alpha=True)
+    return folded[0] if folded else char
+
+
 def canonicalize_content(content: str) -> tuple[str, set[str]]:
     normalized = unicodedata.normalize("NFKC", content)
     transformations: set[str] = set()
@@ -160,22 +180,33 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         transformations.add("nfkc")
     chars: list[str] = []
     removed = False
+    display_modifier_removed = False
     for char in normalized:
         cp = ord(char)
+        display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
         invisible = (
-            cp in {0x200B, 0x200C, 0x200D, 0x2060}
+            cp in {0x200B, 0x2060}
             or 0x202A <= cp <= 0x202E
             or 0x2066 <= cp <= 0x2069
-            or 0xFE00 <= cp <= 0xFE0F
             or 0xE0000 <= cp <= 0xE007F
         )
-        if invisible:
+        if display_modifier:
+            display_modifier_removed = True
+        elif invisible:
             removed = True
         else:
             chars.append(char)
+    canonical = "".join(chars)
     if removed:
         transformations.add("invisible")
-    return "".join(chars), transformations
+    if display_modifier_removed:
+        transformations.add("display_modifier")
+    if not canonical.isascii():
+        skeleton = "".join(_fold_confusable_char(char) for char in canonical)
+        if skeleton != canonical:
+            canonical = skeleton
+            transformations.add("confusable")
+    return canonical, transformations
 
 
 def scan_content(content: str, *, operation: str = "read", key: str = "content") -> SafetyResult:
@@ -183,17 +214,12 @@ def scan_content(content: str, *, operation: str = "read", key: str = "content")
 
 
 def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
-    result = _scan_fields(
-        _walk_strings({key: value for key, value in body.items() if key != "items"}, "retain"),
+    return _scan_batched_fields(
+        _walk_strings(body, "retain"),
         operation="write",
+        max_fields=MAX_RETAIN_SCAN_FIELDS,
+        field_limit_match="field_limit",
     )
-    items = body.get("items")
-    if isinstance(items, list):
-        for index, item in enumerate(items):
-            result.extend(
-                _scan_fields(_walk_strings(item, f"retain.items.{index}"), operation="write")
-            )
-    return result
 
 
 def scan_recall_body(body: dict[str, Any]) -> SafetyResult:
@@ -211,30 +237,48 @@ def scan_facade_result(result: Any) -> SafetyResult:
     instruction reassembly is bounded and does not skip arbitrary fields.
     """
 
+    return _scan_batched_fields(
+        _walk_strings(result, "facade_response"),
+        operation="read",
+        max_fields=MAX_FACADE_SCAN_FIELDS,
+        field_limit_match="facade_field_limit",
+        deadline_seconds=MAX_FACADE_SCAN_SECONDS,
+        time_limit_match="facade_time_limit",
+    )
+
+
+def _scan_batched_fields(
+    source: Iterable[tuple[str, str, bool]],
+    *,
+    operation: str,
+    max_fields: int,
+    field_limit_match: str,
+    deadline_seconds: float | None = None,
+    time_limit_match: str | None = None,
+) -> SafetyResult:
     combined = SafetyResult()
-    fields = iter(_walk_strings(result, "facade_response"))
+    fields = iter(source)
     carry: list[tuple[str, str, bool]] = []
     split_fields: list[tuple[str, str, bool]] = []
     scanned_fields = 0
-    deadline = time.monotonic() + MAX_FACADE_SCAN_SECONDS
+    deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
 
     def finish() -> SafetyResult:
-        for candidate in _split_base64_candidates(split_fields):
-            _scan_encoded(combined, "split-base64", candidate, "read", _EncodedState())
+        _scan_split_base64(combined, split_fields, operation)
         return combined
 
     while True:
         batch: list[tuple[str, str, bool]] = []
         for _ in range(FACADE_SCAN_BATCH_FIELDS):
-            if scanned_fields and time.monotonic() >= deadline:
-                combined.add(SafetyFinding("facade_time_limit", "span_limit"))
+            if scanned_fields and deadline is not None and time.monotonic() >= deadline:
+                combined.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
                 return finish()
-            if scanned_fields >= MAX_FACADE_SCAN_FIELDS:
+            if scanned_fields >= max_fields:
                 try:
                     next(fields)
                 except StopIteration:
                     return finish()
-                combined.add(SafetyFinding("facade_field_limit", "span_limit"))
+                combined.add(SafetyFinding(field_limit_match, "span_limit"))
                 return finish()
             try:
                 field = next(fields)
@@ -250,7 +294,7 @@ def scan_facade_result(result: Any) -> SafetyResult:
         combined.extend(
             _scan_fields(
                 [*carry, *batch],
-                operation="read",
+                operation=operation,
                 isolated_encoded_fields=True,
                 scan_split_base64=False,
             )
@@ -264,8 +308,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     result = SafetyResult()
     canonical_values: list[str] = []
     for key, raw in query:
-        canonical, transformations = canonicalize_content(raw)
-        result.transformations.update(transformations)
+        canonical, _ = canonicalize_content(raw)
         canonical_values.append(canonical)
         for finding in _rule_scan(canonical):
             result.add(finding)
@@ -278,20 +321,9 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             spaced = _bounded_append(spaced, value)
             compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
         for combined in dict.fromkeys((spaced, compact)):
-            for finding in _rule_scan(combined):
+            for finding in _split_instruction_rule_scan(combined):
                 if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
                     result.add(SafetyFinding(finding.matched, "split_instruction"))
-            for finding in _amg_scan("query.combined", combined, operation="read"):
-                if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
-                    result.add(
-                        SafetyFinding(
-                            finding.matched,
-                            "split_instruction",
-                            finding.detector,
-                            finding.severity,
-                            finding.hits,
-                        )
-                    )
     return result
 
 
@@ -395,9 +427,25 @@ def _scan_fields(
                 break
 
     if scan_split_base64:
-        for candidate in _split_base64_candidates(canonical_fields):
-            _scan_encoded(result, "split-base64", candidate, operation, _EncodedState())
+        _scan_split_base64(result, canonical_fields, operation)
     return result
+
+
+def _scan_split_base64(
+    result: SafetyResult, fields: Iterable[tuple[str, str, bool]], operation: str
+) -> None:
+    materialized = list(fields)
+    for candidate in _split_base64_candidates(materialized):
+        _scan_encoded(result, "split-base64", candidate, operation, _EncodedState())
+    for compact, spaced in _split_decoded_base64_candidates(materialized):
+        for candidate in dict.fromkeys((compact, spaced)):
+            findings = _rule_scan(candidate) + _amg_scan(
+                "split-base64.decoded", candidate, operation=operation
+            )
+            if findings:
+                result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
+                for finding in findings:
+                    result.add(finding)
 
 
 def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[str]:
@@ -448,6 +496,89 @@ def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[st
         if exhausted:
             break
     return [candidate for candidate, _ in candidates if len(candidate) >= 8]
+
+
+def _split_decoded_base64_candidates(
+    fields: Iterable[tuple[str, str, bool]],
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str, int, int, bool]] = []
+    work_bytes = 0
+
+    def add(
+        target: list[tuple[str, str, int, int, bool]],
+        compact: str,
+        spaced: str,
+        parts: int,
+        skipped: int,
+        terminated: bool,
+    ) -> bool:
+        nonlocal work_bytes
+        size = len(compact.encode("utf-8")) + len(spaced.encode("utf-8"))
+        if size > MAX_SPLIT_BASE64_WORK_BYTES:
+            return True
+        if work_bytes + size > MAX_SPLIT_BASE64_WORK_BYTES:
+            return False
+        work_bytes += size
+        target.append((compact, spaced, parts, skipped, terminated))
+        return True
+
+    fragment_fields = 0
+    for _, canonical, is_key in fields:
+        fragment = _normalized_base64_fragment(canonical)
+        if fragment is None:
+            continue
+        if is_key and not _looks_like_base64(fragment):
+            continue
+        decoded = _decode_base64_fragment(fragment)
+        if decoded is None:
+            continue
+        fragment_fields += 1
+        if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
+            break
+        next_candidates: list[tuple[str, str, int, int, bool]] = []
+        if not add(next_candidates, decoded, decoded, 1, 0, "=" in fragment):
+            break
+        exhausted = False
+        for compact, spaced, parts, skipped, terminated in candidates:
+            if not add(
+                next_candidates,
+                _bounded_utf8_suffix(f"{compact}{decoded}".encode()),
+                _bounded_append(spaced, decoded),
+                parts + 1,
+                skipped,
+                terminated or "=" in fragment,
+            ):
+                exhausted = True
+                break
+            if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
+                next_candidates, compact, spaced, parts, skipped + 1, terminated
+            ):
+                exhausted = True
+                break
+        unique = dict.fromkeys(next_candidates)
+        candidates = sorted(unique, key=lambda value: (-len(value[0]), value[3]))[
+            :MAX_SPLIT_BASE64_CANDIDATES
+        ]
+        if exhausted:
+            break
+    return [
+        (compact, spaced)
+        for compact, spaced, parts, _, terminated in candidates
+        if parts >= 2 and terminated
+    ]
+
+
+def _decode_base64_fragment(fragment: str) -> str | None:
+    if len(fragment) % 4 or not _CANONICAL_BASE64.fullmatch(fragment):
+        return None
+    try:
+        decoded = base64.b64decode(fragment, validate=True)
+        if len(decoded) > MAX_BASE64_DECODED_BYTES:
+            return None
+        text = decoded.decode("utf-8", errors="strict")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return None
+    return text if text and all(char.isprintable() or char.isspace() for char in text) else None
 
 
 def _normalized_base64_fragment(value: str) -> str | None:
@@ -530,6 +661,14 @@ def _rule_scan(value: str) -> list[SafetyFinding]:
     return [
         SafetyFinding(matched, reason, hits=(match.group(0),))
         for pattern, matched, reason in _RULES
+        if (match := pattern.search(value)) is not None
+    ]
+
+
+def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
+    return [
+        SafetyFinding(matched, reason, hits=(match.group(0),))
+        for pattern, matched, reason in _SPLIT_INSTRUCTION_RULES
         if (match := pattern.search(value)) is not None
     ]
 
@@ -627,9 +766,9 @@ def _bounded_append(window: str, field: str) -> str:
 
 
 def _bounded_utf8_suffix(data: bytes) -> str:
-    if len(data) <= MAX_CANONICAL_BYTES:
+    if len(data) <= MAX_SPLIT_WINDOW_BYTES:
         return data.decode("utf-8")
-    suffix = data[-MAX_CANONICAL_BYTES:]
+    suffix = data[-MAX_SPLIT_WINDOW_BYTES:]
     while suffix:
         try:
             return suffix.decode("utf-8")

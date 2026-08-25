@@ -37,6 +37,7 @@ EVENTS = frozenset(
         "authentication_audit_failed",
         "bank_unavailable",
         "configuration_warning",
+        "facade_scan_failed",
         "hindsight_readiness_failed",
         "hindsight_readiness_recovered",
         "hindsight_request_failed",
@@ -76,6 +77,7 @@ OPERATIONS = frozenset(
     {
         "authenticate",
         "configuration",
+        "facade_scan",
         "health",
         "invalidate_memory",
         "openclaw_bank",

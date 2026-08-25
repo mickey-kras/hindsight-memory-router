@@ -6,13 +6,14 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from memory_router import admin as admin_module
+from memory_router import security as security_module
 from memory_router.admin import QuarantineAdminService
 from memory_router.errors import HttpError
 from memory_router.models import WriterRegistry
 from memory_router.policy import RouterPolicy, recalled_content_digest
 from memory_router.repository import QuarantineRepository
 from memory_router.review_repository import claim_review, remove
-from memory_router.security import MAX_SCAN_FIELDS, scan_retain_body
+from memory_router.security import scan_retain_body
 
 QID = "q_item_0123456789abcdef"
 
@@ -111,8 +112,9 @@ def test_scanner_detects_instruction_split_across_key_and_value() -> None:
     assert any(finding.reason == "split_instruction" for finding in result.findings)
 
 
-def test_scanner_field_budget_fails_closed() -> None:
-    body = {"items": [{f"field_{index}": "ordinary" for index in range(MAX_SCAN_FIELDS + 1)}]}
+def test_scanner_field_budget_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(security_module, "MAX_RETAIN_SCAN_FIELDS", 64)
+    body = {"items": [{f"field_{index}": "ordinary" for index in range(65)}]}
     result = scan_retain_body(body)
     assert any(
         finding.matched == "field_limit" and finding.reason == "span_limit"

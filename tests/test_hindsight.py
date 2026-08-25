@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from memory_router.hindsight import (
+    MAX_FACADE_RESPONSE_BYTES,
     MAX_HINDSIGHT_JSON_DEPTH,
     HindsightGateway,
     HindsightGatewayError,
@@ -45,6 +46,37 @@ def _facade_version_response() -> dict[str, object]:
     ):
         features[feature] = False
     return response
+
+
+@pytest.mark.asyncio
+async def test_openclaw_facade_uses_the_smaller_response_limit() -> None:
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value={})  # type: ignore[method-assign]
+    try:
+        await gateway.openclaw_request("openclaw_stats", "GET", "/stats")
+    finally:
+        await gateway.close()
+
+    assert gateway._request.await_args.kwargs["response_limit"] == MAX_FACADE_RESPONSE_BYTES
+
+
+@pytest.mark.asyncio
+async def test_openclaw_facade_rejects_oversized_response_before_scanning() -> None:
+    raw = b'{"value":"' + (b"x" * MAX_FACADE_RESPONSE_BYTES) + b'"}'
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=raw, request=request)
+
+    gateway = HindsightGateway("http://hindsight", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(HindsightGatewayError) as exc:
+            await gateway.openclaw_request("openclaw_stats", "GET", "/stats")
+    finally:
+        await gateway.close()
+
+    assert exc.value.code == "hindsight_response_too_large"
 
 
 @pytest.mark.asyncio

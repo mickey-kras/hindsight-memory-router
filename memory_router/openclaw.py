@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 from threading import BoundedSemaphore
 from typing import Any
 from urllib.parse import quote, urlencode
@@ -26,16 +26,36 @@ logger = logging.getLogger(__name__)
 FACADE_SCAN_WORKERS = 4
 FACADE_SCAN_CAPACITY = 4
 FACADE_SCAN_WAIT_SECONDS = 31.0
-_FACADE_SCAN_EXECUTOR = ThreadPoolExecutor(
-    max_workers=FACADE_SCAN_WORKERS, thread_name_prefix="facade-scan"
-)
+_FACADE_SCAN_EXECUTOR = ProcessPoolExecutor(max_workers=FACADE_SCAN_WORKERS)
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 
 
-async def _scan_facade_response(value: Any) -> SafetyResult:
+def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = None) -> HttpError:
+    log_event(
+        logger,
+        "warning",
+        "facade_scan_failed",
+        request_id=current_request_id(),
+        operation="facade_scan",
+        error_kind=error_kind,
+        outcome="failed",
+        route_class="openclaw",
+        writer_id=writer_id,
+    )
+    return HttpError(
+        503,
+        "facade_scan_unavailable",
+        message,
+        headers={"Retry-After": "1"},
+    )
+
+
+async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
     capacity = _FACADE_SCAN_CAPACITY
     if not capacity.acquire(blocking=False):
-        raise HttpError(503, "facade_scan_unavailable", "response safety scanner is busy")
+        raise _scan_unavailable(
+            "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
+        )
     try:
         future = _FACADE_SCAN_EXECUTOR.submit(scan_facade_result, value)
     except Exception:
@@ -45,7 +65,9 @@ async def _scan_facade_response(value: Any) -> SafetyResult:
     try:
         return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
     except TimeoutError as exc:
-        raise HttpError(503, "facade_scan_unavailable", "response safety scan timed out") from exc
+        raise _scan_unavailable(
+            "response safety scan timed out", error_kind="timeout", writer_id=writer_id
+        ) from exc
 
 
 class OpenClawFacade:
@@ -130,15 +152,22 @@ class OpenClawFacade:
             f"openclaw_{route.operation}", route.method, path, body
         )
         if value is not None:
-            response_scan = await _scan_facade_response(value)
+            response_scan = await _scan_facade_response(value, writer_id=writer_id)
             if response_scan.findings and all(
                 finding.matched in {"facade_field_limit", "facade_time_limit"}
                 for finding in response_scan.findings
             ):
-                raise HttpError(
-                    503,
-                    "facade_scan_unavailable",
+                error_kind = (
+                    "timeout"
+                    if any(
+                        finding.matched == "facade_time_limit" for finding in response_scan.findings
+                    )
+                    else "response-too-large"
+                )
+                raise _scan_unavailable(
                     "response exceeded safety scan limits",
+                    error_kind=error_kind,
+                    writer_id=writer_id,
                 )
             if not response_scan.safe:
                 await self._audit(

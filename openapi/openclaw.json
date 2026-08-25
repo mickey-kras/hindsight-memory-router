@@ -212,9 +212,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -649,9 +646,6 @@
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
-          },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
@@ -1209,9 +1203,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -1547,9 +1538,6 @@
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
-          },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
@@ -2334,9 +2322,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -3029,9 +3014,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -3581,9 +3563,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -3991,9 +3970,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -4317,9 +4293,6 @@
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
-          },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
@@ -4657,9 +4630,6 @@
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
           },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
-          },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
@@ -4722,9 +4692,6 @@
           },
           "502": {
             "$ref": "#/components/responses/UpstreamFailure"
-          },
-          "503": {
-            "$ref": "#/components/responses/ScanUnavailable"
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
@@ -5372,6 +5339,15 @@
       },
       "ScanUnavailable": {
         "description": "Router response safety scanner is busy or exceeded its field/time limits",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
         "content": {
           "application/json": {
             "schema": {

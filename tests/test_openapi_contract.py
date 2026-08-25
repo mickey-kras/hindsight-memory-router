@@ -132,7 +132,8 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
                 continue
             assert operation["security"] == [{"RouterToken": []}]
             responses = operation["responses"]
-            assert {"400", "401", "404", "422", "429", "4XX", "502", "503", "504"} <= set(responses)
+            assert {"400", "401", "404", "422", "429", "4XX", "502", "504"} <= set(responses)
+            assert ("503" in responses) is (method != "delete")
             assert ("413" in responses) is ("requestBody" in operation)
 
 
@@ -165,6 +166,8 @@ def test_openclaw_openapi_documents_route_metadata_and_response_schemas() -> Non
     )
     rate_limited = _openclaw_spec()["components"]["responses"]["RateLimited"]
     assert "Retry-After" in rate_limited["headers"]
+    scan_unavailable = _openclaw_spec()["components"]["responses"]["ScanUnavailable"]
+    assert "Retry-After" in scan_unavailable["headers"]
 
 
 def test_openclaw_strict_contracts_have_exact_openapi_schemas() -> None:

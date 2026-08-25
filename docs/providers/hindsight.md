@@ -25,8 +25,8 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - GET, reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
 - Retain and recall also enforce content/query limits. Other writes rely on the JSON limit and Hindsight validation.
-- Response scan: four concurrent jobs, 8,192 fields, 30 seconds.
-- Scan capacity/limit failure: `503 facade_scan_unavailable`; no quarantine.
+- Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
+- Scan capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
 
 Webhooks, file transfer, import/export, metrics, cross-writer listings, and deprecated upstream routes are denied and quarantined.
@@ -39,6 +39,8 @@ Webhooks, file transfer, import/export, metrics, cross-writer listings, and depr
 | --- | --- |
 | Timeout | `504 hindsight_timeout` |
 | Facade 4xx except 401/403 | Same status, sanitized `hindsight_http_error` |
+| Facade response over 256 KiB | `502 hindsight_response_too_large` |
+| Facade scanner busy or over field/time limits | `503 facade_scan_unavailable` |
 | Redirect, 401/403, 5xx, network, or malformed response | Typed 502 |
 
 Upstream response bodies are never returned.
@@ -49,6 +51,6 @@ A typed recall failure affects only the Hindsight read bank that failed. If all 
 
 Retain and recall have separate per-writer and global sliding-window budgets. Request bounds return `413`; quota exhaustion returns `429 hindsight_rate_limited` with `Retry-After`.
 
-PostgreSQL-backed limits are shared across router replicas. These normal Hindsight limits are independent of quarantine capacity/rate limits and admin throttling. Requests that are quarantined or blocked before reaching Hindsight do not consume the normal Hindsight budget.
+PostgreSQL-backed limits are shared across router replicas. These normal Hindsight limits are independent of quarantine capacity/rate limits and admin throttling. Requests blocked before the upstream call do not consume quota. Once admitted, upstream and response-scan failures consume quota.
 
 A generic memory-provider abstraction or support for additional memory systems is not implemented in this repository yet.

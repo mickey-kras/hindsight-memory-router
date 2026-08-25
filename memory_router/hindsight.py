@@ -16,6 +16,7 @@ from .observability import current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_FACADE_RESPONSE_BYTES = 256 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
@@ -195,7 +196,14 @@ class HindsightGateway:
         self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
     ) -> Any:
         """Forward one allowlisted OpenClaw-facing Hindsight operation."""
-        return await self._request(operation, method, path, body, preserve_http_status=True)
+        return await self._request(
+            operation,
+            method,
+            path,
+            body,
+            preserve_http_status=True,
+            response_limit=min(self.max_response_bytes, MAX_FACADE_RESPONSE_BYTES),
+        )
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
@@ -213,7 +221,9 @@ class HindsightGateway:
         body: Any = None,
         *,
         preserve_http_status: bool = False,
+        response_limit: int | None = None,
     ) -> Any:
+        max_response_bytes = self.max_response_bytes if response_limit is None else response_limit
         headers = {"content-type": "application/json"}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
@@ -249,7 +259,7 @@ class HindsightGateway:
                 if (
                     content_length
                     and content_length.isdigit()
-                    and int(content_length) > self.max_response_bytes
+                    and int(content_length) > max_response_bytes
                 ):
                     raise HindsightGatewayError(
                         "response-too-large",
@@ -261,7 +271,7 @@ class HindsightGateway:
                 size = 0
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
-                    if size > self.max_response_bytes:
+                    if size > max_response_bytes:
                         raise HindsightGatewayError(
                             "response-too-large",
                             upstream_status=response.status_code,
