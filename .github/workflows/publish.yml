@@ -44,7 +44,7 @@ jobs:
 
       - name: Connect to the tailnet
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: tailscale/github-action@6cae46e2d796f265265cfcf628b72a32b4d7cade # v3
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           use-cache: 'true'
