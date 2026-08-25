@@ -32,6 +32,8 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
     for path, path_item in document["paths"].items():
         if not isinstance(path, str) or not isinstance(path_item, dict):
             continue
+        if "$ref" in path_item:
+            raise ValueError(f"unsupported path-item $ref at {path}")
         shared_parameters = path_item.get("parameters", [])
         if not isinstance(shared_parameters, list):
             shared_parameters = []
@@ -39,6 +41,8 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
             if method not in HTTP_METHODS or not isinstance(operation, dict):
                 continue
             request_body = operation.get("requestBody")
+            if isinstance(request_body, dict) and "$ref" in request_body:
+                raise ValueError(f"unsupported requestBody $ref at {method.upper()} {path}")
             if request_body is None:
                 body_mode = "none"
             elif isinstance(request_body, dict) and request_body.get("required") is True:
@@ -49,6 +53,8 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
             operation_parameters = operation.get("parameters", [])
             if isinstance(operation_parameters, list):
                 parameters.extend(operation_parameters)
+            if any(isinstance(parameter, dict) and "$ref" in parameter for parameter in parameters):
+                raise ValueError(f"unsupported parameter $ref at {method.upper()} {path}")
             query = {
                 parameter["name"]: parameter.get("required") is True
                 for parameter in parameters

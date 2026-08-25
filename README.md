@@ -20,7 +20,7 @@ Memory Router:
 - maps writer IDs to Hindsight banks;
 - applies authentication, bounds, quotas, safety scans, and encrypted quarantine.
 
-Cross-writer, file-transfer, webhook, and metrics endpoints are denied. Hindsight is the only supported memory backend.
+Cross-writer, file-transfer, import/export, webhook, metrics, and deprecated endpoints are denied. Hindsight is the only supported memory backend.
 
 ## Quick start
 

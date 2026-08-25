@@ -21,7 +21,7 @@ Facade contract: `openapi/openclaw.json`.
 - `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
 - Every route requires router authentication, safety scanning, and a retain or recall quota.
 - Write bodies use the global JSON limit. Retain has stricter content limits.
-- Empty upstream 2xx bodies return `200 null`.
+- Empty upstream success bodies keep the route status and return JSON `null`.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 
 Denied: webhooks, file upload/transfer, import/export, `/metrics`, deprecated upstream routes, and cross-writer endpoints (`GET /v1/default/banks`, `/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`).

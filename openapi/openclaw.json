@@ -47,15 +47,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/BankProfileResponse"
                 }
               }
             }
@@ -492,15 +484,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/BankConfigResponse"
                 }
               }
             }
@@ -3581,15 +3565,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/MentalModelListResponse"
                 }
               }
             }
@@ -3650,15 +3626,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/CreateMentalModelResponse"
                 }
               }
             }
@@ -3734,15 +3702,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/MentalModelResponse"
                 }
               }
             }
@@ -3806,15 +3766,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/MentalModelResponse"
                 }
               }
             }
@@ -4700,7 +4652,45 @@
                 ],
                 "properties": {
                   "query": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
+                  },
+                  "max_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "budget": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "mid",
+                      "high"
+                    ]
+                  },
+                  "types": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags_match": {
                     "type": "string"
+                  },
+                  "trace": {
+                    "type": "boolean"
                   }
                 },
                 "additionalProperties": true
@@ -4714,15 +4704,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "type": "object",
-                      "additionalProperties": true
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ReflectResponse"
                 }
               }
             }
@@ -5227,6 +5209,118 @@
       }
     },
     "schemas": {
+      "BankProfileResponse": {
+        "type": "object",
+        "required": [
+          "bank_id",
+          "name",
+          "disposition",
+          "mission"
+        ],
+        "properties": {
+          "bank_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "disposition": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "mission": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "BankConfigResponse": {
+        "type": "object",
+        "required": [
+          "bank_id",
+          "config",
+          "overrides"
+        ],
+        "properties": {
+          "bank_id": {
+            "type": "string"
+          },
+          "config": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": true
+      },
+      "MentalModelResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "bank_id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "bank_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
+      "MentalModelListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MentalModelResponse"
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "CreateMentalModelResponse": {
+        "type": "object",
+        "required": [
+          "operation_id"
+        ],
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "mental_model_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      },
+      "ReflectResponse": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": true
+      },
       "ErrorResponse": {
         "type": "object",
         "required": [

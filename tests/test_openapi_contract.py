@@ -165,3 +165,57 @@ def test_openclaw_openapi_documents_route_metadata_and_response_schemas() -> Non
     )
     rate_limited = _openclaw_spec()["components"]["responses"]["RateLimited"]
     assert "Retry-After" in rate_limited["headers"]
+
+
+def test_openclaw_strict_contracts_have_exact_openapi_schemas() -> None:
+    spec = _openclaw_spec()
+    paths = spec["paths"]
+    expected = {
+        ("/v1/default/banks/{bank_id}", "put"): "BankProfileResponse",
+        ("/v1/default/banks/{bank_id}/config", "patch"): "BankConfigResponse",
+        ("/v1/default/banks/{bank_id}/mental-models", "get"): "MentalModelListResponse",
+        ("/v1/default/banks/{bank_id}/mental-models", "post"): "CreateMentalModelResponse",
+        (
+            "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}",
+            "get",
+        ): "MentalModelResponse",
+        (
+            "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}",
+            "patch",
+        ): "MentalModelResponse",
+        ("/v1/default/banks/{bank_id}/reflect", "post"): "ReflectResponse",
+    }
+    for (path, method), schema_name in expected.items():
+        schema = paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert schema == {"$ref": f"#/components/schemas/{schema_name}"}
+
+    schemas = spec["components"]["schemas"]
+    assert schemas["BankProfileResponse"]["required"] == [
+        "bank_id",
+        "name",
+        "disposition",
+        "mission",
+    ]
+    assert schemas["BankConfigResponse"]["required"] == ["bank_id", "config", "overrides"]
+    assert schemas["MentalModelResponse"]["required"] == ["id", "bank_id", "name"]
+    assert schemas["MentalModelListResponse"]["required"] == ["items"]
+    assert schemas["CreateMentalModelResponse"]["required"] == ["operation_id"]
+    assert schemas["ReflectResponse"]["required"] == ["text"]
+
+    reflect = paths["/v1/default/banks/{bank_id}/reflect"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert reflect["properties"]["query"] == {
+        "type": "string",
+        "minLength": 1,
+        "pattern": r"\S",
+    }
+    assert set(reflect["properties"]) == {
+        "query",
+        "max_tokens",
+        "budget",
+        "types",
+        "tags",
+        "tags_match",
+        "trace",
+    }

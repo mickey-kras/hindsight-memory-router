@@ -243,6 +243,8 @@ def _decode_path_segment(value: str) -> str:
         if next_probe == probe:
             break
         probe = next_probe
+    if probe in {".", ".."}:
+        raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
     return decoded
 
 

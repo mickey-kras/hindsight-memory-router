@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import binascii
 import re
+import time
 import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -28,6 +29,8 @@ MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
 FACADE_SCAN_BATCH_FIELDS = 32
 FACADE_SCAN_CARRY_FIELDS = FACADE_SCAN_BATCH_FIELDS
+MAX_FACADE_SCAN_FIELDS = 8_192
+MAX_FACADE_SCAN_SECONDS = 5.0
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
 _BASE64_PARTS = re.compile(r"[A-Za-z0-9+/=]+")
@@ -200,27 +203,56 @@ def scan_recall_result(result: dict[str, Any]) -> SafetyResult:
 
 
 def scan_facade_result(result: Any) -> SafetyResult:
-    """Scan every facade response field without treating normal list size as unsafe.
+    """Scan facade responses in bounded batches.
 
-    Recall responses are quota-bounded and deliberately fail closed at the global
-    field/window caps. Facade list endpoints can validly return hundreds of records,
-    so they are scanned in overlapping bounded batches instead. The overlap keeps
-    split instructions and encoded fragments visible across batch boundaries.
+    Field and time budgets fail closed. Base64 state spans batches. General
+    instruction reassembly is bounded and does not skip arbitrary fields.
     """
 
     combined = SafetyResult()
     fields = iter(_walk_strings(result, "facade_response"))
     carry: list[tuple[str, str, bool]] = []
+    split_fields: list[tuple[str, str, bool]] = []
+    scanned_fields = 0
+    deadline = time.monotonic() + MAX_FACADE_SCAN_SECONDS
+
+    def finish() -> SafetyResult:
+        for candidate in _split_base64_candidates(split_fields):
+            _scan_encoded(combined, "split-base64", candidate, "read", _EncodedState())
+        return combined
+
     while True:
         batch: list[tuple[str, str, bool]] = []
         for _ in range(FACADE_SCAN_BATCH_FIELDS):
+            if scanned_fields and time.monotonic() >= deadline:
+                combined.add(SafetyFinding("facade_time_limit", "span_limit"))
+                return finish()
+            if scanned_fields >= MAX_FACADE_SCAN_FIELDS:
+                try:
+                    next(fields)
+                except StopIteration:
+                    return finish()
+                combined.add(SafetyFinding("facade_field_limit", "span_limit"))
+                return finish()
             try:
-                batch.append(next(fields))
+                field = next(fields)
             except StopIteration:
                 break
+            batch.append(field)
+            scanned_fields += 1
+            key, raw, is_key = field
+            canonical, _ = canonicalize_content(raw)
+            split_fields.append((key, canonical, is_key))
         if not batch:
-            return combined
-        combined.extend(_scan_fields([*carry, *batch], operation="read"))
+            return finish()
+        combined.extend(
+            _scan_fields(
+                [*carry, *batch],
+                operation="read",
+                isolated_encoded_fields=True,
+                scan_split_base64=False,
+            )
+        )
         carry = [*carry, *batch][-FACADE_SCAN_CARRY_FIELDS:]
 
 
@@ -228,15 +260,33 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     """Scan free-text query values without payload/base64 heuristics."""
 
     result = SafetyResult()
+    canonical_values: list[str] = []
     for key, raw in query:
         canonical, transformations = canonicalize_content(raw)
         result.transformations.update(transformations)
-        if "invisible" in transformations:
-            result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
+        canonical_values.append(canonical)
         for finding in _rule_scan(canonical):
             result.add(finding)
         for finding in _amg_scan(f"query.{key}", canonical, operation="read"):
             result.add(finding)
+    if len(canonical_values) >= 2:
+        combined = ""
+        for value in canonical_values:
+            combined = _bounded_append(combined, value)
+        for finding in _rule_scan(combined):
+            if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
+                result.add(SafetyFinding(finding.matched, "split_instruction"))
+        for finding in _amg_scan("query.combined", combined, operation="read"):
+            if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
+                result.add(
+                    SafetyFinding(
+                        finding.matched,
+                        "split_instruction",
+                        finding.detector,
+                        finding.severity,
+                        finding.hits,
+                    )
+                )
     return result
 
 
@@ -260,7 +310,13 @@ def _walk_strings(
             yield from _walk_strings(entry, child)
 
 
-def _scan_fields(fields: Iterable[tuple[str, str, bool]], *, operation: str) -> SafetyResult:
+def _scan_fields(
+    fields: Iterable[tuple[str, str, bool]],
+    *,
+    operation: str,
+    isolated_encoded_fields: bool = False,
+    scan_split_base64: bool = True,
+) -> SafetyResult:
     result = SafetyResult()
     canonical_fields: list[tuple[str, str, bool]] = []
     direct_rule_matches: set[str] = set()
@@ -279,7 +335,8 @@ def _scan_fields(fields: Iterable[tuple[str, str, bool]], *, operation: str) -> 
             direct_rule_matches.add(finding.matched)
         for finding in _amg_scan(key, canonical, operation=operation):
             result.add(finding)
-        _scan_encoded(result, key, canonical, operation, direct_encoded_state)
+        state = _EncodedState() if isolated_encoded_fields else direct_encoded_state
+        _scan_encoded(result, key, canonical, operation, state)
 
     rolling_windows = 0
     limit_reached = False
@@ -332,8 +389,9 @@ def _scan_fields(fields: Iterable[tuple[str, str, bool]], *, operation: str) -> 
             if limit_reached:
                 break
 
-    for candidate in _split_base64_candidates(canonical_fields):
-        _scan_encoded(result, "split-base64", candidate, operation, _EncodedState())
+    if scan_split_base64:
+        for candidate in _split_base64_candidates(canonical_fields):
+            _scan_encoded(result, "split-base64", candidate, operation, _EncodedState())
     return result
 
 

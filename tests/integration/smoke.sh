@@ -344,7 +344,8 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 pass_check
 
 if [[ "$mode" == "fake" ]]; then
-  # Exact request shapes used by the current OpenClaw plugin and hindsight-agent-sdk.
+  # Fake Hindsight owns the exhaustive facade matrix. Real smoke covers core
+  # transport and SQLite/PostgreSQL parity without state-dependent mutations.
   # shellcheck source=tests/integration/openclaw-compat.sh
   source tests/integration/openclaw-compat.sh
 

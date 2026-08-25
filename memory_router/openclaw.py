@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
+from threading import BoundedSemaphore
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -12,6 +15,7 @@ from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .security import (
+    SafetyFinding,
     SafetyResult,
     scan_facade_result,
     scan_query_values,
@@ -20,6 +24,21 @@ from .security import (
 )
 
 logger = logging.getLogger(__name__)
+_FACADE_SCAN_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="facade-scan")
+_FACADE_SCAN_CAPACITY = BoundedSemaphore(value=4)
+
+
+async def _scan_facade_response(value: Any) -> SafetyResult:
+    capacity = _FACADE_SCAN_CAPACITY
+    if not capacity.acquire(blocking=False):
+        return SafetyResult(findings=[SafetyFinding("facade_scan_busy", "span_limit")])
+    try:
+        future = _FACADE_SCAN_EXECUTOR.submit(scan_facade_result, value)
+    except Exception:
+        capacity.release()
+        raise
+    future.add_done_callback(lambda _: capacity.release())
+    return await asyncio.wrap_future(future)
 
 
 class OpenClawFacade:
@@ -50,6 +69,14 @@ class OpenClawFacade:
         forwarded_query = [
             (key, value) for key, value in (query or []) if key in route.query_params
         ]
+        supplied_query = {key for key, _ in forwarded_query}
+        missing_query = [name for name in route.required_query_params if name not in supplied_query]
+        if missing_query:
+            raise HttpError(
+                400,
+                "invalid_request",
+                f"missing required query parameter: {missing_query[0]}",
+            )
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
             "resource": route.resource,
@@ -96,7 +123,7 @@ class OpenClawFacade:
             f"openclaw_{route.operation}", route.method, path, body
         )
         if value is not None:
-            response_scan = scan_facade_result(value)
+            response_scan = await _scan_facade_response(value)
             if not response_scan.safe:
                 await self._audit(
                     writer_id,
