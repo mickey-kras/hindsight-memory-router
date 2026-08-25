@@ -21,11 +21,11 @@ Facade contract: `openapi/openclaw.json`.
 - `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
 - Every route requires router authentication, safety scanning, and a retain or recall quota.
 - Write bodies use the global JSON limit. Retain has stricter content limits.
-- Facade scanner capacity or field/time exhaustion returns `503 facade_scan_unavailable` with `Retry-After: 1`.
+- Facade scanner worker, capacity, or field/time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`.
 - Empty upstream success bodies keep the route status and return JSON `null`.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 
-Denied: webhooks, file upload/transfer, import/export, `/metrics`, deprecated upstream routes, and cross-writer endpoints (`GET /v1/default/banks`, `/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`).
+Denied: webhooks, file upload/transfer, import/export, `/metrics`, `POST /v1/default/banks/{bank_id}/health/llm`, deprecated upstream routes, and cross-writer endpoints (`GET /v1/default/banks`, `/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`).
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 

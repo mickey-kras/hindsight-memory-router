@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: f4e22da96234d9a6eb21cc133ca666f71855c86c3382278569972a746681e301
+# integration-behavior-sha256: 3499509eaf9d752122975d400e6c0dc29b6772ecf6793d40cb7a5f57ba779f95
 
 openclaw_request() {
   local method="$1"
@@ -65,7 +65,8 @@ openclaw_request GET "/v1/default/banks/main/documents" >/dev/null
 openclaw_request POST "/v1/default/banks/main/documents/doc-1/reprocess" >/dev/null
 openclaw_request GET "/v1/default/banks/main/entities/graph" >/dev/null
 openclaw_request POST "/v1/default/banks/main/consolidate" >/dev/null
-openclaw_request POST "/v1/default/banks/main/memories/dry-run-extract" '{"items":[{"content":"preview fact"}]}' >/dev/null
+ordinary_dry_run="$(python3 -c 'import json; print(json.dumps({"items": [{"content": f"ordinary memory {index}", "context": "ordinary context"} for index in range(50)]}))')"
+openclaw_request POST "/v1/default/banks/main/memories/dry-run-extract" "$ordinary_dry_run" >/dev/null
 openclaw_request GET "/v1/default/banks/main/directives" >/dev/null
 openclaw_request POST "/v1/default/banks/main/operations/op-1/retry" >/dev/null
 openclaw_request GET "/v1/default/banks/main/knowledge-base/tree" >/dev/null

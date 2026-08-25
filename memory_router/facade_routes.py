@@ -6,6 +6,7 @@ from typing import Literal
 
 BodyMode = Literal["none", "optional", "required"]
 ResponseMode = Literal["object", "array"]
+RequestScanMode = Literal["recall", "retain"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,6 +14,7 @@ class FacadeRoute:
     method: str
     template: str
     read: bool
+    request_scan: RequestScanMode
     body: BodyMode
     strict_contract: bool
     success_status: int
@@ -32,6 +34,7 @@ def _route(
     *,
     read: bool,
     body: BodyMode,
+    request_scan: RequestScanMode | None = None,
     strict: bool = False,
     success_status: int = 200,
     body_label: str | None = None,
@@ -58,6 +61,7 @@ def _route(
         method=method,
         template=template,
         read=read,
+        request_scan=request_scan or ("recall" if read else "retain"),
         body=body,
         strict_contract=strict,
         success_status=success_status,
@@ -150,7 +154,13 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         ),
     ),
     _route("DELETE", "memories", read=False, body="none", query=("type",)),
-    _route("POST", "memories/dry-run-extract", read=True, body="required"),
+    _route(
+        "POST",
+        "memories/dry-run-extract",
+        read=True,
+        body="required",
+        request_scan="retain",
+    ),
     _route("GET", "memories/{memory_id}", read=True, body="none"),
     _route("PATCH", "memories/{memory_id}", read=False, body="required"),
     _route("GET", "memories/{memory_id}/history", read=True, body="none", response="array"),

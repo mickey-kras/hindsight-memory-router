@@ -132,8 +132,7 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
                 continue
             assert operation["security"] == [{"RouterToken": []}]
             responses = operation["responses"]
-            assert {"400", "401", "404", "422", "429", "4XX", "502", "504"} <= set(responses)
-            assert ("503" in responses) is (method != "delete")
+            assert {"400", "401", "404", "422", "429", "4XX", "502", "503", "504"} <= set(responses)
             assert ("413" in responses) is ("requestBody" in operation)
 
 

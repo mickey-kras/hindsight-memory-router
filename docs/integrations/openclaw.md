@@ -25,4 +25,4 @@ Writer IDs must exist in the configured Memory Router registry or their requests
 
 Other Hindsight API clients use the same values: router URL, router token, and writer ID as bank ID.
 
-Denied: webhooks, file transfer, import/export, metrics, cross-writer listings, and deprecated endpoints.
+Denied: webhooks, file transfer, import/export, metrics, LLM health, cross-writer listings, and deprecated endpoints.

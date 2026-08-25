@@ -26,10 +26,11 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
 - Retain and recall also enforce content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
-- Scan capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
+- Request scans run inline and are bounded by the configured JSON body limit (default: 1 MiB).
+- Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
 
-Webhooks, file transfer, import/export, metrics, cross-writer listings, and deprecated upstream routes are denied and quarantined.
+Webhooks, file transfer, import/export, metrics, LLM health, cross-writer listings, and deprecated upstream routes are denied and quarantined.
 
 ## Failure mapping
 
@@ -40,7 +41,7 @@ Webhooks, file transfer, import/export, metrics, cross-writer listings, and depr
 | Timeout | `504 hindsight_timeout` |
 | Facade 4xx except 401/403 | Same status, sanitized `hindsight_http_error` |
 | Facade response over 256 KiB | `502 hindsight_response_too_large` |
-| Facade scanner busy or over field/time limits | `503 facade_scan_unavailable` |
+| Facade scanner worker failure, busy capacity, or field/time limit | `503 facade_scan_unavailable` |
 | Redirect, 401/403, 5xx, network, or malformed response | Typed 502 |
 
 Upstream response bodies are never returned.

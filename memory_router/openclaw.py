@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
-from threading import BoundedSemaphore
+from concurrent.futures.process import BrokenProcessPool
+from contextlib import suppress
+from threading import BoundedSemaphore, Lock
 from typing import Any
 from urllib.parse import quote, urlencode
 
@@ -26,7 +29,17 @@ logger = logging.getLogger(__name__)
 FACADE_SCAN_WORKERS = 4
 FACADE_SCAN_CAPACITY = 4
 FACADE_SCAN_WAIT_SECONDS = 31.0
-_FACADE_SCAN_EXECUTOR = ProcessPoolExecutor(max_workers=FACADE_SCAN_WORKERS)
+
+
+def _new_facade_scan_executor() -> ProcessPoolExecutor:
+    return ProcessPoolExecutor(
+        max_workers=FACADE_SCAN_WORKERS,
+        mp_context=multiprocessing.get_context("spawn"),
+    )
+
+
+_FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
+_FACADE_SCAN_EXECUTOR_LOCK = Lock()
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 
 
@@ -50,14 +63,40 @@ def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = 
     )
 
 
+def _replace_broken_facade_scan_executor(broken: ProcessPoolExecutor) -> None:
+    global _FACADE_SCAN_EXECUTOR
+
+    replaced = False
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        if _FACADE_SCAN_EXECUTOR is broken:
+            try:
+                _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
+            except Exception:
+                return
+            else:
+                replaced = True
+    if replaced:
+        with suppress(Exception):
+            broken.shutdown(wait=False, cancel_futures=True)
+
+
 async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
     capacity = _FACADE_SCAN_CAPACITY
     if not capacity.acquire(blocking=False):
         raise _scan_unavailable(
             "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
         )
+    executor = _FACADE_SCAN_EXECUTOR
     try:
-        future = _FACADE_SCAN_EXECUTOR.submit(scan_facade_result, value)
+        future = executor.submit(scan_facade_result, value)
+    except BrokenProcessPool as exc:
+        capacity.release()
+        _replace_broken_facade_scan_executor(executor)
+        raise _scan_unavailable(
+            "response safety scanner worker failed",
+            error_kind="worker-crash",
+            writer_id=writer_id,
+        ) from exc
     except Exception:
         capacity.release()
         raise
@@ -67,6 +106,13 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
     except TimeoutError as exc:
         raise _scan_unavailable(
             "response safety scan timed out", error_kind="timeout", writer_id=writer_id
+        ) from exc
+    except BrokenProcessPool as exc:
+        _replace_broken_facade_scan_executor(executor)
+        raise _scan_unavailable(
+            "response safety scanner worker failed",
+            error_kind="worker-crash",
+            writer_id=writer_id,
         ) from exc
 
 
@@ -124,7 +170,11 @@ class OpenClawFacade:
             for key, value in request_evidence.items()
             if key not in {"resource", "query"}
         }
-        scan = scan_recall_body(scan_input) if route.read else scan_retain_body(scan_input)
+        scan = (
+            scan_recall_body(scan_input)
+            if route.request_scan == "recall"
+            else scan_retain_body(scan_input)
+        )
         scan.extend(scan_query_values(forwarded_query))
         if not scan.safe:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)

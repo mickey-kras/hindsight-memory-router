@@ -25,6 +25,8 @@ The scanner is a deterministic tripwire, not a safety guarantee. It recursively 
 
 Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Payloads that exceed these tripwire budgets can evade split reassembly and must still be constrained by request-size, rate-limit, quarantine, and review controls.
 
+Cross-fragment instruction matching retains a 512-byte normalized suffix. An attacker-controlled whitespace-only gap longer than that can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+
 The direct/rolling scanner also caps the number of string key/value fragments inspected per request. Exceeding that budget fails closed instead of allowing attacker-controlled field counts to create unbounded synchronous detector work.
 
 Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or invalid UTF-8. Mixed-case-plus-digit tokens are only decode-and-scan hints so ordinary identifiers such as device/model names are not blocked. A weak-signal token that validly decodes to non-UTF-8 binary is ignored unless hard Base64 evidence is also present.
@@ -42,6 +44,7 @@ Reviewed recall approvals pin stable memory identity/content (`id` + `text`). Wh
 
 ## CI dependency trust
 
+- `confusables==1.2.0` is an explicit maintenance exception: the scanner needs UTS #39-style skeleton folding, available alternatives have similar maintenance risk, and the dependency is exact-pinned with verified hashes. Revisit the exception when a maintained compatible implementation is available or the package needs an unreviewed data/code update.
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
 - Semgrep uses a versioned image pinned by digest; update the version and digest together.
 - GitHub Actions remain pinned by commit SHA.

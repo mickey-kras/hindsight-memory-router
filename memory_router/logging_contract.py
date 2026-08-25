@@ -67,6 +67,7 @@ ERROR_KINDS = frozenset(
         "storage",
         "timeout",
         "unexpected",
+        "worker-crash",
     }
 )
 OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
