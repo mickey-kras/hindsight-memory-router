@@ -18,7 +18,7 @@ All health endpoints are unauthenticated. `/health/live` is router-only liveness
 
 The Hindsight facade surface (bank management, memories, documents, entities, mental models, directives, observations, operations, knowledge base, and bank observability) is documented in `openapi/openclaw.json`. Every facade endpoint resolves `{bank_id}` as a writer ID, enforces router authentication, safety scanning, and retain/recall quotas, and forwards to the writer's resolved Hindsight bank. Deliberately denied surfaces: webhooks, file upload and document transfer/import/export, `/metrics`, cross-writer listings (`GET /v1/default/banks`, `/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`), and upstream-deprecated endpoints.
 
-Facade proxying notes: write bodies are bounded by the global request-body limit, not retain content bounds. Upstream non-2xx statuses pass through with their original status code and a sanitized `hindsight_http_error` body; an empty upstream 2xx body is forwarded as `200 null`.
+Facade proxying notes: write bodies are bounded by the global request-body limit, not retain content bounds. Upstream 4xx statuses other than 401/403 pass through with their original status code and a sanitized `hindsight_http_error` body; redirects, upstream 401/403, and upstream 5xx normalize to router errors. An empty upstream 2xx body is forwarded as `200 null`.
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 
