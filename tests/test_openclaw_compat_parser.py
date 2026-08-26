@@ -100,6 +100,34 @@ paths:
     assert operation["statuses"] == {"201"}
 
 
+def test_yaml_merge_sequence_allows_source_key_collisions() -> None:
+    source = """
+openapi: 3.1.0
+first: &first {deprecated: false, responses: {200: {description: first}}}
+second: &second {deprecated: true, responses: {201: {description: second}}}
+paths:
+  /first:
+    get:
+      <<: [*first, *second]
+"""
+
+    operation = _upstream_operations(source)[("GET", "/first")]
+
+    assert operation["statuses"] == {"200"}
+
+
+def test_yaml_unhashable_mapping_key_has_hygienic_error() -> None:
+    source = """
+openapi: 3.1.0
+paths:
+  ? [unhashable]
+  : {get: {responses: {200: {description: ok}}}}
+"""
+
+    with pytest.raises(ConstructorError, match="unhashable mapping key"):
+        _upstream_operations(source)
+
+
 @pytest.mark.parametrize(
     "operation",
     [

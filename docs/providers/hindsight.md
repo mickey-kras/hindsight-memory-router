@@ -24,7 +24,7 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - API contract: `openapi/openclaw.json`
 - GET, reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
-- Retain and recall also enforce content/query limits. Other writes rely on the JSON limit and Hindsight validation.
+- Retain, recall, and dry-run extract enforce their item/content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
 - Request scans run inline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query and path values use their route-specific bounds.
 - Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics. Route semantics and Hindsight validation bound their use, including write-capable query routes.

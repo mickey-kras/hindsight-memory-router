@@ -22,6 +22,8 @@ MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 
 Those deployments keep their existing writer/bank behavior across upgrade; the example now uses framework-neutral `source: application` values. New deployments that want the minimal default should leave `MEMORY_ROUTER_REGISTRY` unset. Treat the bundled file as a richer custom-registry example that can be copied and edited for deployment-specific policy.
 
+Every writer's `write_bank` must also appear in its `read_banks`; invalid registries fail startup.
+
 ## Storage
 
 The default is `sqlite:./data/quarantine.db`. Set `QUARANTINE_DATABASE_URL` to an explicit SQLite URL or a PostgreSQL URL when needed.

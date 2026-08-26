@@ -14,6 +14,8 @@ LOGGING_CONTRACT_PATH = Path("memory_router/logging_contract.py")
 OPENCLAW_PATH = Path("memory_router/openclaw.py")
 FACADE_ROUTES_PATH = Path("memory_router/facade_routes.py")
 SECURITY_PATH = Path("memory_router/security.py")
+SCAN_WINDOWS_PATH = Path("memory_router/scan_windows.py")
+UNICODE_SECURITY_PATH = Path("memory_router/unicode_security.py")
 SMOKE_PATH = Path("tests/integration/smoke.sh")
 OPENCLAW_SMOKE_PATH = Path("tests/integration/openclaw-compat.sh")
 
@@ -103,6 +105,8 @@ INTEGRATION_BEHAVIOR_PATHS = {
     OPENCLAW_PATH,
     FACADE_ROUTES_PATH,
     SECURITY_PATH,
+    SCAN_WINDOWS_PATH,
+    UNICODE_SECURITY_PATH,
 }
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
 

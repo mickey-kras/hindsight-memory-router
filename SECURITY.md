@@ -25,11 +25,11 @@ The scanner is a deterministic tripwire, not a safety guarantee. It recursively 
 
 Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a hard size/field budget or a credible combinatorial budget fails closed with `split_base64_limit`.
 
-Cross-fragment instruction matching retains a 512-byte normalized suffix. An attacker-controlled whitespace-only gap of 512 bytes or longer can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+Cross-fragment instruction matching retains a 512-byte normalized suffix. A sufficiently large attacker-controlled whitespace gap can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
 
 Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings unless another detector or the surrounding text matches an unsafe rule.
 
-Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; combining marks separated from a word may not join it; and split Base64 fragments shorter than eight characters may be skipped. These are not security boundaries.
+Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; Base64url and unpadded Base64 are not decoded; and split Base64 fragments shorter than eight characters may be skipped. These are not security boundaries.
 
 The direct/rolling scanner also caps the number of string key/value fragments inspected per request. Exceeding that budget fails closed instead of allowing attacker-controlled field counts to create unbounded synchronous detector work.
 

@@ -215,6 +215,8 @@ class OpenClawFacade:
         if route.resource == "reflect" and body is not None:
             self.policy.limits.assert_recall_bounds(body)
         if route.template == "memories/dry-run-extract" and body is not None:
+            if not isinstance(body.get("items"), list):
+                raise HttpError(400, "invalid_request", "items must be an array")
             self.policy.limits.assert_retain_bounds(body)
 
         if route.read:

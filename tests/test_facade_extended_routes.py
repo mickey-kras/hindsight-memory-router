@@ -15,6 +15,7 @@ from memory_router import app as app_module
 from memory_router import openclaw as openclaw_module
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES, facade_route, match_facade_route
+from memory_router.limits import HindsightLimitConfig, HindsightLimits
 from memory_router.logging_contract import OPERATIONS
 from memory_router.openclaw import OpenClawFacade
 from memory_router.security import SafetyFinding, SafetyResult
@@ -264,6 +265,30 @@ async def test_dry_run_extract_batched_scan_still_blocks_split_instructions() ->
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
     policy._quarantine.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{"content": "x"}, {"items": 42}])
+async def test_dry_run_extract_rejects_invalid_item_shapes(body: dict[str, object]) -> None:
+    policy = _policy({})
+    limiter = SimpleNamespace(consume_many=AsyncMock())
+    policy.limits = HindsightLimits(HindsightLimitConfig(), limiter)
+    app_module.runtime.policy = policy
+
+    with pytest.raises(HttpError) as invalid:
+        await app_module.dispatch(
+            "v1/default/banks/openclaw/memories/dry-run-extract",
+            request(
+                "POST",
+                "/v1/default/banks/openclaw/memories/dry-run-extract",
+                body=body,
+            ),
+        )
+
+    assert invalid.value.status == 400
+    assert invalid.value.code == "invalid_request"
+    policy.hindsight.openclaw_request.assert_not_awaited()
+    limiter.consume_many.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -632,6 +657,7 @@ async def test_facade_response_scan_maps_worker_exception_to_typed_503(monkeypat
 async def test_facade_response_scan_kills_timed_out_task_and_recovers(monkeypatch) -> None:
     openclaw_module.shutdown_facade_scan_executor()
     executor = ProcessPool(max_workers=1, context=multiprocessing.get_context("spawn"))
+    real_executor = executor
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
     monkeypatch.setattr(openclaw_module, "scan_facade_payload", _blocking_scan)
     monkeypatch.setattr(openclaw_module, "FACADE_SCAN_TASK_SECONDS", 0.05)
@@ -649,6 +675,8 @@ async def test_facade_response_scan_kills_timed_out_task_and_recovers(monkeypatc
         assert await openclaw_module._scan_facade_response({"safe": True}) == SafetyResult()  # noqa: SLF001
     finally:
         openclaw_module.shutdown_facade_scan_executor()
+        real_executor.stop()
+        real_executor.join(timeout=5)
 
 
 @pytest.mark.asyncio

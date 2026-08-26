@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import re
 import unicodedata
-from collections.abc import Iterable
 from functools import lru_cache
 from itertools import islice, product
 
@@ -16,10 +14,13 @@ def _ascii_confusable_options(char: str) -> tuple[str, ...]:
     if char.isascii():
         return (char,)
     return tuple(
-        dict.fromkeys(
-            option
-            for option in normalize_confusables(char, prioritize_alpha=True)
-            if option.isascii()
+        sorted(
+            dict.fromkeys(
+                option
+                for option in normalize_confusables(char, prioritize_alpha=True)
+                if option.isascii()
+            ),
+            key=lambda option: (not option.isalpha(), len(option), option.lower(), option),
         )
     )
 
@@ -39,31 +40,24 @@ def _has_mixed_script_word(value: str) -> bool:
             has_confusable_script |= name.startswith(("CYRILLIC ", "GREEK "))
             if has_ascii and has_confusable_script:
                 return True
-        elif not unicodedata.category(char).startswith("M"):
+        elif not char.isdigit() and not unicodedata.category(char).startswith("M"):
             has_ascii = False
             has_confusable_script = False
     return False
 
 
 def confusable_rule_variants(value: str) -> tuple[str, ...]:
-    """Build bounded alternatives one word at a time."""
-    variants: list[str] = []
-    for word_match in re.finditer(r"\w+", value, re.UNICODE):
-        word = word_match.group(0)
-        for variant in _confusable_word_variants(word):
-            variants.append(f"{value[: word_match.start()]}{variant}{value[word_match.end() :]}")
-    return tuple(dict.fromkeys(variants))
-
-
-def _confusable_word_variants(value: str) -> tuple[str, ...]:
+    """Return at most 32 full-value alternatives, including a preferred skeleton."""
     ambiguous: list[tuple[int, tuple[str, ...]]] = []
     for index, char in enumerate(value):
         options = _ascii_confusable_options(char)
         if not char.isascii() and options:
             ambiguous.append((index, options))
+    if not ambiguous:
+        return ()
     variants: list[str] = []
-    choices = product(*(options for _, options in ambiguous))
-    for selected in islice(choices, MAX_CONFUSABLE_RULE_VARIANTS):
+
+    def render(selected: tuple[str, ...]) -> None:
         parts: list[str] = []
         cursor = 0
         for (index, _), replacement in zip(ambiguous, selected, strict=True):
@@ -71,49 +65,72 @@ def _confusable_word_variants(value: str) -> tuple[str, ...]:
             cursor = index + 1
         parts.append(value[cursor:])
         variant = "".join(parts)
-        if variant != value:
+        if variant != value and variant not in variants:
             variants.append(variant)
+
+    preferred = tuple(options[0] for _, options in ambiguous)
+    render(preferred)
+    for option_index, (_, options) in enumerate(ambiguous):
+        for replacement in options[1:]:
+            selected = list(preferred)
+            selected[option_index] = replacement
+            render(tuple(selected))
+            if len(variants) >= MAX_CONFUSABLE_RULE_VARIANTS:
+                return tuple(variants)
+    choices = product(*(options for _, options in ambiguous))
+    for selected_variant in islice(choices, MAX_CONFUSABLE_RULE_VARIANTS):
+        render(selected_variant)
+        if len(variants) >= MAX_CONFUSABLE_RULE_VARIANTS:
+            break
     return tuple(dict.fromkeys(variants))
 
 
 def canonicalize_content(content: str) -> tuple[str, set[str]]:
     transformations: set[str] = set()
+    original_nfkc = unicodedata.normalize("NFKC", content)
     pre_folded = "".join(_fold_confusable_char(char) for char in content)
     if pre_folded != content:
         transformations.add("confusable")
     normalized = unicodedata.normalize("NFKC", pre_folded)
-    if unicodedata.normalize("NFKC", content) != content:
+    if original_nfkc != content:
         transformations.add("nfkc")
-    if _has_mixed_script_word(unicodedata.normalize("NFKC", content)):
+    if _has_mixed_script_word(original_nfkc):
         transformations.add("mixed_script")
     chars: list[str] = []
     removed = False
     display_modifier_removed = False
     display_modifier_evasion = False
-    for index, char in enumerate(normalized):
+    index = 0
+    last_non_modifier = ""
+    while index < len(normalized):
+        char = normalized[index]
         cp = ord(char)
         display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
-        invisible = (
-            unicodedata.category(char) == "Cf"
-            or 0x202A <= cp <= 0x202E
-            or 0x2066 <= cp <= 0x2069
-            or 0xE0000 <= cp <= 0xE007F
-        )
+        invisible = _is_default_ignorable(cp, unicodedata.category(char))
         if display_modifier:
             display_modifier_removed = True
-            previous = _nearest_non_modifier(reversed(normalized[:index]))
-            following = _nearest_non_modifier(iter(normalized[index + 1 :]))
+            end = index + 1
+            while end < len(normalized):
+                following_cp = ord(normalized[end])
+                if following_cp not in {0x200C, 0x200D} and not 0xFE00 <= following_cp <= 0xFE0F:
+                    break
+                end += 1
+            following = normalized[end] if end < len(normalized) else ""
             if (
-                previous.isascii()
-                and previous.isalnum()
+                last_non_modifier.isascii()
+                and last_non_modifier.isalnum()
                 and following.isascii()
                 and following.isalnum()
             ):
                 display_modifier_evasion = True
-        elif invisible:
+            index = end
+            continue
+        elif invisible or unicodedata.category(char).startswith("M") and _joins_alnum(normalized, index):
             removed = True
         else:
             chars.append(char)
+            last_non_modifier = char
+        index += 1
     canonical = "".join(chars)
     if removed:
         transformations.add("invisible")
@@ -129,12 +146,29 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
     return canonical, transformations
 
 
-def _nearest_non_modifier(chars: Iterable[str]) -> str:
-    return next(
-        (
-            candidate
-            for candidate in chars
-            if candidate not in "\u200c\u200d" and not 0xFE00 <= ord(candidate) <= 0xFE0F
-        ),
-        "",
+def _joins_alnum(value: str, index: int) -> bool:
+    return (
+        index > 0
+        and index + 1 < len(value)
+        and value[index - 1].isalnum()
+        and value[index + 1].isalnum()
+    )
+
+
+def _is_default_ignorable(cp: int, category: str) -> bool:
+    return category == "Cf" or any(
+        start <= cp <= end
+        for start, end in (
+            (0x034F, 0x034F),
+            (0x115F, 0x1160),
+            (0x17B4, 0x17B5),
+            (0x180B, 0x180F),
+            (0x3164, 0x3164),
+            (0xFE00, 0xFE0F),
+            (0xFFA0, 0xFFA0),
+            (0xFFF0, 0xFFF8),
+            (0x1BCA0, 0x1BCA3),
+            (0x1D173, 0x1D17A),
+            (0xE0000, 0xE0FFF),
+        )
     )

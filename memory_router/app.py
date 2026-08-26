@@ -852,8 +852,13 @@ async def dispatch(path: str, request: Request) -> Response:
     denied_writer_id = None
     denied_bank_match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
     if denied_bank_match is not None:
-        candidate = _decode_path_segment(denied_bank_match.group(1))
-        if candidate in getattr(getattr(policy, "registry", None), "writers", {}):
+        try:
+            candidate = _decode_path_segment(denied_bank_match.group(1))
+        except HttpError:
+            candidate = None
+        if candidate is not None and candidate in getattr(
+            getattr(policy, "registry", None), "writers", {}
+        ):
             denied_writer_id = candidate
     denied = (
         await policy.deny_endpoint(method, pathname)
