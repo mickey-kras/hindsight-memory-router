@@ -29,9 +29,13 @@ Cross-fragment instruction matching retains a 512-byte normalized suffix. An att
 
 Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings unless another detector or the surrounding text matches an unsafe rule.
 
+Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; combining marks separated from a word may not join it; and split Base64 fragments shorter than eight characters may be skipped. These are not security boundaries.
+
 The direct/rolling scanner also caps the number of string key/value fragments inspected per request. Exceeding that budget fails closed instead of allowing attacker-controlled field counts to create unbounded synchronous detector work.
 
 Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or invalid UTF-8. Mixed-case-plus-digit tokens are only decode-and-scan hints so ordinary identifiers such as device/model names are not blocked. A weak-signal token that validly decodes to non-UTF-8 binary is ignored unless hard Base64 evidence is also present.
+
+Split-Base64 candidate limits are deliberately sensitive: several short Base64-like fields can return `split_base64_limit` and quarantine otherwise benign content.
 
 Reviewed recall approvals pin stable memory identity/content (`id` + `text`). When that digest still matches, the approved `id`/`text` is not rescanned; volatile returned fields continue to be rescanned on every recall. A newly unsafe extra/metadata field suppresses the result and reopens review.
 

@@ -95,7 +95,7 @@ def test_facade_scan_keeps_split_base64_state_across_batches() -> None:
     assert not scan_facade_result(response).safe
 
 
-def test_facade_scan_allows_many_benign_base64_fields() -> None:
+def test_facade_scan_fails_closed_on_many_benign_base64_fields() -> None:
     response = [base64.b64encode(f"safe{i:02}".encode()).decode() for i in range(12)]
     result = scan_facade_result(response)
 

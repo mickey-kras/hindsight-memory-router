@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from yaml.constructor import ConstructorError
 
 from scripts.check_openclaw_compat import _supports_status, _upstream_operations
 
@@ -184,5 +185,5 @@ paths:
       responses: {201: {description: second}}
 """
 
-    with pytest.raises(Exception, match="duplicate key 'responses'"):
+    with pytest.raises(ConstructorError, match="duplicate key 'responses'"):
         _upstream_operations(source)
