@@ -5,11 +5,8 @@ import binascii
 import json
 import re
 import time
-import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
-from functools import lru_cache
-from itertools import combinations, islice, product
 from typing import Any
 
 from agent_memory_guard.detectors import (
@@ -19,12 +16,13 @@ from agent_memory_guard.detectors import (
     SensitiveDataDetector,
     ToolAbuseDetector,
 )
-from confusables import normalize as normalize_confusables  # type: ignore[import-untyped]
+
+from .scan_windows import bounded_skip_fragments
+from .unicode_security import canonicalize_content, confusable_rule_variants
 
 MAX_SCAN_FIELDS = 128
 MAX_ROLLING_WINDOWS = 512
 MAX_SPLIT_WINDOW_BYTES = 512
-MAX_CONFUSABLE_RULE_VARIANTS = 32
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
 MAX_SPLIT_BASE64_CANDIDATES = 64
@@ -168,138 +166,6 @@ class _EncodedState:
     seen: set[str] = field(default_factory=set)
 
 
-@lru_cache(maxsize=1_024)
-def _ascii_confusable_options(char: str) -> tuple[str, ...]:
-    if char.isascii():
-        return (char,)
-    return tuple(
-        dict.fromkeys(
-            option
-            for option in normalize_confusables(char, prioritize_alpha=True)
-            if option.isascii()
-        )
-    )
-
-
-def _fold_confusable_char(char: str) -> str:
-    options = _ascii_confusable_options(char)
-    return options[0] if len(options) == 1 else char
-
-
-def _has_mixed_script_word(value: str) -> bool:
-    has_ascii = False
-    has_confusable_script = False
-    for char in value:
-        if char.isalpha():
-            has_ascii |= char.isascii()
-            name = unicodedata.name(char, "")
-            has_confusable_script |= name.startswith(("CYRILLIC ", "GREEK "))
-            if has_ascii and has_confusable_script:
-                return True
-        elif not unicodedata.category(char).startswith("M"):
-            has_ascii = False
-            has_confusable_script = False
-    return False
-
-
-def _confusable_rule_variants(value: str) -> tuple[str, ...]:
-    """Build bounded alternatives one word at a time."""
-    variants: list[str] = []
-    for word_match in re.finditer(r"\w+", value, re.UNICODE):
-        word = word_match.group(0)
-        for variant in _confusable_word_variants(word):
-            variants.append(f"{value[: word_match.start()]}{variant}{value[word_match.end() :]}")
-    return tuple(dict.fromkeys(variants))
-
-
-def _confusable_word_variants(value: str) -> tuple[str, ...]:
-    ambiguous: list[tuple[int, tuple[str, ...]]] = []
-    for index, char in enumerate(value):
-        options = _ascii_confusable_options(char)
-        if not char.isascii() and options:
-            ambiguous.append((index, options))
-    variants: list[str] = []
-    choices = product(*(options for _, options in ambiguous))
-    for selected in islice(choices, MAX_CONFUSABLE_RULE_VARIANTS):
-        parts: list[str] = []
-        cursor = 0
-        for (index, _), replacement in zip(ambiguous, selected, strict=True):
-            parts.extend((value[cursor:index], replacement))
-            cursor = index + 1
-        parts.append(value[cursor:])
-        variant = "".join(parts)
-        if variant != value:
-            variants.append(variant)
-    return tuple(dict.fromkeys(variants))
-
-
-def canonicalize_content(content: str) -> tuple[str, set[str]]:
-    transformations: set[str] = set()
-    pre_folded = "".join(_fold_confusable_char(char) for char in content)
-    if pre_folded != content:
-        transformations.add("confusable")
-    normalized = unicodedata.normalize("NFKC", pre_folded)
-    if unicodedata.normalize("NFKC", content) != content:
-        transformations.add("nfkc")
-    if _has_mixed_script_word(unicodedata.normalize("NFKC", content)):
-        transformations.add("mixed_script")
-    chars: list[str] = []
-    removed = False
-    display_modifier_removed = False
-    display_modifier_evasion = False
-    for index, char in enumerate(normalized):
-        cp = ord(char)
-        display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
-        invisible = (
-            unicodedata.category(char) == "Cf"
-            or 0x202A <= cp <= 0x202E
-            or 0x2066 <= cp <= 0x2069
-            or 0xE0000 <= cp <= 0xE007F
-        )
-        if display_modifier:
-            display_modifier_removed = True
-            previous = next(
-                (
-                    candidate
-                    for candidate in reversed(normalized[:index])
-                    if candidate not in "\u200c\u200d" and not 0xFE00 <= ord(candidate) <= 0xFE0F
-                ),
-                "",
-            )
-            following = next(
-                (
-                    candidate
-                    for candidate in normalized[index + 1 :]
-                    if candidate not in "\u200c\u200d" and not 0xFE00 <= ord(candidate) <= 0xFE0F
-                ),
-                "",
-            )
-            if (
-                previous.isascii()
-                and previous.isalnum()
-                and following.isascii()
-                and following.isalnum()
-            ):
-                display_modifier_evasion = True
-        elif invisible:
-            removed = True
-        else:
-            chars.append(char)
-    canonical = "".join(chars)
-    if removed:
-        transformations.add("invisible")
-    if display_modifier_removed:
-        transformations.add("display_modifier")
-    if display_modifier_evasion:
-        transformations.add("display_modifier_evasion")
-    if not canonical.isascii():
-        skeleton = "".join(_fold_confusable_char(char) for char in canonical)
-        if skeleton != canonical:
-            canonical = skeleton
-            transformations.add("confusable")
-    return canonical, transformations
-
-
 def scan_content(content: str, *, operation: str = "read", key: str = "content") -> SafetyResult:
     return _scan_fields([(key, content, False)], operation=operation)
 
@@ -425,21 +291,12 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             for finding in _split_instruction_rule_scan(combined):
                 if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
                     result.add(SafetyFinding(finding.matched, "split_instruction"))
-        for start in range(len(canonical_values)):
-            for end in range(start + 2, min(len(canonical_values), start + 4)):
-                middle = canonical_values[start + 1 : end]
-                for skipped in range(1, min(MAX_SPLIT_BASE64_SKIPS, len(middle)) + 1):
-                    for omitted in combinations(range(len(middle)), skipped):
-                        fragments = [
-                            canonical_values[start],
-                            *(value for index, value in enumerate(middle) if index not in omitted),
-                            canonical_values[end],
-                        ]
-                        for combined in dict.fromkeys(("".join(fragments), " ".join(fragments))):
-                            for finding in _split_instruction_rule_scan(
-                                _bounded_utf8_suffix(combined.encode())
-                            ):
-                                result.add(SafetyFinding(finding.matched, "split_instruction"))
+        for fragments in bounded_skip_fragments(canonical_values):
+            for combined in dict.fromkeys(("".join(fragments), " ".join(fragments))):
+                for finding in _split_instruction_rule_scan(
+                    _bounded_utf8_suffix(combined.encode())
+                ):
+                    result.add(SafetyFinding(finding.matched, "split_instruction"))
     return result
 
 
@@ -542,33 +399,15 @@ def _scan_fields(
     # Inspect bounded alternatives that omit up to two interleaved value fields.
     if not limit_reached:
         values = [(key, canonical) for key, canonical, is_key in canonical_fields if not is_key]
-        for start in range(len(values)):
-            for end in range(start + 2, min(len(values), start + 4)):
-                middle = values[start + 1 : end]
-                for skipped in range(1, min(MAX_SPLIT_BASE64_SKIPS, len(middle)) + 1):
-                    for omitted in combinations(range(len(middle)), skipped):
-                        fragments = [
-                            values[start][1],
-                            *(
-                                value
-                                for index, (_, value) in enumerate(middle)
-                                if index not in omitted
-                            ),
-                            values[end][1],
-                        ]
-                        for window in dict.fromkeys(
-                            (
-                                _bounded_utf8_suffix("".join(fragments).encode()),
-                                _bounded_utf8_suffix(" ".join(fragments).encode()),
-                            )
-                        ):
-                            scan_window(values[end][0], window, fragments)
-                            if limit_reached:
-                                break
-                        if limit_reached:
-                            break
-                    if limit_reached:
-                        break
+        value_strings = [value for _, value in values]
+        for fragments in bounded_skip_fragments(value_strings):
+            for window in dict.fromkeys(
+                (
+                    _bounded_utf8_suffix("".join(fragments).encode()),
+                    _bounded_utf8_suffix(" ".join(fragments).encode()),
+                )
+            ):
+                scan_window(values[-1][0], window, fragments)
                 if limit_reached:
                     break
             if limit_reached:
@@ -857,7 +696,7 @@ def _scan_encoded(
 
 def _rule_scan(value: str) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
-    for variant in (value, *_confusable_rule_variants(value)):
+    for variant in (value, *confusable_rule_variants(value)):
         for pattern, matched, reason in _RULES:
             if (match := pattern.search(variant)) is not None:
                 finding = SafetyFinding(matched, reason, hits=(match.group(0),))
@@ -871,7 +710,7 @@ def _rule_scan(value: str) -> list[SafetyFinding]:
 
 def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
-    for variant in (value, *_confusable_rule_variants(value)):
+    for variant in (value, *confusable_rule_variants(value)):
         for pattern, matched, reason in _SPLIT_INSTRUCTION_RULES:
             if (match := pattern.search(variant)) is not None:
                 finding = SafetyFinding(matched, reason, hits=(match.group(0),))
