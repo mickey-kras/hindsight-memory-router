@@ -62,11 +62,11 @@ def _git_blob_sha(source: str) -> str:
 
 
 def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, str], dict[str, Any]]:
-    # This loader subclasses SafeLoader and adds duplicate-key rejection.
-    document = yaml.load(  # nosec B506
-        source,
-        Loader=_UniqueKeyLoader,  # noqa: S506
-    )
+    loader = _UniqueKeyLoader(source)
+    try:
+        document = loader.get_single_data()
+    finally:
+        loader.dispose()
     if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
         raise ValueError("upstream OpenAPI document has no paths object")
     endpoints: dict[tuple[str, str], dict[str, Any]] = {}
