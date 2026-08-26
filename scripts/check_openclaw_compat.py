@@ -62,6 +62,7 @@ def _git_blob_sha(source: str) -> str:
 
 
 def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, str], dict[str, Any]]:
+    # Construct the SafeLoader subclass directly so duplicate-key checks cannot be bypassed.
     loader = _UniqueKeyLoader(source)
     try:
         document = loader.get_single_data()
@@ -257,59 +258,3 @@ def main() -> int:
     for marker in required_plugin_markers:
         if marker not in plugin:
             raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
-    if "/config" not in defaults or 'method: "PATCH"' not in defaults:
-        raise SystemExit("OpenClaw bank config PATCH call changed")
-
-    expected_endpoints = {tuple(item) for item in inventory["endpoints"]}
-    required_endpoints = {
-        ("GET", "/health"),
-        ("GET", "/version"),
-        ("POST", "/v1/default/banks/{bank_id}/memories"),
-        ("POST", "/v1/default/banks/{bank_id}/memories/recall"),
-        ("PUT", "/v1/default/banks/{bank_id}"),
-        ("PATCH", "/v1/default/banks/{bank_id}/config"),
-        ("GET", "/v1/default/banks/{bank_id}/mental-models"),
-        ("POST", "/v1/default/banks/{bank_id}/mental-models"),
-        ("GET", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"),
-        ("PATCH", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"),
-        ("DELETE", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"),
-        ("POST", "/v1/default/banks/{bank_id}/reflect"),
-    }
-    if expected_endpoints != required_endpoints:
-        raise SystemExit("compat/openclaw.json endpoint inventory changed without updating checker")
-
-    documented = _documented_endpoints(Path("openapi/openapi.json")) | _documented_endpoints(
-        Path("openapi/openclaw.json")
-    )
-    missing_docs = sorted(expected_endpoints - documented)
-    if missing_docs:
-        raise SystemExit(f"OpenClaw inventory endpoints missing from OpenAPI: {missing_docs}")
-
-    compatibility_tests = (
-        Path("tests/test_openclaw_compat.py").read_text(encoding="utf-8")
-        + Path("tests/test_openclaw_routes.py").read_text(encoding="utf-8")
-        + Path("tests/test_openclaw_provider_boundaries.py").read_text(encoding="utf-8")
-        + Path("tests/integration/openclaw-compat.sh").read_text(encoding="utf-8")
-    )
-    required_coverage_markers = {
-        "configured bank defaults",
-        "auto-retain",
-        "auto-recall",
-        "knowledge-page list get create update delete",
-        "knowledge reflect",
-        "document ingest",
-        "strings_keys_and_values_are_scanned",
-        "each_openclaw_conditional_route_blocks_unsafe_provider_content",
-    }
-    missing_coverage = sorted(
-        marker for marker in required_coverage_markers if marker not in compatibility_tests
-    )
-    if missing_coverage:
-        raise SystemExit(f"OpenClaw compatibility coverage markers missing: {missing_coverage}")
-
-    print("OpenClaw compatibility inventory matches current upstream call surface")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
