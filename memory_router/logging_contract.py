@@ -6,6 +6,8 @@ import math
 import re
 from typing import Any
 
+from .facade_routes import FACADE_ROUTES
+
 SAFE_FIELDS = frozenset(
     {
         "request_id",
@@ -95,7 +97,7 @@ OPERATIONS = frozenset(
         "storage_health",
         "version",
     }
-)
+) | frozenset(f"openclaw_{route.operation}" for route in FACADE_ROUTES)
 METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"})
 REASONS = frozenset(
     {

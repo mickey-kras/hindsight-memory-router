@@ -1,25 +1,26 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
-from concurrent.futures.process import BrokenProcessPool
 from contextlib import suppress
 from threading import BoundedSemaphore, Lock
 from typing import Any
 from urllib.parse import quote, urlencode
 
+from pebble import ProcessExpired, ProcessPool
+
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
 from .facade_routes import FacadeRoute
-from .hindsight import HindsightGatewayError
+from .hindsight import MAX_FACADE_RESPONSE_BYTES, HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .security import (
     SafetyResult,
-    scan_facade_result,
+    scan_facade_payload,
     scan_query_values,
     scan_recall_body,
     scan_retain_body,
@@ -28,17 +29,18 @@ from .security import (
 logger = logging.getLogger(__name__)
 FACADE_SCAN_WORKERS = 4
 FACADE_SCAN_CAPACITY = 4
+FACADE_SCAN_TASK_SECONDS = 30.0
 FACADE_SCAN_WAIT_SECONDS = 31.0
 
 
-def _new_facade_scan_executor() -> ProcessPoolExecutor:
-    return ProcessPoolExecutor(
+def _new_facade_scan_executor() -> ProcessPool:
+    return ProcessPool(
         max_workers=FACADE_SCAN_WORKERS,
-        mp_context=multiprocessing.get_context("spawn"),
+        context=multiprocessing.get_context("spawn"),
     )
 
 
-_FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
+_FACADE_SCAN_EXECUTOR: ProcessPool | None = None
 _FACADE_SCAN_EXECUTOR_LOCK = Lock()
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 
@@ -63,21 +65,25 @@ def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = 
     )
 
 
-def _replace_broken_facade_scan_executor(broken: ProcessPoolExecutor) -> None:
+def _get_facade_scan_executor() -> ProcessPool:
     global _FACADE_SCAN_EXECUTOR
-
-    replaced = False
     with _FACADE_SCAN_EXECUTOR_LOCK:
-        if _FACADE_SCAN_EXECUTOR is broken:
-            try:
-                _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
-            except Exception:
-                return
-            else:
-                replaced = True
-    if replaced:
+        if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
+            _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
+        return _FACADE_SCAN_EXECUTOR
+
+
+def shutdown_facade_scan_executor() -> None:
+    global _FACADE_SCAN_EXECUTOR
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        executor = _FACADE_SCAN_EXECUTOR
+        _FACADE_SCAN_EXECUTOR = None
+        if executor is not None:
+            with suppress(Exception):
+                executor.stop()  # type: ignore[no-untyped-call]
+    if executor is not None:
         with suppress(Exception):
-            broken.shutdown(wait=False, cancel_futures=True)
+            executor.join(timeout=5)
 
 
 async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
@@ -86,32 +92,50 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         raise _scan_unavailable(
             "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
         )
-    executor = _FACADE_SCAN_EXECUTOR
     try:
-        future = executor.submit(scan_facade_result, value)
-    except BrokenProcessPool as exc:
+        payload = json.dumps(
+            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+        if len(payload) > MAX_FACADE_RESPONSE_BYTES:
+            raise _scan_unavailable(
+                "response exceeded safety scan limits",
+                error_kind="response-too-large",
+                writer_id=writer_id,
+            )
+        executor = _get_facade_scan_executor()
+        future = executor.schedule(
+            scan_facade_payload,
+            args=[payload],
+            timeout=FACADE_SCAN_TASK_SECONDS,
+        )
+    except HttpError:
         capacity.release()
-        _replace_broken_facade_scan_executor(executor)
+        raise
+    except Exception as exc:
+        capacity.release()
+        raise _scan_unavailable(
+            "response safety scanner failed",
+            error_kind="unexpected",
+            writer_id=writer_id,
+        ) from exc
+    future.add_done_callback(lambda _: capacity.release())
+    try:
+        return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
+    except TimeoutError as exc:
+        future.cancel()  # type: ignore[no-untyped-call]
+        raise _scan_unavailable(
+            "response safety scan timed out", error_kind="timeout", writer_id=writer_id
+        ) from exc
+    except ProcessExpired as exc:
         raise _scan_unavailable(
             "response safety scanner worker failed",
             error_kind="worker-crash",
             writer_id=writer_id,
         ) from exc
-    except Exception:
-        capacity.release()
-        raise
-    future.add_done_callback(lambda _: capacity.release())
-    try:
-        return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
-    except TimeoutError as exc:
+    except Exception as exc:
         raise _scan_unavailable(
-            "response safety scan timed out", error_kind="timeout", writer_id=writer_id
-        ) from exc
-    except BrokenProcessPool as exc:
-        _replace_broken_facade_scan_executor(executor)
-        raise _scan_unavailable(
-            "response safety scanner worker failed",
-            error_kind="worker-crash",
+            "response safety scanner failed",
+            error_kind="unexpected",
             writer_id=writer_id,
         ) from exc
 

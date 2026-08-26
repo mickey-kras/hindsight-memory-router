@@ -123,6 +123,13 @@ async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     assert invalid.value.code == "invalid_json"
     assert await app_module._json_body(request("POST", "/")) == {}
     assert await app_module._json_body(request("POST", "/", body={"x": 1})) == {"x": 1}
+    assert (
+        await app_module._json_body(request("POST", "/"), empty_as_none=True)
+        is app_module._EMPTY_BODY
+    )
+    assert (
+        await app_module._json_body(request("POST", "/", body=b"null"), empty_as_none=True) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -397,8 +404,11 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
 async def test_lifespan_starts_and_stops_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     start = AsyncMock()
     stop = AsyncMock()
+    shutdown_scanner = Mock()
     monkeypatch.setattr(app_module.runtime, "start", start)
     monkeypatch.setattr(app_module.runtime, "stop", stop)
+    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor", shutdown_scanner)
     async with app_module.lifespan(app_module.app):
         start.assert_awaited_once()
     stop.assert_awaited_once()
+    shutdown_scanner.assert_called_once_with()

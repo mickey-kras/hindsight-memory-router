@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import base64
 import binascii
+import json
 import re
 import time
 import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
+from itertools import islice, product
 from typing import Any
 
 from agent_memory_guard.detectors import (
@@ -20,8 +22,9 @@ from agent_memory_guard.detectors import (
 from confusables import normalize as normalize_confusables  # type: ignore[import-untyped]
 
 MAX_SCAN_FIELDS = 128
-MAX_ROLLING_WINDOWS = 128
+MAX_ROLLING_WINDOWS = 512
 MAX_SPLIT_WINDOW_BYTES = 512
+MAX_CONFUSABLE_RULE_VARIANTS = 32
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
 MAX_SPLIT_BASE64_CANDIDATES = 64
@@ -166,22 +169,75 @@ class _EncodedState:
 
 
 @lru_cache(maxsize=1_024)
-def _fold_confusable_char(char: str) -> str:
+def _ascii_confusable_options(char: str) -> tuple[str, ...]:
     if char.isascii():
-        return char
-    folded = normalize_confusables(char, prioritize_alpha=True)
-    return folded[0] if folded else char
+        return (char,)
+    return tuple(
+        dict.fromkeys(
+            option
+            for option in normalize_confusables(char, prioritize_alpha=True)
+            if option.isascii()
+        )
+    )
+
+
+def _fold_confusable_char(char: str) -> str:
+    options = _ascii_confusable_options(char)
+    return options[0] if len(options) == 1 else char
+
+
+def _has_mixed_script_word(value: str) -> bool:
+    has_ascii = False
+    has_confusable_script = False
+    for char in value:
+        if char.isalpha():
+            has_ascii |= char.isascii()
+            name = unicodedata.name(char, "")
+            has_confusable_script |= name.startswith(("CYRILLIC ", "GREEK "))
+            if has_ascii and has_confusable_script:
+                return True
+        elif not unicodedata.category(char).startswith("M"):
+            has_ascii = False
+            has_confusable_script = False
+    return False
+
+
+def _confusable_rule_variants(value: str) -> tuple[str, ...]:
+    ambiguous: list[tuple[int, tuple[str, ...]]] = []
+    for index, char in enumerate(value):
+        options = _ascii_confusable_options(char)
+        if not char.isascii() and options:
+            ambiguous.append((index, options))
+    variants: list[str] = []
+    choices = product(*(options for _, options in ambiguous))
+    for selected in islice(choices, MAX_CONFUSABLE_RULE_VARIANTS):
+        parts: list[str] = []
+        cursor = 0
+        for (index, _), replacement in zip(ambiguous, selected, strict=True):
+            parts.extend((value[cursor:index], replacement))
+            cursor = index + 1
+        parts.append(value[cursor:])
+        variant = "".join(parts)
+        if variant != value:
+            variants.append(variant)
+    return tuple(dict.fromkeys(variants))
 
 
 def canonicalize_content(content: str) -> tuple[str, set[str]]:
-    normalized = unicodedata.normalize("NFKC", content)
     transformations: set[str] = set()
-    if normalized != content:
+    pre_folded = "".join(_fold_confusable_char(char) for char in content)
+    if pre_folded != content:
+        transformations.add("confusable")
+    normalized = unicodedata.normalize("NFKC", pre_folded)
+    if unicodedata.normalize("NFKC", content) != content:
         transformations.add("nfkc")
+    if _has_mixed_script_word(normalized):
+        transformations.add("mixed_script")
     chars: list[str] = []
     removed = False
     display_modifier_removed = False
-    for char in normalized:
+    display_modifier_evasion = False
+    for index, char in enumerate(normalized):
         cp = ord(char)
         display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
         invisible = (
@@ -192,6 +248,15 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         )
         if display_modifier:
             display_modifier_removed = True
+            if (
+                index > 0
+                and index + 1 < len(normalized)
+                and normalized[index - 1].isascii()
+                and normalized[index - 1].isalnum()
+                and normalized[index + 1].isascii()
+                and normalized[index + 1].isalnum()
+            ):
+                display_modifier_evasion = True
         elif invisible:
             removed = True
         else:
@@ -201,6 +266,8 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         transformations.add("invisible")
     if display_modifier_removed:
         transformations.add("display_modifier")
+    if display_modifier_evasion:
+        transformations.add("display_modifier_evasion")
     if not canonical.isascii():
         skeleton = "".join(_fold_confusable_char(char) for char in canonical)
         if skeleton != canonical:
@@ -247,6 +314,10 @@ def scan_facade_result(result: Any) -> SafetyResult:
     )
 
 
+def scan_facade_payload(payload: bytes) -> SafetyResult:
+    return scan_facade_result(json.loads(payload))
+
+
 def _scan_batched_fields(
     source: Iterable[tuple[str, str, bool]],
     *,
@@ -270,9 +341,9 @@ def _scan_batched_fields(
     while True:
         batch: list[tuple[str, str, bool]] = []
         for _ in range(FACADE_SCAN_BATCH_FIELDS):
-            if scanned_fields and deadline is not None and time.monotonic() >= deadline:
+            if deadline is not None and time.monotonic() >= deadline:
                 combined.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
-                return finish()
+                return combined
             if scanned_fields >= max_fields:
                 try:
                     next(fields)
@@ -291,14 +362,19 @@ def _scan_batched_fields(
             split_fields.append((key, canonical, is_key))
         if not batch:
             return finish()
-        combined.extend(
-            _scan_fields(
-                [*carry, *batch],
-                operation=operation,
-                isolated_encoded_fields=True,
-                scan_split_base64=False,
-            )
+        batch_result = _scan_fields(
+            [*carry, *batch],
+            operation=operation,
+            isolated_encoded_fields=True,
+            scan_split_base64=False,
+            deadline=deadline,
+            time_limit_match=time_limit_match,
         )
+        combined.extend(batch_result)
+        if time_limit_match is not None and any(
+            finding.matched == time_limit_match for finding in batch_result.findings
+        ):
+            return combined
         carry = [*carry, *batch][-FACADE_SCAN_CARRY_FIELDS:]
 
 
@@ -308,7 +384,8 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     result = SafetyResult()
     canonical_values: list[str] = []
     for key, raw in query:
-        canonical, _ = canonicalize_content(raw)
+        canonical, transformations = canonicalize_content(raw)
+        _add_unicode_findings(result, transformations)
         canonical_values.append(canonical)
         for finding in _rule_scan(canonical):
             result.add(finding)
@@ -353,20 +430,24 @@ def _scan_fields(
     operation: str,
     isolated_encoded_fields: bool = False,
     scan_split_base64: bool = True,
+    deadline: float | None = None,
+    time_limit_match: str | None = None,
 ) -> SafetyResult:
     result = SafetyResult()
     canonical_fields: list[tuple[str, str, bool]] = []
     direct_rule_matches: set[str] = set()
     direct_encoded_state = _EncodedState()
     for index, (key, raw, is_key) in enumerate(fields):
+        if deadline is not None and time.monotonic() >= deadline:
+            result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
+            break
         if index >= MAX_SCAN_FIELDS:
             result.add(SafetyFinding("field_limit", "span_limit"))
             break
         canonical, transformations = canonicalize_content(raw)
         result.transformations.update(transformations)
         canonical_fields.append((key, canonical, is_key))
-        if "invisible" in transformations:
-            result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
+        _add_unicode_findings(result, transformations)
         for finding in _rule_scan(canonical):
             result.add(finding)
             direct_rule_matches.add(finding.matched)
@@ -403,14 +484,19 @@ def _scan_fields(
                 )
 
     value_window = ""
+    compact_value_window = ""
     value_fields: list[str] = []
     for key, canonical, is_key in canonical_fields:
         if is_key:
             continue
         value_window = _bounded_append(value_window, canonical)
+        compact_value_window = _bounded_utf8_suffix(f"{compact_value_window}{canonical}".encode())
         value_fields.append(canonical)
         if len(value_fields) >= 2:
-            scan_window(key, value_window, value_fields)
+            for window in dict.fromkeys((value_window, compact_value_window)):
+                scan_window(key, window, value_fields)
+                if limit_reached:
+                    break
         if limit_reached:
             break
 
@@ -435,9 +521,11 @@ def _scan_split_base64(
     result: SafetyResult, fields: Iterable[tuple[str, str, bool]], operation: str
 ) -> None:
     materialized = list(fields)
-    for candidate in _split_base64_candidates(materialized):
+    encoded_candidates, encoded_exhausted = _split_base64_candidates(materialized)
+    for candidate in encoded_candidates:
         _scan_encoded(result, "split-base64", candidate, operation, _EncodedState())
-    for compact, spaced in _split_decoded_base64_candidates(materialized):
+    decoded_candidates, decoded_exhausted = _split_decoded_base64_candidates(materialized)
+    for compact, spaced in decoded_candidates:
         for candidate in dict.fromkeys((compact, spaced)):
             findings = _rule_scan(candidate) + _amg_scan(
                 "split-base64.decoded", candidate, operation=operation
@@ -446,20 +534,29 @@ def _scan_split_base64(
                 result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
                 for finding in findings:
                     result.add(finding)
+    if encoded_exhausted or decoded_exhausted:
+        result.add(SafetyFinding("split_base64_limit", "span_limit"))
 
 
-def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[str]:
+def _split_base64_candidates(
+    fields: Iterable[tuple[str, str, bool]],
+) -> tuple[list[str], bool]:
     candidates: list[tuple[str, int]] = []
     fragment_fields = 0
     work_bytes = 0
     exhausted = False
+    unconditional_exhausted = False
+    soft_exhausted = False
+    credible = False
 
     def add(next_candidates: list[tuple[str, int]], value: str, skipped: int) -> bool:
-        nonlocal work_bytes
+        nonlocal exhausted, unconditional_exhausted, work_bytes
         size = len(value)
         if size > MAX_SPLIT_BASE64_CANDIDATE_BYTES:
+            unconditional_exhausted = True
             return True
         if work_bytes + size > MAX_SPLIT_BASE64_WORK_BYTES:
+            exhausted = True
             return False
         work_bytes += size
         next_candidates.append((value, skipped))
@@ -473,9 +570,12 @@ def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[st
             continue
         fragment_fields += 1
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
+            unconditional_exhausted = True
             break
         if len(fragment) > MAX_SPLIT_BASE64_CANDIDATE_BYTES:
+            unconditional_exhausted = True
             continue
+        credible |= _decode_base64_fragment(fragment) is not None
         next_candidates: list[tuple[str, int]] = []
         if not add(next_candidates, fragment, 0):
             break
@@ -492,17 +592,27 @@ def _split_base64_candidates(fields: Iterable[tuple[str, str, bool]]) -> list[st
             ):
                 exhausted = True
                 break
+            if skipped >= MAX_SPLIT_BASE64_SKIPS and credible:
+                soft_exhausted = True
+        if len(set(next_candidates)) > MAX_SPLIT_BASE64_CANDIDATES:
+            soft_exhausted |= credible
+        credible |= any(_looks_like_base64(candidate) for candidate, _ in next_candidates)
         candidates = _dedupe_split_candidates(next_candidates)
         if exhausted:
             break
-    return [candidate for candidate, _ in candidates if len(candidate) >= 8]
+    return (
+        [candidate for candidate, _ in candidates if len(candidate) >= 8],
+        unconditional_exhausted or soft_exhausted or (exhausted and credible),
+    )
 
 
 def _split_decoded_base64_candidates(
     fields: Iterable[tuple[str, str, bool]],
-) -> list[tuple[str, str]]:
+) -> tuple[list[tuple[str, str]], bool]:
     candidates: list[tuple[str, str, int, int, bool]] = []
     work_bytes = 0
+    exhausted = False
+    soft_exhausted = False
 
     def add(
         target: list[tuple[str, str, int, int, bool]],
@@ -512,11 +622,13 @@ def _split_decoded_base64_candidates(
         skipped: int,
         terminated: bool,
     ) -> bool:
-        nonlocal work_bytes
+        nonlocal exhausted, work_bytes
         size = len(compact.encode("utf-8")) + len(spaced.encode("utf-8"))
         if size > MAX_SPLIT_BASE64_WORK_BYTES:
+            exhausted = True
             return True
         if work_bytes + size > MAX_SPLIT_BASE64_WORK_BYTES:
+            exhausted = True
             return False
         work_bytes += size
         target.append((compact, spaced, parts, skipped, terminated))
@@ -534,11 +646,11 @@ def _split_decoded_base64_candidates(
             continue
         fragment_fields += 1
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
+            exhausted = True
             break
         next_candidates: list[tuple[str, str, int, int, bool]] = []
         if not add(next_candidates, decoded, decoded, 1, 0, "=" in fragment):
             break
-        exhausted = False
         for compact, spaced, parts, skipped, terminated in candidates:
             if not add(
                 next_candidates,
@@ -555,17 +667,24 @@ def _split_decoded_base64_candidates(
             ):
                 exhausted = True
                 break
+            if skipped >= MAX_SPLIT_BASE64_SKIPS:
+                soft_exhausted = True
         unique = dict.fromkeys(next_candidates)
+        if len(unique) > MAX_SPLIT_BASE64_CANDIDATES:
+            soft_exhausted = True
         candidates = sorted(unique, key=lambda value: (-len(value[0]), value[3]))[
             :MAX_SPLIT_BASE64_CANDIDATES
         ]
         if exhausted:
             break
-    return [
-        (compact, spaced)
-        for compact, spaced, parts, _, terminated in candidates
-        if parts >= 2 and terminated
-    ]
+    return (
+        [
+            (compact, spaced)
+            for compact, spaced, parts, _, terminated in candidates
+            if parts >= 2 and terminated
+        ],
+        exhausted or soft_exhausted,
+    )
 
 
 def _decode_base64_fragment(fragment: str) -> str | None:
@@ -648,6 +767,7 @@ def _scan_encoded(
             continue
         decoded_canonical, decoded_transformations = canonicalize_content(decoded_text)
         result.transformations.update(decoded_transformations)
+        _add_unicode_findings(result, decoded_transformations)
         decoded_hits = _rule_scan(decoded_canonical) + _amg_scan(
             f"{key}.base64", decoded_canonical, operation=operation
         )
@@ -658,19 +778,38 @@ def _scan_encoded(
 
 
 def _rule_scan(value: str) -> list[SafetyFinding]:
-    return [
-        SafetyFinding(matched, reason, hits=(match.group(0),))
-        for pattern, matched, reason in _RULES
-        if (match := pattern.search(value)) is not None
-    ]
+    findings: list[SafetyFinding] = []
+    for variant in (value, *_confusable_rule_variants(value)):
+        for pattern, matched, reason in _RULES:
+            if (match := pattern.search(variant)) is not None:
+                finding = SafetyFinding(matched, reason, hits=(match.group(0),))
+                if not any(
+                    item.matched == finding.matched and item.reason == finding.reason
+                    for item in findings
+                ):
+                    findings.append(finding)
+    return findings
 
 
 def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
-    return [
-        SafetyFinding(matched, reason, hits=(match.group(0),))
-        for pattern, matched, reason in _SPLIT_INSTRUCTION_RULES
-        if (match := pattern.search(value)) is not None
-    ]
+    findings: list[SafetyFinding] = []
+    for variant in (value, *_confusable_rule_variants(value)):
+        for pattern, matched, reason in _SPLIT_INSTRUCTION_RULES:
+            if (match := pattern.search(variant)) is not None:
+                finding = SafetyFinding(matched, reason, hits=(match.group(0),))
+                if not any(
+                    item.matched == finding.matched and item.reason == finding.reason
+                    for item in findings
+                ):
+                    findings.append(finding)
+    return findings
+
+
+def _add_unicode_findings(result: SafetyResult, transformations: set[str]) -> None:
+    if transformations & {"invisible", "display_modifier_evasion"}:
+        result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
+    if "mixed_script" in transformations:
+        result.add(SafetyFinding("confusable_unicode", "confusable_unicode"))
 
 
 def _amg_scan(key: str, value: str, *, operation: str) -> list[SafetyFinding]:

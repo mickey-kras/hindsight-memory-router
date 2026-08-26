@@ -7,10 +7,47 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
+from yaml.constructor import ConstructorError  # type: ignore[import-untyped]
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 MIN_FACADE_OPERATION_COUNT = 75
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
+    pass
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    loader.flatten_mapping(node)
+    result: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in result
+        except TypeError as exc:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "found an unhashable mapping key",
+                key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        result[key] = loader.construct_object(value_node, deep=deep)
+    return result
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _construct_unique_mapping
+)
 
 
 def _methods(source: str, receivers: tuple[str, ...]) -> set[str]:
@@ -25,24 +62,38 @@ def _git_blob_sha(source: str) -> str:
 
 
 def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, str], dict[str, Any]]:
-    document = yaml.safe_load(source)
+    # This loader subclasses SafeLoader and adds duplicate-key rejection.
+    document = yaml.load(  # nosec B506
+        source,
+        Loader=_UniqueKeyLoader,  # noqa: S506
+    )
     if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
         raise ValueError("upstream OpenAPI document has no paths object")
     endpoints: dict[tuple[str, str], dict[str, Any]] = {}
     for path, path_item in document["paths"].items():
         if not isinstance(path, str) or not isinstance(path_item, dict):
-            continue
+            raise ValueError("upstream OpenAPI paths must map string paths to objects")
         if "$ref" in path_item:
             raise ValueError(f"unsupported path-item $ref at {path}")
         shared_parameters = path_item.get("parameters", [])
         if not isinstance(shared_parameters, list):
-            shared_parameters = []
+            raise ValueError(f"parameters must be an array at {path}")
         for method, operation in path_item.items():
-            if method not in HTTP_METHODS or not isinstance(operation, dict):
+            if method not in HTTP_METHODS:
                 continue
+            if not isinstance(operation, dict):
+                raise ValueError(f"operation must be an object at {method.upper()} {path}")
             request_body = operation.get("requestBody")
+            if request_body is not None and not isinstance(request_body, dict):
+                raise ValueError(f"requestBody must be an object at {method.upper()} {path}")
             if isinstance(request_body, dict) and "$ref" in request_body:
                 raise ValueError(f"unsupported requestBody $ref at {method.upper()} {path}")
+            if (
+                isinstance(request_body, dict)
+                and "required" in request_body
+                and not isinstance(request_body["required"], bool)
+            ):
+                raise ValueError(f"requestBody.required must be boolean at {method.upper()} {path}")
             if request_body is None:
                 body_mode = "none"
             elif isinstance(request_body, dict) and request_body.get("required") is True:
@@ -51,24 +102,45 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
                 body_mode = "optional"
             parameters = [*shared_parameters]
             operation_parameters = operation.get("parameters", [])
-            if isinstance(operation_parameters, list):
-                parameters.extend(operation_parameters)
+            if not isinstance(operation_parameters, list):
+                raise ValueError(f"parameters must be an array at {method.upper()} {path}")
+            parameters.extend(operation_parameters)
             if any(isinstance(parameter, dict) and "$ref" in parameter for parameter in parameters):
                 raise ValueError(f"unsupported parameter $ref at {method.upper()} {path}")
-            query = {
-                parameter["name"]: parameter.get("required") is True
-                for parameter in parameters
-                if isinstance(parameter, dict)
-                and parameter.get("in") == "query"
-                and isinstance(parameter.get("name"), str)
-            }
+            query: dict[str, bool] = {}
+            seen_parameters: set[tuple[str, str]] = set()
+            for parameter in parameters:
+                if not isinstance(parameter, dict):
+                    raise ValueError(f"parameter must be an object at {method.upper()} {path}")
+                location = parameter.get("in")
+                name = parameter.get("name")
+                required = parameter.get("required", False)
+                if not isinstance(location, str) or not isinstance(name, str):
+                    raise ValueError(
+                        f"parameter name/in must be strings at {method.upper()} {path}"
+                    )
+                if not isinstance(required, bool):
+                    raise ValueError(
+                        f"parameter.required must be boolean at {method.upper()} {path}"
+                    )
+                identity = (location, name)
+                if identity in seen_parameters:
+                    raise ValueError(
+                        f"duplicate parameter {location}:{name} at {method.upper()} {path}"
+                    )
+                seen_parameters.add(identity)
+                if location == "query":
+                    query[name] = required
             responses = operation.get("responses", {})
-            statuses = set()
-            if isinstance(responses, dict):
-                statuses = {str(status).upper() for status in responses}
+            if not isinstance(responses, dict):
+                raise ValueError(f"responses must be an object at {method.upper()} {path}")
+            statuses = {str(status).upper() for status in responses}
+            deprecated = operation.get("deprecated", False)
+            if not isinstance(deprecated, bool):
+                raise ValueError(f"deprecated must be boolean at {method.upper()} {path}")
             endpoints[(method.upper(), path)] = {
                 "body": body_mode,
-                "deprecated": operation.get("deprecated") is True,
+                "deprecated": deprecated,
                 "query": query,
                 "statuses": statuses,
             }

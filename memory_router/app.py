@@ -41,7 +41,7 @@ from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
-from .openclaw import OpenClawFacade
+from .openclaw import OpenClawFacade, shutdown_facade_scan_executor
 from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
@@ -58,6 +58,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
+_EMPTY_BODY = object()
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -451,6 +452,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 error=exc,
                 outcome="failed",
             )
+        finally:
+            shutdown_facade_scan_executor()
         raise
     else:
         try:
@@ -466,6 +469,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 outcome="failed",
             )
             raise
+        finally:
+            shutdown_facade_scan_executor()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -516,7 +521,7 @@ async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
         if len(body) > runtime.max_body_bytes:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
-        return None if empty_as_none else {}
+        return _EMPTY_BODY if empty_as_none else {}
     try:
         value = json.loads(
             bytes(body), parse_constant=lambda raw: (_ for _ in ()).throw(ValueError(raw))
@@ -822,7 +827,7 @@ async def dispatch(path: str, request: Request) -> Response:
         facade_body: dict[str, Any] | None = None
         if route.body != "none":
             raw_body = await _json_body(request, empty_as_none=True)
-            if raw_body is None:
+            if raw_body is _EMPTY_BODY:
                 if route.body == "required":
                     raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
             elif not isinstance(raw_body, dict):

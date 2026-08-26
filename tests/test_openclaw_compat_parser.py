@@ -94,3 +94,44 @@ paths:
 
     with pytest.raises(ValueError, match=r"unsupported parameter \$ref"):
         _upstream_operations(source)
+
+
+@pytest.mark.parametrize(
+    ("operation", "message"),
+    [
+        (
+            "parameters: [{name: on, in: query}]\n      responses: {200: {}}",
+            "parameter name/in must be strings",
+        ),
+        (
+            "parameters: [{name: q, in: query}, {name: q, in: query}]\n      responses: {200: {}}",
+            "duplicate parameter query:q",
+        ),
+        ("deprecated: 'true'\n      responses: {200: {}}", "deprecated must be boolean"),
+    ],
+)
+def test_upstream_openapi_parser_rejects_silent_coercions(operation: str, message: str) -> None:
+    source = f"""
+openapi: 3.1.0
+paths:
+  /first:
+    get:
+      {operation}
+"""
+
+    with pytest.raises(ValueError, match=message):
+        _upstream_operations(source)
+
+
+def test_upstream_openapi_parser_rejects_duplicate_mapping_keys() -> None:
+    source = """
+openapi: 3.1.0
+paths:
+  /first:
+    get:
+      responses: {200: {description: first}}
+      responses: {201: {description: second}}
+"""
+
+    with pytest.raises(Exception, match="duplicate key 'responses'"):
+        _upstream_operations(source)

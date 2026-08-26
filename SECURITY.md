@@ -23,9 +23,11 @@ Use a private GitHub security advisory.
 
 The scanner is a deterministic tripwire, not a safety guarantee. It recursively scans string keys and values across retain requests, recall requests, and recalled results; normalizes known Unicode evasions; checks bounded Base64 content; and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
 
-Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Payloads that exceed these tripwire budgets can evade split reassembly and must still be constrained by request-size, rate-limit, quarantine, and review controls.
+Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a credible split-reassembly tripwire budget fails closed with `split_base64_limit`.
 
-Cross-fragment instruction matching retains a 512-byte normalized suffix. An attacker-controlled whitespace-only gap longer than that can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+Cross-fragment instruction matching retains a 512-byte normalized suffix. An attacker-controlled whitespace-only gap of 512 bytes or longer can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+
+Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings unless another detector or the surrounding text matches an unsafe rule.
 
 The direct/rolling scanner also caps the number of string key/value fragments inspected per request. Exceeding that budget fails closed instead of allowing attacker-controlled field counts to create unbounded synchronous detector work.
 

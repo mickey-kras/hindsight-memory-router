@@ -26,11 +26,12 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
 - Retain and recall also enforce content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
-- Request scans run inline and are bounded by the configured JSON body limit (default: 1 MiB).
+- Request scans run inline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query and path values use their route-specific bounds.
+- Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics because facade query routes are read-only and do not persist them.
 - Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
 
-Webhooks, file transfer, import/export, metrics, LLM health, cross-writer listings, and deprecated upstream routes are denied and quarantined.
+Webhooks, file transfer, import/export, metrics, provider-credential LLM health probes, cross-writer listings, and deprecated upstream routes are denied and quarantined.
 
 ## Failure mapping
 
@@ -41,6 +42,7 @@ Webhooks, file transfer, import/export, metrics, LLM health, cross-writer listin
 | Timeout | `504 hindsight_timeout` |
 | Facade 4xx except 401/403 | Same status, sanitized `hindsight_http_error` |
 | Facade response over 256 KiB | `502 hindsight_response_too_large` |
+| Unsafe facade response | `502 hindsight_unsafe_response` |
 | Facade scanner worker failure, busy capacity, or field/time limit | `503 facade_scan_unavailable` |
 | Redirect, 401/403, 5xx, network, or malformed response | Typed 502 |
 

@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import json
 import multiprocessing
-import os
-import signal
-from concurrent.futures import Future, ProcessPoolExecutor
+import time
+from concurrent.futures import Future
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from pebble import ProcessExpired, ProcessPool
 
 from memory_router import app as app_module
 from memory_router import openclaw as openclaw_module
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES, facade_route, match_facade_route
+from memory_router.logging_contract import OPERATIONS
 from memory_router.openclaw import OpenClawFacade
 from memory_router.security import SafetyFinding, SafetyResult
 from tests.request_helpers import request
@@ -23,12 +24,25 @@ def _payload(response: object) -> object:
     return json.loads(response.body)  # type: ignore[attr-defined]
 
 
+def _blocking_scan(_: bytes) -> SafetyResult:
+    time.sleep(5)
+    return SafetyResult()
+
+
+def _safe_scan(_: bytes) -> SafetyResult:
+    return SafetyResult()
+
+
 @pytest.fixture(autouse=True)
-def runtime_state() -> None:
-    app_module.runtime.allow_anonymous = True
-    app_module.runtime.router_token = None
-    app_module.runtime.max_body_bytes = 1024 * 1024
-    app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+def runtime_state(monkeypatch) -> None:
+    monkeypatch.setattr(app_module.runtime, "allow_anonymous", True)
+    monkeypatch.setattr(app_module.runtime, "router_token", None)
+    monkeypatch.setattr(app_module.runtime, "max_body_bytes", 1024 * 1024)
+    monkeypatch.setattr(
+        app_module.runtime,
+        "auditor",
+        SimpleNamespace(log_failure=Mock(), persist=AsyncMock()),
+    )
 
 
 def _policy(response: object = None) -> SimpleNamespace:
@@ -313,6 +327,23 @@ async def test_extended_route_enforces_required_body() -> None:
     policy.hindsight.openclaw_request.assert_not_awaited()
 
 
+@pytest.mark.parametrize("resource", ["directives", "consolidate"])
+@pytest.mark.asyncio
+async def test_json_null_is_not_treated_as_an_absent_facade_body(resource: str) -> None:
+    policy = _policy({})
+    app_module.runtime.policy = policy
+
+    with pytest.raises(HttpError) as blocked:
+        await app_module.dispatch(
+            f"v1/default/banks/openclaw/{resource}",
+            request("POST", f"/v1/default/banks/openclaw/{resource}", body=b"null"),
+        )
+
+    assert blocked.value.status == 400
+    assert blocked.value.message.endswith("body must be an object")
+    policy.hindsight.openclaw_request.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_optional_body_preserves_absent_body_for_upstream() -> None:
     policy = _policy({})
@@ -373,6 +404,19 @@ async def test_history_routes_accept_upstream_array(path: str) -> None:
 
     assert response.status_code == 200
     assert _payload(response) == history
+
+
+@pytest.mark.asyncio
+async def test_history_route_rejects_upstream_object_for_array_contract() -> None:
+    path = "/v1/default/banks/openclaw/memories/mem-1/history"
+    policy = _policy({"id": "not-an-array"})
+    app_module.runtime.policy = policy
+
+    with pytest.raises(HttpError) as blocked:
+        await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert blocked.value.status == 502
+    assert blocked.value.code == "hindsight_invalid_response"
 
 
 @pytest.mark.asyncio
@@ -454,14 +498,18 @@ async def test_facade_response_scan_uses_the_process_executor(monkeypatch) -> No
     policy = _policy({"safe": True})
     future: Future[SafetyResult] = Future()
     future.set_result(SafetyResult())
-    executor = SimpleNamespace(submit=Mock(return_value=future))
+    executor = SimpleNamespace(active=True, schedule=Mock(return_value=future))
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
 
     await OpenClawFacade(policy).forward(
         route=facade_route("GET", "stats"), writer_id="openclaw", params={}
     )
 
-    executor.submit.assert_called_once_with(openclaw_module.scan_facade_result, {"safe": True})
+    executor.schedule.assert_called_once_with(
+        openclaw_module.scan_facade_payload,
+        args=[b'{"safe":true}'],
+        timeout=30.0,
+    )
 
 
 @pytest.mark.asyncio
@@ -491,30 +539,62 @@ async def test_facade_response_scan_fails_closed_when_capacity_is_full(
 @pytest.mark.asyncio
 async def test_facade_response_scan_releases_capacity_when_submit_fails(monkeypatch) -> None:
     capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
-    executor = SimpleNamespace(submit=Mock(side_effect=RuntimeError("closed")))
+    executor = SimpleNamespace(active=True, schedule=Mock(side_effect=RuntimeError("closed")))
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
 
-    with pytest.raises(RuntimeError, match="closed"):
+    with pytest.raises(HttpError) as unavailable:
         await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
 
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "facade_scan_unavailable"
     capacity.release.assert_called_once_with()
 
 
-@pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="requires POSIX worker termination")
 @pytest.mark.asyncio
-async def test_facade_response_scan_recovers_after_worker_crash(monkeypatch) -> None:
-    broken = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
-    replacement_future: Future[SafetyResult] = Future()
-    replacement_future.set_result(SafetyResult())
-    replacement = SimpleNamespace(submit=Mock(return_value=replacement_future))
-    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", broken)
+async def test_facade_response_scan_maps_pool_construction_failure(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", None)
     monkeypatch.setattr(
-        openclaw_module, "_new_facade_scan_executor", Mock(return_value=replacement)
+        openclaw_module,
+        "_new_facade_scan_executor",
+        Mock(side_effect=RuntimeError("cannot start pool")),
     )
 
-    worker_pid = broken.submit(os.getpid).result(timeout=5)
-    os.kill(worker_pid, signal.SIGKILL)
+    with pytest.raises(HttpError) as unavailable:
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "facade_scan_unavailable"
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_is_size_capped_before_pool_submission(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    executor = SimpleNamespace(active=True, schedule=Mock())
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+
+    with pytest.raises(HttpError) as unavailable:
+        await openclaw_module._scan_facade_response(  # noqa: SLF001
+            "x" * openclaw_module.MAX_FACADE_RESPONSE_BYTES
+        )
+
+    assert unavailable.value.status == 503
+    executor.schedule.assert_not_called()
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_recovers_after_worker_crash(monkeypatch) -> None:
+    crashed: Future[SafetyResult] = Future()
+    crashed.set_exception(ProcessExpired("worker exited", 9))
+    recovered: Future[SafetyResult] = Future()
+    recovered.set_result(SafetyResult())
+    executor = SimpleNamespace(active=True, schedule=Mock(side_effect=[crashed, recovered]))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
 
     with pytest.raises(HttpError) as unavailable:
         await openclaw_module._scan_facade_response(  # noqa: SLF001
@@ -524,9 +604,42 @@ async def test_facade_response_scan_recovers_after_worker_crash(monkeypatch) -> 
     assert unavailable.value.status == 503
     assert unavailable.value.code == "facade_scan_unavailable"
     assert unavailable.value.headers == {"Retry-After": "1"}
-    assert openclaw_module._FACADE_SCAN_EXECUTOR is replacement  # noqa: SLF001
     assert await openclaw_module._scan_facade_response({"safe": True}) == SafetyResult()  # noqa: SLF001
-    replacement.submit.assert_called_once_with(openclaw_module.scan_facade_result, {"safe": True})
+    assert executor.schedule.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_maps_worker_exception_to_typed_503(monkeypatch) -> None:
+    failed: Future[SafetyResult] = Future()
+    failed.set_exception(ValueError("bad worker result"))
+    executor = SimpleNamespace(active=True, schedule=Mock(return_value=failed))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+
+    with pytest.raises(HttpError) as unavailable:
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "facade_scan_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_kills_timed_out_task_and_recovers(monkeypatch) -> None:
+    openclaw_module.shutdown_facade_scan_executor()
+    executor = ProcessPool(max_workers=1, context=multiprocessing.get_context("spawn"))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+    monkeypatch.setattr(openclaw_module, "scan_facade_payload", _blocking_scan)
+    monkeypatch.setattr(openclaw_module, "FACADE_SCAN_TASK_SECONDS", 0.05)
+    monkeypatch.setattr(openclaw_module, "FACADE_SCAN_WAIT_SECONDS", 1.0)
+    try:
+        with pytest.raises(HttpError) as unavailable:
+            await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+        assert unavailable.value.status == 503
+        assert unavailable.value.code == "facade_scan_unavailable"
+
+        monkeypatch.setattr(openclaw_module, "scan_facade_payload", _safe_scan)
+        assert await openclaw_module._scan_facade_response({"safe": True}) == SafetyResult()  # noqa: SLF001
+    finally:
+        openclaw_module.shutdown_facade_scan_executor()
 
 
 @pytest.mark.asyncio
@@ -534,7 +647,7 @@ async def test_facade_response_scan_has_an_await_deadline(monkeypatch) -> None:
     capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
     future: Future[SafetyResult] = Future()
     assert future.set_running_or_notify_cancel()
-    executor = SimpleNamespace(submit=Mock(return_value=future))
+    executor = SimpleNamespace(active=True, schedule=Mock(return_value=future))
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
     monkeypatch.setattr(openclaw_module, "FACADE_SCAN_WAIT_SECONDS", 0.0)
@@ -552,8 +665,13 @@ async def test_facade_response_scan_has_an_await_deadline(monkeypatch) -> None:
 def test_facade_scan_worker_bounds_are_pinned() -> None:
     assert openclaw_module.FACADE_SCAN_WORKERS == 4
     assert openclaw_module.FACADE_SCAN_CAPACITY == 4
+    assert openclaw_module.FACADE_SCAN_TASK_SECONDS == 30.0
     assert openclaw_module.FACADE_SCAN_WAIT_SECONDS == 31.0
-    assert isinstance(openclaw_module._FACADE_SCAN_EXECUTOR, ProcessPoolExecutor)
+    executor = openclaw_module._get_facade_scan_executor()  # noqa: SLF001
+    try:
+        assert isinstance(executor, ProcessPool)
+    finally:
+        openclaw_module.shutdown_facade_scan_executor()
 
 
 @pytest.mark.parametrize("matched", ["facade_field_limit", "facade_time_limit"])
@@ -689,6 +807,10 @@ def test_route_quota_classification_is_explicit_for_read_post_operations() -> No
         for route in FACADE_ROUTES
         if route.read and route.template != "memories/dry-run-extract"
     )
+
+
+def test_logging_contract_accepts_every_facade_operation() -> None:
+    assert all(f"openclaw_{route.operation}" in OPERATIONS for route in FACADE_ROUTES)
 
 
 def test_route_lookup_and_miss() -> None:
