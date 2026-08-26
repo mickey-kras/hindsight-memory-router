@@ -21,6 +21,21 @@ class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
 def _construct_unique_mapping(
     loader: _UniqueKeyLoader, node: yaml.MappingNode, deep: bool = False
 ) -> dict[Any, Any]:
+    explicit_keys: set[Any] = set()
+    explicit_nodes: set[int] = set()
+    for key_node, _ in node.value:
+        if key_node.tag == "tag:yaml.org,2002:merge":
+            continue
+        key = loader.construct_object(key_node, deep=deep)
+        if key in explicit_keys:
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                f"found duplicate key {key!r}",
+                key_node.start_mark,
+            )
+        explicit_keys.add(key)
+        explicit_nodes.add(id(key_node))
     loader.flatten_mapping(node)
     result: dict[Any, Any] = {}
     for key_node, value_node in node.value:
@@ -34,7 +49,7 @@ def _construct_unique_mapping(
                 "found an unhashable mapping key",
                 key_node.start_mark,
             ) from exc
-        if duplicate:
+        if duplicate and id(key_node) not in explicit_nodes:
             raise ConstructorError(
                 "while constructing a mapping",
                 node.start_mark,
@@ -101,16 +116,16 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
                 body_mode = "required"
             else:
                 body_mode = "optional"
-            parameters = [*shared_parameters]
             operation_parameters = operation.get("parameters", [])
             if not isinstance(operation_parameters, list):
                 raise ValueError(f"parameters must be an array at {method.upper()} {path}")
-            parameters.extend(operation_parameters)
+            parameters = [*shared_parameters, *operation_parameters]
             if any(isinstance(parameter, dict) and "$ref" in parameter for parameter in parameters):
                 raise ValueError(f"unsupported parameter $ref at {method.upper()} {path}")
             query: dict[str, bool] = {}
             seen_parameters: set[tuple[str, str]] = set()
-            for parameter in parameters:
+            seen_operation_parameters: set[tuple[str, str]] = set()
+            for parameter_index, parameter in enumerate(parameters):
                 if not isinstance(parameter, dict):
                     raise ValueError(f"parameter must be an object at {method.upper()} {path}")
                 location = parameter.get("in")
@@ -125,11 +140,16 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
                         f"parameter.required must be boolean at {method.upper()} {path}"
                     )
                 identity = (location, name)
-                if identity in seen_parameters:
+                is_operation_parameter = parameter_index >= len(shared_parameters)
+                if identity in seen_operation_parameters or (
+                    identity in seen_parameters and not is_operation_parameter
+                ):
                     raise ValueError(
                         f"duplicate parameter {location}:{name} at {method.upper()} {path}"
                     )
                 seen_parameters.add(identity)
+                if is_operation_parameter:
+                    seen_operation_parameters.add(identity)
                 if location == "query":
                     query[name] = required
             responses = operation.get("responses", {})
@@ -190,7 +210,6 @@ def main() -> int:
         )
 
     plugin = sources["plugin"]
-    defaults = sources["bank_defaults"]
     sdk = sources["agent_sdk"]
 
     from memory_router.facade_routes import FACADE_ROUTES
@@ -258,3 +277,7 @@ def main() -> int:
     for marker in required_plugin_markers:
         if marker not in plugin:
             raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

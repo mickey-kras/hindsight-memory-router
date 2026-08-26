@@ -1,8 +1,23 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from scripts.check_openclaw_compat import _supports_status, _upstream_operations
+
+
+def test_compat_script_invokes_main_when_executed() -> None:
+    script = Path(__file__).parents[1] / "scripts" / "check_openclaw_compat.py"
+
+    completed = subprocess.run(  # noqa: S603 - fixed interpreter and repository script
+        [sys.executable, str(script)], capture_output=True, check=False, text=True
+    )
+
+    assert completed.returncode != 0
+    assert "usage: check_openclaw_compat.py <hindsight-checkout>" in completed.stderr
 
 
 def test_upstream_openapi_parser_handles_yaml_renderings_without_status_leak() -> None:
@@ -46,6 +61,42 @@ paths:
 def test_upstream_openapi_parser_enforces_operation_floor() -> None:
     with pytest.raises(ValueError, match="expected at least 2"):
         _upstream_operations("openapi: 3.1.0\npaths: {}\n", minimum=2)
+
+
+def test_operation_parameter_overrides_shared_parameter() -> None:
+    source = """
+openapi: 3.1.0
+paths:
+  /first:
+    parameters:
+      - {name: q, in: query, required: false}
+    get:
+      parameters:
+        - {name: q, in: query, required: true}
+      responses: {200: {description: ok}}
+"""
+
+    operation = _upstream_operations(source)[("GET", "/first")]
+
+    assert operation["query"] == {"q": True}
+
+
+def test_yaml_merge_allows_explicit_override() -> None:
+    source = """
+openapi: 3.1.0
+defaults: &defaults
+  deprecated: false
+  responses: {200: {description: default}}
+paths:
+  /first:
+    get:
+      <<: *defaults
+      responses: {201: {description: overridden}}
+"""
+
+    operation = _upstream_operations(source)[("GET", "/first")]
+
+    assert operation["statuses"] == {"201"}
 
 
 @pytest.mark.parametrize(

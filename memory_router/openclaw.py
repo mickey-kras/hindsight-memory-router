@@ -67,10 +67,18 @@ def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = 
 
 def _get_facade_scan_executor() -> ProcessPool:
     global _FACADE_SCAN_EXECUTOR
+    stale = None
     with _FACADE_SCAN_EXECUTOR_LOCK:
         if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
+            stale = _FACADE_SCAN_EXECUTOR
             _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
-        return _FACADE_SCAN_EXECUTOR
+        executor = _FACADE_SCAN_EXECUTOR
+    if stale is not None:
+        with suppress(Exception):
+            stale.stop()  # type: ignore[no-untyped-call]
+        with suppress(Exception):
+            stale.join(timeout=5)
+    return executor
 
 
 def shutdown_facade_scan_executor() -> None:
@@ -206,6 +214,8 @@ class OpenClawFacade:
 
         if route.resource == "reflect" and body is not None:
             self.policy.limits.assert_recall_bounds(body)
+        if route.template == "memories/dry-run-extract" and body is not None:
+            self.policy.limits.assert_retain_bounds(body)
 
         if route.read:
             await self.policy.limits.consume_recall(writer_id)

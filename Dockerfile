@@ -14,6 +14,7 @@ RUN python -m pip install --no-cache-dir --disable-pip-version-check --require-h
 
 COPY memory_router ./memory_router
 COPY writer_registry.example.json ./writer_registry.example.json
+COPY THIRD_PARTY_NOTICES.md ./THIRD_PARTY_NOTICES.md
 RUN python -m pip install --no-cache-dir --disable-pip-version-check --no-deps . \
     && python -m pip uninstall --yes pip \
     && mkdir -p /app/data \

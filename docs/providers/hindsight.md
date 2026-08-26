@@ -27,7 +27,7 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - Retain and recall also enforce content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
 - Request scans run inline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query and path values use their route-specific bounds.
-- Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics because facade query routes are read-only and do not persist them.
+- Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics. Route semantics and Hindsight validation bound their use, including write-capable query routes.
 - Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
 

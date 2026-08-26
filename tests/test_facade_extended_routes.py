@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import multiprocessing
 import time
@@ -233,6 +234,7 @@ async def test_dry_run_extract_uses_batched_retain_request_scan() -> None:
     )
 
     assert response.status_code == 200
+    policy.limits.assert_retain_bounds.assert_called_once_with(body)
     policy.hindsight.openclaw_request.assert_awaited_once()
     policy._quarantine.assert_not_awaited()
 
@@ -290,6 +292,10 @@ async def test_out_of_scope_hindsight_endpoints_remain_denied(method: str, path:
 
     assert response.status_code == 404
     assert _payload(response) == {"error": "endpoint_not_allowed"}
+    if path.startswith("/v1/default/banks/openclaw/"):
+        policy.deny_endpoint.assert_awaited_once_with(method, path, writer_id="openclaw")
+    else:
+        policy.deny_endpoint.assert_awaited_once_with(method, path)
     policy.hindsight.openclaw_request.assert_not_awaited()
 
 
@@ -636,7 +642,10 @@ async def test_facade_response_scan_kills_timed_out_task_and_recovers(monkeypatc
         assert unavailable.value.status == 503
         assert unavailable.value.code == "facade_scan_unavailable"
 
-        monkeypatch.setattr(openclaw_module, "scan_facade_payload", _safe_scan)
+        recovered: Future[SafetyResult] = Future()
+        recovered.set_result(SafetyResult())
+        mock_executor = SimpleNamespace(active=True, schedule=Mock(return_value=recovered))
+        monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", mock_executor)
         assert await openclaw_module._scan_facade_response({"safe": True}) == SafetyResult()  # noqa: SLF001
     finally:
         openclaw_module.shutdown_facade_scan_executor()
@@ -659,6 +668,29 @@ async def test_facade_response_scan_has_an_await_deadline(monkeypatch) -> None:
     assert blocked.value.code == "facade_scan_unavailable"
     capacity.release.assert_not_called()
     future.set_result(SafetyResult())
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_releases_capacity_after_caller_cancellation(
+    monkeypatch,
+) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    future: Future[SafetyResult] = Future()
+    assert future.set_running_or_notify_cancel()
+    executor = SimpleNamespace(active=True, schedule=Mock(return_value=future))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+
+    task = asyncio.create_task(openclaw_module._scan_facade_response({"safe": True}))  # noqa: SLF001
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    capacity.release.assert_not_called()
+
+    future.set_result(SafetyResult())
+    await asyncio.sleep(0)
     capacity.release.assert_called_once_with()
 
 

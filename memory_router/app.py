@@ -849,4 +849,15 @@ async def dispatch(path: str, request: Request) -> Response:
             status_code=route.success_status,
         )
 
-    return JSONResponse(await policy.deny_endpoint(method, pathname), status_code=404)
+    denied_writer_id = None
+    denied_bank_match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
+    if denied_bank_match is not None:
+        candidate = _decode_path_segment(denied_bank_match.group(1))
+        if candidate in getattr(getattr(policy, "registry", None), "writers", {}):
+            denied_writer_id = candidate
+    denied = (
+        await policy.deny_endpoint(method, pathname)
+        if denied_writer_id is None
+        else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
+    )
+    return JSONResponse(denied, status_code=404)

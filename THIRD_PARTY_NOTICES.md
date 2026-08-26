@@ -13,3 +13,5 @@ OWASP and the OWASP name are associated with the OWASP Foundation. Use of this d
 Memory Router depends on Pebble version 5.2.1 for bounded process-pool task execution and worker replacement.
 
 Pebble is licensed under the GNU Lesser General Public License, version 3.0. Its license and source notices remain those of the upstream distribution.
+
+Source: https://github.com/noxdafox/pebble/tree/5.2.1

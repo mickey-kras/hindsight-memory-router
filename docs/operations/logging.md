@@ -10,10 +10,10 @@ Unknown fields and invalid numbers are dropped. Invalid enums use their safe fal
 
 ## Values
 
-- `error_kind`: `capacity`, `conflict`, `http`, `invalid-credentials`, `invalid-response`, `network`, `payload-too-large`, `rate-limit`, `response-too-large`, `storage`, `timeout`, `unexpected`
+- `error_kind`: `capacity`, `conflict`, `http`, `invalid-credentials`, `invalid-response`, `network`, `payload-too-large`, `rate-limit`, `response-too-large`, `storage`, `timeout`, `unexpected`, `worker-crash`
 - `outcome`: `failed`, `degraded`, `healthy`, `unhealthy`
 - `route_class`: `readiness`, `liveness`, `version`, `admin`, `memory`, `openclaw`, `unmatched`
-- `operation`: `authenticate`, `configuration`, `health`, `invalidate_memory`, `openclaw_bank`, `openclaw_config`, `openclaw_mental-models`, `openclaw_reflect`, `quarantine_maintenance`, `recall`, `request`, `retain`, `security_audit`, `shutdown`, `startup`, `storage_health`, `version`
+- `operation`: core operations in `logging_contract.OPERATIONS`, plus `facade_scan` and `openclaw_<allowlist operation>` for every facade route
 - `reason`: `admin-cleanup-token-missing`, `admin-read-token-missing`, `admin-review-token-missing`, `anonymous-mode`, `application-shutdown`, `application-startup`, `asgi-application-error`, `direct-stdlib-log`, `http-protocol-error`, `legacy-admin-token`, `openclaw-suspicious-provider-response`, `openclaw-suspicious-request`, `openclaw-unknown-writer`, `reserved-field`, `router-token-missing`, `runtime-other`, `server-finished`, `server-running`, `server-started`, `server-stopping`, `unregistered-event`
 
 ## Events

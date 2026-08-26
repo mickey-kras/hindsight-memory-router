@@ -21,9 +21,9 @@ Use a private GitHub security advisory.
 
 ## Content scanning
 
-The scanner is a deterministic tripwire, not a safety guarantee. It recursively scans string keys and values across retain requests, recall requests, and recalled results; normalizes known Unicode evasions; checks bounded Base64 content; and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
+The scanner is a deterministic tripwire, not a safety guarantee. It recursively scans string keys and values across retain, recall, facade, query, and provider-response surfaces; normalizes known Unicode evasions; checks bounded Base64 content; and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
 
-Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a credible split-reassembly tripwire budget fails closed with `split_base64_limit`.
+Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a hard size/field budget or a credible combinatorial budget fails closed with `split_base64_limit`.
 
 Cross-fragment instruction matching retains a 512-byte normalized suffix. An attacker-controlled whitespace-only gap of 512 bytes or longer can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
 
@@ -47,6 +47,7 @@ Reviewed recall approvals pin stable memory identity/content (`id` + `text`). Wh
 ## CI dependency trust
 
 - `confusables==1.2.0` is an explicit maintenance exception: the scanner needs UTS #39-style skeleton folding, available alternatives have similar maintenance risk, and the dependency is exact-pinned with verified hashes. Revisit the exception when a maintained compatible implementation is available or the package needs an unreviewed data/code update.
+- Pebble 5.2.1's LGPL-3.0 use is accepted for worker isolation; published images include its notice and upstream source URL.
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
 - Semgrep uses a versioned image pinned by digest; update the version and digest together.
 - GitHub Actions remain pinned by commit SHA.

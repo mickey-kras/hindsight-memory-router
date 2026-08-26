@@ -9,7 +9,7 @@ import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from functools import lru_cache
-from itertools import islice, product
+from itertools import combinations, islice, product
 from typing import Any
 
 from agent_memory_guard.detectors import (
@@ -203,6 +203,16 @@ def _has_mixed_script_word(value: str) -> bool:
 
 
 def _confusable_rule_variants(value: str) -> tuple[str, ...]:
+    """Build bounded alternatives one word at a time."""
+    variants: list[str] = []
+    for word_match in re.finditer(r"\w+", value, re.UNICODE):
+        word = word_match.group(0)
+        for variant in _confusable_word_variants(word):
+            variants.append(f"{value[: word_match.start()]}{variant}{value[word_match.end() :]}")
+    return tuple(dict.fromkeys(variants))
+
+
+def _confusable_word_variants(value: str) -> tuple[str, ...]:
     ambiguous: list[tuple[int, tuple[str, ...]]] = []
     for index, char in enumerate(value):
         options = _ascii_confusable_options(char)
@@ -231,7 +241,7 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
     normalized = unicodedata.normalize("NFKC", pre_folded)
     if unicodedata.normalize("NFKC", content) != content:
         transformations.add("nfkc")
-    if _has_mixed_script_word(normalized):
+    if _has_mixed_script_word(unicodedata.normalize("NFKC", content)):
         transformations.add("mixed_script")
     chars: list[str] = []
     removed = False
@@ -241,20 +251,34 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         cp = ord(char)
         display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
         invisible = (
-            cp in {0x200B, 0x2060}
+            unicodedata.category(char) == "Cf"
             or 0x202A <= cp <= 0x202E
             or 0x2066 <= cp <= 0x2069
             or 0xE0000 <= cp <= 0xE007F
         )
         if display_modifier:
             display_modifier_removed = True
+            previous = next(
+                (
+                    candidate
+                    for candidate in reversed(normalized[:index])
+                    if candidate not in "\u200c\u200d" and not 0xFE00 <= ord(candidate) <= 0xFE0F
+                ),
+                "",
+            )
+            following = next(
+                (
+                    candidate
+                    for candidate in normalized[index + 1 :]
+                    if candidate not in "\u200c\u200d" and not 0xFE00 <= ord(candidate) <= 0xFE0F
+                ),
+                "",
+            )
             if (
-                index > 0
-                and index + 1 < len(normalized)
-                and normalized[index - 1].isascii()
-                and normalized[index - 1].isalnum()
-                and normalized[index + 1].isascii()
-                and normalized[index + 1].isalnum()
+                previous.isascii()
+                and previous.isalnum()
+                and following.isascii()
+                and following.isalnum()
             ):
                 display_modifier_evasion = True
         elif invisible:
@@ -401,6 +425,21 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             for finding in _split_instruction_rule_scan(combined):
                 if any(_crosses_field_boundary(hit, canonical_values) for hit in finding.hits):
                     result.add(SafetyFinding(finding.matched, "split_instruction"))
+        for start in range(len(canonical_values)):
+            for end in range(start + 2, min(len(canonical_values), start + 4)):
+                middle = canonical_values[start + 1 : end]
+                for skipped in range(1, min(MAX_SPLIT_BASE64_SKIPS, len(middle)) + 1):
+                    for omitted in combinations(range(len(middle)), skipped):
+                        fragments = [
+                            canonical_values[start],
+                            *(value for index, value in enumerate(middle) if index not in omitted),
+                            canonical_values[end],
+                        ]
+                        for combined in dict.fromkeys(("".join(fragments), " ".join(fragments))):
+                            for finding in _split_instruction_rule_scan(
+                                _bounded_utf8_suffix(combined.encode())
+                            ):
+                                result.add(SafetyFinding(finding.matched, "split_instruction"))
     return result
 
 
@@ -500,6 +539,41 @@ def _scan_fields(
         if limit_reached:
             break
 
+    # Inspect bounded alternatives that omit up to two interleaved value fields.
+    if not limit_reached:
+        values = [(key, canonical) for key, canonical, is_key in canonical_fields if not is_key]
+        for start in range(len(values)):
+            for end in range(start + 2, min(len(values), start + 4)):
+                middle = values[start + 1 : end]
+                for skipped in range(1, min(MAX_SPLIT_BASE64_SKIPS, len(middle)) + 1):
+                    for omitted in combinations(range(len(middle)), skipped):
+                        fragments = [
+                            values[start][1],
+                            *(
+                                value
+                                for index, (_, value) in enumerate(middle)
+                                if index not in omitted
+                            ),
+                            values[end][1],
+                        ]
+                        for window in dict.fromkeys(
+                            (
+                                _bounded_utf8_suffix("".join(fragments).encode()),
+                                _bounded_utf8_suffix(" ".join(fragments).encode()),
+                            )
+                        ):
+                            scan_window(values[end][0], window, fragments)
+                            if limit_reached:
+                                break
+                        if limit_reached:
+                            break
+                    if limit_reached:
+                        break
+                if limit_reached:
+                    break
+            if limit_reached:
+                break
+
     if not limit_reached:
         for index in range(len(canonical_fields) - 1):
             key, canonical, is_key = canonical_fields[index]
@@ -543,6 +617,7 @@ def _split_base64_candidates(
 ) -> tuple[list[str], bool]:
     candidates: list[tuple[str, int]] = []
     fragment_fields = 0
+    fragment_bytes = 0
     work_bytes = 0
     exhausted = False
     unconditional_exhausted = False
@@ -569,6 +644,7 @@ def _split_base64_candidates(
         if is_key and not _looks_like_base64(fragment):
             continue
         fragment_fields += 1
+        fragment_bytes += len(fragment)
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
             unconditional_exhausted = True
             break
@@ -602,7 +678,9 @@ def _split_base64_candidates(
             break
     return (
         [candidate for candidate, _ in candidates if len(candidate) >= 8],
-        unconditional_exhausted or soft_exhausted or (exhausted and credible),
+        unconditional_exhausted
+        or soft_exhausted
+        or (exhausted and (credible or fragment_bytes >= MAX_SPLIT_BASE64_WORK_BYTES // 4)),
     )
 
 
