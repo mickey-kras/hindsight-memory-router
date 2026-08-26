@@ -21,8 +21,8 @@ from .scan_windows import bounded_skip_fragments
 from .unicode_security import canonicalize_content, confusable_rule_variant_set
 
 MAX_SCAN_FIELDS = 128
-MAX_ROLLING_WINDOWS = 512
-MAX_SKIP_WINDOWS = 2_048
+MAX_ROLLING_WINDOWS = 8_192
+MAX_SKIP_WINDOWS = 8_192
 MAX_SPLIT_WINDOW_BYTES = 512
 MAX_BASE64_SPANS = 8
 MAX_BASE64_DECODED_BYTES = 16 * 1024
@@ -39,6 +39,7 @@ MAX_FACADE_SCAN_SECONDS = 30.0
 MAX_RETAIN_SCAN_FIELDS = MAX_FACADE_SCAN_FIELDS
 MAX_QUERY_SCAN_FIELDS = 256
 MAX_SCAN_FIELD_BYTES = 1024 * 1024
+MAX_NON_ASCII_CODEPOINTS = 65_536
 MAX_CORE_SCAN_SECONDS = 5.0
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
@@ -308,6 +309,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     result = SafetyResult()
     canonical_values: list[str] = []
     canonical_keys: list[str] = []
+    canonical_traversal: list[str] = []
     deadline = time.monotonic() + MAX_CORE_SCAN_SECONDS
     for index, (key, raw) in enumerate(query):
         if index >= MAX_QUERY_SCAN_FIELDS:
@@ -318,19 +320,24 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
         if _string_exceeds_scan_limit(key) or _string_exceeds_scan_limit(raw):
             result.add(SafetyFinding("field_size_limit", "span_limit"))
             break
+        if _exceeds_non_ascii_budget(key) or _exceeds_non_ascii_budget(raw):
+            result.add(SafetyFinding("unicode_size_limit", "span_limit"))
+            break
         canonical_key, key_transformations = canonicalize_content(key)
         _add_unicode_findings(result, key_transformations)
         canonical_keys.append(canonical_key)
+        canonical_traversal.append(canonical_key)
         canonical, transformations = canonicalize_content(raw)
         _add_unicode_findings(result, transformations)
         canonical_values.append(canonical)
+        canonical_traversal.append(canonical)
         for finding in _rule_scan(canonical):
             result.add(finding)
         for finding in _amg_scan(f"query.{key}", canonical, operation="read"):
             result.add(finding)
         if _deadline_reached(result, deadline):
             break
-    for canonical_fragments in (canonical_values, canonical_keys):
+    for canonical_fragments in (canonical_values, canonical_keys, canonical_traversal):
         if len(canonical_fragments) < 2:
             continue
         spaced = ""
@@ -340,7 +347,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 return result
             spaced = _bounded_append(spaced, value)
             compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
-        for combined in dict.fromkeys((spaced, compact)):
+        for combined in _join_variants(canonical_fragments, spaced=spaced, compact=compact):
             if _deadline_reached(result, deadline):
                 return result
             for finding in _split_instruction_rule_scan(combined):
@@ -352,7 +359,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 ):
                     result.add(SafetyFinding(finding.matched, "split_instruction"))
         for fragments in bounded_skip_fragments(canonical_fragments):
-            for combined in dict.fromkeys(("".join(fragments), " ".join(fragments))):
+            for combined in _join_variants(fragments):
                 for finding in _split_instruction_rule_scan(
                     _bounded_utf8_suffix(combined.encode())
                 ):
@@ -420,6 +427,9 @@ def _scan_fields(
             break
         if _string_exceeds_scan_limit(raw):
             result.add(SafetyFinding("field_size_limit", "span_limit"))
+            break
+        if _exceeds_non_ascii_budget(raw):
+            result.add(SafetyFinding("unicode_size_limit", "span_limit"))
             break
         if index < canonical_prefix_fields:
             canonical, transformations = raw, set[str]()
@@ -490,7 +500,9 @@ def _scan_fields(
         compact_value_window = _bounded_utf8_suffix(f"{compact_value_window}{canonical}".encode())
         value_fields.append(canonical)
         if len(value_fields) >= 2:
-            for window in dict.fromkeys((value_window, compact_value_window)):
+            for window in _join_variants(
+                value_fields, spaced=value_window, compact=compact_value_window
+            ):
                 scan_window(key, window, value_fields)
                 if limit_reached:
                     break
@@ -508,7 +520,9 @@ def _scan_fields(
             compact_key_window = _bounded_utf8_suffix(f"{compact_key_window}{canonical}".encode())
             key_fields.append(canonical)
             if len(key_fields) >= 2:
-                for window in dict.fromkeys((key_window, compact_key_window)):
+                for window in _join_variants(
+                    key_fields, spaced=key_window, compact=compact_key_window
+                ):
                     scan_window(key, window, key_fields)
                     if limit_reached:
                         break
@@ -526,7 +540,9 @@ def _scan_fields(
             compact_all_window = _bounded_utf8_suffix(f"{compact_all_window}{canonical}".encode())
             all_fields.append(canonical)
             if len(all_fields) >= 2:
-                for window in dict.fromkeys((all_window, compact_all_window)):
+                for window in _join_variants(
+                    all_fields, spaced=all_window, compact=compact_all_window
+                ):
                     scan_window(key, window, all_fields)
                     if limit_reached:
                         break
@@ -543,12 +559,7 @@ def _scan_fields(
         for group in field_groups:
             skip_windows = 0
             for fragments in bounded_skip_fragments([value for _, value in group]):
-                for window in dict.fromkeys(
-                    (
-                        _bounded_utf8_suffix("".join(fragments).encode()),
-                        _bounded_utf8_suffix(" ".join(fragments).encode()),
-                    )
-                ):
+                for window in _join_variants(fragments):
                     skip_windows += 1
                     if skip_windows > MAX_SKIP_WINDOWS:
                         result.add(SafetyFinding("window_limit", "span_limit"))
@@ -591,8 +602,14 @@ def _scan_split_base64(
     field_groups = (
         [field for field in materialized if not field[2]],
         [field for field in materialized if field[2]],
+        [field for field in materialized if _credible_split_field(field[1])],
     )
+    seen_groups: set[tuple[tuple[str, str, bool], ...]] = set()
     for group in field_groups:
+        group_key = tuple(group)
+        if not group or group_key in seen_groups:
+            continue
+        seen_groups.add(group_key)
         if _deadline_reached(result, deadline, time_limit_match):
             return
         encoded_candidates, encoded_exhausted = _split_base64_candidates(group, deadline=deadline)
@@ -659,8 +676,6 @@ def _split_base64_candidates(
         fragment = _normalized_base64_fragment(canonical)
         if fragment is None:
             continue
-        if not _looks_like_base64(fragment) and canonical.strip() != fragment and len(fragment) > 3:
-            continue
         fragment_fields += 1
         fragment_bytes += len(fragment)
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
@@ -711,7 +726,14 @@ def _split_base64_candidates(
         if exhausted:
             break
     return (
-        [candidate for candidate, _ in candidates if len(candidate) >= 8],
+        [
+            candidate
+            for candidate, _ in candidates
+            if len(candidate) >= 8
+            and _padded_base64(candidate) is not None
+            and _looks_like_base64(candidate)
+            and _decode_base64_fragment(candidate) is not None
+        ],
         unconditional_exhausted or soft_exhausted or exhausted,
     )
 
@@ -760,7 +782,7 @@ def _split_decoded_base64_candidates(
             exhausted = True
             break
         next_candidates: list[tuple[str, str, int, int, bool]] = []
-        if not add(next_candidates, decoded, decoded, 1, 0, "=" in fragment):
+        if not add(next_candidates, decoded, decoded, 1, 0, True):
             break
         for compact, spaced, parts, skipped, terminated in candidates:
             if deadline is not None and time.monotonic() >= deadline:
@@ -772,7 +794,7 @@ def _split_decoded_base64_candidates(
                 _bounded_append(spaced, decoded),
                 parts + 1,
                 skipped,
-                terminated or "=" in fragment,
+                terminated,
             ):
                 exhausted = True
                 break
@@ -800,10 +822,11 @@ def _split_decoded_base64_candidates(
 
 
 def _decode_base64_fragment(fragment: str) -> str | None:
-    if len(fragment) % 4 or not _CANONICAL_BASE64.fullmatch(fragment):
+    padded = _padded_base64(fragment)
+    if padded is None:
         return None
     try:
-        decoded = base64.b64decode(fragment, validate=True)
+        decoded = base64.b64decode(padded, validate=True)
         if len(decoded) > MAX_BASE64_DECODED_BYTES:
             return None
         text = decoded.decode("utf-8", errors="strict")
@@ -819,17 +842,29 @@ def _normalized_base64_fragment(value: str) -> str | None:
     if _BASE64_CHARS.fullmatch(stripped):
         return stripped
     parts = _BASE64_PARTS.findall(stripped)
-    if len(parts) < 2:
+    if not parts or len(parts) > MAX_SPLIT_BASE64_FIELDS:
         return None
     joined = "".join(parts)
     separators = _BASE64_PARTS.sub("", stripped)
+    if len(parts) < 2 and (not separators or len(joined) > 7):
+        return None
     if not joined or not separators or any(char.isalnum() for char in separators):
         return None
-    if any(char.isspace() for char in separators) and (
-        max(len(part) for part in parts) > 7 or not _looks_like_base64(joined)
-    ):
+    if any(char.isspace() for char in separators) and max(len(part) for part in parts) > 7:
         return None
     return joined
+
+
+def _credible_split_field(value: str) -> bool:
+    fragment = _normalized_base64_fragment(value)
+    return bool(
+        fragment
+        and (
+            _decode_base64_fragment(fragment) is not None
+            or _hard_base64_signal(fragment)
+            or _weak_base64_signal(fragment)
+        )
+    )
 
 
 def _dedupe_split_candidates(values: list[tuple[str, int]]) -> list[tuple[str, int]]:
@@ -852,7 +887,9 @@ def _scan_encoded(
 ) -> None:
     for match in _BASE64_RUN.finditer(canonical):
         candidate = match.group(0)
-        if candidate in state.seen or not _looks_like_base64(candidate):
+        if candidate in state.seen or (
+            not _hard_base64_signal(candidate) and not _looks_like_base64(candidate)
+        ):
             continue
         state.seen.add(candidate)
         state.spans += 1
@@ -860,12 +897,13 @@ def _scan_encoded(
             result.add(SafetyFinding("span_limit", "encoded_payload"))
             return
         hard_signal = _hard_base64_signal(candidate)
-        if len(candidate) % 4 or not _CANONICAL_BASE64.fullmatch(candidate):
+        padded = _padded_base64(candidate)
+        if padded is None:
             if hard_signal:
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
             continue
         try:
-            decoded = base64.b64decode(candidate, validate=True)
+            decoded = base64.b64decode(padded, validate=True)
         except (binascii.Error, ValueError):
             if hard_signal:
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
@@ -939,12 +977,13 @@ def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
 
 
 def _bare_secret_name_fragments(matched: str, fragments: Iterable[str]) -> bool:
-    if matched == "api key":
-        return True
-    if matched != "private key":
-        return False
     words = [fragment.strip().casefold() for fragment in fragments if fragment.strip()]
-    return "private" in words and "key" in words
+    if matched not in {"api key", "private key"}:
+        return False
+    matched_words = matched.split()
+    exact_pair = all(word in words for word in matched_words)
+    incidental = all(word in matched_words or re.fullmatch(r"[vq]?\d+", word) for word in words)
+    return exact_pair and incidental
 
 
 def _deadline_reached(
@@ -960,11 +999,23 @@ def _string_exceeds_scan_limit(value: str) -> bool:
     return len(value) > MAX_SCAN_FIELD_BYTES or len(value.encode("utf-8")) > MAX_SCAN_FIELD_BYTES
 
 
+def _exceeds_non_ascii_budget(value: str) -> bool:
+    seen = 0
+    for char in value:
+        if not char.isascii():
+            seen += 1
+            if seen > MAX_NON_ASCII_CODEPOINTS:
+                return True
+    return False
+
+
 def _add_unicode_findings(result: SafetyResult, transformations: set[str]) -> None:
     if transformations & {"invisible", "display_modifier_evasion"}:
         result.add(SafetyFinding("invisible_unicode", "invisible_unicode"))
     if "mixed_script" in transformations:
         result.add(SafetyFinding("confusable_unicode", "confusable_unicode"))
+    if "unmapped_confusable" in transformations:
+        result.add(SafetyFinding("unmapped_confusable", "confusable_unicode"))
 
 
 def _amg_scan(key: str, value: str, *, operation: str) -> list[SafetyFinding]:
@@ -1031,16 +1082,46 @@ def _crosses_field_boundary(hit: str, fields: Iterable[str]) -> bool:
 def _looks_like_base64(candidate: str) -> bool:
     if len(candidate) < 8:
         return False
+    padded = _padded_base64(candidate)
+    if padded is None:
+        return False
     if _hard_base64_signal(candidate) or _weak_base64_signal(candidate):
         return True
-    if len(candidate) % 4:
-        return False
     try:
-        decoded = base64.b64decode(candidate, validate=True)
+        decoded = base64.b64decode(padded, validate=True)
         text = decoded.decode("utf-8", errors="strict")
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return False
     return bool(text and all(char.isprintable() or char.isspace() for char in text))
+
+
+def _padded_base64(candidate: str) -> str | None:
+    if not candidate or len(candidate) % 4 == 1:
+        return None
+    if "=" in candidate and not candidate.endswith(("=", "==")):
+        return None
+    padded = candidate + "=" * (-len(candidate) % 4)
+    return padded if _CANONICAL_BASE64.fullmatch(padded) else None
+
+
+def _join_variants(
+    fragments: list[str], *, spaced: str | None = None, compact: str | None = None
+) -> tuple[str, ...]:
+    """Return bounded per-boundary compact/spaced reconstruction variants."""
+    if len(fragments) < 2:
+        return tuple(fragments)
+    tail = fragments[-5:]
+    variants: list[str] = []
+    for choices in range(1 << (len(tail) - 1)):
+        combined = tail[0]
+        for index, fragment in enumerate(tail[1:]):
+            combined += (" " if choices & (1 << index) else "") + fragment
+        variants.append(_bounded_utf8_suffix(combined.encode()))
+    if spaced is not None:
+        variants.append(spaced)
+    if compact is not None:
+        variants.append(compact)
+    return tuple(dict.fromkeys(variants))
 
 
 def _hard_base64_signal(candidate: str) -> bool:

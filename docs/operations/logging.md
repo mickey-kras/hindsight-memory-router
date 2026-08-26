@@ -10,7 +10,7 @@ Unknown fields and invalid numbers are dropped. Invalid enums use their safe fal
 
 ## Values
 
-- `error_kind`: `capacity`, `conflict`, `http`, `invalid-credentials`, `invalid-response`, `network`, `payload-too-large`, `rate-limit`, `response-too-large`, `storage`, `timeout`, `unexpected`, `worker-crash`
+- `error_kind`: `capacity`, `conflict`, `http`, `invalid-credentials`, `invalid-response`, `network`, `payload-too-large`, `rate-limit`, `response-too-large`, `shutdown`, `storage`, `timeout`, `unexpected`, `worker-crash`
 - `outcome`: `failed`, `degraded`, `healthy`, `unhealthy`
 - `route_class`: `readiness`, `liveness`, `version`, `admin`, `memory`, `openclaw`, `unmatched`
 - `operation`: core operations in `logging_contract.OPERATIONS`, plus `facade_scan` and `openclaw_<allowlist operation>` for every facade route

@@ -9,6 +9,26 @@ from confusables import normalize as normalize_confusables  # type: ignore[impor
 
 MAX_CONFUSABLE_RULE_VARIANTS = 32
 
+_CONFUSABLE_SUPPLEMENT: dict[int, tuple[str, ...]] = {
+    0x00D8: ("O",),
+    0x00DE: ("P", "T"),
+    0x00F8: ("o",),
+    0x00FE: ("p", "t"),
+    0x0110: ("D",),
+    0x0111: ("d",),
+    0x0141: ("L",),
+    0x0142: ("l",),
+    0x0192: ("f",),
+    0x01BF: ("p",),
+    0x0448: ("w",),
+    0x0969: ("3",),
+    0x2C82: ("B",),
+    0x2C83: ("b",),
+    0x11DE0: ("O",),
+    0x11DE1: ("l",),
+    0x16EAA: ("l",),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ConfusableVariantSet:
@@ -23,19 +43,29 @@ def _ascii_confusable_options(char: str) -> tuple[str, ...]:
     cp = ord(char)
     if 0x1CCD6 <= cp <= 0x1CCEF:
         return (chr(ord("A") + cp - 0x1CCD6),)
+    if 0x1CCF0 <= cp <= 0x1CCF9:
+        digit = cp - 0x1CCF0
+        return ("O", "0") if digit == 0 else ("l", "1") if digit == 1 else (str(digit),)
+    if cp in _CONFUSABLE_SUPPLEMENT:
+        return _CONFUSABLE_SUPPLEMENT[cp]
+    options: list[str] = []
+    for option in normalize_confusables(char, prioritize_alpha=True):
+        stripped = "".join(
+            item for item in option if not unicodedata.category(item).startswith("M")
+        )
+        if stripped.isascii() and stripped:
+            options.append(stripped)
     return tuple(
         sorted(
-            dict.fromkeys(
-                option
-                for option in normalize_confusables(char, prioritize_alpha=True)
-                if option.isascii()
-            ),
+            dict.fromkeys(options),
             key=lambda option: (not option.isalpha(), len(option), option.lower(), option),
         )
     )
 
 
 def _fold_confusable_char(char: str) -> str:
+    if unicodedata.category(char).startswith("M"):
+        return char
     options = _ascii_confusable_options(char)
     return options[0] if len(options) == 1 else char
 
@@ -122,16 +152,19 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
         return content, set()
     transformations: set[str] = set()
     original_nfkc = unicodedata.normalize("NFKC", content)
-    pre_folded = "".join(_fold_confusable_char(char) for char in content)
-    if pre_folded != content:
+    mark_cleaned, pre_fold_mark_removed = _strip_evasive_marks(original_nfkc)
+    pre_folded = "".join(_fold_confusable_char(char) for char in mark_cleaned)
+    if pre_folded != mark_cleaned:
         transformations.add("confusable")
     normalized = unicodedata.normalize("NFKC", pre_folded)
     if original_nfkc != content:
         transformations.add("nfkc")
     if _has_mixed_script_word(original_nfkc):
         transformations.add("mixed_script")
+    if _has_unmapped_ascii_word_char(original_nfkc):
+        transformations.add("unmapped_confusable")
     chars: list[str] = []
-    removed = False
+    removed = pre_fold_mark_removed
     display_modifier_removed = False
     display_modifier_evasion = False
     index = 0
@@ -150,12 +183,7 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
                     break
                 end += 1
             following = normalized[end] if end < len(normalized) else ""
-            if (
-                last_non_modifier.isascii()
-                and last_non_modifier.isalnum()
-                and following.isascii()
-                and following.isalnum()
-            ):
+            if _ascii_like_alnum(last_non_modifier) or _ascii_like_alnum(following):
                 display_modifier_evasion = True
             index = end
             continue
@@ -195,13 +223,59 @@ def _mark_run_evasion(value: str, start: int) -> tuple[int, bool]:
         end += 1
     left = value[start - 1] if start > 0 else ""
     right = value[end] if end < len(value) else ""
-    if not left or not right:
-        neighbor = left or right
-        return end, bool(neighbor and neighbor.isascii())
-    ascii_neighbors = left.isascii() and right.isascii()
-    in_word = ascii_neighbors and left.isalnum() and right.isalnum()
-    separator_adjacent = ascii_neighbors and (not left.isalnum() or not right.isalnum())
+    left_ascii = bool(left and left.isascii())
+    right_ascii = bool(right and right.isascii())
+    in_word = _ascii_like_alnum(left) and _ascii_like_alnum(right)
+    separator_adjacent = (
+        _ascii_like_alnum(left) or _ascii_like_alnum(right) or (left_ascii and right_ascii)
+    ) and (not _ascii_like_alnum(left) or not _ascii_like_alnum(right))
     return end, in_word or separator_adjacent
+
+
+def _ascii_like_alnum(char: str) -> bool:
+    if not char:
+        return False
+    if char.isascii():
+        return char.isalnum()
+    name = unicodedata.name(char, "")
+    if (
+        "LATIN" not in name
+        and ord(char) not in _CONFUSABLE_SUPPLEMENT
+        and not (0x1CCD6 <= ord(char) <= 0x1CCF9)
+    ):
+        return False
+    return any(option.isalnum() for option in _ascii_confusable_options(char))
+
+
+def _has_unmapped_ascii_word_char(value: str) -> bool:
+    for index, char in enumerate(value):
+        if char.isascii() or _ascii_confusable_options(char):
+            continue
+        if not unicodedata.name(char, "").startswith(("LATIN ", "CYRILLIC ", "GREEK ")):
+            continue
+        left = value[index - 1] if index else ""
+        right = value[index + 1] if index + 1 < len(value) else ""
+        if (left.isascii() and left.isalnum()) or (right.isascii() and right.isalnum()):
+            return True
+    return False
+
+
+def _strip_evasive_marks(value: str) -> tuple[str, bool]:
+    chars: list[str] = []
+    removed = False
+    index = 0
+    while index < len(value):
+        if unicodedata.category(value[index]).startswith("M"):
+            end, evasion = _mark_run_evasion(value, index)
+            if evasion:
+                removed = True
+            else:
+                chars.extend(value[index:end])
+            index = end
+            continue
+        chars.append(value[index])
+        index += 1
+    return "".join(chars), removed
 
 
 def _is_default_ignorable(cp: int, category: str) -> bool:

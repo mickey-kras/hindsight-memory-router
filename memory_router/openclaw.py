@@ -72,6 +72,11 @@ def _facade_scan_generation() -> int:
         return _FACADE_SCAN_GENERATION
 
 
+def _facade_scan_stopped(generation: int) -> bool:
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        return _FACADE_SCAN_SHUTDOWN or generation != _FACADE_SCAN_GENERATION
+
+
 def _get_facade_scan_executor(expected_generation: int | None = None) -> ProcessPool:
     global _FACADE_SCAN_EXECUTOR
     stale = None
@@ -175,6 +180,12 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
     except TimeoutError as exc:
         future.cancel()  # type: ignore[no-untyped-call]
+        if _facade_scan_stopped(generation):
+            raise _scan_unavailable(
+                "response safety scanner is shut down",
+                error_kind="shutdown",
+                writer_id=writer_id,
+            ) from exc
         raise _scan_unavailable(
             "response safety scan timed out", error_kind="timeout", writer_id=writer_id
         ) from exc
@@ -185,6 +196,12 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
             writer_id=writer_id,
         ) from exc
     except Exception as exc:
+        if _facade_scan_stopped(generation):
+            raise _scan_unavailable(
+                "response safety scanner is shut down",
+                error_kind="shutdown",
+                writer_id=writer_id,
+            ) from exc
         raise _scan_unavailable(
             "response safety scanner failed",
             error_kind="unexpected",
