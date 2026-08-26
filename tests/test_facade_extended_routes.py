@@ -658,6 +658,7 @@ async def test_facade_response_scan_maps_worker_exception_to_typed_503(monkeypat
 @pytest.mark.asyncio
 async def test_facade_response_scan_kills_timed_out_task_and_recovers(monkeypatch) -> None:
     openclaw_module.shutdown_facade_scan_executor()
+    openclaw_module.start_facade_scan_executor()
     executor = ProcessPool(max_workers=1, context=multiprocessing.get_context("spawn"))
     real_executor = executor
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
@@ -722,6 +723,27 @@ async def test_facade_response_scan_releases_capacity_after_caller_cancellation(
     future.set_result(SafetyResult())
     await asyncio.sleep(0)
     capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_scan_shutdown_cancels_waiter_immediately(monkeypatch) -> None:
+    future: Future[SafetyResult] = Future()
+    executor = SimpleNamespace(
+        active=True,
+        schedule=Mock(return_value=future),
+        stop=Mock(),
+        join=Mock(),
+    )
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+
+    task = asyncio.create_task(openclaw_module._scan_facade_response({"safe": True}))  # noqa: SLF001
+    await asyncio.sleep(0)
+    await openclaw_module.shutdown_facade_scan_executor_async()
+
+    with pytest.raises(HttpError) as unavailable:
+        await asyncio.wait_for(task, timeout=0.5)
+    assert unavailable.value.code == "facade_scan_unavailable"
+    assert unavailable.value.message == "response safety scanner is shut down"
 
 
 def test_facade_scan_worker_bounds_are_pinned() -> None:

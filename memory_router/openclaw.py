@@ -45,6 +45,7 @@ _FACADE_SCAN_EXECUTOR_LOCK = Lock()
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 _FACADE_SCAN_GENERATION = 0
 _FACADE_SCAN_SHUTDOWN = False
+_FACADE_SCAN_FUTURES: set[Any] = set()
 
 
 def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = None) -> HttpError:
@@ -120,10 +121,13 @@ def shutdown_facade_scan_executor() -> None:
         _FACADE_SCAN_GENERATION += 1
         executor = _FACADE_SCAN_EXECUTOR
         _FACADE_SCAN_EXECUTOR = None
-        if executor is not None:
-            with suppress(Exception):
-                executor.stop()  # type: ignore[no-untyped-call]
+        futures = tuple(_FACADE_SCAN_FUTURES)
+    for future in futures:
+        with suppress(Exception):
+            future.cancel()
     if executor is not None:
+        with suppress(Exception):
+            executor.stop()  # type: ignore[no-untyped-call]
         with suppress(Exception):
             executor.join(timeout=5)
 
@@ -155,6 +159,11 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
             args=[payload],
             timeout=FACADE_SCAN_TASK_SECONDS,
         )
+        with _FACADE_SCAN_EXECUTOR_LOCK:
+            if _FACADE_SCAN_SHUTDOWN or generation != _FACADE_SCAN_GENERATION:
+                future.cancel()  # type: ignore[no-untyped-call]
+                raise RuntimeError("facade scanner shut down")
+            _FACADE_SCAN_FUTURES.add(future)
     except HttpError:
         capacity.release()
         raise
@@ -175,7 +184,13 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
             error_kind="unexpected",
             writer_id=writer_id,
         ) from exc
-    future.add_done_callback(lambda _: capacity.release())
+
+    def release(done: Any) -> None:
+        with _FACADE_SCAN_EXECUTOR_LOCK:
+            _FACADE_SCAN_FUTURES.discard(done)
+        capacity.release()
+
+    future.add_done_callback(release)
     try:
         return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
     except TimeoutError as exc:
@@ -189,6 +204,14 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         raise _scan_unavailable(
             "response safety scan timed out", error_kind="timeout", writer_id=writer_id
         ) from exc
+    except asyncio.CancelledError as exc:
+        if _facade_scan_stopped(generation):
+            raise _scan_unavailable(
+                "response safety scanner is shut down",
+                error_kind="shutdown",
+                writer_id=writer_id,
+            ) from exc
+        raise
     except ProcessExpired as exc:
         raise _scan_unavailable(
             "response safety scanner worker failed",
@@ -268,8 +291,7 @@ class OpenClawFacade:
             await self.policy.limits.consume_retain(writer_id)
 
         # Route metadata and free-text query values are not persisted payload. Query
-        # values use a ruleset that detects instructions but does not classify URL
-        # syntax or ordinary base64-looking search text as an encoded payload.
+        # values decode valid Base64 but do not fail closed on ordinary URL syntax.
         scan_input = {
             key: value
             for key, value in request_evidence.items()

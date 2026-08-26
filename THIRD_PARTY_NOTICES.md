@@ -17,3 +17,11 @@ Pebble is licensed under the GNU Lesser General Public License, version 3.0. Its
 Source: https://github.com/noxdafox/pebble/tree/5.2.1
 
 The container includes `/app/licenses/LGPL-3.0.txt` and `/app/licenses/GPL-3.0.txt`.
+
+## Unicode Security Mechanisms
+
+The generated ASCII-confusable map uses Unicode UTS #39 data version 17.0.0.
+
+Source: https://www.unicode.org/Public/security/17.0.0/confusables.txt
+
+Unicode data is provided under the Unicode Terms of Use: https://www.unicode.org/terms_of_use.html
