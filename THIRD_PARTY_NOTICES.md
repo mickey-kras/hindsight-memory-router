@@ -15,3 +15,5 @@ Memory Router depends on Pebble version 5.2.1 for bounded process-pool task exec
 Pebble is licensed under the GNU Lesser General Public License, version 3.0. Its license and source notices remain those of the upstream distribution.
 
 Source: https://github.com/noxdafox/pebble/tree/5.2.1
+
+The container includes `/app/licenses/LGPL-3.0.txt` and `/app/licenses/GPL-3.0.txt`.

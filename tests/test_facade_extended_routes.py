@@ -265,6 +265,7 @@ async def test_dry_run_extract_batched_scan_still_blocks_split_instructions() ->
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
     policy._quarantine.assert_awaited_once()
+    policy.limits.consume_recall.assert_awaited_once_with("openclaw")
 
 
 @pytest.mark.asyncio
@@ -734,6 +735,19 @@ def test_facade_scan_worker_bounds_are_pinned() -> None:
         openclaw_module.shutdown_facade_scan_executor()
 
 
+def test_facade_scan_shutdown_generation_prevents_pool_recreation(monkeypatch) -> None:
+    generation = openclaw_module._facade_scan_generation()  # noqa: SLF001
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", None)
+    openclaw_module.shutdown_facade_scan_executor()
+    create = Mock()
+    monkeypatch.setattr(openclaw_module, "_new_facade_scan_executor", create)
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        openclaw_module._get_facade_scan_executor(generation)  # noqa: SLF001
+
+    create.assert_not_called()
+
+
 @pytest.mark.parametrize("matched", ["facade_field_limit", "facade_time_limit"])
 @pytest.mark.asyncio
 async def test_facade_scan_limits_are_operational_failures_without_quarantine(
@@ -901,6 +915,7 @@ async def test_facade_rejects_suspicious_request_body() -> None:
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
     policy._quarantine.assert_awaited_once()
+    policy.limits.consume_retain.assert_awaited_once_with("openclaw")
 
 
 @pytest.mark.asyncio

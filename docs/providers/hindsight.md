@@ -26,7 +26,7 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
 - Retain, recall, and dry-run extract enforce their item/content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
-- Request scans run inline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query and path values use their route-specific bounds.
+- Request scans run inline with a five-second deadline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query scans inspect at most 256 pairs.
 - Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics. Route semantics and Hindsight validation bound their use, including write-capable query routes.
 - Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
@@ -54,6 +54,6 @@ A typed recall failure affects only the Hindsight read bank that failed. If all 
 
 Retain and recall have separate per-writer and global sliding-window budgets. Request bounds return `413`; quota exhaustion returns `429 hindsight_rate_limited` with `Retry-After`.
 
-PostgreSQL-backed limits are shared across router replicas. These normal Hindsight limits are independent of quarantine capacity/rate limits and admin throttling. Requests blocked before the upstream call do not consume quota. Once admitted, upstream and response-scan failures consume quota.
+PostgreSQL-backed limits are shared across router replicas. Authenticated requests consume quota before content scanning, so blocked/quarantined scans, upstream failures, and response-scan failures count. Unknown writers and cheap structural failures do not.
 
 A generic memory-provider abstraction or support for additional memory systems is not implemented in this repository yet.

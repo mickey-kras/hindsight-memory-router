@@ -48,7 +48,7 @@ def _construct_unique_mapping(
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
         try:
-            duplicate = key in result
+            hash(key)
         except TypeError as exc:
             raise ConstructorError(
                 "while constructing a mapping",
@@ -80,7 +80,10 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
     # Construct the SafeLoader subclass directly so duplicate-key checks cannot be bypassed.
     loader = _UniqueKeyLoader(source)
     try:
-        document = loader.get_single_data()
+        try:
+            document = loader.get_single_data()
+        except RecursionError as exc:
+            raise ValueError("upstream OpenAPI nesting is too deep") from exc
     finally:
         loader.dispose()
     if not isinstance(document, dict) or not isinstance(document.get("paths"), dict):
@@ -176,17 +179,6 @@ def _supports_status(statuses: set[str], status: int) -> bool:
     return str(status) in statuses or f"{status // 100}XX" in statuses
 
 
-def _documented_endpoints(path: Path) -> set[tuple[str, str]]:
-    spec = json.loads(path.read_text(encoding="utf-8"))
-    endpoints: set[tuple[str, str]] = set()
-    for route, path_item in spec["paths"].items():
-        normalized = route.replace("{writer_id}", "{bank_id}")
-        for method in ("get", "post", "put", "patch", "delete"):
-            if method in path_item:
-                endpoints.add((method.upper(), normalized))
-    return endpoints
-
-
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("usage: check_openclaw_compat.py <hindsight-checkout>")
@@ -218,7 +210,7 @@ def main() -> int:
         facade_operations = _upstream_operations(
             sources["facade_spec"], minimum=MIN_FACADE_OPERATION_COUNT
         )
-    except (ValueError, yaml.YAMLError) as exc:
+    except (RecursionError, ValueError, yaml.YAMLError) as exc:
         raise SystemExit(f"could not parse upstream facade OpenAPI: {exc}") from exc
     missing_facade = []
     mismatched_statuses = []

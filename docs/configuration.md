@@ -24,6 +24,8 @@ Those deployments keep their existing writer/bank behavior across upgrade; the e
 
 Every writer's `write_bank` must also appear in its `read_banks`; invalid registries fail startup.
 
+Writer IDs use `[A-Za-z0-9._:-]{1,128}`; `.` and `..` are rejected.
+
 ## Storage
 
 The default is `sqlite:./data/quarantine.db`. Set `QUARANTINE_DATABASE_URL` to an explicit SQLite URL or a PostgreSQL URL when needed.

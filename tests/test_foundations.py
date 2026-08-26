@@ -120,7 +120,7 @@ def test_registry_loading_and_validation(tmp_path: Path) -> None:
         config.load_registry(str(blank))
 
     invalid_writer = json.loads(valid.read_text())
-    for writer_id in ("my writer", "agent-ü", "w" * 129):
+    for writer_id in ("my writer", "agent-ü", "w" * 129, ".", ".."):
         invalid_writer["writers"] = {
             writer_id: {
                 "role": "dev",

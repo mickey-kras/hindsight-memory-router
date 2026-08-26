@@ -43,6 +43,7 @@ def _new_facade_scan_executor() -> ProcessPool:
 _FACADE_SCAN_EXECUTOR: ProcessPool | None = None
 _FACADE_SCAN_EXECUTOR_LOCK = Lock()
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
+_FACADE_SCAN_GENERATION = 0
 
 
 def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = None) -> HttpError:
@@ -65,10 +66,17 @@ def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = 
     )
 
 
-def _get_facade_scan_executor() -> ProcessPool:
+def _facade_scan_generation() -> int:
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        return _FACADE_SCAN_GENERATION
+
+
+def _get_facade_scan_executor(expected_generation: int | None = None) -> ProcessPool:
     global _FACADE_SCAN_EXECUTOR
     stale = None
     with _FACADE_SCAN_EXECUTOR_LOCK:
+        if expected_generation is not None and expected_generation != _FACADE_SCAN_GENERATION:
+            raise RuntimeError("facade scanner shut down")
         if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
             stale = _FACADE_SCAN_EXECUTOR
             _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
@@ -81,9 +89,20 @@ def _get_facade_scan_executor() -> ProcessPool:
     return executor
 
 
-def shutdown_facade_scan_executor() -> None:
-    global _FACADE_SCAN_EXECUTOR
+async def _get_facade_scan_executor_async(expected_generation: int) -> ProcessPool:
     with _FACADE_SCAN_EXECUTOR_LOCK:
+        if expected_generation != _FACADE_SCAN_GENERATION:
+            raise RuntimeError("facade scanner shut down")
+        executor = _FACADE_SCAN_EXECUTOR
+        if executor is not None and executor.active:
+            return executor
+    return await asyncio.to_thread(_get_facade_scan_executor, expected_generation)
+
+
+def shutdown_facade_scan_executor() -> None:
+    global _FACADE_SCAN_EXECUTOR, _FACADE_SCAN_GENERATION
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        _FACADE_SCAN_GENERATION += 1
         executor = _FACADE_SCAN_EXECUTOR
         _FACADE_SCAN_EXECUTOR = None
         if executor is not None:
@@ -95,6 +114,7 @@ def shutdown_facade_scan_executor() -> None:
 
 
 async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
+    generation = _facade_scan_generation()
     capacity = _FACADE_SCAN_CAPACITY
     if not capacity.acquire(blocking=False):
         raise _scan_unavailable(
@@ -110,13 +130,16 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
                 error_kind="response-too-large",
                 writer_id=writer_id,
             )
-        executor = _get_facade_scan_executor()
+        executor = await _get_facade_scan_executor_async(generation)
         future = executor.schedule(
             scan_facade_payload,
             args=[payload],
             timeout=FACADE_SCAN_TASK_SECONDS,
         )
     except HttpError:
+        capacity.release()
+        raise
+    except asyncio.CancelledError:
         capacity.release()
         raise
     except Exception as exc:
@@ -194,6 +217,18 @@ class OpenClawFacade:
         if body is not None:
             request_evidence["body"] = body
 
+        if route.resource == "reflect" and body is not None:
+            self.policy.limits.assert_recall_bounds(body)
+        if route.template == "memories/dry-run-extract" and body is not None:
+            if not isinstance(body.get("items"), list):
+                raise HttpError(400, "invalid_request", "items must be an array")
+            self.policy.limits.assert_retain_bounds(body)
+
+        if route.read:
+            await self.policy.limits.consume_recall(writer_id)
+        else:
+            await self.policy.limits.consume_retain(writer_id)
+
         # Route metadata and free-text query values are not persisted payload. Query
         # values use a ruleset that detects instructions but does not classify URL
         # syntax or ordinary base64-looking search text as an encoded payload.
@@ -211,18 +246,6 @@ class OpenClawFacade:
         if not scan.safe:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
             raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
-
-        if route.resource == "reflect" and body is not None:
-            self.policy.limits.assert_recall_bounds(body)
-        if route.template == "memories/dry-run-extract" and body is not None:
-            if not isinstance(body.get("items"), list):
-                raise HttpError(400, "invalid_request", "items must be an array")
-            self.policy.limits.assert_retain_bounds(body)
-
-        if route.read:
-            await self.policy.limits.consume_recall(writer_id)
-        else:
-            await self.policy.limits.consume_retain(writer_id)
 
         bank = quote(writer.write_bank, safe="")
         suffix = route.template

@@ -215,3 +215,13 @@ paths:
 
     with pytest.raises(ConstructorError, match="duplicate key 'responses'"):
         _upstream_operations(source)
+
+
+def test_upstream_openapi_parser_reports_excessive_nesting() -> None:
+    nested = "[" * 2_000 + "null" + "]" * 2_000
+    source = (
+        f"paths:\n  /v1/test:\n    get:\n      responses:\n        '200':\n          x: {nested}\n"
+    )
+
+    with pytest.raises(ValueError, match="nesting is too deep"):
+        _upstream_operations(source)

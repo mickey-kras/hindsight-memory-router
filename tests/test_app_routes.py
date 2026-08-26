@@ -290,6 +290,20 @@ async def test_malformed_percent_encoding_falls_through_after_auth() -> None:
 
 
 @pytest.mark.asyncio
+async def test_denied_bank_path_ignores_malformed_writer_segment() -> None:
+    policy = SimpleNamespace(
+        registry=SimpleNamespace(writers={"main": object()}),
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+    )
+    app_module.runtime.policy = policy
+
+    response = await app_module.dispatch("unused", request("GET", "/v1/default/banks/%ZZ/webhooks"))
+
+    assert response.status_code == 404
+    policy.deny_endpoint.assert_awaited_once_with("GET", "/v1/default/banks/%ZZ/webhooks")
+
+
+@pytest.mark.asyncio
 async def test_admin_dispatch_all_routes_and_validation() -> None:
     admin = SimpleNamespace(
         list_queue=AsyncMock(return_value={"items": []}),

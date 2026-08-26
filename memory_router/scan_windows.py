@@ -11,8 +11,11 @@ def bounded_skip_fragments(values: Sequence[str], *, max_skips: int = 2) -> Iter
             middle = values[start + 1 : end]
             for skipped in range(1, min(max_skips, len(middle)) + 1):
                 for omitted in combinations(range(len(middle)), skipped):
-                    yield [
+                    fragments = [
                         first,
                         *(value for index, value in enumerate(middle) if index not in omitted),
                         values[end],
                     ]
+                    yield fragments
+                    if end + 1 < len(values):
+                        yield [*fragments, values[end + 1]]

@@ -88,13 +88,13 @@ class RouterPolicy:
         writer = self.registry.writers.get(writer_id)
         if writer is None:
             return await self._quarantine_retain(writer_id, source, "unknown_writer", body)
+        await self.limits.consume_retain(writer_id)
         scan = scan_retain_body(body)
         if not scan.safe:
             return await self._quarantine_retain(
                 writer_id, source, "suspicious_content", body, writer.write_bank, scan
             )
         rewritten = prepare_retain_body(body, writer_id, source, writer.write_bank)
-        await self.limits.consume_retain(writer_id)
         return await self.hindsight.retain(writer.write_bank, rewritten)
 
     async def recall(
@@ -104,13 +104,13 @@ class RouterPolicy:
         if writer is None:
             await self._quarantine_recall_or_degrade(writer_id, source, "unknown_writer", body)
             return {"results": []}
+        await self.limits.consume_recall(writer_id)
         scan = scan_recall_body(body)
         if not scan.safe:
             await self._quarantine_recall_or_degrade(
                 writer_id, source, "suspicious_query", body, list(writer.read_banks), scan
             )
             return {"results": []}
-        await self.limits.consume_recall(writer_id)
         responses = await self._recall_from_banks(writer_id, list(writer.read_banks), body)
         results: list[dict[str, Any]] = []
         for bank_id, response in responses:

@@ -97,7 +97,7 @@ async def test_prompt_injection_retain_is_quarantined_before_provider() -> None:
     assert result["queued"] is True
     assert result["reason"] == "suspicious_content"
     assert hindsight.retain_calls == []
-    assert limits.retain == []
+    assert limits.retain == ["main"]
     assert store.items[0]["kind"] == "retain_request"
 
 
@@ -117,7 +117,7 @@ async def test_all_retain_strings_and_keys_are_scanned(body: dict[str, Any]) -> 
     result = await router.retain("main", body)
     assert result["reason"] == "suspicious_content"
     assert hindsight.retain_calls == []
-    assert limits.retain == []
+    assert limits.retain == ["main"]
     assert store.items
 
 
@@ -141,7 +141,7 @@ async def test_all_recall_request_strings_are_scanned() -> None:
     )
     assert response == {"results": []}
     assert hindsight.recall_calls == []
-    assert limits.recall == []
+    assert limits.recall == ["main"]
     assert store.items[0]["kind"] == "recall_request"
 
 

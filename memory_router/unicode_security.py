@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import unicodedata
+from dataclasses import dataclass
 from functools import lru_cache
-from itertools import islice, product
+from itertools import combinations, product
 
 from confusables import normalize as normalize_confusables  # type: ignore[import-untyped]
 
 MAX_CONFUSABLE_RULE_VARIANTS = 32
+
+
+@dataclass(frozen=True, slots=True)
+class ConfusableVariantSet:
+    variants: tuple[str, ...]
+    exhausted: bool
 
 
 @lru_cache(maxsize=1_024)
@@ -46,15 +53,14 @@ def _has_mixed_script_word(value: str) -> bool:
     return False
 
 
-def confusable_rule_variants(value: str) -> tuple[str, ...]:
-    """Return at most 32 full-value alternatives, including a preferred skeleton."""
+def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
     ambiguous: list[tuple[int, tuple[str, ...]]] = []
     for index, char in enumerate(value):
         options = _ascii_confusable_options(char)
         if not char.isascii() and options:
             ambiguous.append((index, options))
     if not ambiguous:
-        return ()
+        return ConfusableVariantSet((), False)
     variants: list[str] = []
 
     def render(selected: tuple[str, ...]) -> None:
@@ -70,19 +76,37 @@ def confusable_rule_variants(value: str) -> tuple[str, ...]:
 
     preferred = tuple(options[0] for _, options in ambiguous)
     render(preferred)
-    for option_index, (_, options) in enumerate(ambiguous):
-        for replacement in options[1:]:
-            selected = list(preferred)
-            selected[option_index] = replacement
-            render(tuple(selected))
-            if len(variants) >= MAX_CONFUSABLE_RULE_VARIANTS:
-                return tuple(variants)
-    choices = product(*(options for _, options in ambiguous))
-    for selected_variant in islice(choices, MAX_CONFUSABLE_RULE_VARIANTS):
-        render(selected_variant)
-        if len(variants) >= MAX_CONFUSABLE_RULE_VARIANTS:
-            break
-    return tuple(dict.fromkeys(variants))
+    option_count = 1
+    for _, options in ambiguous:
+        option_count = min(MAX_CONFUSABLE_RULE_VARIANTS + 1, option_count * len(options))
+
+    # Prefer fewer deviations from the alpha-prioritized skeleton. Within each
+    # deviation count, earlier positions are explored first.
+    for deviation_count in range(1, len(ambiguous) + 1):
+        for positions in combinations(range(len(ambiguous)), deviation_count):
+            alternatives = tuple(ambiguous[position][1][1:] for position in positions)
+            if any(not options for options in alternatives):
+                continue
+            for replacements in product(*alternatives):
+                selected = list(preferred)
+                for position, replacement in zip(positions, replacements, strict=True):
+                    selected[position] = replacement
+                render(tuple(selected))
+                if len(variants) >= MAX_CONFUSABLE_RULE_VARIANTS:
+                    return ConfusableVariantSet(tuple(variants), option_count > len(variants))
+    return ConfusableVariantSet(tuple(variants), option_count > len(variants))
+
+
+def confusable_rule_variant_set(value: str) -> ConfusableVariantSet:
+    """Return bounded rule variants and whether further variants were omitted."""
+
+    return _build_confusable_rule_variants(value)
+
+
+def confusable_rule_variants(value: str) -> tuple[str, ...]:
+    """Return at most 32 full-value alternatives, including a preferred skeleton."""
+
+    return confusable_rule_variant_set(value).variants
 
 
 def canonicalize_content(content: str) -> tuple[str, set[str]]:
@@ -125,7 +149,11 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
                 display_modifier_evasion = True
             index = end
             continue
-        elif invisible or unicodedata.category(char).startswith("M") and _joins_alnum(normalized, index):
+        elif (
+            invisible
+            or _is_separator_mark_evasion(normalized, index)
+            or _is_ascii_overlay_evasion(normalized, index)
+        ):
             removed = True
         else:
             chars.append(char)
@@ -146,11 +174,32 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
     return canonical, transformations
 
 
-def _joins_alnum(value: str, index: int) -> bool:
+def _is_separator_mark_evasion(value: str, index: int) -> bool:
+    if not unicodedata.category(value[index]).startswith("M"):
+        return False
+    left = index - 1
+    while left >= 0 and unicodedata.category(value[left]).startswith("M"):
+        left -= 1
+    right = index + 1
+    while right < len(value) and unicodedata.category(value[right]).startswith("M"):
+        right += 1
+    if left < 0 or right >= len(value):
+        return False
+    return (value[left].isspace() and value[right].isascii() and value[right].isalnum()) or (
+        value[left].isascii() and value[left].isalnum() and value[right].isspace()
+    )
+
+
+def _is_ascii_overlay_evasion(value: str, index: int) -> bool:
+    cp = ord(value[index])
+    if not (0x0334 <= cp <= 0x0338):
+        return False
     return (
         index > 0
         and index + 1 < len(value)
+        and value[index - 1].isascii()
         and value[index - 1].isalnum()
+        and value[index + 1].isascii()
         and value[index + 1].isalnum()
     )
 
@@ -163,6 +212,9 @@ def _is_default_ignorable(cp: int, category: str) -> bool:
             (0x115F, 0x1160),
             (0x17B4, 0x17B5),
             (0x180B, 0x180F),
+            (0x200B, 0x200F),
+            (0x202A, 0x202E),
+            (0x2060, 0x206F),
             (0x3164, 0x3164),
             (0xFE00, 0xFE0F),
             (0xFFA0, 0xFFA0),

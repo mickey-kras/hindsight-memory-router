@@ -18,7 +18,7 @@ from agent_memory_guard.detectors import (
 )
 
 from .scan_windows import bounded_skip_fragments
-from .unicode_security import canonicalize_content, confusable_rule_variants
+from .unicode_security import canonicalize_content, confusable_rule_variant_set
 
 MAX_SCAN_FIELDS = 128
 MAX_ROLLING_WINDOWS = 512
@@ -31,11 +31,14 @@ MAX_SPLIT_BASE64_FIELDS = 256
 MAX_SPLIT_BASE64_SKIPS = 2
 MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
+MAX_SPLIT_BASE64_AMBIGUOUS_BYTES = 1_024
 FACADE_SCAN_BATCH_FIELDS = 32
-FACADE_SCAN_CARRY_VALUES = 2
+FACADE_SCAN_CARRY_VALUES = MAX_SPLIT_BASE64_SKIPS + 2
 MAX_FACADE_SCAN_FIELDS = 8_192
 MAX_FACADE_SCAN_SECONDS = 30.0
 MAX_RETAIN_SCAN_FIELDS = MAX_FACADE_SCAN_FIELDS
+MAX_QUERY_SCAN_FIELDS = 256
+MAX_SCAN_FIELD_BYTES = 1024 * 1024
 MAX_CORE_SCAN_SECONDS = 5.0
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
@@ -259,9 +262,7 @@ def _scan_batched_fields(
                 break
             batch.append(field)
             scanned_fields += 1
-            key, raw, is_key = field
-            canonical, _ = canonicalize_content(raw)
-            split_fields.append((key, canonical, is_key))
+            split_fields.append(field)
         if not batch:
             return finish()
         batch_result = _scan_fields(
@@ -285,8 +286,8 @@ def _value_carry(
 ) -> list[tuple[str, str, bool]]:
     seen = 0
     start = len(fields)
-    for index in range(len(fields) - 1, -1, -1):
-        if not fields[index][2]:
+    for index, entry in reversed(tuple(enumerate(fields))):
+        if not entry[2]:
             seen += 1
         start = index
         if seen >= value_count:
@@ -300,7 +301,16 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     result = SafetyResult()
     canonical_values: list[str] = []
     canonical_keys: list[str] = []
-    for key, raw in query:
+    deadline = time.monotonic() + MAX_CORE_SCAN_SECONDS
+    for index, (key, raw) in enumerate(query):
+        if index >= MAX_QUERY_SCAN_FIELDS:
+            result.add(SafetyFinding("query_field_limit", "span_limit"))
+            break
+        if _deadline_reached(result, deadline):
+            break
+        if _string_exceeds_scan_limit(key) or _string_exceeds_scan_limit(raw):
+            result.add(SafetyFinding("field_size_limit", "span_limit"))
+            break
         canonical_key, key_transformations = canonicalize_content(key)
         _add_unicode_findings(result, key_transformations)
         canonical_keys.append(canonical_key)
@@ -311,6 +321,8 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             result.add(finding)
         for finding in _amg_scan(f"query.{key}", canonical, operation="read"):
             result.add(finding)
+        if _deadline_reached(result, deadline):
+            break
     for canonical_fragments in (canonical_values, canonical_keys):
         if len(canonical_fragments) < 2:
             continue
@@ -321,6 +333,9 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
         for combined in dict.fromkeys((spaced, compact)):
             for finding in _split_instruction_rule_scan(combined):
+                if finding.reason == "span_limit":
+                    result.add(finding)
+                    return result
                 if any(_crosses_field_boundary(hit, canonical_fragments) for hit in finding.hits):
                     result.add(SafetyFinding(finding.matched, "split_instruction"))
         for fragments in bounded_skip_fragments(canonical_fragments):
@@ -328,8 +343,13 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 for finding in _split_instruction_rule_scan(
                     _bounded_utf8_suffix(combined.encode())
                 ):
+                    if finding.reason == "span_limit":
+                        result.add(finding)
+                        return result
                     if any(_crosses_field_boundary(hit, fragments) for hit in finding.hits):
                         result.add(SafetyFinding(finding.matched, "split_instruction"))
+                if _deadline_reached(result, deadline):
+                    return result
     return result
 
 
@@ -373,6 +393,9 @@ def _scan_fields(
         if index >= MAX_SCAN_FIELDS:
             result.add(SafetyFinding("field_limit", "span_limit"))
             break
+        if _string_exceeds_scan_limit(raw):
+            result.add(SafetyFinding("field_size_limit", "span_limit"))
+            break
         canonical, transformations = canonicalize_content(raw)
         result.transformations.update(transformations)
         canonical_fields.append((key, canonical, is_key))
@@ -384,10 +407,13 @@ def _scan_fields(
             result.add(finding)
         state = _EncodedState() if isolated_encoded_fields else direct_encoded_state
         _scan_encoded(result, key, canonical, operation, state)
+        if _deadline_reached(result, deadline, time_limit_match):
+            break
 
     rolling_windows = 0
-    skip_windows = 0
-    limit_reached = False
+    limit_reached = any(
+        finding.matched == (time_limit_match or "time_limit") for finding in result.findings
+    )
 
     def scan_window(
         key: str, window: str, fragments: list[str], *, count_rolling: bool = True
@@ -401,7 +427,11 @@ def _scan_fields(
                 result.add(SafetyFinding("window_limit", "span_limit"))
                 limit_reached = True
                 return
-        for finding in _rule_scan(window):
+        for finding in _split_instruction_rule_scan(window):
+            if finding.reason == "span_limit":
+                result.add(finding)
+                limit_reached = True
+                return
             if finding.matched not in direct_rule_matches:
                 result.add(SafetyFinding(finding.matched, "split_instruction"))
         for finding in _amg_scan(f"rolling.{key}", window, operation=operation):
@@ -415,6 +445,8 @@ def _scan_fields(
                         finding.hits,
                     )
                 )
+        if _deadline_reached(result, deadline, time_limit_match):
+            limit_reached = True
 
     value_window = ""
     compact_value_window = ""
@@ -451,42 +483,59 @@ def _scan_fields(
             if limit_reached:
                 break
 
-    # Inspect bounded alternatives that omit up to two interleaved value fields.
+    # Inspect the actual key/value traversal order so instruction fragments can
+    # cross a key/value or nested-object boundary.
+    all_window = ""
+    compact_all_window = ""
+    all_fields: list[str] = []
     if not limit_reached:
-        values = [(key, canonical) for key, canonical, is_key in canonical_fields if not is_key]
-        value_strings = [value for _, value in values]
-        for fragments in bounded_skip_fragments(value_strings):
-            for window in dict.fromkeys(
-                (
-                    _bounded_utf8_suffix("".join(fragments).encode()),
-                    _bounded_utf8_suffix(" ".join(fragments).encode()),
-                )
-            ):
-                skip_windows += 1
-                if skip_windows > MAX_SKIP_WINDOWS:
-                    result.add(SafetyFinding("window_limit", "span_limit"))
-                    limit_reached = True
-                    break
-                scan_window(values[-1][0], window, fragments, count_rolling=False)
+        for key, canonical, _ in canonical_fields:
+            all_window = _bounded_append(all_window, canonical)
+            compact_all_window = _bounded_utf8_suffix(f"{compact_all_window}{canonical}".encode())
+            all_fields.append(canonical)
+            if len(all_fields) >= 2:
+                for window in dict.fromkeys((all_window, compact_all_window)):
+                    scan_window(key, window, all_fields)
+                    if limit_reached:
+                        break
+            if limit_reached:
+                break
+
+    # Inspect bounded alternatives that omit up to two interleaved fields.
+    if not limit_reached:
+        field_groups = (
+            [(key, canonical) for key, canonical, is_key in canonical_fields if not is_key],
+            [(key, canonical) for key, canonical, is_key in canonical_fields if is_key],
+        )
+        for group in field_groups:
+            skip_windows = 0
+            for fragments in bounded_skip_fragments([value for _, value in group]):
+                for window in dict.fromkeys(
+                    (
+                        _bounded_utf8_suffix("".join(fragments).encode()),
+                        _bounded_utf8_suffix(" ".join(fragments).encode()),
+                    )
+                ):
+                    skip_windows += 1
+                    if skip_windows > MAX_SKIP_WINDOWS:
+                        result.add(SafetyFinding("window_limit", "span_limit"))
+                        limit_reached = True
+                        break
+                    scan_window(group[-1][0], window, fragments, count_rolling=False)
+                    if limit_reached:
+                        break
                 if limit_reached:
                     break
             if limit_reached:
                 break
 
-    if not limit_reached:
-        for index in range(len(canonical_fields) - 1):
-            key, canonical, is_key = canonical_fields[index]
-            next_key, next_canonical, next_is_key = canonical_fields[index + 1]
-            if is_key == next_is_key:
-                continue
-            scan_window(
-                next_key, _bounded_append(canonical, next_canonical), [canonical, next_canonical]
-            )
-            if limit_reached:
-                break
-
-    if scan_split_base64:
+    if (
+        scan_split_base64
+        and not limit_reached
+        and not _deadline_reached(result, deadline, time_limit_match)
+    ):
         _scan_split_base64(result, canonical_fields, operation)
+        _deadline_reached(result, deadline, time_limit_match)
     return result
 
 
@@ -516,6 +565,7 @@ def _split_base64_candidates(
 ) -> tuple[list[str], bool]:
     candidates: list[tuple[str, int]] = []
     fragment_fields = 0
+    fragment_bytes = 0
     work_bytes = 0
     exhausted = False
     unconditional_exhausted = False
@@ -529,7 +579,7 @@ def _split_base64_candidates(
             unconditional_exhausted = True
             return True
         if work_bytes + size > MAX_SPLIT_BASE64_WORK_BYTES:
-            exhausted = True
+            exhausted |= credible or fragment_bytes >= MAX_SPLIT_BASE64_AMBIGUOUS_BYTES
             return False
         work_bytes += size
         next_candidates.append((value, skipped))
@@ -539,16 +589,12 @@ def _split_base64_candidates(
         fragment = _normalized_base64_fragment(canonical)
         if fragment is None:
             continue
-        if (
-            not _looks_like_base64(fragment)
-            and not (canonical.strip() == fragment and len(fragment) < 8)
-            and len(fragment) > 3
-            and len(fragment) < 32
-        ):
+        if not _looks_like_base64(fragment) and canonical.strip() != fragment and len(fragment) > 3:
             continue
         if is_key and not _looks_like_base64(fragment):
             continue
         fragment_fields += 1
+        fragment_bytes += len(fragment)
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
             unconditional_exhausted = True
             break
@@ -558,19 +604,27 @@ def _split_base64_candidates(
         credible |= _decode_base64_fragment(fragment) is not None
         next_candidates: list[tuple[str, int]] = []
         if not add(next_candidates, fragment, 0):
-            break
+            if exhausted:
+                break
+            candidates = []
+            work_bytes = 0
+            add(next_candidates, fragment, 0)
         for candidate, skipped in candidates:
             if "=" not in candidate:
                 combined = candidate + fragment
                 if len(combined) <= MAX_SPLIT_BASE64_CANDIDATE_BYTES and not add(
                     next_candidates, combined, skipped
                 ):
-                    exhausted = True
+                    if not exhausted:
+                        work_bytes = len(fragment)
+                        next_candidates = [(fragment, 0)]
                     break
             if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
                 next_candidates, candidate, skipped + 1
             ):
-                exhausted = True
+                if not exhausted:
+                    work_bytes = len(fragment)
+                    next_candidates = [(fragment, 0)]
                 break
         if len(set(next_candidates)) > MAX_SPLIT_BASE64_CANDIDATES:
             soft_exhausted |= credible
@@ -706,7 +760,13 @@ def _dedupe_split_candidates(values: list[tuple[str, int]]) -> list[tuple[str, i
 
 
 def _scan_encoded(
-    result: SafetyResult, key: str, canonical: str, operation: str, state: _EncodedState
+    result: SafetyResult,
+    key: str,
+    canonical: str,
+    operation: str,
+    state: _EncodedState,
+    *,
+    depth: int = 0,
 ) -> None:
     for match in _BASE64_RUN.finditer(canonical):
         candidate = match.group(0)
@@ -751,11 +811,21 @@ def _scan_encoded(
             result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
             for finding in decoded_hits:
                 result.add(finding)
+        if depth == 0:
+            _scan_encoded(
+                result,
+                f"{key}.base64",
+                decoded_canonical,
+                operation,
+                state,
+                depth=1,
+            )
 
 
 def _rule_scan(value: str) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
-    for variant in (value, *confusable_rule_variants(value)):
+    variants = confusable_rule_variant_set(value)
+    for variant in (value, *variants.variants):
         for pattern, matched, reason in _RULES:
             if (match := pattern.search(variant)) is not None:
                 finding = SafetyFinding(matched, reason, hits=(match.group(0),))
@@ -764,12 +834,15 @@ def _rule_scan(value: str) -> list[SafetyFinding]:
                     for item in findings
                 ):
                     findings.append(finding)
+    if variants.exhausted:
+        findings.append(SafetyFinding("confusable_variant_limit", "span_limit"))
     return findings
 
 
 def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
-    for variant in (value, *confusable_rule_variants(value)):
+    variants = confusable_rule_variant_set(value)
+    for variant in (value, *variants.variants):
         for pattern, matched, reason in _SPLIT_INSTRUCTION_RULES:
             if (match := pattern.search(variant)) is not None:
                 finding = SafetyFinding(matched, reason, hits=(match.group(0),))
@@ -778,7 +851,22 @@ def _split_instruction_rule_scan(value: str) -> list[SafetyFinding]:
                     for item in findings
                 ):
                     findings.append(finding)
+    if variants.exhausted:
+        findings.append(SafetyFinding("confusable_variant_limit", "span_limit"))
     return findings
+
+
+def _deadline_reached(
+    result: SafetyResult, deadline: float | None, time_limit_match: str | None = None
+) -> bool:
+    if deadline is None or time.monotonic() < deadline:
+        return False
+    result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
+    return True
+
+
+def _string_exceeds_scan_limit(value: str) -> bool:
+    return len(value) > MAX_SCAN_FIELD_BYTES or len(value.encode("utf-8")) > MAX_SCAN_FIELD_BYTES
 
 
 def _add_unicode_findings(result: SafetyResult, transformations: set[str]) -> None:

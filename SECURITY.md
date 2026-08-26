@@ -25,13 +25,15 @@ The scanner is a deterministic tripwire, not a safety guarantee. It recursively 
 
 Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a hard size/field budget or a credible combinatorial budget fails closed with `split_base64_limit`.
 
-Cross-fragment instruction matching retains a 512-byte normalized suffix. A sufficiently large attacker-controlled whitespace gap can separate otherwise matching fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+Cross-fragment instruction matching retains a 512-byte normalized suffix, skips at most two intervening fields, and fails closed after 1,024 skip windows. A sufficiently large whitespace gap or more than two decoys can separate fragments; request limits, ACLs, quarantine, and review remain necessary controls.
 
-Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings unless another detector or the surrounding text matches an unsafe rule.
+Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings. Split scans intentionally exclude `system prompt`, `developer message`, and `new instructions` unless another detector or a complete field matches them.
 
-Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; Base64url and unpadded Base64 are not decoded; and split Base64 fragments shorter than eight characters may be skipped. These are not security boundaries.
+Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; Base64url and unpadded Base64 are not decoded. Standard Base64 is decoded through one nested encoded layer. These are not security boundaries.
 
-The direct/rolling scanner also caps the number of string key/value fragments inspected per request. Exceeding that budget fails closed instead of allowing attacker-controlled field counts to create unbounded synchronous detector work.
+Confusable alternatives are capped at 32 per value; exhaustion fails closed with `confusable_variant_limit`. Default-Ignorable characters, ASCII-word overlay marks, and ASCII separator-adjacent marks block as `invisible_unicode`. Ordinary script marks such as Indic vowel signs, Arabic harakat, and Hebrew niqqud are preserved.
+
+Retain, recall, and query scans have a five-second inline deadline; individual strings are capped at 1 MiB. Query scans inspect at most 256 pairs. Other direct/rolling field and window limits fail closed. Authenticated requests consume their retain/recall quota before scanning; unknown writers and cheap structural failures do not.
 
 Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or invalid UTF-8. Mixed-case-plus-digit tokens are only decode-and-scan hints so ordinary identifiers such as device/model names are not blocked. A weak-signal token that validly decodes to non-UTF-8 binary is ignored unless hard Base64 evidence is also present.
 
@@ -51,7 +53,7 @@ Reviewed recall approvals pin stable memory identity/content (`id` + `text`). Wh
 ## CI dependency trust
 
 - `confusables==1.2.0` is an explicit maintenance exception: the scanner needs UTS #39-style skeleton folding, available alternatives have similar maintenance risk, and the dependency is exact-pinned with verified hashes. Revisit the exception when a maintained compatible implementation is available or the package needs an unreviewed data/code update.
-- Pebble 5.2.1's LGPL-3.0 use is accepted for worker isolation; published images include its notice and upstream source URL.
+- Pebble 5.2.1's LGPL-3.0 use is accepted for worker isolation; published images include its notice, LGPL-3.0/GPL-3.0 text, and upstream source URL.
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
 - Semgrep uses a versioned image pinned by digest; update the version and digest together.
 - GitHub Actions remain pinned by commit SHA.
