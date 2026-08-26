@@ -20,6 +20,9 @@ class ConfusableVariantSet:
 def _ascii_confusable_options(char: str) -> tuple[str, ...]:
     if char.isascii():
         return (char,)
+    cp = ord(char)
+    if 0x1CCD6 <= cp <= 0x1CCEF:
+        return (chr(ord("A") + cp - 0x1CCD6),)
     return tuple(
         sorted(
             dict.fromkeys(
@@ -82,12 +85,17 @@ def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
 
     # Prefer fewer deviations from the alpha-prioritized skeleton. Within each
     # deviation count, earlier positions are explored first.
-    for deviation_count in range(1, len(ambiguous) + 1):
-        for positions in combinations(range(len(ambiguous)), deviation_count):
+    deviable = tuple(
+        position for position, (_, options) in enumerate(ambiguous) if len(options) > 1
+    )
+    explored = 0
+    for deviation_count in range(1, len(deviable) + 1):
+        for positions in combinations(deviable, deviation_count):
             alternatives = tuple(ambiguous[position][1][1:] for position in positions)
-            if any(not options for options in alternatives):
-                continue
             for replacements in product(*alternatives):
+                explored += 1
+                if explored >= MAX_CONFUSABLE_RULE_VARIANTS:
+                    return ConfusableVariantSet(tuple(variants), option_count > len(variants))
                 selected = list(preferred)
                 for position, replacement in zip(positions, replacements, strict=True):
                     selected[position] = replacement
@@ -110,6 +118,8 @@ def confusable_rule_variants(value: str) -> tuple[str, ...]:
 
 
 def canonicalize_content(content: str) -> tuple[str, set[str]]:
+    if content.isascii():
+        return content, set()
     transformations: set[str] = set()
     original_nfkc = unicodedata.normalize("NFKC", content)
     pre_folded = "".join(_fold_confusable_char(char) for char in content)
@@ -149,12 +159,17 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
                 display_modifier_evasion = True
             index = end
             continue
-        elif (
-            invisible
-            or _is_separator_mark_evasion(normalized, index)
-            or _is_ascii_overlay_evasion(normalized, index)
-        ):
+        elif invisible:
             removed = True
+        elif unicodedata.category(char).startswith("M"):
+            end, mark_evasion = _mark_run_evasion(normalized, index)
+            if mark_evasion:
+                removed = True
+            else:
+                chars.extend(normalized[index:end])
+                last_non_modifier = normalized[end - 1]
+            index = end
+            continue
         else:
             chars.append(char)
             last_non_modifier = char
@@ -174,34 +189,19 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
     return canonical, transformations
 
 
-def _is_separator_mark_evasion(value: str, index: int) -> bool:
-    if not unicodedata.category(value[index]).startswith("M"):
-        return False
-    left = index - 1
-    while left >= 0 and unicodedata.category(value[left]).startswith("M"):
-        left -= 1
-    right = index + 1
-    while right < len(value) and unicodedata.category(value[right]).startswith("M"):
-        right += 1
-    if left < 0 or right >= len(value):
-        return False
-    return (value[left].isspace() and value[right].isascii() and value[right].isalnum()) or (
-        value[left].isascii() and value[left].isalnum() and value[right].isspace()
-    )
-
-
-def _is_ascii_overlay_evasion(value: str, index: int) -> bool:
-    cp = ord(value[index])
-    if not (0x0334 <= cp <= 0x0338):
-        return False
-    return (
-        index > 0
-        and index + 1 < len(value)
-        and value[index - 1].isascii()
-        and value[index - 1].isalnum()
-        and value[index + 1].isascii()
-        and value[index + 1].isalnum()
-    )
+def _mark_run_evasion(value: str, start: int) -> tuple[int, bool]:
+    end = start + 1
+    while end < len(value) and unicodedata.category(value[end]).startswith("M"):
+        end += 1
+    left = value[start - 1] if start > 0 else ""
+    right = value[end] if end < len(value) else ""
+    if not left or not right:
+        neighbor = left or right
+        return end, bool(neighbor and neighbor.isascii())
+    ascii_neighbors = left.isascii() and right.isascii()
+    in_word = ascii_neighbors and left.isalnum() and right.isalnum()
+    separator_adjacent = ascii_neighbors and (not left.isalnum() or not right.isalnum())
+    return end, in_word or separator_adjacent
 
 
 def _is_default_ignorable(cp: int, category: str) -> bool:

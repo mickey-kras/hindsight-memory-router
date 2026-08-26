@@ -67,6 +67,7 @@ ERROR_KINDS = frozenset(
         "rate-limit",
         "response-too-large",
         "storage",
+        "shutdown",
         "timeout",
         "unexpected",
         "worker-crash",

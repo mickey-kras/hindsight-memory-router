@@ -418,11 +418,14 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
 async def test_lifespan_starts_and_stops_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     start = AsyncMock()
     stop = AsyncMock()
-    shutdown_scanner = Mock()
+    start_scanner = Mock()
+    shutdown_scanner = AsyncMock()
     monkeypatch.setattr(app_module.runtime, "start", start)
     monkeypatch.setattr(app_module.runtime, "stop", stop)
-    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor", shutdown_scanner)
+    monkeypatch.setattr(app_module, "start_facade_scan_executor", start_scanner)
+    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor_async", shutdown_scanner)
     async with app_module.lifespan(app_module.app):
         start.assert_awaited_once()
+        start_scanner.assert_called_once_with()
     stop.assert_awaited_once()
-    shutdown_scanner.assert_called_once_with()
+    shutdown_scanner.assert_awaited_once_with()

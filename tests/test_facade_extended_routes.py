@@ -37,6 +37,7 @@ def _safe_scan(_: bytes) -> SafetyResult:
 
 @pytest.fixture(autouse=True)
 def runtime_state(monkeypatch) -> None:
+    openclaw_module.start_facade_scan_executor()
     monkeypatch.setattr(app_module.runtime, "allow_anonymous", True)
     monkeypatch.setattr(app_module.runtime, "router_token", None)
     monkeypatch.setattr(app_module.runtime, "max_body_bytes", 1024 * 1024)
@@ -746,6 +747,69 @@ def test_facade_scan_shutdown_generation_prevents_pool_recreation(monkeypatch) -
         openclaw_module._get_facade_scan_executor(generation)  # noqa: SLF001
 
     create.assert_not_called()
+
+
+def test_facade_scan_shutdown_latch_blocks_post_shutdown_entries(monkeypatch) -> None:
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", None)
+    openclaw_module.shutdown_facade_scan_executor()
+    generation = openclaw_module._facade_scan_generation()  # noqa: SLF001
+    create = Mock()
+    monkeypatch.setattr(openclaw_module, "_new_facade_scan_executor", create)
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        openclaw_module._get_facade_scan_executor(generation)  # noqa: SLF001
+
+    create.assert_not_called()
+
+
+def test_facade_scan_replaces_and_cleans_stale_executor(monkeypatch) -> None:
+    stale = SimpleNamespace(active=False, stop=Mock(), join=Mock())
+    replacement = SimpleNamespace(active=True)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", stale)
+    monkeypatch.setattr(
+        openclaw_module, "_new_facade_scan_executor", Mock(return_value=replacement)
+    )
+
+    assert openclaw_module._get_facade_scan_executor() is replacement  # noqa: SLF001
+    stale.stop.assert_called_once_with()
+    stale.join.assert_called_once_with(timeout=5)
+
+
+@pytest.mark.asyncio
+async def test_facade_scan_async_generation_check_rejects_shutdown() -> None:
+    generation = openclaw_module._facade_scan_generation()  # noqa: SLF001
+    openclaw_module.shutdown_facade_scan_executor()
+
+    with pytest.raises(RuntimeError, match="shut down"):
+        await openclaw_module._get_facade_scan_executor_async(generation)  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_facade_scan_releases_capacity_when_executor_lookup_is_cancelled(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(
+        openclaw_module,
+        "_get_facade_scan_executor_async",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_scan_async_shutdown_offloads_sync_cleanup(monkeypatch) -> None:
+    cleanup = Mock()
+    to_thread = AsyncMock()
+    monkeypatch.setattr(openclaw_module, "shutdown_facade_scan_executor", cleanup)
+    monkeypatch.setattr(openclaw_module.asyncio, "to_thread", to_thread)
+
+    await openclaw_module.shutdown_facade_scan_executor_async()
+
+    to_thread.assert_awaited_once_with(cleanup)
 
 
 @pytest.mark.parametrize("matched", ["facade_field_limit", "facade_time_limit"])

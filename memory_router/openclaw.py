@@ -44,6 +44,7 @@ _FACADE_SCAN_EXECUTOR: ProcessPool | None = None
 _FACADE_SCAN_EXECUTOR_LOCK = Lock()
 _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
 _FACADE_SCAN_GENERATION = 0
+_FACADE_SCAN_SHUTDOWN = False
 
 
 def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = None) -> HttpError:
@@ -75,6 +76,8 @@ def _get_facade_scan_executor(expected_generation: int | None = None) -> Process
     global _FACADE_SCAN_EXECUTOR
     stale = None
     with _FACADE_SCAN_EXECUTOR_LOCK:
+        if _FACADE_SCAN_SHUTDOWN:
+            raise RuntimeError("facade scanner shut down")
         if expected_generation is not None and expected_generation != _FACADE_SCAN_GENERATION:
             raise RuntimeError("facade scanner shut down")
         if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
@@ -99,9 +102,16 @@ async def _get_facade_scan_executor_async(expected_generation: int) -> ProcessPo
     return await asyncio.to_thread(_get_facade_scan_executor, expected_generation)
 
 
-def shutdown_facade_scan_executor() -> None:
-    global _FACADE_SCAN_EXECUTOR, _FACADE_SCAN_GENERATION
+def start_facade_scan_executor() -> None:
+    global _FACADE_SCAN_SHUTDOWN
     with _FACADE_SCAN_EXECUTOR_LOCK:
+        _FACADE_SCAN_SHUTDOWN = False
+
+
+def shutdown_facade_scan_executor() -> None:
+    global _FACADE_SCAN_EXECUTOR, _FACADE_SCAN_GENERATION, _FACADE_SCAN_SHUTDOWN
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        _FACADE_SCAN_SHUTDOWN = True
         _FACADE_SCAN_GENERATION += 1
         executor = _FACADE_SCAN_EXECUTOR
         _FACADE_SCAN_EXECUTOR = None
@@ -111,6 +121,10 @@ def shutdown_facade_scan_executor() -> None:
     if executor is not None:
         with suppress(Exception):
             executor.join(timeout=5)
+
+
+async def shutdown_facade_scan_executor_async() -> None:
+    await asyncio.to_thread(shutdown_facade_scan_executor)
 
 
 async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
@@ -142,6 +156,13 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
     except asyncio.CancelledError:
         capacity.release()
         raise
+    except RuntimeError as exc:
+        capacity.release()
+        raise _scan_unavailable(
+            "response safety scanner is shut down",
+            error_kind="shutdown",
+            writer_id=writer_id,
+        ) from exc
     except Exception as exc:
         capacity.release()
         raise _scan_unavailable(

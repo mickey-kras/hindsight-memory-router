@@ -25,19 +25,19 @@ The scanner is a deterministic tripwire, not a safety guarantee. It recursively 
 
 Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields, 512 KiB of aggregate candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated chunks and dictionary-key fragments are considered, with a printable/decode prose guard for whitespace-separated text. Exhausting a hard size/field budget or a credible combinatorial budget fails closed with `split_base64_limit`.
 
-Cross-fragment instruction matching retains a 512-byte normalized suffix, skips at most two intervening fields, and fails closed after 1,024 skip windows. A sufficiently large whitespace gap or more than two decoys can separate fragments; request limits, ACLs, quarantine, and review remain necessary controls.
+Cross-fragment instruction matching retains a 512-byte normalized suffix, skips at most two intervening fields, and fails closed after 2,048 skip windows per value-only, key-only, or traversal-order group. A sufficiently large whitespace gap or more than two decoys can separate fragments; request limits, ACLs, quarantine, and review remain necessary controls.
 
 Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings. Split scans intentionally exclude `system prompt`, `developer message`, and `new instructions` unless another detector or a complete field matches them.
 
-Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; Base64url and unpadded Base64 are not decoded. Standard Base64 is decoded through one nested encoded layer. These are not security boundaries.
+Known tripwire limits: the confusable table is not exhaustive for IPA lookalikes; Unicode 16 outlined Latin capitals are handled explicitly. Base64url and unpadded Base64 are not decoded. Standard Base64 is decoded through one nested encoded layer. Whitespace-separated Base64 is considered only when its chunks are at most seven characters and the joined text passes the Base64 plausibility guard. These are not security boundaries.
 
-Confusable alternatives are capped at 32 per value; exhaustion fails closed with `confusable_variant_limit`. Default-Ignorable characters, ASCII-word overlay marks, and ASCII separator-adjacent marks block as `invisible_unicode`. Ordinary script marks such as Indic vowel signs, Arabic harakat, and Hebrew niqqud are preserved.
+Confusable alternatives are capped at 32 per scanned field/window; exhaustion fails closed with `confusable_variant_limit`. One confusable-heavy field can therefore suppress a whole shared recall/facade response. Default-Ignorable characters and mark runs between ASCII word/separator characters block as `invisible_unicode`. Ordinary script marks such as Indic vowel signs, Arabic harakat, and Hebrew niqqud are preserved.
 
 Retain, recall, and query scans have a five-second inline deadline; individual strings are capped at 1 MiB. Query scans inspect at most 256 pairs. Other direct/rolling field and window limits fail closed. Authenticated requests consume their retain/recall quota before scanning; unknown writers and cheap structural failures do not.
 
 Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or invalid UTF-8. Mixed-case-plus-digit tokens are only decode-and-scan hints so ordinary identifiers such as device/model names are not blocked. A weak-signal token that validly decodes to non-UTF-8 binary is ignored unless hard Base64 evidence is also present.
 
-Split-Base64 candidate limits are deliberately sensitive: several short Base64-like fields can return `split_base64_limit` and quarantine otherwise benign content.
+Split-Base64 candidate limits are deliberately sensitive: several short Base64-like fields or a long Base64-alphabet-only token/blob can return `split_base64_limit` and quarantine otherwise benign content.
 
 Reviewed recall approvals pin stable memory identity/content (`id` + `text`). When that digest still matches, the approved `id`/`text` is not rescanned; volatile returned fields continue to be rescanned on every recall. A newly unsafe extra/metadata field suppresses the result and reopens review.
 

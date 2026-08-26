@@ -41,7 +41,11 @@ from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
-from .openclaw import OpenClawFacade, shutdown_facade_scan_executor
+from .openclaw import (
+    OpenClawFacade,
+    shutdown_facade_scan_executor_async,
+    start_facade_scan_executor,
+)
 from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
@@ -425,6 +429,7 @@ runtime = Runtime()
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         await runtime.start()
+        start_facade_scan_executor()
     except Exception as exc:
         log_event(
             logger,
@@ -453,7 +458,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 outcome="failed",
             )
         finally:
-            shutdown_facade_scan_executor()
+            await shutdown_facade_scan_executor_async()
         raise
     else:
         try:
@@ -470,7 +475,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
             )
             raise
         finally:
-            shutdown_facade_scan_executor()
+            await shutdown_facade_scan_executor_async()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)

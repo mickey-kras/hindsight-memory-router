@@ -6,10 +6,12 @@ import pytest
 
 import memory_router.app as app_module
 import memory_router.logging as logging_module
+import memory_router.openclaw as openclaw_module
 
 
 @pytest.fixture(autouse=True)
 def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
+    openclaw_module.start_facade_scan_executor()
     previous_runtime = vars(app_module.runtime).copy()
     previous_admin_tokens = dict(app_module.runtime.admin_tokens)
     application_logger = logging.getLogger("memory_router")
