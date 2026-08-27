@@ -240,6 +240,8 @@ def _decode_path_segment(value: str) -> str:
         ) from exc
     probe = decoded
     for _ in range(_MAX_PATH_PROBE_DECODES):
+        if "/" in probe:
+            raise HttpError(400, "invalid_path_segment", "encoded path separators are not allowed")
         if probe in {".", ".."}:
             raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
         try:
@@ -857,14 +859,20 @@ async def dispatch(path: str, request: Request) -> Response:
         return JSONResponse(await policy.retain(writer_id, body))
 
     facade = OpenClawFacade(policy)
-    facade_pathname = pathname
+    matched = None
     if pathname.startswith("/v1/default/banks/"):
         try:
             facade_pathname = "/".join(_decode_path_segment(part) for part in pathname.split("/"))
-        except HttpError:
-            if match_facade_route(method, pathname) is not None:
+        except HttpError as exc:
+            if exc.code == "invalid_path_segment":
                 raise
-    matched = match_facade_route(method, facade_pathname)
+            matched = match_facade_route(method, pathname)
+            if matched is not None:
+                raise
+        else:
+            matched = match_facade_route(method, facade_pathname)
+    else:
+        matched = match_facade_route(method, pathname)
     if matched is not None:
         route, route_match = matched
         writer_id = route_match.group("bank")

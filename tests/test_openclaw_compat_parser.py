@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 from yaml.constructor import ConstructorError
 
-from scripts.check_openclaw_compat import _supports_status, _upstream_operations
+from scripts.check_openclaw_compat import (
+    REQUIRED_COVERAGE_MARKERS,
+    _missing_coverage_markers,
+    _supports_status,
+    _upstream_operations,
+)
 
 
 def test_compat_script_invokes_main_when_executed() -> None:
@@ -57,6 +62,7 @@ paths:
     assert _supports_status(first["statuses"], 200)
     assert not _supports_status(first["statuses"], 201)
     assert _supports_status(second["statuses"], 201)
+    assert _supports_status({"DEFAULT"}, 204)
 
 
 def test_upstream_openapi_parser_enforces_operation_floor() -> None:
@@ -82,7 +88,7 @@ paths:
     assert operation["query"] == {"q": True}
 
 
-def test_yaml_merge_allows_explicit_override() -> None:
+def test_yaml_merge_keys_fail_loud() -> None:
     source = """
 openapi: 3.1.0
 defaults: &defaults
@@ -95,12 +101,11 @@ paths:
       responses: {201: {description: overridden}}
 """
 
-    operation = _upstream_operations(source)[("GET", "/first")]
+    with pytest.raises(ConstructorError, match="YAML merge keys are not supported"):
+        _upstream_operations(source)
 
-    assert operation["statuses"] == {"201"}
 
-
-def test_yaml_merge_sequence_allows_source_key_collisions() -> None:
+def test_yaml_merge_sequence_cannot_mask_source_key_collisions() -> None:
     source = """
 openapi: 3.1.0
 first: &first {deprecated: false, responses: {200: {description: first}}}
@@ -111,9 +116,14 @@ paths:
       <<: [*first, *second]
 """
 
-    operation = _upstream_operations(source)[("GET", "/first")]
+    with pytest.raises(ConstructorError, match="YAML merge keys are not supported"):
+        _upstream_operations(source)
 
-    assert operation["statuses"] == {"200"}
+
+def test_coverage_marker_check_fails_when_any_marker_is_removed() -> None:
+    source = "\n".join(REQUIRED_COVERAGE_MARKERS - {"auto-recall"})
+
+    assert _missing_coverage_markers(source) == ["auto-recall"]
 
 
 def test_yaml_unhashable_mapping_key_has_hygienic_error() -> None:

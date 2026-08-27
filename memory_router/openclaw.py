@@ -116,7 +116,19 @@ def start_facade_scan_executor() -> None:
             _FACADE_SCAN_FUTURES.clear()
     # Pebble starts workers lazily when ``active`` is first inspected. Do that
     # during startup so the first facade request never pays process-spawn cost.
-    _get_facade_scan_executor()
+    executor = _get_facade_scan_executor()
+    if not executor.active:
+        raise RuntimeError("facade scanner failed to start")
+
+
+def _acquire_facade_scan_capacity() -> tuple[int, BoundedSemaphore] | None:
+    with _FACADE_SCAN_EXECUTOR_LOCK:
+        if _FACADE_SCAN_SHUTDOWN:
+            raise _FacadeScannerShutdown("facade scanner shut down")
+        capacity = _FACADE_SCAN_CAPACITY
+        if not capacity.acquire(blocking=False):
+            return None
+        return _FACADE_SCAN_GENERATION, capacity
 
 
 def shutdown_facade_scan_executor() -> None:
@@ -142,12 +154,19 @@ async def shutdown_facade_scan_executor_async() -> None:
 
 
 async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
-    generation = _facade_scan_generation()
-    capacity = _FACADE_SCAN_CAPACITY
-    if not capacity.acquire(blocking=False):
+    try:
+        admission = _acquire_facade_scan_capacity()
+    except _FacadeScannerShutdown as exc:
+        raise _scan_unavailable(
+            "response safety scanner is shut down",
+            error_kind="shutdown",
+            writer_id=writer_id,
+        ) from exc
+    if admission is None:
         raise _scan_unavailable(
             "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
         )
+    generation, capacity = admission
     try:
         payload = json.dumps(
             value, ensure_ascii=False, separators=(",", ":"), allow_nan=False

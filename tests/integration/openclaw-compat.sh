@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 8e5d975069e4094dae9d951b97eae0f5a2775426111d52706bd1a653dd6b325a
+# integration-behavior-sha256: d436227c0875f1d46ae82e462ea97d7076b0a98c4a221fb3af9ce893f3dd5b35
 
 openclaw_request() {
   local method="$1"
@@ -114,6 +114,13 @@ events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
 facade = [event for event in events if event.get("kind") == "facade"]
 assert facade
 assert all(event.get("bank_id") == "physical-main" for event in facade)
+by_route = {(event["method"], event["path"]): event for event in facade}
+assert by_route[("GET", "tags")]["query"] == "?q=hello%2Fworld"
+assert by_route[("GET", "tags")]["body"] is None
+assert by_route[("POST", "documents/doc-1/reprocess")]["query"] == ""
+assert by_route[("POST", "documents/doc-1/reprocess")]["body"] == {}
+assert by_route[("PATCH", "knowledge-base/nodes/node-1")]["body"] == {"title": "Runbook"}
+assert by_route[("DELETE", "observations")]["body"] is None
 PY
 pass_check
 

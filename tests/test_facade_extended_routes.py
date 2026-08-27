@@ -919,6 +919,33 @@ def test_facade_scanner_restart_rebuilds_capacity_and_future_state(monkeypatch) 
     prewarm.assert_called_once_with()
 
 
+def test_facade_scanner_start_activates_lazy_pool(monkeypatch) -> None:
+    class LazyExecutor:
+        active_reads = 0
+
+        @property
+        def active(self) -> bool:
+            self.active_reads += 1
+            return True
+
+    executor = LazyExecutor()
+    monkeypatch.setattr(openclaw_module, "_get_facade_scan_executor", Mock(return_value=executor))
+
+    openclaw_module.start_facade_scan_executor()
+
+    assert executor.active_reads == 1
+
+
+def test_facade_scan_admission_captures_generation_and_capacity_together(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_GENERATION", 42)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_SHUTDOWN", False)
+
+    assert openclaw_module._acquire_facade_scan_capacity() == (42, capacity)  # noqa: SLF001
+    capacity.acquire.assert_called_once_with(blocking=False)
+
+
 @pytest.mark.asyncio
 async def test_facade_scan_releases_capacity_when_executor_lookup_is_cancelled(monkeypatch) -> None:
     capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
@@ -1037,6 +1064,20 @@ async def test_dot_segment_path_params_are_rejected(segment: str) -> None:
             f"v1/default/banks/openclaw/memories/{segment}/history",
             request("GET", f"/v1/default/banks/openclaw/memories/{segment}/history"),
         )
+
+    assert blocked.value.status == 400
+    assert blocked.value.code == "invalid_path_segment"
+    policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_encoded_slash_cannot_reenter_a_multisegment_route() -> None:
+    policy = _policy({})
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/memories%2Flist"
+
+    with pytest.raises(HttpError) as blocked:
+        await app_module.dispatch(path.lstrip("/"), request("GET", path))
 
     assert blocked.value.status == 400
     assert blocked.value.code == "invalid_path_segment"

@@ -38,13 +38,14 @@ MAX_SPLIT_BASE64_FIELDS = 256
 MAX_SPLIT_BASE64_SKIPS = 2
 MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
-MIN_BASE64_OVERFLOW_PLAUSIBLE_PARTS = MAX_SPLIT_BASE64_SKIPS + 2
 FACADE_SCAN_BATCH_FIELDS = 32
 FACADE_SCAN_CARRY_VALUES = MAX_SPLIT_BASE64_SKIPS + 2
 MAX_FACADE_SCAN_FIELDS = 8_192
 MAX_FACADE_SCAN_SECONDS = 30.0
 MAX_RETAIN_SCAN_FIELDS = MAX_FACADE_SCAN_FIELDS
 MAX_QUERY_SCAN_FIELDS = 256
+MAX_QUERY_ROLLING_WINDOWS = 32_768
+MAX_QUERY_SKIP_WINDOWS = 32_768
 MAX_SCAN_FIELD_BYTES = 1024 * 1024
 MAX_NON_ASCII_CODEPOINTS = 65_536
 MAX_CORE_SCAN_SECONDS = 5.0
@@ -56,6 +57,8 @@ _BASE64_COLON_AFTER = re.compile(r"\s*:")
 _BASE64_JSON_LABEL_AFTER = re.compile(r"[\"']\s*:\s*")
 _BASE64_NUMBERED_LABEL = re.compile(r"(?:part|chunk|fragment)\d*", re.I)
 _IN_WORD_DIGIT = re.compile(r"(?<=[A-Za-z])\d(?=[A-Za-z])")
+_LONG_BOUNDARY_TOKEN_SUFFIX = re.compile(r"\S{64,}$")
+_LONG_BOUNDARY_TOKEN_PREFIX = re.compile(r"^\S{64,}")
 _CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
@@ -448,10 +451,14 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
             if end < 2:
                 continue
-            windows = (*junctions, *_join_variants(prefix, spaced=spaced, compact=compact))
+            windows = (
+                *junctions,
+                *_trim_evasion_variants(prefix[-2], value),
+                *_join_variants(prefix, spaced=spaced, compact=compact),
+            )
             for combined in dict.fromkeys(windows):
                 rolling_windows += 1
-                if rolling_windows > MAX_ROLLING_WINDOWS:
+                if rolling_windows > MAX_QUERY_ROLLING_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
                 if _scan_query_window(window_context, combined, prefix):
@@ -459,7 +466,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
         for fragments in bounded_skip_fragments(canonical_fragments):
             for combined in _sequence_join_variants(fragments):
                 skip_windows += 1
-                if skip_windows > MAX_SKIP_WINDOWS:
+                if skip_windows > MAX_QUERY_SKIP_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
                 if _scan_query_window(window_context, combined, fragments):
@@ -557,8 +564,8 @@ class _WindowScanContext:
     rolling_windows: int = 0
     skip_windows: int = 0
     limit_reached: bool = False
-    scan_cache: dict[tuple[str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = field(
-        default_factory=dict
+    scan_cache: dict[tuple[str, str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = (
+        field(default_factory=dict)
     )
 
 
@@ -736,7 +743,7 @@ def _scan_window(
         context.limit_reached = True
         return
     strip_inword_digits = any(fragment in context.keycap_values for fragment in fragments)
-    cache_key = window, strip_inword_digits
+    cache_key = key, window, strip_inword_digits
     cached = context.scan_cache.get(cache_key)
     if cached is None:
         try:
@@ -795,6 +802,8 @@ def _scan_rolling_group(context: _WindowScanContext, group: list[tuple[str, str]
         if fragments:
             for window in _junction_variants(spaced, compact, value):
                 _scan_window(context, key, window, [*fragments, value])
+            for window in _trim_evasion_variants(fragments[-1], value):
+                _scan_window(context, key, window, [fragments[-1], value])
         spaced = _bounded_append(spaced, value)
         compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
         if fragments:
@@ -974,13 +983,7 @@ def _split_base64_candidates(
                 unconditional_exhausted = True
                 break
             preserved = False
-            if skipped >= MAX_SPLIT_BASE64_SKIPS and (
-                _credible_base64_prefix(candidate)
-                or (
-                    _decode_base64_fragment(candidate) is not None
-                    and _decode_base64_fragment(fragment) is not None
-                )
-            ):
+            if skipped >= MAX_SPLIT_BASE64_SKIPS and _credible_base64_prefix(candidate):
                 soft_exhausted = True
             if "=" not in candidate:
                 combined = candidate + fragment
@@ -1137,7 +1140,6 @@ def _normalized_base64_fragment(
         return stripped, False
     parts: list[str] = []
     part_count = 0
-    plausible_parts = 0
     for match_index, match in enumerate(_BASE64_PARTS.finditer(stripped), start=1):
         if match_index % 1_024 == 0 and deadline is not None and time.monotonic() >= deadline:
             return None, True
@@ -1145,11 +1147,10 @@ def _normalized_base64_fragment(
             continue
         part_count += 1
         part = match.group(0)
-        plausible_parts += int(_plausible_base64_fragment(part))
         if len(parts) < MAX_SPLIT_BASE64_FIELDS:
             parts.append(part)
     if part_count > MAX_SPLIT_BASE64_FIELDS:
-        return None, plausible_parts >= MIN_BASE64_OVERFLOW_PLAUSIBLE_PARTS
+        return None, _has_decodable_base64_prefix(parts)
     if not parts:
         return None, False
     return "".join(parts), False
@@ -1181,7 +1182,24 @@ def _credible_base64_prefix(fragment: str) -> bool:
     if _hard_base64_signal(fragment) or _weak_base64_signal(fragment):
         return True
     decoded = _decode_base64_fragment(fragment)
-    return bool(decoded and any(char.isspace() for char in decoded))
+    return bool(
+        decoded
+        and len(decoded) >= 2
+        and re.search(r"[a-z]", fragment)
+        and re.search(r"[A-Z]", fragment)
+        and all(char.isalnum() or char.isspace() for char in decoded)
+    )
+
+
+def _has_decodable_base64_prefix(parts: list[str]) -> bool:
+    candidate = ""
+    for part in parts:
+        if "=" in candidate:
+            break
+        candidate += part
+        if len(candidate) >= 8 and _decode_base64_fragment(candidate) is not None:
+            return True
+    return False
 
 
 def _viable_base64_prefix(fragment: str) -> bool:
@@ -1568,6 +1586,17 @@ def _junction_variants(spaced: str, compact: str, field: str) -> tuple[str, ...]
             )
         )
     )
+
+
+def _trim_evasion_variants(previous: str, current: str) -> tuple[str, ...]:
+    """Remove long boundary tokens before joining split-rule edges."""
+    trimmed_previous = _LONG_BOUNDARY_TOKEN_SUFFIX.sub("", previous)
+    trimmed_current = _LONG_BOUNDARY_TOKEN_PREFIX.sub("", current)
+    if trimmed_previous == previous and trimmed_current == current:
+        return ()
+    left = _bounded_utf8_suffix(trimmed_previous.encode("utf-8"))
+    right = _bounded_utf8_prefix(trimmed_current.encode("utf-8"))
+    return tuple(dict.fromkeys((f"{left} {right}", f"{left}{right}")))
 
 
 def _sequence_join_variants(fragments: list[str]) -> tuple[str, ...]:

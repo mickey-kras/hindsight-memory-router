@@ -258,7 +258,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
 
 
 @pytest.mark.asyncio
-async def test_encoded_writer_segment_preserves_routing() -> None:
+async def test_encoded_writer_segment_is_rejected() -> None:
     limits = SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock())
     policy = SimpleNamespace(
         limits=limits,
@@ -268,17 +268,16 @@ async def test_encoded_writer_segment_preserves_routing() -> None:
     )
     app_module.runtime.policy = policy
 
-    response = await app_module.dispatch(
-        "unused",
-        request(
-            "POST",
-            "/v1/default/banks/team%2Fwriter/memories",
-            body={"items": [{"content": "ok"}]},
-        ),
-    )
-    assert response.status_code == 200
-    policy.retain.assert_awaited_once()
-    assert policy.retain.await_args.args[0] == "team/writer"
+    with pytest.raises(HttpError, match="encoded path separators are not allowed"):
+        await app_module.dispatch(
+            "unused",
+            request(
+                "POST",
+                "/v1/default/banks/team%2Fwriter/memories",
+                body={"items": [{"content": "ok"}]},
+            ),
+        )
+    policy.retain.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,26 @@ from typing import Any
 import yaml  # type: ignore[import-untyped]
 from yaml.constructor import ConstructorError  # type: ignore[import-untyped]
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
+
+from memory_router.facade_routes import FACADE_ROUTES  # noqa: E402
+
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
 MIN_FACADE_OPERATION_COUNT = 75
+REQUIRED_COVERAGE_MARKERS = frozenset(
+    {
+        "configured bank defaults",
+        "auto-retain",
+        "auto-recall",
+        "knowledge-page list get create update delete",
+        "knowledge reflect",
+        "document ingest",
+        "strings_keys_and_values_are_scanned",
+        "each_openclaw_conditional_route_blocks_unsafe_provider_content",
+    }
+)
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
@@ -24,7 +42,12 @@ def _construct_unique_mapping(
     explicit_keys: set[Any] = set()
     for key_node, _ in node.value:
         if key_node.tag == "tag:yaml.org,2002:merge":
-            continue
+            raise ConstructorError(
+                "while constructing a mapping",
+                node.start_mark,
+                "YAML merge keys are not supported",
+                key_node.start_mark,
+            )
         key = loader.construct_object(key_node, deep=deep)
         try:
             duplicate = key in explicit_keys
@@ -176,7 +199,11 @@ def _upstream_operations(source: str, *, minimum: int = 1) -> dict[tuple[str, st
 
 
 def _supports_status(statuses: set[str], status: int) -> bool:
-    return str(status) in statuses or f"{status // 100}XX" in statuses
+    return "DEFAULT" in statuses or str(status) in statuses or f"{status // 100}XX" in statuses
+
+
+def _missing_coverage_markers(source: str) -> list[str]:
+    return sorted(marker for marker in REQUIRED_COVERAGE_MARKERS if marker not in source)
 
 
 def main() -> int:
@@ -203,8 +230,6 @@ def main() -> int:
 
     plugin = sources["plugin"]
     sdk = sources["agent_sdk"]
-
-    from memory_router.facade_routes import FACADE_ROUTES
 
     try:
         facade_operations = _upstream_operations(
@@ -269,6 +294,18 @@ def main() -> int:
     for marker in required_plugin_markers:
         if marker not in plugin:
             raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
+    compatibility_tests = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (
+            Path("tests/test_openclaw_compat.py"),
+            Path("tests/test_openclaw_routes.py"),
+            Path("tests/test_openclaw_provider_boundaries.py"),
+            Path("tests/integration/openclaw-compat.sh"),
+        )
+    )
+    missing_coverage = _missing_coverage_markers(compatibility_tests)
+    if missing_coverage:
+        raise SystemExit(f"OpenClaw compatibility coverage markers missing: {missing_coverage}")
     print("OpenClaw compatibility inventory is current")
     return 0
 
