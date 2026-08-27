@@ -530,6 +530,16 @@ class _WindowScanContext:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _DirectScanOptions:
+    operation: str
+    isolated_encoded_fields: bool
+    deadline: float | None
+    time_limit_match: str | None
+    canonical_prefix_fields: int
+    canonical_output: list[tuple[str, str, bool]] | None
+
+
 def _scan_fields(
     fields: Iterable[tuple[str, str, bool]],
     *,
@@ -543,12 +553,14 @@ def _scan_fields(
 ) -> SafetyResult:
     result, canonical_fields, direct_rule_matches, keycap_values = _scan_direct_fields(
         fields,
-        operation=operation,
-        isolated_encoded_fields=isolated_encoded_fields,
-        deadline=deadline,
-        time_limit_match=time_limit_match,
-        canonical_prefix_fields=canonical_prefix_fields,
-        canonical_output=canonical_output,
+        _DirectScanOptions(
+            operation=operation,
+            isolated_encoded_fields=isolated_encoded_fields,
+            deadline=deadline,
+            time_limit_match=time_limit_match,
+            canonical_prefix_fields=canonical_prefix_fields,
+            canonical_output=canonical_output,
+        ),
     )
     context = _WindowScanContext(
         result,
@@ -591,13 +603,7 @@ def _scan_fields(
 
 def _scan_direct_fields(
     fields: Iterable[tuple[str, str, bool]],
-    *,
-    operation: str,
-    isolated_encoded_fields: bool,
-    deadline: float | None,
-    time_limit_match: str | None,
-    canonical_prefix_fields: int,
-    canonical_output: list[tuple[str, str, bool]] | None,
+    options: _DirectScanOptions,
 ) -> tuple[SafetyResult, list[tuple[str, str, bool]], set[str], set[str]]:
     result = SafetyResult()
     canonical_fields: list[tuple[str, str, bool]] = []
@@ -606,8 +612,8 @@ def _scan_direct_fields(
     direct_encoded_state = _EncodedState()
     scanned_values: set[tuple[str, bool]] = set()
     for index, (key, raw, is_key) in enumerate(fields):
-        if deadline is not None and time.monotonic() >= deadline:
-            result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
+        if options.deadline is not None and time.monotonic() >= options.deadline:
+            result.add(SafetyFinding(options.time_limit_match or "time_limit", "span_limit"))
             break
         if index >= MAX_SCAN_FIELDS:
             result.add(SafetyFinding("field_limit", "span_limit"))
@@ -619,14 +625,14 @@ def _scan_direct_fields(
             result.add(SafetyFinding("unicode_size_limit", "span_limit"))
             break
         try:
-            if index < canonical_prefix_fields:
+            if index < options.canonical_prefix_fields:
                 canonical, transformations = raw, set[str]()
             else:
-                canonical, transformations = canonicalize_content(raw, deadline=deadline)
+                canonical, transformations = canonicalize_content(raw, deadline=options.deadline)
             result.transformations.update(transformations)
             canonical_fields.append((key, canonical, is_key))
-            if canonical_output is not None:
-                canonical_output.append((key, canonical, is_key))
+            if options.canonical_output is not None:
+                options.canonical_output.append((key, canonical, is_key))
             _add_unicode_findings(result, transformations)
             if "keycap" in transformations:
                 keycap_values.add(canonical)
@@ -636,19 +642,28 @@ def _scan_direct_fields(
             scanned_values.add(signature)
             for finding in _rule_scan(
                 canonical,
-                deadline=deadline,
+                deadline=options.deadline,
                 strip_inword_digits="keycap" in transformations,
             ):
                 result.add(finding)
                 direct_rule_matches.add(finding.matched)
-            for finding in _amg_scan(key, canonical, operation=operation, deadline=deadline):
+            for finding in _amg_scan(
+                key, canonical, operation=options.operation, deadline=options.deadline
+            ):
                 result.add(finding)
-            state = _EncodedState() if isolated_encoded_fields else direct_encoded_state
-            _scan_encoded(result, key, canonical, operation, state, deadline=deadline)
+            state = _EncodedState() if options.isolated_encoded_fields else direct_encoded_state
+            _scan_encoded(
+                result,
+                key,
+                canonical,
+                options.operation,
+                state,
+                deadline=options.deadline,
+            )
         except UnicodeScanDeadlineExceeded:
-            result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
+            result.add(SafetyFinding(options.time_limit_match or "time_limit", "span_limit"))
             break
-        if _deadline_reached(result, deadline, time_limit_match):
+        if _deadline_reached(result, options.deadline, options.time_limit_match):
             break
     return result, canonical_fields, direct_rule_matches, keycap_values
 
