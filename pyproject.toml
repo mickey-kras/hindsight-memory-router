@@ -5,6 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hindsight-memory-router"
 version = "0.0.0"
+license-files = ["LICENSE", "licenses/*.txt"]
 requires-python = ">=3.12"
 dependencies = [
   "agent-memory-guard==0.3.0",

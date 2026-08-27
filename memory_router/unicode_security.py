@@ -4,10 +4,21 @@ import unicodedata
 from dataclasses import dataclass
 from functools import lru_cache
 from itertools import combinations, product
+from time import monotonic
 
 from .confusables_data import ASCII_CONFUSABLES
 
 MAX_CONFUSABLE_RULE_VARIANTS = 32
+_DEADLINE_CHECK_INTERVAL = 1_024
+
+
+class UnicodeScanDeadlineExceeded(RuntimeError):
+    """Raised when bounded Unicode work reaches the caller's scan deadline."""
+
+
+def _check_deadline(deadline: float | None, index: int = 0) -> None:
+    if deadline is not None and index % _DEADLINE_CHECK_INTERVAL == 0 and monotonic() >= deadline:
+        raise UnicodeScanDeadlineExceeded
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,8 +37,10 @@ def _ascii_confusable_options(char: str) -> tuple[str, ...]:
         semantic = chr(ord("A") + cp - 0x1CCD6)
     elif 0x1CCF0 <= cp <= 0x1CCF9:
         semantic = str(cp - 0x1CCF0)
+    normalized = unicodedata.normalize("NFKC", char)
+    nfkc_ascii = normalized if normalized != char and normalized.isascii() else None
     skeleton = ASCII_CONFUSABLES.get(cp)
-    return tuple(dict.fromkeys(option for option in (semantic, skeleton) if option))
+    return tuple(dict.fromkeys(option for option in (semantic, nfkc_ascii, skeleton) if option))
 
 
 def _fold_confusable_char(char: str) -> str:
@@ -37,10 +50,11 @@ def _fold_confusable_char(char: str) -> str:
     return options[0] if len(options) == 1 else char
 
 
-def _has_mixed_script_word(value: str) -> bool:
+def _has_mixed_script_word(value: str, *, deadline: float | None = None) -> bool:
     has_ascii = False
     has_confusable_script = False
-    for char in value:
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
         if char.isalpha():
             has_ascii |= char.isascii()
             name = unicodedata.name(char, "")
@@ -55,9 +69,14 @@ def _has_mixed_script_word(value: str) -> bool:
     return False
 
 
-def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
+def _build_confusable_rule_variants(
+    value: str, *, deadline: float | None = None
+) -> ConfusableVariantSet:
+    if value.isascii():
+        return ConfusableVariantSet((), False)
     ambiguous: list[tuple[int, tuple[str, ...]]] = []
     for index, char in enumerate(value):
+        _check_deadline(deadline, index)
         options = _ascii_confusable_options(char)
         if not char.isascii() and options:
             ambiguous.append((index, options))
@@ -69,6 +88,7 @@ def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
         parts: list[str] = []
         cursor = 0
         for (index, _), replacement in zip(ambiguous, selected, strict=True):
+            _check_deadline(deadline, cursor)
             parts.extend((value[cursor:index], replacement))
             cursor = index + 1
         parts.append(value[cursor:])
@@ -92,6 +112,7 @@ def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
         for positions in combinations(deviable, deviation_count):
             alternatives = tuple(ambiguous[position][1][1:] for position in positions)
             for replacements in product(*alternatives):
+                _check_deadline(deadline, explored)
                 explored += 1
                 if explored >= MAX_CONFUSABLE_RULE_VARIANTS:
                     return ConfusableVariantSet(tuple(variants), option_count > len(variants))
@@ -104,10 +125,12 @@ def _build_confusable_rule_variants(value: str) -> ConfusableVariantSet:
     return ConfusableVariantSet(tuple(variants), option_count > len(variants))
 
 
-def confusable_rule_variant_set(value: str) -> ConfusableVariantSet:
+def confusable_rule_variant_set(
+    value: str, *, deadline: float | None = None
+) -> ConfusableVariantSet:
     """Return bounded rule variants and whether further variants were omitted."""
 
-    return _build_confusable_rule_variants(value)
+    return _build_confusable_rule_variants(value, deadline=deadline)
 
 
 def confusable_rule_variants(value: str) -> tuple[str, ...]:
@@ -116,23 +139,61 @@ def confusable_rule_variants(value: str) -> tuple[str, ...]:
     return confusable_rule_variant_set(value).variants
 
 
-def canonicalize_content(content: str) -> tuple[str, set[str]]:
+def preferred_confusable_variant(value: str, *, deadline: float | None = None) -> str:
+    """Return the deterministic semantic fold used by pattern detectors."""
+
+    if value.isascii():
+        return value
+    chars: list[str] = []
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
+        options = _ascii_confusable_options(char)
+        chars.append(options[0] if not char.isascii() and options else char)
+    return "".join(chars)
+
+
+def official_confusable_variant(value: str, *, deadline: float | None = None) -> str:
+    """Return the vendored UTS #39 ASCII skeleton where one exists."""
+
+    if value.isascii():
+        return value
+    chars: list[str] = []
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
+        chars.append(ASCII_CONFUSABLES.get(ord(char), char))
+    return "".join(chars)
+
+
+def canonicalize_content(content: str, *, deadline: float | None = None) -> tuple[str, set[str]]:
     if content.isascii():
         return content, set()
     transformations: set[str] = set()
-    pre_nfkc = "".join(_pre_nfkc_ascii_fold(char) for char in content)
+    pre_nfkc_chars: list[str] = []
+    for index, char in enumerate(content):
+        _check_deadline(deadline, index)
+        pre_nfkc_chars.append(_pre_nfkc_ascii_fold(char))
+    pre_nfkc = "".join(pre_nfkc_chars)
     if pre_nfkc != content:
         transformations.add("confusable")
-    original_nfkc = unicodedata.normalize("NFKC", pre_nfkc)
-    mark_cleaned, pre_fold_mark_removed = _strip_evasive_marks(original_nfkc)
-    cleaned, invisible_removed, modifier_removed, modifier_evasion = _strip_ignorables(mark_cleaned)
-    pre_folded = "".join(_fold_confusable_char(char) for char in cleaned)
-    if pre_folded != cleaned:
+    original_nfkc = _nfkc_preserving_ambiguous(pre_nfkc, deadline=deadline)
+    modifier_cleaned, invisible_removed, modifier_removed, modifier_evasion = _strip_ignorables(
+        original_nfkc, deadline=deadline
+    )
+    mark_cleaned, pre_fold_mark_removed = _strip_evasive_marks(modifier_cleaned, deadline=deadline)
+    diacritic_cleaned = _strip_latin_diacritics(mark_cleaned, deadline=deadline)
+    if diacritic_cleaned != mark_cleaned:
+        transformations.add("diacritic")
+    pre_folded_chars: list[str] = []
+    for index, char in enumerate(diacritic_cleaned):
+        _check_deadline(deadline, index)
+        pre_folded_chars.append(_fold_confusable_char(char))
+    pre_folded = "".join(pre_folded_chars)
+    if pre_folded != diacritic_cleaned:
         transformations.add("confusable")
-    normalized = unicodedata.normalize("NFKC", pre_folded)
+    normalized = _nfkc_preserving_ambiguous(pre_folded, deadline=deadline)
     if original_nfkc != content:
         transformations.add("nfkc")
-    if _has_mixed_script_word(original_nfkc):
+    if _has_mixed_script_word(original_nfkc, deadline=deadline):
         transformations.add("mixed_script")
     canonical = normalized
     if pre_fold_mark_removed or invisible_removed:
@@ -145,22 +206,56 @@ def canonicalize_content(content: str) -> tuple[str, set[str]]:
 
 
 def _pre_nfkc_ascii_fold(char: str) -> str:
-    normalized = unicodedata.normalize("NFKC", char)
-    if unicodedata.category(char).startswith("M") or normalized == char:
+    if unicodedata.category(char).startswith("M"):
         return char
-    if normalized.isascii():
-        return normalized
     options = _ascii_confusable_options(char)
-    return options[0] if len(options) == 1 else char
+    if len(options) == 1:
+        return options[0]
+    if options:
+        return char
+    normalized = unicodedata.normalize("NFKC", char)
+    return normalized if normalized != char and normalized.isascii() else char
 
 
-def _strip_ignorables(value: str) -> tuple[str, bool, bool, bool]:
+def _nfkc_preserving_ambiguous(value: str, *, deadline: float | None = None) -> str:
+    parts: list[str] = []
+    cursor = 0
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
+        if len(_ascii_confusable_options(char)) <= 1:
+            continue
+        parts.append(unicodedata.normalize("NFKC", value[cursor:index]))
+        parts.append(char)
+        cursor = index + 1
+    if not parts:
+        return unicodedata.normalize("NFKC", value)
+    parts.append(unicodedata.normalize("NFKC", value[cursor:]))
+    return "".join(parts)
+
+
+def _strip_latin_diacritics(value: str, *, deadline: float | None = None) -> str:
+    chars: list[str] = []
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
+        if not unicodedata.name(char, "").startswith("LATIN "):
+            chars.append(char)
+            continue
+        decomposed = unicodedata.normalize("NFD", char)
+        base = "".join(
+            part for part in decomposed if not unicodedata.category(part).startswith("M")
+        )
+        chars.append(base if base.isascii() and base else char)
+    return "".join(chars)
+
+
+def _strip_ignorables(value: str, *, deadline: float | None = None) -> tuple[str, bool, bool, bool]:
     chars: list[str] = []
     invisible_removed = False
     modifier_removed = False
     modifier_evasion = False
     index = 0
     while index < len(value):
+        _check_deadline(deadline, index)
         char = value[index]
         cp = ord(char)
         display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
@@ -200,14 +295,18 @@ def _is_keycap_selector(value: str, index: int) -> bool:
     )
 
 
-def _mark_run_evasion(value: str, start: int) -> tuple[int, bool]:
+def _mark_run_evasion(value: str, start: int, *, deadline: float | None = None) -> tuple[int, bool]:
     end = start + 1
     while end < len(value) and unicodedata.category(value[end]).startswith("M"):
+        _check_deadline(deadline, end)
         end += 1
     left = value[start - 1] if start > 0 else ""
     right = value[end] if end < len(value) else ""
     if _is_keycap_mark_run(value, start, end):
-        return end, False
+        base_index = _keycap_base_index(value, end - 1)
+        keycap_left = value[base_index - 1] if base_index > 0 else ""
+        keycap_right = value[end] if end < len(value) else ""
+        return end, _ascii_like_alnum(keycap_left) and _ascii_like_alnum(keycap_right)
     in_word = _ascii_like_alnum(left) and _ascii_like_alnum(right)
     left_separator = not left or (left.isascii() and not left.isalnum())
     right_separator = not right or (right.isascii() and not right.isalnum())
@@ -219,10 +318,15 @@ def _mark_run_evasion(value: str, start: int) -> tuple[int, bool]:
     return end, in_word or separator_adjacent
 
 
-def _keycap_base(value: str, mark_index: int) -> bool:
+def _keycap_base_index(value: str, mark_index: int) -> int:
     base_index = mark_index - 1
     if base_index >= 0 and ord(value[base_index]) == 0xFE0F:
         base_index -= 1
+    return base_index
+
+
+def _keycap_base(value: str, mark_index: int) -> bool:
+    base_index = _keycap_base_index(value, mark_index)
     return base_index >= 0 and value[base_index] in "#*0123456789"
 
 
@@ -243,14 +347,15 @@ def _ascii_like_alnum(char: str) -> bool:
     return any(option.isalnum() for option in _ascii_confusable_options(char))
 
 
-def _strip_evasive_marks(value: str) -> tuple[str, bool]:
+def _strip_evasive_marks(value: str, *, deadline: float | None = None) -> tuple[str, bool]:
     chars: list[str] = []
     removed = False
     index = 0
     while index < len(value):
+        _check_deadline(deadline, index)
         cp = ord(value[index])
         if unicodedata.category(value[index]).startswith("M") and not 0xFE00 <= cp <= 0xFE0F:
-            end, evasion = _mark_run_evasion(value, index)
+            end, evasion = _mark_run_evasion(value, index, deadline=deadline)
             if evasion:
                 removed = True
             else:

@@ -1,0 +1,3 @@
+include THIRD_PARTY_NOTICES.md
+include scripts/generate_confusables_ascii.py
+recursive-include licenses *.txt

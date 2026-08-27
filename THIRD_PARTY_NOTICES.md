@@ -22,6 +22,6 @@ The container includes `/app/licenses/LGPL-3.0.txt` and `/app/licenses/GPL-3.0.t
 
 The generated ASCII-confusable map uses Unicode UTS #39 data version 17.0.0.
 
-Source: https://www.unicode.org/Public/security/17.0.0/confusables.txt
+Source: https://www.unicode.org/Public/17.0.0/security/confusables.txt
 
-Unicode data is provided under the Unicode Terms of Use: https://www.unicode.org/terms_of_use.html
+Unicode data is licensed under the Unicode License V3. The license text is included at `licenses/UNICODE-3.0.txt`.

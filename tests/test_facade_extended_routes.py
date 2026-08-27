@@ -585,6 +585,50 @@ async def test_facade_response_scan_releases_capacity_when_submit_fails(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_facade_response_scan_rejects_shutdown_race_after_submit(monkeypatch) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    future: Future[SafetyResult] = Future()
+    generation = openclaw_module._facade_scan_generation()  # noqa: SLF001
+
+    def schedule(*args, **kwargs):
+        del args, kwargs
+        monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_GENERATION", generation + 1)
+        return future
+
+    executor = SimpleNamespace(active=True, schedule=Mock(side_effect=schedule))
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_EXECUTOR", executor)
+
+    with pytest.raises(HttpError) as unavailable:
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    assert unavailable.value.message == "response safety scanner is shut down"
+    assert future.cancelled()
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_facade_response_serialization_runtime_error_is_not_shutdown(
+    monkeypatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
+    monkeypatch.setattr(
+        openclaw_module.json,
+        "dumps",
+        Mock(side_effect=RecursionError("payload nesting exceeded")),
+    )
+
+    with pytest.raises(HttpError) as unavailable:
+        await openclaw_module._scan_facade_response({"safe": True})  # noqa: SLF001
+
+    assert unavailable.value.message == "response safety scanner failed"
+    record = next(record for record in caplog.records if record.msg == "facade_scan_failed")
+    assert record.error_kind == "unexpected"  # type: ignore[attr-defined]
+    capacity.release.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_facade_response_scan_maps_pool_construction_failure(monkeypatch) -> None:
     capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
