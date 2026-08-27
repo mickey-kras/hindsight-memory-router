@@ -675,6 +675,7 @@ def test_split_base64_small_junk_exhaustion_fails_closed() -> None:
 
     assert not result.safe
     assert "unsafe_base64" in matches(result)
+    assert "split_base64_limit" not in matches(result)
 
 
 def test_four_short_base64_like_fields_do_not_exhaust_skip_budget() -> None:
