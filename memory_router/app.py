@@ -427,10 +427,40 @@ runtime = Runtime()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    runtime_started = False
+    scanner_start_attempted = False
     try:
         await runtime.start()
+        runtime_started = True
+        scanner_start_attempted = True
         await asyncio.to_thread(start_facade_scan_executor)
-    except Exception as exc:
+    except BaseException as exc:
+        if scanner_start_attempted:
+            try:
+                await shutdown_facade_scan_executor_async()
+            except BaseException as cleanup_exc:
+                log_event(
+                    logger,
+                    "error",
+                    "application_stop_failed",
+                    operation="shutdown",
+                    error_kind="unexpected",
+                    error=cleanup_exc,
+                    outcome="failed",
+                )
+        if runtime_started:
+            try:
+                await runtime.stop()
+            except BaseException as cleanup_exc:
+                log_event(
+                    logger,
+                    "error",
+                    "application_stop_failed",
+                    operation="shutdown",
+                    error_kind="unexpected",
+                    error=cleanup_exc,
+                    outcome="failed",
+                )
         log_event(
             logger,
             "error",

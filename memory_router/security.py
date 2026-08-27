@@ -319,6 +319,15 @@ def _reassembly_carry(
     return [entry for index, entry in enumerate(fields) if index in selected]
 
 
+@dataclass(slots=True)
+class _QueryWindowContext:
+    result: SafetyResult
+    canonical_fields: list[tuple[str, str, bool]]
+    direct_detector_matches: set[str]
+    keycap_values: set[str]
+    deadline: float
+
+
 def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     """Scan bounded query keys and values."""
 
@@ -327,6 +336,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     canonical_keys: list[str] = []
     canonical_traversal: list[str] = []
     canonical_fields: list[tuple[str, str, bool]] = []
+    direct_detector_matches: set[str] = set()
     keycap_values: set[str] = set()
     encoded_state = _EncodedState()
     rolling_windows = 0
@@ -356,6 +366,17 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
         canonical_traversal.append(canonical_key)
         canonical_fields.append((f"query.{key}.key", canonical_key, True))
         try:
+            for finding in _rule_scan(
+                canonical_key,
+                deadline=deadline,
+                strip_inword_digits="keycap" in key_transformations,
+            ):
+                result.add(finding)
+            for finding in _amg_scan(
+                f"query.{key}.key", canonical_key, operation="read", deadline=deadline
+            ):
+                result.add(finding)
+                direct_detector_matches.add(finding.detector or finding.matched)
             _scan_encoded(
                 result,
                 f"query.{key}.key",
@@ -390,6 +411,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 f"query.{key}", canonical, operation="read", deadline=deadline
             ):
                 result.add(finding)
+                direct_detector_matches.add(finding.detector or finding.matched)
             _scan_encoded(
                 result,
                 f"query.{key}",
@@ -404,6 +426,13 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
             break
         if _deadline_reached(result, deadline):
             break
+    window_context = _QueryWindowContext(
+        result,
+        canonical_fields,
+        direct_detector_matches,
+        keycap_values,
+        deadline,
+    )
     for canonical_fragments in (canonical_values, canonical_keys, canonical_traversal):
         if len(canonical_fragments) < 2:
             continue
@@ -425,14 +454,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 if rolling_windows > MAX_ROLLING_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
-                if _scan_query_window(
-                    result,
-                    combined,
-                    prefix,
-                    canonical_fields,
-                    keycap_values,
-                    deadline,
-                ):
+                if _scan_query_window(window_context, combined, prefix):
                     return result
         for fragments in bounded_skip_fragments(canonical_fragments):
             for combined in _sequence_join_variants(fragments):
@@ -440,14 +462,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 if skip_windows > MAX_SKIP_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
-                if _scan_query_window(
-                    result,
-                    combined,
-                    fragments,
-                    canonical_fields,
-                    keycap_values,
-                    deadline,
-                ):
+                if _scan_query_window(window_context, combined, fragments):
                     return result
                 if _deadline_reached(result, deadline):
                     return result
@@ -458,30 +473,46 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
 
 
 def _scan_query_window(
-    result: SafetyResult,
+    context: _QueryWindowContext,
     window: str,
     fragments: list[str],
-    canonical_fields: list[tuple[str, str, bool]],
-    keycap_values: set[str],
-    deadline: float,
 ) -> bool:
     try:
         findings = _split_instruction_rule_scan(
             window,
-            deadline=deadline,
-            strip_inword_digits=any(fragment in keycap_values for fragment in fragments),
+            deadline=context.deadline,
+            strip_inword_digits=any(fragment in context.keycap_values for fragment in fragments),
+        )
+        detector_findings = _amg_scan(
+            "query.rolling", window, operation="read", deadline=context.deadline
         )
     except UnicodeScanDeadlineExceeded:
-        result.add(SafetyFinding("time_limit", "span_limit"))
+        context.result.add(SafetyFinding("time_limit", "span_limit"))
         return True
     for finding in findings:
         if finding.reason == "span_limit":
-            result.add(finding)
+            context.result.add(finding)
             return True
-        if not _bare_secret_name_fragments(finding.matched, fragments, canonical_fields) and any(
-            _crosses_field_boundary(hit, fragments) for hit in finding.hits
+        if not _bare_secret_name_fragments(
+            finding.matched, fragments, context.canonical_fields
+        ) and any(_crosses_field_boundary(hit, fragments) for hit in finding.hits):
+            context.result.add(SafetyFinding(finding.matched, "split_instruction"))
+    for finding in detector_findings:
+        detector = finding.detector or finding.matched
+        if (
+            any(_crosses_field_boundary(hit, fragments) for hit in finding.hits)
+            if finding.hits
+            else detector not in context.direct_detector_matches
         ):
-            result.add(SafetyFinding(finding.matched, "split_instruction"))
+            context.result.add(
+                SafetyFinding(
+                    finding.matched,
+                    "split_instruction",
+                    finding.detector,
+                    finding.severity,
+                    finding.hits,
+                )
+            )
     return False
 
 
@@ -518,6 +549,7 @@ class _WindowScanContext:
     result: SafetyResult
     canonical_fields: list[tuple[str, str, bool]]
     direct_rule_matches: set[str]
+    direct_detector_matches: set[str]
     keycap_values: set[str]
     operation: str
     deadline: float | None
@@ -551,7 +583,13 @@ def _scan_fields(
     canonical_prefix_fields: int = 0,
     canonical_output: list[tuple[str, str, bool]] | None = None,
 ) -> SafetyResult:
-    result, canonical_fields, direct_rule_matches, keycap_values = _scan_direct_fields(
+    (
+        result,
+        canonical_fields,
+        direct_rule_matches,
+        direct_detector_matches,
+        keycap_values,
+    ) = _scan_direct_fields(
         fields,
         _DirectScanOptions(
             operation=operation,
@@ -566,6 +604,7 @@ def _scan_fields(
         result,
         canonical_fields,
         direct_rule_matches,
+        direct_detector_matches,
         keycap_values,
         operation,
         deadline,
@@ -604,10 +643,11 @@ def _scan_fields(
 def _scan_direct_fields(
     fields: Iterable[tuple[str, str, bool]],
     options: _DirectScanOptions,
-) -> tuple[SafetyResult, list[tuple[str, str, bool]], set[str], set[str]]:
+) -> tuple[SafetyResult, list[tuple[str, str, bool]], set[str], set[str], set[str]]:
     result = SafetyResult()
     canonical_fields: list[tuple[str, str, bool]] = []
     direct_rule_matches: set[str] = set()
+    direct_detector_matches: set[str] = set()
     keycap_values: set[str] = set()
     direct_encoded_state = _EncodedState()
     scanned_values: set[tuple[str, bool]] = set()
@@ -648,9 +688,13 @@ def _scan_direct_fields(
                 result.add(finding)
                 direct_rule_matches.add(finding.matched)
             for finding in _amg_scan(
-                key, canonical, operation=options.operation, deadline=options.deadline
+                key,
+                canonical,
+                operation=options.operation,
+                deadline=options.deadline,
             ):
                 result.add(finding)
+                direct_detector_matches.add(finding.detector or finding.matched)
             state = _EncodedState() if options.isolated_encoded_fields else direct_encoded_state
             _scan_encoded(
                 result,
@@ -665,7 +709,13 @@ def _scan_direct_fields(
             break
         if _deadline_reached(result, options.deadline, options.time_limit_match):
             break
-    return result, canonical_fields, direct_rule_matches, keycap_values
+    return (
+        result,
+        canonical_fields,
+        direct_rule_matches,
+        direct_detector_matches,
+        keycap_values,
+    )
 
 
 def _scan_window(
@@ -717,7 +767,12 @@ def _scan_window(
         ):
             context.result.add(SafetyFinding(finding.matched, "split_instruction"))
     for finding in detector_findings:
-        if any(_crosses_field_boundary(hit, fragments) for hit in finding.hits):
+        detector = finding.detector or finding.matched
+        if (
+            any(_crosses_field_boundary(hit, fragments) for hit in finding.hits)
+            if finding.hits
+            else detector not in context.direct_detector_matches
+        ):
             context.result.add(
                 SafetyFinding(
                     finding.matched,
@@ -1382,11 +1437,17 @@ def _amg_scan(
             severity = getattr(detection.severity, "value", detection.severity)
             metadata = detection.metadata if isinstance(detection.metadata, dict) else {}
             raw_hits = metadata.get("hits", [])
-            hits = tuple(str(hit) for hit in raw_hits if isinstance(hit, str))
+            string_hits = tuple(hit for hit in raw_hits if isinstance(hit, str))
+            structured_hits = tuple(
+                hit["matched_text"]
+                for hit in raw_hits
+                if isinstance(hit, dict) and isinstance(hit.get("matched_text"), str)
+            )
+            hits = (*string_hits, *structured_hits)
             if name == "sensitive_data" and not _keep_sensitive_detection(candidate, hits):
                 continue
             finding = SafetyFinding(
-                hits[0] if hits else name,
+                string_hits[0] if string_hits else name,
                 _REASON_MAP.get(name, name),
                 name,
                 str(severity) if severity is not None else None,

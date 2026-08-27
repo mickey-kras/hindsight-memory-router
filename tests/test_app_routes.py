@@ -450,3 +450,26 @@ async def test_lifespan_starts_and_stops_runtime(monkeypatch: pytest.MonkeyPatch
         start_scanner.assert_called_once_with()
     stop.assert_awaited_once()
     shutdown_scanner.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_cleans_up_runtime_when_scanner_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = AsyncMock()
+    stop = AsyncMock()
+    start_scanner = Mock(side_effect=RuntimeError("scanner unavailable"))
+    shutdown_scanner = AsyncMock()
+    monkeypatch.setattr(app_module.runtime, "start", start)
+    monkeypatch.setattr(app_module.runtime, "stop", stop)
+    monkeypatch.setattr(app_module, "start_facade_scan_executor", start_scanner)
+    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor_async", shutdown_scanner)
+
+    with pytest.raises(RuntimeError, match="scanner unavailable"):
+        async with app_module.lifespan(app_module.app):
+            pass
+
+    start.assert_awaited_once_with()
+    start_scanner.assert_called_once_with()
+    shutdown_scanner.assert_awaited_once_with()
+    stop.assert_awaited_once_with()
