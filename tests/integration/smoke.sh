@@ -384,7 +384,7 @@ events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines(
 retains = [event for event in events if event.get("kind") == "retain"]
 retained_banks = [event["bank_id"] for event in retains]
 recalled_banks = [event["bank_id"] for event in events if event.get("kind") == "recall"]
-assert "main" in retained_banks, retained_banks
+assert "physical-main" in retained_banks, retained_banks
 assert any(
     item.get("metadata", {}).get("router_decision") == "approved"
     for event in retains
