@@ -193,7 +193,14 @@ class HindsightGateway:
         return cast(dict[str, Any], value)
 
     async def openclaw_request(
-        self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
+        self,
+        operation: str,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        expected_status: int = 200,
+        allow_empty_response: bool = False,
     ) -> Any:
         """Forward one allowlisted OpenClaw-facing Hindsight operation."""
         return await self._request(
@@ -203,6 +210,8 @@ class HindsightGateway:
             body,
             preserve_http_status=True,
             response_limit=min(self.max_response_bytes, MAX_FACADE_RESPONSE_BYTES),
+            expected_status=expected_status,
+            allow_empty_response=allow_empty_response,
         )
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
@@ -222,9 +231,11 @@ class HindsightGateway:
         *,
         preserve_http_status: bool = False,
         response_limit: int | None = None,
+        expected_status: int | None = None,
+        allow_empty_response: bool = False,
     ) -> Any:
         max_response_bytes = self.max_response_bytes if response_limit is None else response_limit
-        headers = {"content-type": "application/json"}
+        headers = {"content-type": "application/json"} if body is not None else {}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         request_id = current_request_id()
@@ -255,6 +266,13 @@ class HindsightGateway:
                         method=method,
                         client_status=client_status,
                     )
+                if expected_status is not None and response.status_code != expected_status:
+                    raise HindsightGatewayError(
+                        "invalid-response",
+                        upstream_status=response.status_code,
+                        operation=operation,
+                        method=method,
+                    )
                 content_length = response.headers.get("content-length")
                 if (
                     content_length
@@ -281,9 +299,14 @@ class HindsightGateway:
                     chunks.append(chunk)
                 raw = b"".join(chunks)
                 if not raw:
-                    # Callers validate whether an empty success is legal. Facade
-                    # routes pin their own client status and serialize it as JSON null.
-                    return None
+                    if allow_empty_response:
+                        return None
+                    raise HindsightGatewayError(
+                        "invalid-response",
+                        upstream_status=response.status_code,
+                        operation=operation,
+                        method=method,
+                    )
                 try:
                     value = json.loads(raw, parse_constant=_reject_non_finite)
                     _assert_response_depth(value)

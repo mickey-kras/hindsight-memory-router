@@ -25,6 +25,7 @@ class FacadeRoute:
     query_params: tuple[str, ...]
     required_query_params: tuple[str, ...]
     response: ResponseMode
+    allow_empty_response: bool
     pattern: re.Pattern[str]
 
 
@@ -72,6 +73,7 @@ def _route(
         query_params=query,
         required_query_params=required_query,
         response=response,
+        allow_empty_response=method == "DELETE" or (method == "POST" and body == "none"),
         pattern=pattern,
     )
 

@@ -163,7 +163,7 @@ createServer(async (req, res) => {
       }
       if (method === "DELETE") {
         record({ kind: "mental_model_delete", bank_id: bankId, mental_model_id: mentalModelId });
-        res.writeHead(204);
+        res.writeHead(200);
         return res.end();
       }
     }
@@ -300,7 +300,8 @@ createServer(async (req, res) => {
         query: url.search,
         body,
       });
-      return send(res, 200, { ok: true });
+      const status = /^knowledge-base\/(folders|pages)$/.test(facade[2]) ? 201 : 200;
+      return send(res, status, { ok: true });
     }
 
     return send(res, 404, { error: "not found" });

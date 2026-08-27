@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import urllib.request
@@ -11,13 +12,17 @@ from pathlib import Path
 
 UNICODE_VERSION = "17.0.0"
 SOURCE_URL = f"https://www.unicode.org/Public/{UNICODE_VERSION}/security/confusables.txt"
+SOURCE_SHA256 = "091c7f82fc39ef208faf8f94d29c244de99254675e09de163160c810d13ef22a"
 OUTPUT = Path(__file__).resolve().parents[1] / "memory_router" / "confusables_ascii.json"
 _ENTRY = re.compile(r"^([0-9A-F]+)\s*;\s*([0-9A-F ]+)\s*;")
 
 
 def main() -> None:
     with urllib.request.urlopen(SOURCE_URL, timeout=30) as response:  # noqa: S310
-        source = response.read().decode("utf-8")
+        source_bytes = response.read()
+    if hashlib.sha256(source_bytes).hexdigest() != SOURCE_SHA256:
+        raise RuntimeError("unexpected Unicode confusables SHA-256")
+    source = source_bytes.decode("utf-8")
     if f"# Version: {UNICODE_VERSION}" not in source:
         raise RuntimeError("unexpected Unicode confusables version")
 
@@ -28,6 +33,8 @@ def main() -> None:
                 int(codepoint, 16) for codepoint in match.group(2).split()
             )
 
+    resolving: set[int] = set()
+
     @cache
     def skeleton(codepoint: int) -> str | None:
         if codepoint < 128:
@@ -36,8 +43,14 @@ def main() -> None:
         target = raw.get(codepoint)
         if target is None:
             return None
-        parts = tuple(skeleton(part) for part in target)
-        return "".join(part for part in parts if part is not None) if all(parts) else None
+        if codepoint in resolving:
+            raise RuntimeError(f"cycle in confusable skeleton for U+{codepoint:04X}")
+        resolving.add(codepoint)
+        try:
+            parts = tuple(skeleton(part) for part in target)
+            return "".join(part for part in parts if part is not None) if all(parts) else None
+        finally:
+            resolving.remove(codepoint)
 
     generated = {
         codepoint: resolved

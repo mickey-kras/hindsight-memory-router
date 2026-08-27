@@ -191,8 +191,9 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
     facade = OpenClawFacade(policy)
 
     template = "mental-models/{mental_model_id}" if mental_model_id is not None else resource
+    route = facade_route(method, template)
     result = await facade.forward(
-        route=facade_route(method, template),
+        route=route,
         writer_id="openclaw",
         params={"mental_model_id": mental_model_id} if mental_model_id is not None else {},
         body=body,
@@ -201,7 +202,12 @@ async def test_current_openclaw_tool_shapes_resolve_to_write_bank(
 
     assert result == response
     policy.hindsight.openclaw_request.assert_awaited_once_with(
-        f"openclaw_{resource.replace('/', '_') or 'bank'}", method, path, body
+        f"openclaw_{resource.replace('/', '_') or 'bank'}",
+        method,
+        path,
+        body,
+        expected_status=route.success_status,
+        allow_empty_response=route.allow_empty_response,
     )
     if read_operation:
         policy.limits.consume_recall.assert_awaited_once_with("openclaw")

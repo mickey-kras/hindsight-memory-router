@@ -191,6 +191,32 @@ async def test_knowledge_base_create_preserves_created_status(resource: str) -> 
 
 
 @pytest.mark.asyncio
+async def test_percent_encoded_static_sibling_uses_static_route_contract() -> None:
+    policy = _policy({"items": []})
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/memories/%6Cist?limit=10&detail=full"
+
+    response = await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert response.status_code == 200
+    forwarded = policy.hindsight.openclaw_request.await_args.args[2]
+    assert forwarded == "/v1/default/banks/resolved-main/memories/list?limit=10"
+
+
+@pytest.mark.parametrize("method", ["HEAD", "OPTIONS"])
+@pytest.mark.asyncio
+async def test_non_allowlisted_methods_never_reach_facade(method: str) -> None:
+    policy = _policy({})
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/stats"
+
+    response = await app_module.dispatch(path.lstrip("/"), request(method, path))
+
+    assert response.status_code == 404
+    policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_read_routes_consume_recall_quota_and_write_routes_retain_quota() -> None:
     policy = _policy({})
     app_module.runtime.policy = policy
@@ -360,7 +386,7 @@ async def test_extended_route_enforces_required_body() -> None:
     policy.hindsight.openclaw_request.assert_not_awaited()
 
 
-@pytest.mark.parametrize("resource", ["directives", "consolidate"])
+@pytest.mark.parametrize("resource", ["directives"])
 @pytest.mark.asyncio
 async def test_json_null_is_not_treated_as_an_absent_facade_body(resource: str) -> None:
     policy = _policy({})
@@ -375,6 +401,19 @@ async def test_json_null_is_not_treated_as_an_absent_facade_body(resource: str) 
     assert blocked.value.status == 400
     assert blocked.value.message.endswith("body must be an object")
     policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_json_null_matches_absent_optional_facade_body() -> None:
+    policy = _policy({})
+    app_module.runtime.policy = policy
+
+    response = await app_module.dispatch(
+        "unused", request("POST", "/v1/default/banks/openclaw/consolidate", body=b"null")
+    )
+
+    assert response.status_code == 200
+    policy.hindsight.openclaw_request.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -494,6 +533,7 @@ async def test_facade_list_still_blocks_unsafe_late_field() -> None:
         await app_module.dispatch(path.lstrip("/"), request("GET", path))
 
     assert blocked.value.code == "hindsight_unsafe_response"
+    policy.limits.consume_recall.assert_awaited_once_with("openclaw")
 
 
 @pytest.mark.parametrize("query", ["hello/world", "foo=bar", "dGVzdA=="])
@@ -762,7 +802,7 @@ async def test_facade_response_scan_releases_capacity_after_caller_cancellation(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    capacity.release.assert_not_called()
+    capacity.release.assert_called_once_with()
 
     future.set_result(SafetyResult())
     await asyncio.sleep(0)
@@ -851,6 +891,35 @@ async def test_facade_scan_async_generation_check_rejects_shutdown() -> None:
 
 
 @pytest.mark.asyncio
+async def test_facade_executor_state_check_is_offloaded_from_event_loop(monkeypatch) -> None:
+    executor = SimpleNamespace(active=True)
+    to_thread = AsyncMock(return_value=executor)
+    monkeypatch.setattr(openclaw_module.asyncio, "to_thread", to_thread)
+    generation = openclaw_module._facade_scan_generation()  # noqa: SLF001
+
+    assert (
+        await openclaw_module._get_facade_scan_executor_async(generation)  # noqa: SLF001
+        is executor
+    )
+
+    to_thread.assert_awaited_once_with(openclaw_module._get_facade_scan_executor, generation)  # noqa: SLF001
+
+
+def test_facade_scanner_restart_rebuilds_capacity_and_future_state(monkeypatch) -> None:
+    previous_capacity = openclaw_module._FACADE_SCAN_CAPACITY  # noqa: SLF001
+    openclaw_module._FACADE_SCAN_FUTURES.add(object())  # noqa: SLF001
+    monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_SHUTDOWN", True)
+    prewarm = Mock()
+    monkeypatch.setattr(openclaw_module, "_get_facade_scan_executor", prewarm)
+
+    openclaw_module.start_facade_scan_executor()
+
+    assert openclaw_module._FACADE_SCAN_CAPACITY is not previous_capacity  # noqa: SLF001
+    assert not openclaw_module._FACADE_SCAN_FUTURES  # noqa: SLF001
+    prewarm.assert_called_once_with()
+
+
+@pytest.mark.asyncio
 async def test_facade_scan_releases_capacity_when_executor_lookup_is_cancelled(monkeypatch) -> None:
     capacity = SimpleNamespace(acquire=Mock(return_value=True), release=Mock())
     monkeypatch.setattr(openclaw_module, "_FACADE_SCAN_CAPACITY", capacity)
@@ -898,6 +967,7 @@ async def test_facade_scan_limits_are_operational_failures_without_quarantine(
     assert blocked.value.status == 503
     assert blocked.value.code == "facade_scan_unavailable"
     assert blocked.value.headers == {"Retry-After": "1"}
+    policy.limits.consume_recall.assert_awaited_once_with("openclaw")
     policy._quarantine.assert_not_awaited()
 
 

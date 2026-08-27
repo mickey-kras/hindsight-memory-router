@@ -429,7 +429,7 @@ runtime = Runtime()
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         await runtime.start()
-        start_facade_scan_executor()
+        await asyncio.to_thread(start_facade_scan_executor)
     except Exception as exc:
         log_event(
             logger,
@@ -764,7 +764,10 @@ async def dispatch(path: str, request: Request) -> Response:
     method = request.method
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return JSONResponse(
+                {"error": "unauthorized", "message": "authentication required"},
+                status_code=401,
+            )
         await _admin_rate(method)
         admin = _require_runtime(runtime.admin, "admin service")
         if method == "GET" and pathname == "/admin/quarantine/queue":
@@ -807,7 +810,9 @@ async def dispatch(path: str, request: Request) -> Response:
     if method == "GET" and pathname == "/version":
         return await _version_response()
     if not await _router_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(
+            {"error": "unauthorized", "message": "authentication required"}, status_code=401
+        )
     policy = _require_runtime(runtime.policy, "router policy")
 
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
@@ -822,19 +827,26 @@ async def dispatch(path: str, request: Request) -> Response:
         return JSONResponse(await policy.retain(writer_id, body))
 
     facade = OpenClawFacade(policy)
-    matched = match_facade_route(method, pathname)
+    facade_pathname = pathname
+    if pathname.startswith("/v1/default/banks/"):
+        try:
+            facade_pathname = "/".join(_decode_path_segment(part) for part in pathname.split("/"))
+        except HttpError:
+            if match_facade_route(method, pathname) is not None:
+                raise
+    matched = match_facade_route(method, facade_pathname)
     if matched is not None:
         route, route_match = matched
-        writer_id = _decode_path_segment(route_match.group("bank"))
-        route_params = {
-            name: _decode_path_segment(route_match.group(name)) for name in route.params
-        }
+        writer_id = route_match.group("bank")
+        route_params = {name: route_match.group(name) for name in route.params}
         facade_body: dict[str, Any] | None = None
         if route.body != "none":
             raw_body = await _json_body(request, empty_as_none=True)
             if raw_body is _EMPTY_BODY:
                 if route.body == "required":
                     raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
+            elif raw_body is None and route.body == "optional":
+                pass
             elif not isinstance(raw_body, dict):
                 raise HttpError(
                     400, "invalid_request", f"{route.body_label} body must be an object"

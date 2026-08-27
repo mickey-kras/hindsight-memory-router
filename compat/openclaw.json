@@ -24,19 +24,5 @@
     "reflect",
     "retainBatch",
     "updateMentalModel"
-  ],
-  "endpoints": [
-    ["GET", "/health"],
-    ["GET", "/version"],
-    ["POST", "/v1/default/banks/{bank_id}/memories"],
-    ["POST", "/v1/default/banks/{bank_id}/memories/recall"],
-    ["PUT", "/v1/default/banks/{bank_id}"],
-    ["PATCH", "/v1/default/banks/{bank_id}/config"],
-    ["GET", "/v1/default/banks/{bank_id}/mental-models"],
-    ["POST", "/v1/default/banks/{bank_id}/mental-models"],
-    ["GET", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["PATCH", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["DELETE", "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}"],
-    ["POST", "/v1/default/banks/{bank_id}/reflect"]
   ]
 }

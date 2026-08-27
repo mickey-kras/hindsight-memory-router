@@ -269,6 +269,8 @@ def main() -> int:
     for marker in required_plugin_markers:
         if marker not in plugin:
             raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
+    print("OpenClaw compatibility inventory is current")
+    return 0
 
 
 if __name__ == "__main__":

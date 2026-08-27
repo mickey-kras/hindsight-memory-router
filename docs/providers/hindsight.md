@@ -22,12 +22,12 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 
 - Allowlist: `memory_router/facade_routes.py`
 - API contract: `openapi/openclaw.json`
-- GET, reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
+- GET (including `stats?refresh=true`), reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
 - JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
 - Retain, recall, and dry-run extract enforce their item/content/query limits. Other writes rely on the JSON limit and Hindsight validation.
 - Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
 - Request scans run inline with a five-second deadline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query scans inspect at most 256 pairs.
-- Query values use instruction rules but intentionally skip encoded-payload/Base64 heuristics. Route semantics and Hindsight validation bound their use, including write-capable query routes.
+- Query keys and values use instruction rules plus bounded encoded-payload and split-Base64 heuristics. Ordinary URL syntax is not treated as hard Base64 evidence.
 - Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
 - Unknown query parameters are dropped and excluded from security evidence.
 
@@ -43,10 +43,13 @@ Webhooks, file transfer, import/export, metrics, provider-credential LLM health 
 | Facade 4xx except 401/403 | Same status, sanitized `hindsight_http_error` |
 | Facade response over 256 KiB | `502 hindsight_response_too_large` |
 | Unsafe facade response | `502 hindsight_unsafe_response` |
+| Unexpected 2xx status or disallowed empty success body | `502 hindsight_invalid_response` |
 | Facade scanner worker failure, busy capacity, or field/time limit | `503 facade_scan_unavailable` |
 | Redirect, 401/403, 5xx, network, or malformed response | Typed 502 |
 
 Upstream response bodies are never returned.
+
+Optional facade bodies treat an absent body and JSON `null` equivalently. Required bodies must be JSON objects. Bodyless upstream requests omit `Content-Type`.
 
 A typed recall failure affects only the Hindsight read bank that failed. If all configured read banks fail, recall returns empty results. Unexpected application/database failures still propagate rather than being hidden as Hindsight degradation.
 

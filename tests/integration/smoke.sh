@@ -238,7 +238,7 @@ begin_check "safe recall endpoint succeeds"
 safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
 printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("results"), list)'
 if [[ "$mode" == "fake" ]]; then
-  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
+  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from physical-main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
 fi
 pass_check
 

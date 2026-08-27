@@ -103,19 +103,20 @@ def _get_facade_scan_executor(expected_generation: int | None = None) -> Process
 
 
 async def _get_facade_scan_executor_async(expected_generation: int) -> ProcessPool:
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        if expected_generation != _FACADE_SCAN_GENERATION:
-            raise _FacadeScannerShutdown("facade scanner shut down")
-        executor = _FACADE_SCAN_EXECUTOR
-        if executor is not None and executor.active:
-            return executor
     return await asyncio.to_thread(_get_facade_scan_executor, expected_generation)
 
 
 def start_facade_scan_executor() -> None:
-    global _FACADE_SCAN_SHUTDOWN
+    global _FACADE_SCAN_CAPACITY, _FACADE_SCAN_SHUTDOWN
     with _FACADE_SCAN_EXECUTOR_LOCK:
+        restarting = _FACADE_SCAN_SHUTDOWN
         _FACADE_SCAN_SHUTDOWN = False
+        if restarting:
+            _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
+            _FACADE_SCAN_FUTURES.clear()
+    # Pebble starts workers lazily when ``active`` is first inspected. Do that
+    # during startup so the first facade request never pays process-spawn cost.
+    _get_facade_scan_executor()
 
 
 def shutdown_facade_scan_executor() -> None:
@@ -322,7 +323,12 @@ class OpenClawFacade:
             path += "?" + urlencode(forwarded_query)
 
         value = await self.policy.hindsight.openclaw_request(
-            f"openclaw_{route.operation}", route.method, path, body
+            f"openclaw_{route.operation}",
+            route.method,
+            path,
+            body,
+            expected_status=route.success_status,
+            allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
             response_scan = await _scan_facade_response(value, writer_id=writer_id)
@@ -360,7 +366,9 @@ class OpenClawFacade:
                     route.method, route.resource, params.get("mental_model_id"), value
                 )
             else:
-                validate_facade_response(value, route.response)
+                validate_facade_response(
+                    value, route.response, allow_empty=route.allow_empty_response
+                )
         except ValueError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation=f"openclaw_{route.operation}", method=route.method

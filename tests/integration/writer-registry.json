@@ -1,0 +1,14 @@
+{
+  "writers": {
+    "main": {
+      "role": "orchestrator",
+      "source": "integration",
+      "write_bank": "physical-main",
+      "read_banks": ["physical-main"]
+    }
+  },
+  "defaults": {
+    "unknown_writer_action": "review_queue",
+    "suspicious_content_action": "review_queue"
+  }
+}

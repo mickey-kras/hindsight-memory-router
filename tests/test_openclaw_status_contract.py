@@ -61,3 +61,68 @@ async def test_core_gateway_keeps_existing_upstream_error_normalization() -> Non
         assert error.value.status == 502
     finally:
         await gateway.close()
+
+
+@pytest.mark.parametrize(("upstream", "expected"), [(202, 201), (204, 200)])
+@pytest.mark.asyncio
+async def test_openclaw_facade_rejects_unexpected_success_status(
+    upstream: int, expected: int
+) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(upstream, request=request)
+
+    gateway = HindsightGateway("http://hindsight.test", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(HindsightGatewayError) as error:
+            await gateway.openclaw_request(
+                "openclaw_create", "POST", "/resource", expected_status=expected
+            )
+        assert error.value.code == "hindsight_invalid_response"
+        assert error.value.upstream_status == upstream
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_openclaw_facade_allows_empty_body_only_for_explicit_routes() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, request=request)
+
+    gateway = HindsightGateway("http://hindsight.test", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        assert (
+            await gateway.openclaw_request(
+                "openclaw_delete",
+                "DELETE",
+                "/resource",
+                allow_empty_response=True,
+            )
+            is None
+        )
+        with pytest.raises(HindsightGatewayError, match="invalid response"):
+            await gateway.openclaw_request("openclaw_get", "GET", "/resource")
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_bodyless_upstream_request_omits_json_content_type() -> None:
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={}, request=request)
+
+    gateway = HindsightGateway("http://hindsight.test", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await gateway.openclaw_request("openclaw_get", "GET", "/resource")
+    finally:
+        await gateway.close()
+
+    assert "content-type" not in seen[0].headers

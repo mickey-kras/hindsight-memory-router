@@ -10,6 +10,22 @@ from .confusables_data import ASCII_CONFUSABLES
 
 MAX_CONFUSABLE_RULE_VARIANTS = 32
 _DEADLINE_CHECK_INTERVAL = 1_024
+_DEFAULT_IGNORABLE_RANGES = (
+    (0x034F, 0x034F),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
 
 
 class UnicodeScanDeadlineExceeded(RuntimeError):
@@ -37,6 +53,12 @@ def _ascii_confusable_options(char: str) -> tuple[str, ...]:
         semantic = chr(ord("A") + cp - 0x1CCD6)
     elif 0x1CCF0 <= cp <= 0x1CCF9:
         semantic = str(cp - 0x1CCF0)
+    elif 0x1F1E6 <= cp <= 0x1F1FF:
+        semantic = chr(ord("A") + cp - 0x1F1E6)
+    elif 0x1F150 <= cp <= 0x1F169:
+        semantic = chr(ord("A") + cp - 0x1F150)
+    elif 0x1F170 <= cp <= 0x1F189:
+        semantic = chr(ord("A") + cp - 0x1F170)
     normalized = unicodedata.normalize("NFKC", char)
     nfkc_ascii = normalized if normalized != char and normalized.isascii() else None
     skeleton = ASCII_CONFUSABLES.get(cp)
@@ -165,9 +187,13 @@ def official_confusable_variant(value: str, *, deadline: float | None = None) ->
 
 
 def canonicalize_content(content: str, *, deadline: float | None = None) -> tuple[str, set[str]]:
-    if content.isascii():
+    if content.isascii() and all(char.isprintable() or char in "\t\n\r" for char in content):
         return content, set()
     transformations: set[str] = set()
+    if _has_mixed_script_word(content, deadline=deadline):
+        transformations.add("mixed_script")
+    if _has_unmapped_spoof_word(content, deadline=deadline):
+        transformations.add("unmapped_confusable")
     pre_nfkc_chars: list[str] = []
     for index, char in enumerate(content):
         _check_deadline(deadline, index)
@@ -176,9 +202,13 @@ def canonicalize_content(content: str, *, deadline: float | None = None) -> tupl
     if pre_nfkc != content:
         transformations.add("confusable")
     original_nfkc = _nfkc_preserving_ambiguous(pre_nfkc, deadline=deadline)
-    modifier_cleaned, invisible_removed, modifier_removed, modifier_evasion = _strip_ignorables(
-        original_nfkc, deadline=deadline
-    )
+    (
+        modifier_cleaned,
+        invisible_removed,
+        modifier_removed,
+        modifier_evasion,
+        keycap_folded,
+    ) = _strip_ignorables(original_nfkc, deadline=deadline)
     mark_cleaned, pre_fold_mark_removed = _strip_evasive_marks(modifier_cleaned, deadline=deadline)
     diacritic_cleaned = _strip_latin_diacritics(mark_cleaned, deadline=deadline)
     if diacritic_cleaned != mark_cleaned:
@@ -193,8 +223,6 @@ def canonicalize_content(content: str, *, deadline: float | None = None) -> tupl
     normalized = _nfkc_preserving_ambiguous(pre_folded, deadline=deadline)
     if original_nfkc != content:
         transformations.add("nfkc")
-    if _has_mixed_script_word(original_nfkc, deadline=deadline):
-        transformations.add("mixed_script")
     canonical = normalized
     if pre_fold_mark_removed or invisible_removed:
         transformations.add("invisible")
@@ -202,6 +230,8 @@ def canonicalize_content(content: str, *, deadline: float | None = None) -> tupl
         transformations.add("display_modifier")
     if modifier_evasion:
         transformations.add("display_modifier_evasion")
+    if keycap_folded:
+        transformations.add("keycap")
     return canonical, transformations
 
 
@@ -248,21 +278,44 @@ def _strip_latin_diacritics(value: str, *, deadline: float | None = None) -> str
     return "".join(chars)
 
 
-def _strip_ignorables(value: str, *, deadline: float | None = None) -> tuple[str, bool, bool, bool]:
+def _strip_ignorables(
+    value: str, *, deadline: float | None = None
+) -> tuple[str, bool, bool, bool, bool]:
     chars: list[str] = []
     invisible_removed = False
     modifier_removed = False
     modifier_evasion = False
+    keycap_folded = False
     index = 0
     while index < len(value):
         _check_deadline(deadline, index)
         char = value[index]
         cp = ord(char)
-        display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
-        if display_modifier and _is_keycap_selector(value, index):
+        keycap_length = _keycap_sequence_length(value, index)
+        if keycap_length:
             chars.append(char)
+            keycap_folded = True
+            index += keycap_length
+            continue
+        if unicodedata.category(char) == "Cc":
+            if char in "\t\n\r":
+                chars.append(char)
+            else:
+                invisible_removed = True
             index += 1
             continue
+        if cp == 0x2800:
+            invisible_removed = True
+            index += 1
+            continue
+        if cp == 0x0640:
+            left = chars[-1] if chars else ""
+            right = value[index + 1] if index + 1 < len(value) else ""
+            if _ascii_like_alnum(left) or _ascii_like_alnum(right):
+                invisible_removed = True
+                index += 1
+                continue
+        display_modifier = cp in {0x200C, 0x200D} or 0xFE00 <= cp <= 0xFE0F
         if display_modifier:
             modifier_removed = True
             end = index + 1
@@ -282,17 +335,21 @@ def _strip_ignorables(value: str, *, deadline: float | None = None) -> tuple[str
             continue
         chars.append(char)
         index += 1
-    return "".join(chars), invisible_removed, modifier_removed, modifier_evasion
+    return "".join(chars), invisible_removed, modifier_removed, modifier_evasion, keycap_folded
 
 
-def _is_keycap_selector(value: str, index: int) -> bool:
-    return (
-        ord(value[index]) == 0xFE0F
-        and index > 0
-        and value[index - 1] in "#*0123456789"
-        and index + 1 < len(value)
-        and ord(value[index + 1]) == 0x20E3
-    )
+def _keycap_sequence_length(value: str, index: int) -> int:
+    if value[index] not in "#*0123456789" or index + 1 >= len(value):
+        return 0
+    if ord(value[index + 1]) == 0x20E3:
+        return 2
+    if (
+        ord(value[index + 1]) == 0xFE0F
+        and index + 2 < len(value)
+        and ord(value[index + 2]) == 0x20E3
+    ):
+        return 3
+    return 0
 
 
 def _mark_run_evasion(value: str, start: int, *, deadline: float | None = None) -> tuple[int, bool]:
@@ -347,6 +404,31 @@ def _ascii_like_alnum(char: str) -> bool:
     return any(option.isalnum() for option in _ascii_confusable_options(char))
 
 
+def _has_unmapped_spoof_word(value: str, *, deadline: float | None = None) -> bool:
+    has_ascii_like = False
+    has_unmapped = False
+    word_length = 0
+    for index, char in enumerate(value):
+        _check_deadline(deadline, index)
+        name = unicodedata.name(char, "")
+        options = _ascii_confusable_options(char)
+        if (char.isascii() and char.isalnum()) or (
+            options and any(option.isalnum() for option in options)
+        ):
+            has_ascii_like = True
+            word_length += 1
+        elif name.startswith("CHEROKEE ") and char.isalpha():
+            has_unmapped = True
+            word_length += 1
+        elif not unicodedata.category(char).startswith("M"):
+            if has_unmapped and (has_ascii_like or word_length >= 4):
+                return True
+            has_ascii_like = False
+            has_unmapped = False
+            word_length = 0
+    return has_unmapped and (has_ascii_like or word_length >= 4)
+
+
 def _strip_evasive_marks(value: str, *, deadline: float | None = None) -> tuple[str, bool]:
     chars: list[str] = []
     removed = False
@@ -367,23 +449,6 @@ def _strip_evasive_marks(value: str, *, deadline: float | None = None) -> tuple[
     return "".join(chars), removed
 
 
+@lru_cache(maxsize=4_096)
 def _is_default_ignorable(cp: int, category: str) -> bool:
-    return category == "Cf" or any(
-        start <= cp <= end
-        for start, end in (
-            (0x034F, 0x034F),
-            (0x115F, 0x1160),
-            (0x17B4, 0x17B5),
-            (0x180B, 0x180F),
-            (0x200B, 0x200F),
-            (0x202A, 0x202E),
-            (0x2060, 0x206F),
-            (0x3164, 0x3164),
-            (0xFE00, 0xFE0F),
-            (0xFFA0, 0xFFA0),
-            (0xFFF0, 0xFFF8),
-            (0x1BCA0, 0x1BCA3),
-            (0x1D173, 0x1D17A),
-            (0xE0000, 0xE0FFF),
-        )
-    )
+    return category == "Cf" or any(start <= cp <= end for start, end in _DEFAULT_IGNORABLE_RANGES)

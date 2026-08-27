@@ -251,6 +251,10 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
     )
     assert response.status_code == 401
+    assert payload(response) == {
+        "error": "unauthorized",
+        "message": "authentication required",
+    }
 
 
 @pytest.mark.asyncio
@@ -301,6 +305,19 @@ async def test_denied_bank_path_ignores_malformed_writer_segment() -> None:
 
     assert response.status_code == 404
     policy.deny_endpoint.assert_awaited_once_with("GET", "/v1/default/banks/%ZZ/webhooks")
+
+
+@pytest.mark.asyncio
+async def test_malformed_writer_segment_on_facade_route_is_rejected() -> None:
+    policy = SimpleNamespace(
+        registry=SimpleNamespace(writers={"main": object()}),
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+    )
+    app_module.runtime.policy = policy
+
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        await app_module.dispatch("unused", request("GET", "/v1/default/banks/%ZZ/stats"))
+    policy.deny_endpoint.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -412,6 +429,10 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         "admin/quarantine/stats", request("GET", "/admin/quarantine/stats")
     )
     assert response.status_code == 401
+    assert payload(response) == {
+        "error": "unauthorized",
+        "message": "authentication required",
+    }
 
 
 @pytest.mark.asyncio

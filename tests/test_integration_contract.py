@@ -95,18 +95,9 @@ REQUIRED_WORKFLOW_CHECKS = {
     "Denied Hindsight surfaces fail closed at the router",
 }
 INTEGRATION_BEHAVIOR_PATHS = {
-    APP_PATH,
-    POLICY_PATH,
-    ADMIN_PATH,
-    AUTH_PATH,
-    HINDSIGHT_PATH,
-    LOGGING_PATH,
-    LOGGING_CONTRACT_PATH,
-    OPENCLAW_PATH,
-    FACADE_ROUTES_PATH,
-    SECURITY_PATH,
-    SCAN_WINDOWS_PATH,
-    UNICODE_SECURITY_PATH,
+    path
+    for path in Path("memory_router").rglob("*")
+    if path.is_file() and path.suffix in {".py", ".json"}
 }
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
 
