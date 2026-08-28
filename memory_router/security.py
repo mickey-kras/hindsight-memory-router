@@ -7,6 +7,7 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -41,6 +42,7 @@ MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
 MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
 MAX_SPLIT_BASE64_RECOVERY_MIN_PARTS = 3
 MAX_SPLIT_BASE64_RECOVERY_PAIR_PARTS = 64
+MAX_SPLIT_BASE64_RECOVERY_TRIPLE_PARTS = 32
 MAX_SPLIT_BASE64_RECOVERY_ATTEMPTS = 40_000
 MAX_SPLIT_BASE64_RECOVERY_WORK_BYTES = 16 * 1024 * 1024
 FACADE_SCAN_BATCH_FIELDS = 32
@@ -223,6 +225,19 @@ _RULE_FILLER_WORDS = frozenset(
         "hence",
         "then",
         "so",
+        "these",
+        "those",
+        "two",
+        "few",
+        "many",
+        "several",
+        "some",
+        "any",
+        "other",
+        "another",
+        "such",
+        "own",
+        "same",
     }
 )
 _RULE_MIN_FUSED_TOKEN_LEN = min(
@@ -1456,7 +1471,7 @@ def _split_base64_candidates(
             len(value) >= 8
             and _padded_base64(value) is not None
             and _looks_like_base64(value)
-            and _decode_base64_fragment(value) is not None
+            and (_decode_base64_fragment(value) is not None or _lossy_decodable_base64(value))
         ):
             completed[value] = None
 
@@ -1526,7 +1541,9 @@ def _split_base64_candidates(
             if not preserved and candidate not in completed and _looks_like_base64(candidate):
                 soft_exhausted = True
         next_candidates = [
-            candidate for candidate in next_candidates if _viable_base64_prefix(candidate[0])
+            candidate
+            for candidate in next_candidates
+            if _viable_base64_prefix(candidate[0]) or _lossy_viable_base64_prefix(candidate[0])
         ]
         if plausible_fragment or any(
             _credible_base64_prefix(value) for value, _ in next_candidates
@@ -1674,6 +1691,78 @@ def _lossy_ascii_decoded_text(decoded: bytes) -> str | None:
     return folded if folded.strip("\x00").strip() else None
 
 
+def _lossy_scannable_ascii(decoded: bytes) -> bool:
+    """Whether lossy folding keeps enough ASCII text to be worth scanning.
+
+    Split-join garbage decodes to mostly non-printable bytes (~37% printable
+    on average), while a real payload with a few invalid bytes stays mostly
+    printable ASCII. Requiring a printable majority keeps random joins out of
+    the candidate pool so budgets behave like the strict path.
+    """
+    if not decoded:
+        return False
+    printable = sum(1 for byte in decoded if 0x20 <= byte < 0x7F or byte in (0x09, 0x0A, 0x0D))
+    return printable >= 8 and printable / len(decoded) >= 0.6
+
+
+def _lossy_decodable_base64(candidate: str) -> bool:
+    """Whether decoded bytes fail strict UTF-8 but keep scannable ASCII.
+
+    Complements the strict decode paths so weak-signal split payloads with
+    invalid UTF-8 survive to the lossy scan in ``_scan_encoded`` instead of
+    being dropped before scanning. Strictly decodable candidates stay on the
+    strict paths.
+    """
+    if _hard_base64_signal(candidate):
+        # Hard-signal candidates already fail closed on invalid UTF-8 in
+        # _scan_encoded; accepting them here would re-route random "+"/"/"
+        # tokens into that fail-closed path and false-positive.
+        return False
+    padded = _padded_base64(candidate)
+    if padded is None:
+        return False
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if len(decoded) > MAX_BASE64_DECODED_BYTES:
+        return False
+    try:
+        decoded.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return _lossy_scannable_ascii(decoded)
+    return False
+
+
+def _lossy_viable_base64_prefix(fragment: str) -> bool:
+    """Fallback viability for joins dropped only due to invalid UTF-8.
+
+    ``_viable_base64_prefix`` judges strictly decodable text; a weak-signal
+    join whose decoded bytes are invalid UTF-8 but whose lossy folding keeps
+    scannable ASCII stays in the candidate pool so ``_scan_encoded`` can
+    lossy-scan it. Strictly decodable prefixes remain ``_viable_base64_prefix``
+    territory, and undecodable garbage still drops out of the pool.
+    """
+    if _hard_base64_signal(fragment):
+        # See _lossy_decodable_base64: hard-signal garbage must keep dropping
+        # out of the pool instead of reaching the fail-closed invalid-UTF-8
+        # path in _scan_encoded.
+        return False
+    complete_length = len(fragment) - (len(fragment) % 4)
+    if complete_length == 0:
+        return False
+    prefix = fragment[:complete_length]
+    try:
+        decoded = base64.b64decode(prefix, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    try:
+        decoded.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        return _lossy_scannable_ascii(decoded)
+    return False
+
+
 def _decoded_text_variants(value: str) -> tuple[str, ...]:
     """Keep both intra-word and between-word control-byte payloads scannable."""
     removed: list[str] = []
@@ -1689,6 +1778,29 @@ def _decoded_text_variants(value: str) -> tuple[str, ...]:
             candidate for candidate in ("".join(removed), "".join(separated)) if candidate.strip()
         )
     )
+
+
+def _joined_base64_decodes_cleanly(joined: str) -> bool:
+    """Return whether the joined run decodes to fully printable text.
+
+    Alignment-preserving poison parts keep the joined run structurally
+    decodable while garbling the plaintext with control bytes; such a decode
+    is not a clean Base64 payload and must not suppress recovery.
+    """
+    padded = _padded_base64(joined)
+    if padded is None:
+        return False
+    try:
+        decoded = base64.b64decode(padded, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    if len(decoded) > MAX_BASE64_DECODED_BYTES:
+        return False
+    try:
+        text = decoded.decode("utf-8", "strict")
+    except UnicodeDecodeError:
+        return False
+    return all(char.isprintable() or char in "\t\n\r" for char in text)
 
 
 def _recover_base64_edge_fragments(
@@ -1717,19 +1829,29 @@ def _recover_base64_edge_fragments(
     joined = "".join(parts)
     if not 8 <= len(joined) <= MAX_SPLIT_BASE64_CANDIDATE_BYTES:
         return (), False
+    clean_join = False
+    garbled_decode = False
     if _decode_base64_fragment(joined) is not None:
-        return (), False
+        if _joined_base64_decodes_cleanly(joined):
+            # The join itself is scanned elsewhere, but a consumer that drops
+            # junk parts sees a different message: recover clean alternates so
+            # alignment-preserving poison parts cannot hide the real payload.
+            clean_join = True
+        else:
+            # The joined run decodes only to control-byte/non-printable garble:
+            # an alignment-preserving poisoned join, not a clean decode.
+            garbled_decode = True
     offsets = [0]
     for part in parts:
         offsets.append(offsets[-1] + len(part))
     attempts = 0
     work_bytes = 0
     cut_short = False
-    near_decodable = False
+    near_decodable = garbled_decode and (_hard_base64_signal(joined) or _weak_base64_signal(joined))
     found: dict[str, None] = {}
 
     def probe(candidate: str) -> bool:
-        """Return whether candidate decodes cleanly; track budget and evidence."""
+        """Return whether candidate is a plausible payload; track budget/evidence."""
         nonlocal attempts, work_bytes, cut_short, near_decodable
         size = len(candidate)
         if size < 8 or size % 4 == 1:
@@ -1745,6 +1867,8 @@ def _recover_base64_edge_fragments(
         attempts += 1
         work_bytes += size
         signaled = _hard_base64_signal(candidate) or _weak_base64_signal(candidate)
+        if clean_join:
+            return bool(signaled and _joined_base64_decodes_cleanly(candidate))
         if _decode_base64_fragment(candidate) is not None:
             if signaled:
                 near_decodable = True
@@ -1755,19 +1879,23 @@ def _recover_base64_edge_fragments(
         return False
 
     def keep(candidate: str) -> None:
-        found[candidate] = None
+        # Never evict the true payload by ranking: excess candidates trip the
+        # encoded span limit in _scan_encoded, which fails closed.
+        if len(found) < MAX_BASE64_SPANS + 1:
+            found[candidate] = None
 
     # Linear evidence pass: any cleanly decodable prefix across the part stream
     # marks this join as near-decodable even when elimination never recovers it.
-    prefix_tracker = ""
-    for part in parts:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise UnicodeScanDeadlineExceeded
-        prefix_tracker, prefix_decoded = _advance_base64_prefix(prefix_tracker, part)
-        if prefix_decoded and (
-            _hard_base64_signal(prefix_tracker) or _weak_base64_signal(prefix_tracker)
-        ):
-            near_decodable = True
+    if not clean_join:
+        prefix_tracker = ""
+        for part in parts:
+            if deadline is not None and time.monotonic() >= deadline:
+                raise UnicodeScanDeadlineExceeded
+            prefix_tracker, prefix_decoded = _advance_base64_prefix(prefix_tracker, part)
+            if prefix_decoded and (
+                _hard_base64_signal(prefix_tracker) or _weak_base64_signal(prefix_tracker)
+            ):
+                near_decodable = True
 
     # Fast path: contiguous suffix and prefix trims.
     for stop in range(count - 1, 0, -1):
@@ -1806,6 +1934,27 @@ def _recover_base64_edge_fragments(
                 if probe(candidate):
                     keep(candidate)
 
+    # Bounded elimination: drop each triple of parts where the part count keeps
+    # the cubic work bounded (multi-part alignment-preserving poison).
+    if count <= MAX_SPLIT_BASE64_RECOVERY_TRIPLE_PARTS:
+        for first in range(count):
+            if cut_short:
+                break
+            for second in range(first + 1, count):
+                if cut_short:
+                    break
+                for third in range(second + 1, count):
+                    if cut_short:
+                        break
+                    candidate = (
+                        joined[: offsets[first]]
+                        + joined[offsets[first + 1] : offsets[second]]
+                        + joined[offsets[second + 1] : offsets[third]]
+                        + joined[offsets[third + 1] :]
+                    )
+                    if probe(candidate):
+                        keep(candidate)
+
     # Bounded elimination: contiguous windows (drop a prefix and a suffix at
     # once), longest window per start position wins.
     for start in range(count):
@@ -1819,9 +1968,10 @@ def _recover_base64_edge_fragments(
                 keep(candidate)
                 break
 
+    if clean_join:
+        return tuple(dict.fromkeys(found)), False
     fail_closed = not found and count >= 8 and near_decodable and (cut_short or pairs_skipped)
-    ordered = sorted(found, key=len, reverse=True)[:MAX_BASE64_SPANS]
-    return tuple(dict.fromkeys(ordered)), fail_closed
+    return tuple(dict.fromkeys(found)), fail_closed
 
 
 def _normalized_base64_fragment(
@@ -1910,21 +2060,27 @@ def _advance_base64_prefix(candidate: str, part: str) -> tuple[str, bool]:
     return "", False
 
 
-def _is_decoded_control_character(char: str) -> bool:
-    """Match the control bytes _decoded_text_variants strips or separates."""
+def _is_decoded_removable_character(char: str) -> bool:
+    """Match characters _decoded_text_variants removes from decoded text.
+
+    Covers control bytes (Cc) and format characters (Cf: zero-width space,
+    joiner/non-joiner, soft hyphen, bidi controls), which _decoded_text_variants
+    strips or separates. Unassigned (Cn), private-use (Co), and surrogate (Cs)
+    codepoints stay non-removable.
+    """
     codepoint = ord(char)
-    return codepoint < 0x20 or 0x7F <= codepoint <= 0x9F
+    return codepoint < 0x20 or 0x7F <= codepoint <= 0x9F or unicodedata.category(char) == "Cf"
 
 
 def _viable_base64_prefix(fragment: str) -> bool:
     """Return whether future Base64 bytes can still form scannable UTF-8.
 
-    Viability is judged on the control-removed variant, consistent with
-    _decoded_text_variants: decoded control bytes (Cc) never kill viability
-    because the removed/separated variants are scanned downstream in
-    _scan_encoded. Other non-printable, non-whitespace characters (format,
-    unassigned, private-use) and invalid UTF-8 still mark the prefix as
-    non-viable garbage.
+    Viability is judged on the control-and-format-removed variant, consistent
+    with _decoded_text_variants: decoded control bytes (Cc) and format
+    characters (Cf) never kill viability because the removed/separated
+    variants are scanned downstream in _scan_encoded. Other non-printable,
+    non-whitespace characters (unassigned, private-use) and invalid UTF-8
+    still mark the prefix as non-viable garbage.
     """
     complete_length = len(fragment) - (len(fragment) % 4)
     if complete_length == 0:
@@ -1937,13 +2093,15 @@ def _viable_base64_prefix(fragment: str) -> bool:
         return False
     if all(char.isprintable() or char.isspace() for char in text):
         return True
-    # Consistent with _decoded_text_variants: control bytes mixed into
-    # otherwise-scannable text never kill viability, because the removed and
-    # separated variants are scanned downstream in _scan_encoded. Prefixes
-    # decoding to nothing but control bytes carry no scannable signal and
-    # stay non-viable, as do format, unassigned, and private-use characters.
+    # Consistent with _decoded_text_variants: control bytes and format
+    # characters mixed into otherwise-scannable text never kill viability,
+    # because the removed and separated variants are scanned downstream in
+    # _scan_encoded. Prefixes decoding to nothing but control or format
+    # characters carry no scannable signal and stay non-viable, as do
+    # unassigned and private-use characters.
     return any(char.isprintable() or char.isspace() for char in text) and all(
-        char.isprintable() or char.isspace() or _is_decoded_control_character(char) for char in text
+        char.isprintable() or char.isspace() or _is_decoded_removable_character(char)
+        for char in text
     )
 
 
@@ -1962,17 +2120,22 @@ def _alphabet_separator_split_is_suspicious(fragment: str) -> bool:
     if _decode_base64_fragment(fragment) is not None:
         return False
     viable_parts = [
-        part
+        head
         for part in _BASE64_IN_ALPHABET_SEPARATOR.split(fragment)
-        if len(part) >= 2 and _viable_base64_prefix(part)
+        for head in (part.split("=", 1)[0],)
+        if len(head) >= 2 and _viable_base64_prefix(head)
     ]
     if len(viable_parts) >= 4 and sum(len(part) for part in viable_parts) >= 16:
         return True
     # A single in-alphabet separator already breaks alignment; if simply removing
     # the separator characters yields a decodable printable payload, the fragment
-    # is a split payload with separator poisoning rather than prose.
+    # is a split payload with separator poisoning rather than prose. Trailing
+    # junk appended after the padding marker must not hide the payload either.
     stripped = _BASE64_IN_ALPHABET_SEPARATOR.sub("", fragment)
-    return len(stripped) >= 8 and _decode_base64_fragment(stripped) is not None
+    if len(stripped) >= 8 and _decode_base64_fragment(stripped) is not None:
+        return True
+    head = stripped.split("=", 1)[0]
+    return head != stripped and len(head) >= 8 and _decode_base64_fragment(head) is not None
 
 
 def _dedupe_split_candidates(values: list[tuple[str, int]]) -> list[tuple[str, int]]:
@@ -2427,13 +2590,14 @@ def _rule_edge_matches(
                 continue
             if _rule_gap_benign_adjacency(previous_gap, current_gap):
                 continue
-            if (
-                not _rule_gap_allowed(previous_gap, current_gap)
-                and matched not in _RULE_FAIL_CLOSED_MATCHES
+            if not _rule_gap_allowed(previous_gap, current_gap) and not (
+                matched in _RULE_FAIL_CLOSED_MATCHES
+                and _rule_gap_fail_closed(previous_gap, current_gap)
             ):
-                # Distinctive hostile phrases fail closed on budget-exceeded
-                # subsequences; common-word rules stay silent to avoid
-                # flagging ordinary prose collisions across field junctions.
+                # Distinctive hostile phrases fail closed on clearly padded
+                # subsequences; common-word rules and lightly padded matches
+                # stay silent to avoid flagging ordinary prose collisions
+                # across field junctions.
                 continue
             matches.append(matched)
             break
@@ -2562,6 +2726,21 @@ def _rule_gap_benign_adjacency(previous: _RuleGap, current: _RuleGap) -> bool:
         return False
     arbitrary_words = previous[1] | current[1]
     return bool(arbitrary_words) and arbitrary_words <= _RULE_FILLER_WORDS
+
+
+def _rule_gap_fail_closed(previous: _RuleGap, current: _RuleGap) -> bool:
+    """Whether a budget-exceeded strong-rule match fails closed.
+
+    Requires at least two non-filler junk words, or three or more skipped
+    words overall, so ordinary ops prose ("the existing permissions doc")
+    stays clean while nonce-word padding still fails closed.
+    """
+    arbitrary_count = previous[0] + current[0]
+    signal_count = previous[2] + current[2]
+    filler_words = (previous[1] | current[1]) & _RULE_FILLER_WORDS
+    non_filler_count = arbitrary_count - len(filler_words)
+    skipped_count = arbitrary_count + signal_count
+    return non_filler_count >= 2 or skipped_count >= 3
 
 
 def _trim_boundary_padding(value: str, *, from_start: bool) -> str:
