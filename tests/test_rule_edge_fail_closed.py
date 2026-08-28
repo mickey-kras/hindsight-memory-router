@@ -169,3 +169,52 @@ def test_gap_budget_predicate_semantics() -> None:
     assert security_module._rule_gap_allowed(gap_one_junk, gap_clean)  # noqa: SLF001
     assert security_module._rule_gap_allowed(gap_two_same, gap_clean)  # noqa: SLF001
     assert not security_module._rule_gap_allowed(gap_two_distinct, gap_clean)  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("a", "b"),
+    [
+        ("overwrite", "the existing permissions doc"),
+        ("overwrite", "the current permissions"),
+        ("overwrite", "the stale permissions"),
+        ("overwrite", "my old permissions notes"),
+        ("overwrite", "these two permissions files"),
+        ("overwrite", "the default permissions policy"),
+    ],
+    ids=["existing", "current", "stale", "my-old", "these-two", "default"],
+)
+def test_benign_ops_prose_stays_clean(a: str, b: str) -> None:
+    for result in all_surfaces(a, b):
+        assert matches(result) == set()
+
+
+def test_openssh_backup_pair_flags_only_within_field_private_key() -> None:
+    # "your old private key backup" contains a literal "private key" (matched
+    # within-field, unchanged since before the split-rule work); the junction
+    # fail-closed tier must not add "private key block" on top.
+    for result in all_surfaces("begin openssh", "your old private key backup"):
+        assert matches(result) == {"private key"}
+
+
+def test_fail_closed_tier_requires_clear_padding() -> None:
+    gap = security_module._rule_gap_fail_closed  # noqa: SLF001
+    filler = frozenset({"the"})
+    assert not gap((0, frozenset(), 0, 0), (2, frozenset({"the", "existing"}), 0, 20))
+    assert gap((2, frozenset({"alpha", "beta"}), 0, 12), (0, frozenset(), 0, 0))
+    assert gap((3, frozenset({"zz"}), 0, 9), (0, frozenset(), 0, 0))
+    assert gap((0, frozenset(), 3, 30), (0, frozenset(), 0, 0))
+    assert not gap((1, frozenset({"existing"}), 0, 9), (1, filler, 0, 4))
+
+
+def test_single_descriptor_word_attacks_stay_blocked_via_budget() -> None:
+    # One junk word of any kind still fits the clean-match budget.
+    for result in all_surfaces("overwrite", "existing permissions"):
+        assert "overwrite permissions" in matches(result)
+
+
+def test_documented_residual_light_padding_evasion() -> None:
+    # Residual (accepted): strong-rule matches padded with at most one
+    # non-filler word plus filler words stay silent on the fail-closed tier,
+    # matching within-field behavior for the same prose.
+    for result in all_surfaces("overwrite", "the existing permissions"):
+        assert matches(result) == set()
