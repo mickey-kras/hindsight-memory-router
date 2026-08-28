@@ -150,6 +150,7 @@ _RULE_SIGNAL_WORDS = frozenset(
     word for _, matched, _ in _RULE_SPECS for word in _decoded(matched).lower().split()
 )
 _ASCII_WORD = re.compile(r"[A-Za-z]+")
+_DecodedBase64Candidate = tuple[str, str, int, int, bool, bool]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1046,21 +1047,17 @@ def _split_decoded_base64_candidates(
     deadline: float | None = None,
     normalized_fragments: dict[str, tuple[str | None, bool]] | None = None,
 ) -> tuple[list[tuple[str, str]], bool]:
-    candidates: list[tuple[str, str, int, int, bool, bool]] = []
+    candidates: list[_DecodedBase64Candidate] = []
     work_bytes = 0
     exhausted = False
     soft_exhausted = False
 
     def add(
-        target: list[tuple[str, str, int, int, bool, bool]],
-        compact: str,
-        spaced: str,
-        parts: int,
-        skipped: int,
-        terminated: bool,
-        credible: bool,
+        target: list[_DecodedBase64Candidate],
+        candidate: _DecodedBase64Candidate,
     ) -> bool:
         nonlocal exhausted, work_bytes
+        compact, spaced, _, _, _, _ = candidate
         size = len(compact.encode("utf-8")) + len(spaced.encode("utf-8"))
         if size > MAX_SPLIT_BASE64_WORK_BYTES:
             exhausted = True
@@ -1069,7 +1066,7 @@ def _split_decoded_base64_candidates(
             exhausted = True
             return False
         work_bytes += size
-        target.append((compact, spaced, parts, skipped, terminated, credible))
+        target.append(candidate)
         return True
 
     fragment_fields = 0
@@ -1095,8 +1092,8 @@ def _split_decoded_base64_candidates(
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
             exhausted = True
             break
-        next_candidates: list[tuple[str, str, int, int, bool, bool]] = []
-        if not add(next_candidates, decoded, decoded, 1, 0, True, fragment_credible):
+        next_candidates: list[_DecodedBase64Candidate] = []
+        if not add(next_candidates, (decoded, decoded, 1, 0, True, fragment_credible)):
             break
         for compact, spaced, parts, skipped, terminated, credible in candidates:
             if deadline is not None and time.monotonic() >= deadline:
@@ -1104,23 +1101,20 @@ def _split_decoded_base64_candidates(
                 break
             if not add(
                 next_candidates,
-                _bounded_utf8_suffix(f"{compact}{decoded}".encode()),
-                _bounded_append(spaced, decoded),
-                parts + 1,
-                skipped,
-                terminated,
-                credible or fragment_credible,
+                (
+                    _bounded_utf8_suffix(f"{compact}{decoded}".encode()),
+                    _bounded_append(spaced, decoded),
+                    parts + 1,
+                    skipped,
+                    terminated,
+                    credible or fragment_credible,
+                ),
             ):
                 exhausted = True
                 break
             if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
                 next_candidates,
-                compact,
-                spaced,
-                parts,
-                skipped + 1,
-                terminated,
-                credible,
+                (compact, spaced, parts, skipped + 1, terminated, credible),
             ):
                 exhausted = True
                 break
