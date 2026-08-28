@@ -211,7 +211,7 @@ def main() -> int:
         raise SystemExit("usage: check_openclaw_compat.py <hindsight-checkout>")
 
     root = Path(sys.argv[1])
-    inventory = json.loads(Path("compat/openclaw.json").read_text(encoding="utf-8"))
+    inventory = json.loads((REPOSITORY_ROOT / "compat/openclaw.json").read_text(encoding="utf-8"))
     sources = {
         name: (root / path).read_text(encoding="utf-8")
         for name, path in inventory["sources"].items()
@@ -297,10 +297,10 @@ def main() -> int:
     compatibility_tests = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (
-            Path("tests/test_openclaw_compat.py"),
-            Path("tests/test_openclaw_routes.py"),
-            Path("tests/test_openclaw_provider_boundaries.py"),
-            Path("tests/integration/openclaw-compat.sh"),
+            REPOSITORY_ROOT / "tests/test_openclaw_compat.py",
+            REPOSITORY_ROOT / "tests/test_openclaw_routes.py",
+            REPOSITORY_ROOT / "tests/test_openclaw_provider_boundaries.py",
+            REPOSITORY_ROOT / "tests/integration/openclaw-compat.sh",
         )
     )
     missing_coverage = _missing_coverage_markers(compatibility_tests)

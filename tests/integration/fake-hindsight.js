@@ -267,6 +267,14 @@ createServer(async (req, res) => {
     if (method === "GET" && history) {
       const bankId = decodeURIComponent(history[1]);
       if (rejectForbiddenRouterTraffic(res, "history", bankId)) return;
+      record({
+        kind: "facade",
+        method,
+        bank_id: bankId,
+        path: `${history[2]}/${decodeURIComponent(history[3])}/history`,
+        query: url.search,
+        body: null,
+      });
       return send(res, 200, [{ id: "version-1", text: "safe history" }]);
     }
 
@@ -276,6 +284,14 @@ createServer(async (req, res) => {
     if (method === "GET" && memoryList) {
       const bankId = decodeURIComponent(memoryList[1]);
       if (rejectForbiddenRouterTraffic(res, "memory_list", bankId)) return;
+      record({
+        kind: "facade",
+        method,
+        bank_id: bankId,
+        path: "memories/list",
+        query: url.search,
+        body: null,
+      });
       const items = Array.from({ length: 5 }, (_, item) =>
         Object.fromEntries(
           Array.from({ length: 30 }, (_, field) => [

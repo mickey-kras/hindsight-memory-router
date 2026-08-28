@@ -6,6 +6,7 @@ import codecs
 import json
 import re
 import time
+from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -49,6 +50,7 @@ MAX_QUERY_SKIP_WINDOWS = 32_768
 MAX_SCAN_FIELD_BYTES = 1024 * 1024
 MAX_NON_ASCII_CODEPOINTS = 65_536
 MAX_CORE_SCAN_SECONDS = 5.0
+MAX_QUERY_SCAN_SECONDS = 10.0
 _BASE64_RUN = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/=]{8,}(?![A-Za-z0-9+/=])")
 _BASE64_CHARS = re.compile(r"^[A-Za-z0-9+/=]+$")
 _BASE64_PARTS = re.compile(r"[A-Za-z0-9+/=]+")
@@ -57,8 +59,6 @@ _BASE64_COLON_AFTER = re.compile(r"\s*:")
 _BASE64_JSON_LABEL_AFTER = re.compile(r"[\"']\s*:\s*")
 _BASE64_NUMBERED_LABEL = re.compile(r"(?:part|chunk|fragment)\d*", re.I)
 _IN_WORD_DIGIT = re.compile(r"(?<=[A-Za-z])\d(?=[A-Za-z])")
-_LONG_BOUNDARY_TOKEN_SUFFIX = re.compile(r"\S{64,}$")
-_LONG_BOUNDARY_TOKEN_PREFIX = re.compile(r"^\S{64,}")
 _CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
@@ -146,6 +146,10 @@ _COMPACT_SPLIT_RULES = tuple(
     (re.compile(pattern.pattern.replace(r"\s+", "").replace(r"\s*", ""), re.I), matched, reason)
     for pattern, matched, reason in _SPLIT_RULES
 )
+_RULE_SIGNAL_WORDS = frozenset(
+    word for _, matched, _ in _RULE_SPECS for word in _decoded(matched).lower().split()
+)
+_ASCII_WORD = re.compile(r"[A-Za-z]+")
 
 
 @dataclass(frozen=True, slots=True)
@@ -344,7 +348,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
     encoded_state = _EncodedState()
     rolling_windows = 0
     skip_windows = 0
-    deadline = time.monotonic() + MAX_CORE_SCAN_SECONDS
+    deadline = time.monotonic() + MAX_QUERY_SCAN_SECONDS
     for index, (key, raw) in enumerate(query):
         if index >= MAX_QUERY_SCAN_FIELDS:
             result.add(SafetyFinding("query_field_limit", "span_limit"))
@@ -436,26 +440,32 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
         keycap_values,
         deadline,
     )
-    for canonical_fragments in (canonical_values, canonical_keys, canonical_traversal):
+    for group_index, canonical_fragments in enumerate(
+        (canonical_values, canonical_keys, canonical_traversal)
+    ):
         if len(canonical_fragments) < 2:
             continue
         skip_windows = 0
         spaced = ""
         compact = ""
-        for end, value in enumerate(canonical_fragments, start=1):
+        compact_tail = ""
+        prefix: list[str] = []
+        for value in canonical_fragments:
             if _deadline_reached(result, deadline):
                 return result
-            prefix = canonical_fragments[:end]
-            junctions = _junction_variants(spaced, compact, value) if end >= 2 else ()
+            windows: list[str] = []
+            if prefix:
+                windows.extend(_junction_variants(spaced, compact, value))
+                windows.extend(_trim_evasion_variants(prefix[-1], value))
             spaced = _bounded_append(spaced, value)
             compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
-            if end < 2:
+            if prefix:
+                compact_tail = _bounded_utf8_suffix(f"{compact_tail}{value}".encode())
+            prefix.append(value)
+            if len(prefix) < 2:
                 continue
-            windows = (
-                *junctions,
-                *_trim_evasion_variants(prefix[-2], value),
-                *_join_variants(prefix, spaced=spaced, compact=compact),
-            )
+            mixed = f"{_bounded_utf8_prefix(prefix[0].encode())} {compact_tail}"
+            windows.extend((spaced, compact, mixed))
             for combined in dict.fromkeys(windows):
                 rolling_windows += 1
                 if rolling_windows > MAX_QUERY_ROLLING_WINDOWS:
@@ -464,12 +474,17 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:
                 if _scan_query_window(window_context, combined, prefix):
                     return result
         for fragments in bounded_skip_fragments(canonical_fragments):
-            for combined in _sequence_join_variants(fragments):
+            for variant_index, combined in enumerate(_sequence_join_variants(fragments)):
                 skip_windows += 1
                 if skip_windows > MAX_QUERY_SKIP_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
-                if _scan_query_window(window_context, combined, fragments):
+                if _scan_query_window(
+                    window_context,
+                    combined,
+                    fragments,
+                    scan_detectors=variant_index == 0 and group_index < 2,
+                ):
                     return result
                 if _deadline_reached(result, deadline):
                     return result
@@ -483,6 +498,8 @@ def _scan_query_window(
     context: _QueryWindowContext,
     window: str,
     fragments: list[str],
+    *,
+    scan_detectors: bool = True,
 ) -> bool:
     try:
         findings = _split_instruction_rule_scan(
@@ -490,8 +507,10 @@ def _scan_query_window(
             deadline=context.deadline,
             strip_inword_digits=any(fragment in context.keycap_values for fragment in fragments),
         )
-        detector_findings = _amg_scan(
-            "query.rolling", window, operation="read", deadline=context.deadline
+        detector_findings = (
+            _amg_scan("query.rolling", window, operation="read", deadline=context.deadline)
+            if scan_detectors
+            else []
         )
     except UnicodeScanDeadlineExceeded:
         context.result.add(SafetyFinding("time_limit", "span_limit"))
@@ -1027,18 +1046,19 @@ def _split_decoded_base64_candidates(
     deadline: float | None = None,
     normalized_fragments: dict[str, tuple[str | None, bool]] | None = None,
 ) -> tuple[list[tuple[str, str]], bool]:
-    candidates: list[tuple[str, str, int, int, bool]] = []
+    candidates: list[tuple[str, str, int, int, bool, bool]] = []
     work_bytes = 0
     exhausted = False
     soft_exhausted = False
 
     def add(
-        target: list[tuple[str, str, int, int, bool]],
+        target: list[tuple[str, str, int, int, bool, bool]],
         compact: str,
         spaced: str,
         parts: int,
         skipped: int,
         terminated: bool,
+        credible: bool,
     ) -> bool:
         nonlocal exhausted, work_bytes
         size = len(compact.encode("utf-8")) + len(spaced.encode("utf-8"))
@@ -1049,7 +1069,7 @@ def _split_decoded_base64_candidates(
             exhausted = True
             return False
         work_bytes += size
-        target.append((compact, spaced, parts, skipped, terminated))
+        target.append((compact, spaced, parts, skipped, terminated, credible))
         return True
 
     fragment_fields = 0
@@ -1070,14 +1090,15 @@ def _split_decoded_base64_candidates(
         decoded = _decode_base64_fragment(fragment)
         if decoded is None:
             continue
+        fragment_credible = _credible_base64_prefix(fragment)
         fragment_fields += 1
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
             exhausted = True
             break
-        next_candidates: list[tuple[str, str, int, int, bool]] = []
-        if not add(next_candidates, decoded, decoded, 1, 0, True):
+        next_candidates: list[tuple[str, str, int, int, bool, bool]] = []
+        if not add(next_candidates, decoded, decoded, 1, 0, True, fragment_credible):
             break
-        for compact, spaced, parts, skipped, terminated in candidates:
+        for compact, spaced, parts, skipped, terminated, credible in candidates:
             if deadline is not None and time.monotonic() >= deadline:
                 exhausted = True
                 break
@@ -1088,18 +1109,25 @@ def _split_decoded_base64_candidates(
                 parts + 1,
                 skipped,
                 terminated,
+                credible or fragment_credible,
             ):
                 exhausted = True
                 break
             if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
-                next_candidates, compact, spaced, parts, skipped + 1, terminated
+                next_candidates,
+                compact,
+                spaced,
+                parts,
+                skipped + 1,
+                terminated,
+                credible,
             ):
                 exhausted = True
                 break
-            if skipped >= MAX_SPLIT_BASE64_SKIPS:
+            if skipped >= MAX_SPLIT_BASE64_SKIPS and (credible or fragment_credible):
                 soft_exhausted = True
         unique = dict.fromkeys(next_candidates)
-        if len(unique) > MAX_SPLIT_BASE64_CANDIDATES:
+        if len(unique) > MAX_SPLIT_BASE64_CANDIDATES and any(candidate[-1] for candidate in unique):
             soft_exhausted = True
         candidates = sorted(unique, key=lambda value: (-len(value[0]), value[3]))[
             :MAX_SPLIT_BASE64_CANDIDATES
@@ -1109,7 +1137,7 @@ def _split_decoded_base64_candidates(
     return (
         [
             (compact, spaced)
-            for compact, spaced, parts, _, terminated in candidates
+            for compact, spaced, parts, _, terminated, _ in candidates
             if parts >= 2 and terminated
         ],
         exhausted or soft_exhausted,
@@ -1127,7 +1155,7 @@ def _decode_base64_fragment(fragment: str) -> str | None:
         text = decoded.decode("utf-8", errors="strict")
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return None
-    return text if text and all(char.isprintable() or char.isspace() for char in text) else None
+    return text if text and all(char.isprintable() or char in "\t\n\r" for char in text) else None
 
 
 def _normalized_base64_fragment(
@@ -1140,6 +1168,8 @@ def _normalized_base64_fragment(
         return stripped, False
     parts: list[str] = []
     part_count = 0
+    overflow_candidate = ""
+    decodable_prefix = False
     for match_index, match in enumerate(_BASE64_PARTS.finditer(stripped), start=1):
         if match_index % 1_024 == 0 and deadline is not None and time.monotonic() >= deadline:
             return None, True
@@ -1147,10 +1177,12 @@ def _normalized_base64_fragment(
             continue
         part_count += 1
         part = match.group(0)
+        overflow_candidate, found = _advance_base64_prefix(overflow_candidate, part)
+        decodable_prefix |= found
         if len(parts) < MAX_SPLIT_BASE64_FIELDS:
             parts.append(part)
     if part_count > MAX_SPLIT_BASE64_FIELDS:
-        return None, _has_decodable_base64_prefix(parts)
+        return None, decodable_prefix
     if not parts:
         return None, False
     return "".join(parts), False
@@ -1191,15 +1223,22 @@ def _credible_base64_prefix(fragment: str) -> bool:
     )
 
 
-def _has_decodable_base64_prefix(parts: list[str]) -> bool:
-    candidate = ""
-    for part in parts:
-        if "=" in candidate:
-            break
-        candidate += part
-        if len(candidate) >= 8 and _decode_base64_fragment(candidate) is not None:
-            return True
-    return False
+def _advance_base64_prefix(candidate: str, part: str) -> tuple[str, bool]:
+    """Track a viable decoded prefix in linear bounded space across all parts."""
+    if "=" in candidate or "=" in part:
+        candidate = ""
+        if "=" in part:
+            return candidate, False
+    combined = candidate + part
+    if len(combined) >= 8 and _decode_base64_fragment(combined) is not None:
+        return combined, True
+    if len(combined) > 256:
+        return "", True
+    if _viable_base64_prefix(combined):
+        return combined, False
+    if part != combined and _viable_base64_prefix(part):
+        return part, False
+    return "", False
 
 
 def _viable_base64_prefix(fragment: str) -> bool:
@@ -1274,6 +1313,10 @@ def _scan_encoded(
         except UnicodeDecodeError:
             if hard_signal and fail_closed_invalid:
                 result.add(SafetyFinding("invalid_utf8", "encoded_payload"))
+            continue
+        if not hard_signal and any(
+            not char.isprintable() and char not in "\t\n\r" for char in decoded_text
+        ):
             continue
         decoded_canonical, decoded_transformations = canonicalize_content(
             decoded_text, deadline=deadline
@@ -1523,7 +1566,7 @@ def _looks_like_base64(candidate: str) -> bool:
         text = decoded.decode("utf-8", errors="strict")
     except (binascii.Error, UnicodeDecodeError, ValueError):
         return False
-    return bool(text and all(char.isprintable() or char.isspace() for char in text))
+    return bool(text and all(char.isprintable() or char in "\t\n\r" for char in text))
 
 
 def _padded_base64(candidate: str) -> str | None:
@@ -1589,14 +1632,81 @@ def _junction_variants(spaced: str, compact: str, field: str) -> tuple[str, ...]
 
 
 def _trim_evasion_variants(previous: str, current: str) -> tuple[str, ...]:
-    """Remove long boundary tokens before joining split-rule edges."""
-    trimmed_previous = _LONG_BOUNDARY_TOKEN_SUFFIX.sub("", previous)
-    trimmed_current = _LONG_BOUNDARY_TOKEN_PREFIX.sub("", current)
-    if trimmed_previous == previous and trimmed_current == current:
-        return ()
-    left = _bounded_utf8_suffix(trimmed_previous.encode("utf-8"))
-    right = _bounded_utf8_prefix(trimmed_current.encode("utf-8"))
-    return tuple(dict.fromkeys((f"{left} {right}", f"{left}{right}")))
+    """Remove low-entropy boundary padding in bounded linear time."""
+    trimmed_previous = _trim_boundary_padding(previous, from_start=False)
+    trimmed_current = _trim_boundary_padding(current, from_start=True)
+    variants: list[str] = []
+    if trimmed_previous != previous or trimmed_current != current:
+        left = _bounded_utf8_suffix(trimmed_previous.encode("utf-8"))
+        right = _bounded_utf8_prefix(trimmed_current.encode("utf-8"))
+        variants.extend((f"{left} {right}", f"{left}{right}"))
+    projected_previous = _rule_signal_edge(previous, from_start=False)
+    projected_current = _rule_signal_edge(current, from_start=True)
+    if projected_previous and projected_current:
+        variants.extend(
+            (
+                f"{projected_previous} {projected_current}",
+                f"{projected_previous}{projected_current}",
+            )
+        )
+    return tuple(dict.fromkeys(variants))
+
+
+def _rule_signal_edge(value: str, *, from_start: bool) -> str:
+    """Project bounded rule vocabulary so arbitrary boundary padding cannot hide it."""
+    selected: list[str] | deque[str]
+    selected = [] if from_start else deque(maxlen=16)
+    for match in _ASCII_WORD.finditer(value):
+        token = match.group(0).lower()
+        signal = token if token in _RULE_SIGNAL_WORDS else None
+        if signal is None and len(token) >= 10:
+            signal = next(
+                (
+                    word
+                    for word in _RULE_SIGNAL_WORDS
+                    if len(token) >= len(word) + 8
+                    and (token.startswith(word) or token.endswith(word))
+                ),
+                None,
+            )
+        if signal is None:
+            continue
+        selected.append(signal)
+        if from_start and len(selected) >= 16:
+            break
+    return " ".join(selected)
+
+
+def _trim_boundary_padding(value: str, *, from_start: bool) -> str:
+    if not value:
+        return value
+    start = 0
+    end = len(value)
+    while start < end and (value[start] if from_start else value[end - 1]).isspace():
+        if from_start:
+            start += 1
+        else:
+            end -= 1
+    while start < end:
+        boundary = value[start] if from_start else value[end - 1]
+        run = 1
+        if from_start:
+            while start + run < end and value[start + run] == boundary:
+                run += 1
+        else:
+            while end - run - 1 >= start and value[end - run - 1] == boundary:
+                run += 1
+        if run < 8:
+            break
+        if from_start:
+            start += run
+            while start < end and value[start].isspace():
+                start += 1
+        else:
+            end -= run
+            while start < end and value[end - 1].isspace():
+                end -= 1
+    return value[start:end]
 
 
 def _sequence_join_variants(fragments: list[str]) -> tuple[str, ...]:
@@ -1607,6 +1717,22 @@ def _sequence_join_variants(fragments: list[str]) -> tuple[str, ...]:
     spaced = _bounded_append(spaced, fragments[-1])
     compact = _bounded_utf8_suffix(f"{compact}{fragments[-1]}".encode())
     variants.extend(_join_variants(fragments, spaced=spaced, compact=compact))
+    if len(fragments) >= 2:
+        trimmed = [
+            _trim_boundary_padding(fragment, from_start=index > 0)
+            for index, fragment in enumerate(fragments)
+        ]
+        trimmed[:-1] = [
+            _trim_boundary_padding(fragment, from_start=False) for fragment in trimmed[:-1]
+        ]
+        variants.extend(_join_variants(trimmed))
+        if len(fragments) == 2:
+            projected = [
+                _rule_signal_edge(fragments[0], from_start=False),
+                _rule_signal_edge(fragments[1], from_start=True),
+            ]
+            if all(projected):
+                variants.extend(_join_variants(projected))
     return tuple(dict.fromkeys(variants))
 
 

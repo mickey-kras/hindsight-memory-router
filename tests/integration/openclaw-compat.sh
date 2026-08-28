@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: d436227c0875f1d46ae82e462ea97d7076b0a98c4a221fb3af9ce893f3dd5b35
+# integration-behavior-sha256: 780c483eec648e0f6232b0f72df48c48ce5bf21188fa4a4f5a24b1bc78d250b4
 
 openclaw_request() {
   local method="$1"
@@ -115,12 +115,37 @@ facade = [event for event in events if event.get("kind") == "facade"]
 assert facade
 assert all(event.get("bank_id") == "physical-main" for event in facade)
 by_route = {(event["method"], event["path"]): event for event in facade}
-assert by_route[("GET", "tags")]["query"] == "?q=hello%2Fworld"
-assert by_route[("GET", "tags")]["body"] is None
-assert by_route[("POST", "documents/doc-1/reprocess")]["query"] == ""
-assert by_route[("POST", "documents/doc-1/reprocess")]["body"] == {}
-assert by_route[("PATCH", "knowledge-base/nodes/node-1")]["body"] == {"title": "Runbook"}
-assert by_route[("DELETE", "observations")]["body"] is None
+expected = {
+    ("GET", "stats"): ("", None),
+    ("GET", "tags"): ("?q=hello%2Fworld", None),
+    ("GET", "memories/list"): ("?limit=10", None),
+    ("GET", "memories/mem-1/history"): ("", None),
+    ("GET", "mental-models/page-1/history"): ("", None),
+    ("GET", "documents"): ("", None),
+    ("POST", "documents/doc-1/reprocess"): ("", {}),
+    ("GET", "entities/graph"): ("", None),
+    ("POST", "consolidate"): ("", {}),
+    ("GET", "directives"): ("", None),
+    ("POST", "operations/op-1/retry"): ("", {}),
+    ("GET", "knowledge-base/tree"): ("", None),
+    ("POST", "knowledge-base/folders"): ("", {"name": "Runbooks"}),
+    ("POST", "knowledge-base/pages"): (
+        "",
+        {"title": "Runbook", "content": "safe content"},
+    ),
+    ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
+    ("GET", "audit-logs"): ("", None),
+    ("GET", "llm-requests/stats"): ("", None),
+    ("GET", "observations/scopes"): ("", None),
+    ("DELETE", "observations"): ("", None),
+}
+for route, (query, body) in expected.items():
+    assert route in by_route, route
+    assert by_route[route]["query"] == query, route
+    assert by_route[route]["body"] == body, route
+dry_run = by_route[("POST", "memories/dry-run-extract")]
+assert dry_run["query"] == ""
+assert len(dry_run["body"]["items"]) == 50
 PY
 pass_check
 
