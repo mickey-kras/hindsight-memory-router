@@ -21,23 +21,33 @@ Use a private GitHub security advisory.
 
 ## Content scanning
 
-The scanner is a deterministic tripwire, not a safety guarantee. It recursively scans string keys and values across retain, recall, facade, query, and provider-response surfaces; normalizes known Unicode evasions; checks bounded Base64 content; and applies explicit rules. ACLs, quarantine, exact-hash review, and human judgment remain required.
+The scanner is a tripwire, not a security boundary. It scans string keys and values in retain, recall, facade, query, and Hindsight responses. It normalizes Unicode, checks bounded standard Base64, and applies explicit rules. Keep ACLs, request limits, quarantine, exact-hash review, and human review.
 
-Base64 reassembly is deliberately bounded so attacker-controlled 1 MiB requests cannot create unbounded synchronous work. Split candidates are limited to 64 live candidates, 256 Base64-like fields or single-field chunks, 512 KiB of candidate-building work, and an encoded candidate size corresponding to `MAX_BASE64_DECODED_BYTES`; at most two Base64-looking decoy fragments may be skipped. Whitespace/punctuation-separated and labeled chunks, serialized JSON values, unpadded standard Base64, dictionary keys, and traversal-adjacent key/value fragments are considered. Candidate prefixes are discarded only after a complete Base64 quartet proves they cannot become printable UTF-8. Exhaustion is sticky and fails closed with `split_base64_limit`.
+### Fail-closed limits
 
-Cross-fragment instruction matching retains a 512-byte normalized suffix and scans every junction before suffix truncation, plus normal, compact, and a bounded mixed-boundary form. Body, response, and query scans fail closed after 8,192 rolling or skip windows per value-only, key-only, or traversal-order group. Skip reconstruction omits at most two fields inside a five-field span. Longer phrases leave less room for decoys; a six-field phrase with two interior decoys is outside that span. Request limits, ACLs, quarantine, and review remain necessary controls.
+| Scope | Limit |
+| --- | --- |
+| Retain, recall, facade request | 5-second cooperative deadline |
+| Query | 256 pairs; 10-second deadline; 32,768 rolling windows total and skip windows per group |
+| Facade response | 256 KiB; 8,192 fields; 30-second deadline |
+| Other rolling or skip scans | 8,192 windows per value, key, or traversal group |
+| String | 1 MiB; 65,536 non-ASCII code points |
+| Confusable variants | 32 per field or window |
+| Split Base64 | 64 candidates; 256 fragments; 512 KiB candidate work; two skipped fragments |
 
-Instruction rules intentionally use phrase and word boundaries to limit false positives. Related nouns or inflections such as `system prompts`, `new instruction`, and `exfiltrating` are not standalone findings. Split scans exclude `system prompt`, `developer message`, and `new instructions` unless another detector or a complete field matches them. Bare `api`/`key` and `private`/`key` pairs are suppressed when they are separate keys or values with only version tokens between them; contextual fragments between the words are not suppressed.
+Deadlines are checked between scan units; they are not preemptive. Authenticated requests consume quota before scanning. Unknown writers and cheap structural failures do not.
 
-Known tripwire limits: the generated confusable map contains Unicode UTS #39 17.0.0 sources whose recursive skeleton is printable ASCII. Sources with non-ASCII skeletons are preserved. Base64url is not decoded. Padded and unpadded standard Base64 are decoded through one nested encoded layer. These are not security boundaries.
+### Base64
 
-Confusable alternatives are capped at 32 per scanned field/window; exhaustion fails closed with `confusable_variant_limit`. One confusable-heavy field can therefore suppress a whole shared recall/facade response. Vendored UTS #39 skeletons are scanned alongside NFKC and semantic folds. Latin diacritics are removed for scanning. Evasive mark runs, control/blank separators, and non-display Default-Ignorable characters block as `invisible_unicode`; ZWJ, ZWNJ, and variation selectors use the display-modifier path. Keycap clusters scan as their digit base; Indic vowel signs, Arabic harakat, and Hebrew niqqud are preserved.
+Split reconstruction covers whitespace-, punctuation-, and label-separated chunks, serialized JSON values, dictionary keys, and adjacent key/value fragments. It can skip two fragments within a five-field span. Limit exhaustion returns `split_base64_limit`; this can quarantine benign Base64-like content.
 
-Retain and recall scans have a five-second cooperative deadline; query scans have a ten-second deadline for their 256-pair contract; facade response scans have a 30-second deadline. Deadlines are checked between fields, detectors, reconstructed windows, and every 1,024 Unicode canonicalization/variant characters. They are not preemptive timeouts. Individual strings are capped at 1 MiB, and fields containing more than 65,536 non-ASCII code points fail closed before Unicode canonicalization. Query scans inspect at most 256 pairs. Other direct/rolling field and window limits fail closed. Authenticated requests consume their retain/recall quota before scanning; unknown writers and cheap structural failures do not.
+Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or UTF-8. Mixed-case tokens with digits are weak hints, so valid binary identifiers are ignored. Padded and unpadded standard Base64 are decoded through one nested layer. Base64url is not decoded.
 
-Hard Base64 evidence (`=`, `+`, or `/`) fails closed on invalid encoding or invalid UTF-8. Mixed-case-plus-digit tokens are only decode-and-scan hints so ordinary identifiers such as device/model names are not blocked. A weak-signal token that validly decodes to non-UTF-8 binary is ignored unless hard Base64 evidence is also present.
+### Unicode and instruction rules
 
-Split-Base64 candidate limits are deliberately sensitive: several short Base64-like fields or a long Base64-alphabet-only token/blob can return `split_base64_limit` and quarantine otherwise benign content.
+Scanning uses NFKC, semantic folds, Latin-diacritic removal, and vendored Unicode UTS #39 17.0.0 ASCII skeletons. Non-ASCII skeletons are preserved. Invisible/control Unicode fails closed; script marks used by Indic, Arabic, and Hebrew text are preserved.
+
+Phrase and word boundaries reduce false positives. Related inflections may not match. Split scans exclude `system prompt`, `developer message`, and `new instructions` unless another detector or a complete field matches. Separate bare `api`/`key` and `private`/`key` fields are suppressed when only version tokens sit between them.
 
 Reviewed recall approvals pin stable memory identity/content (`id` + `text`). When that digest still matches, the approved `id`/`text` is not rescanned; volatile returned fields continue to be rescanned on every recall. A newly unsafe extra/metadata field suppresses the result and reopens review.
 
@@ -52,8 +62,8 @@ Reviewed recall approvals pin stable memory identity/content (`id` + `text`). Wh
 
 ## CI dependency trust
 
-- `scripts/generate_confusables_ascii.py` generates `memory_router/confusables_ascii.json` from Unicode UTS #39 17.0.0. Update the map, Unicode license, and `THIRD_PARTY_NOTICES.md` together.
-- Pebble 5.2.1's LGPL-3.0 use is accepted for worker isolation; published images include its notice, LGPL-3.0/GPL-3.0 text, and upstream source URL.
+- `scripts/generate_confusables_ascii.py` generates `memory_router/confusables_ascii.json` from Unicode UTS #39 17.0.0. Update the map, license, and `THIRD_PARTY_NOTICES.md` together.
+- Pebble 5.2.1 runs facade scans in replaceable workers. Published images include its notice, LGPL-3.0/GPL-3.0 text, and source URL.
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.
 - Semgrep uses a versioned image pinned by digest; update the version and digest together.
 - GitHub Actions remain pinned by commit SHA.

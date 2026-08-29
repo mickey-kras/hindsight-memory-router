@@ -20,16 +20,13 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 
 ## Facade policy
 
-- Allowlist: `memory_router/facade_routes.py`
-- API contract: `openapi/openclaw.json`
+- Routes are allowlisted in `memory_router/facade_routes.py`; `openapi/openclaw.json` is the contract.
+- `{bank_id}` is a writer ID. Memory Router resolves the Hindsight bank.
 - GET (including `stats?refresh=true`), reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
-- JSON body limit: `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB).
-- Retain, recall, and dry-run extract enforce their item/content/query limits. Other writes rely on the JSON limit and Hindsight validation.
-- Facade responses: 256 KiB, four process scans, 8,192 fields, 30 seconds.
-- Request scans run inline with a five-second deadline. Bodies are bounded by the configured JSON limit (default: 1 MiB); query scans inspect at most 256 pairs.
-- Query keys and values use instruction rules plus bounded encoded-payload and split-Base64 heuristics. Ordinary URL syntax is not treated as hard Base64 evidence.
-- Response worker/capacity/limit failure: `503 facade_scan_unavailable`, `Retry-After: 1`; no quarantine.
-- Unknown query parameters are dropped and excluded from security evidence.
+- Bodies use `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB). Retain, recall, and dry-run extract have stricter limits.
+- Requests scan inline for up to five seconds. Queries scan up to 256 pairs. Responses allow 256 KiB, 8,192 fields, 30 seconds, and four worker slots.
+- Scan worker, capacity, or limit failure returns `503 facade_scan_unavailable` with `Retry-After: 1`; it is not quarantined.
+- Unknown query parameters are dropped before scanning.
 
 Webhooks, file transfer, import/export, metrics, provider-credential LLM health probes, cross-writer listings, and deprecated upstream routes are denied and quarantined.
 
@@ -49,7 +46,7 @@ Webhooks, file transfer, import/export, metrics, provider-credential LLM health 
 
 Upstream response bodies are never returned.
 
-Optional facade bodies treat an absent body and JSON `null` equivalently. Required bodies must be JSON objects. Bodyless upstream requests omit `Content-Type`.
+Optional bodies treat no body and JSON `null` the same. Required bodies must be JSON objects. Bodyless upstream requests omit `Content-Type`.
 
 A typed recall failure affects only the Hindsight read bank that failed. If all configured read banks fail, recall returns empty results. Unexpected application/database failures still propagate rather than being hidden as Hindsight degradation.
 
@@ -59,4 +56,4 @@ Retain and recall have separate per-writer and global sliding-window budgets. Re
 
 PostgreSQL-backed limits are shared across router replicas. Authenticated requests consume quota before content scanning, so blocked/quarantined scans, upstream failures, and response-scan failures count. Unknown writers and cheap structural failures do not.
 
-A generic memory-provider abstraction or support for additional memory systems is not implemented in this repository yet.
+Other memory backends are not supported.
