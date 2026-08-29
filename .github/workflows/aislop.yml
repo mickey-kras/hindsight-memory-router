@@ -33,11 +33,40 @@ jobs:
       - run: npm ci
 
       - name: Aislop quality gate
-        run: npm run aislop:ci:human
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            npm run aislop:ci -- --human
+          else
+            npm run aislop:ci:human
+          fi
 
       - name: Aislop SARIF
         if: always()
-        run: npm run --silent aislop:ci:sarif > aislop.sarif
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "${EVENT_NAME}" = pull_request ]; then
+            npm run --silent aislop:ci -- --sarif > aislop.sarif
+          else
+            npm run --silent aislop:ci:sarif > aislop.sarif
+          fi
+
+      - name: Aislop findings gate
+        if: always()
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const sarif = JSON.parse(readFileSync('aislop.sarif', 'utf8'));
+          const findings = sarif.runs.flatMap((run) => run.results ?? []);
+          if (findings.length > 0) {
+            const rules = [...new Set(findings.map((finding) => finding.ruleId ?? 'unknown'))];
+            console.error(`Aislop reported ${findings.length} finding(s): ${rules.join(', ')}`);
+            process.exit(1);
+          }
+          NODE
 
       - name: Upload Aislop SARIF
         if: >-

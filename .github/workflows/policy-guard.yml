@@ -198,6 +198,12 @@ jobs:
                 if (!publish.includes('needs.aislop.result == \'success\'')) {
                   fail('publish.yml: publishing must require a successful Aislop gate');
                 }
+                if (!/^  report-validation-failure:\s*$/m.test(publish)) {
+                  fail('publish.yml: validation failure reporter must stay present');
+                }
+                if (!publish.includes("needs.aislop.result != 'success'")) {
+                  fail('publish.yml: non-successful Aislop validation must be reported');
+                }
               }
             }
 
@@ -245,7 +251,16 @@ jobs:
                   fail('aislop.yml: quality gate must stay present');
                 }
                 if (!aislop.includes('npm run --silent aislop:ci:sarif')) {
-                  fail('aislop.yml: SARIF generation must stay present');
+                  fail('aislop.yml: main SARIF generation must stay present');
+                }
+                if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
+                  fail('aislop.yml: PR SARIF generation must stay change-scoped');
+                }
+                if (!aislop.includes('name: Aislop findings gate')) {
+                  fail('aislop.yml: zero-findings gate must stay present');
+                }
+                if (!aislop.includes('process.exit(1)')) {
+                  fail('aislop.yml: findings gate must fail the job');
                 }
                 if (!aislop.includes('pull_request:')) {
                   fail('aislop.yml: pull request gate must stay enabled');

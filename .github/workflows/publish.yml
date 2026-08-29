@@ -457,10 +457,10 @@ jobs:
         github.event_name == 'push' &&
         github.ref == 'refs/heads/main' &&
         (
-          needs.quality.result == 'failure' ||
-          needs.aislop.result == 'failure' ||
-          needs.codeql.result == 'failure' ||
-          needs.architecture.result == 'failure'
+          needs.quality.result != 'success' ||
+          needs.aislop.result != 'success' ||
+          needs.codeql.result != 'success' ||
+          needs.architecture.result != 'success'
         )
       }}
     runs-on: ubuntu-latest
