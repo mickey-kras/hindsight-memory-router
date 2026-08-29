@@ -433,7 +433,7 @@ async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool)
     if scanner_started:
         try:
             await shutdown_facade_scan_executor_async()
-        except Exception as exc:
+        except BaseException as exc:
             log_event(
                 logger,
                 "error",
@@ -446,7 +446,7 @@ async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool)
     if runtime_started:
         try:
             await runtime.stop()
-        except Exception as exc:
+        except BaseException as exc:
             log_event(
                 logger,
                 "error",
