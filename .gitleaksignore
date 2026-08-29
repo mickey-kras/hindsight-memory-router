@@ -3,3 +3,8 @@
 
 # Non-secret upstream OpenAPI path in the compatibility inventory.
 82543ed697a087f490fc728ccad32c273d331da3:compat/openclaw.json:generic-api-key:16
+
+# Non-secret synthetic scanner test fixture (patterned fake key, not a credential);
+# the literal only exists in superseded commit c412fed and was removed in 11cf294.
+c412fed76bebbcf1c95e1ef68f533e94a95a0d02:tests/test_security.py:generic-api-key:143
+c412fed76bebbcf1c95e1ef68f533e94a95a0d02:tests/test_security.py:generic-api-key:223
