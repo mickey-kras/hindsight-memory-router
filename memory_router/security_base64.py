@@ -259,7 +259,7 @@ def _decode_base64_fragment(fragment: str) -> str | None:
         if len(decoded) > MAX_BASE64_DECODED_BYTES:
             return None
         text = decoded.decode("utf-8", errors="strict")
-    except (binascii.Error, UnicodeDecodeError, ValueError):
+    except (binascii.Error, UnicodeDecodeError):
         return None
     variants = _decoded_text_variants(text)
     return variants[0] if variants else None
@@ -313,7 +313,7 @@ def _lossy_decodable_base64(candidate: str) -> bool:
         return False
     try:
         decoded = base64.b64decode(padded, validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error:
         return False
     if len(decoded) > MAX_BASE64_DECODED_BYTES:
         return False
@@ -344,7 +344,7 @@ def _lossy_viable_base64_prefix(fragment: str) -> bool:
     prefix = fragment[:complete_length]
     try:
         decoded = base64.b64decode(prefix, validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error:
         return False
     try:
         decoded.decode("utf-8", errors="strict")
@@ -382,7 +382,7 @@ def _joined_base64_decodes_cleanly(joined: str) -> bool:
         return False
     try:
         decoded = base64.b64decode(padded, validate=True)
-    except (binascii.Error, ValueError):
+    except binascii.Error:
         return False
     if len(decoded) > MAX_BASE64_DECODED_BYTES:
         return False
@@ -679,7 +679,7 @@ def _viable_base64_prefix(fragment: str) -> bool:
     try:
         decoded = base64.b64decode(prefix, validate=True)
         text = codecs.getincrementaldecoder("utf-8")().decode(decoded, final=False)
-    except (binascii.Error, UnicodeDecodeError, ValueError):
+    except (binascii.Error, UnicodeDecodeError):
         return False
     if all(char.isprintable() or char.isspace() for char in text):
         return True
@@ -774,7 +774,7 @@ def _scan_encoded(
             continue
         try:
             decoded = base64.b64decode(padded, validate=True)
-        except (binascii.Error, ValueError):
+        except binascii.Error:
             if hard_signal and fail_closed_invalid:
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
             continue
