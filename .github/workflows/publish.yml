@@ -309,16 +309,55 @@ jobs:
         if: failure() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
         run: |
           set -euo pipefail
+
+          sonar_details='- SonarQube details: unavailable; failure occurred before a completed analysis or the API could not be queried.'
+          report=.scannerwork/report-task.txt
+          if [ -s "$report" ]; then
+            ce_task_url="$(sed -n 's/^ceTaskUrl=//p' "$report")"
+            if [ -n "$ce_task_url" ]; then
+              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" "$ce_task_url" || true)"
+              analysis_id="$(jq -r '.task.analysisId // empty' <<<"$ce_payload" 2>/dev/null || true)"
+              if [ -n "$analysis_id" ]; then
+                gate_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
+                  --get --data-urlencode "analysisId=${analysis_id}" \
+                  "${SONAR_HOST_URL%/}/api/qualitygates/project_status" || true)"
+                gate_status="$(jq -r '.projectStatus.status // empty' <<<"$gate_payload" 2>/dev/null || true)"
+                failed_conditions="$(jq -r '
+                  .projectStatus.conditions
+                  | map(select(.status != "OK"))
+                  | if length == 0 then
+                      "- No failed conditions returned by SonarQube."
+                    else
+                      .[]
+                      | "- \(.metricKey): actual=\(.actualValue // "n/a"), comparator=\(.comparator // "n/a"), threshold=\(.errorThreshold // "n/a")"
+                    end
+                ' <<<"$gate_payload" 2>/dev/null || true)"
+                if [ -n "$gate_status" ]; then
+                  sonar_details="$(printf -- '- SonarQube Quality Gate: `%s`\n%s' "$gate_status" "$failed_conditions")"
+                fi
+              fi
+            fi
+          fi
+
           title='[tech debt] Main publish pipeline blocked'
           body=$(cat <<EOF
           Main publish pipeline failed.
 
           - Commit: ${GITHUB_SHA}
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          ${sonar_details}
           EOF
           )
+          {
+            echo "## Main publish failure"
+            echo
+            echo "${sonar_details}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
           number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
           if [ -n "$number" ]; then
             gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
