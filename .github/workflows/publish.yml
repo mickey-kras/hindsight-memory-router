@@ -21,8 +21,15 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
-      security-events: write
     uses: ./.github/workflows/ci.yml
+
+  aislop:
+    name: aislop
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/aislop.yml
 
   codeql:
     name: codeql
@@ -41,7 +48,7 @@ jobs:
 
   container:
     name: container
-    needs: [quality, codeql, architecture]
+    needs: [quality, aislop, codeql, architecture]
     if: >-
       ${{
         always() &&
@@ -51,6 +58,7 @@ jobs:
           (
             github.ref == 'refs/heads/main' &&
             needs.quality.result == 'success' &&
+            needs.aislop.result == 'success' &&
             needs.codeql.result == 'success' &&
             needs.architecture.result == 'success'
           )
@@ -454,7 +462,7 @@ jobs:
 
   report-validation-failure:
     name: report validation failure
-    needs: [quality, codeql, architecture]
+    needs: [quality, aislop, codeql, architecture]
     if: >-
       ${{
         always() &&
@@ -462,6 +470,7 @@ jobs:
         github.ref == 'refs/heads/main' &&
         (
           needs.quality.result != 'success' ||
+          needs.aislop.result != 'success' ||
           needs.codeql.result != 'success' ||
           needs.architecture.result != 'success'
         )
@@ -479,6 +488,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           QUALITY_RESULT: ${{ needs.quality.result }}
+          AISLOP_RESULT: ${{ needs.aislop.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
           ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
         run: |
@@ -491,6 +501,7 @@ jobs:
           - Commit: ${GITHUB_SHA}
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           - Quality: ${QUALITY_RESULT}
+          - Aislop: ${AISLOP_RESULT}
           - CodeQL: ${CODEQL_RESULT}
           - Architecture: ${ARCHITECTURE_RESULT}
           EOF
