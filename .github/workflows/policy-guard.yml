@@ -48,6 +48,9 @@ jobs:
             });
 
             const changed = files.map((file) => file.filename);
+            const removed = new Set(
+              files.filter((file) => file.status === 'removed').map((file) => file.filename),
+            );
             const workflowChanged = changed.some(
               (path) =>
                 path.startsWith(`${wfDir}/`) &&
@@ -110,6 +113,7 @@ jobs:
             for (const path of changed) {
               if (!path.startsWith(`${wfDir}/`)) continue;
               if (!path.endsWith('.yml') && !path.endsWith('.yaml')) continue;
+              if (removed.has(path)) continue;
 
               const content = await readFileAtHead(path);
               const surface = yamlSurface(content);
