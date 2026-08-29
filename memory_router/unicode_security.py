@@ -10,6 +10,7 @@ from .confusables_data import ASCII_CONFUSABLES
 
 MAX_CONFUSABLE_RULE_VARIANTS = 32
 _DEADLINE_CHECK_INTERVAL = 1_024
+_LATIN_NAME_PREFIX = "LATIN "
 _DEFAULT_IGNORABLE_RANGES = (
     (0x034F, 0x034F),
     (0x115F, 0x1160),
@@ -267,7 +268,7 @@ def _strip_latin_diacritics(value: str, *, deadline: float | None = None) -> str
     chars: list[str] = []
     for index, char in enumerate(value):
         _check_deadline(deadline, index)
-        if not unicodedata.name(char, "").startswith("LATIN "):
+        if not unicodedata.name(char, "").startswith(_LATIN_NAME_PREFIX):
             chars.append(char)
             continue
         decomposed = unicodedata.normalize("NFD", char)
@@ -397,9 +398,9 @@ def _ascii_like_alnum(char: str) -> bool:
     if char.isascii():
         return char.isalnum()
     name = unicodedata.name(char, "")
-    if name.startswith("LATIN ") and char.isalpha():
+    if name.startswith(_LATIN_NAME_PREFIX) and char.isalpha():
         return True
-    if name and not name.startswith(("LATIN ", "CYRILLIC ", "GREEK ")):
+    if name and not name.startswith((_LATIN_NAME_PREFIX, "CYRILLIC ", "GREEK ")):
         return False
     return any(option.isalnum() for option in _ascii_confusable_options(char))
 
