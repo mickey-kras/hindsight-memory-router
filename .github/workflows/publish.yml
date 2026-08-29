@@ -121,6 +121,7 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: SonarQube quality gate
+        id: sonar-quality-gate
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         timeout-minutes: 6
         uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
@@ -389,13 +390,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          SONAR_GATE_OUTCOME: ${{ steps.sonar-quality-gate.outcome }}
         run: |
           set -euo pipefail
 
-          sonar_details='- SonarQube details: unavailable; failure occurred before a completed analysis or the API could not be queried.'
+          failed_step=''
+          if [ "$SONAR_GATE_OUTCOME" = failure ]; then
+            failed_step='SonarQube quality gate'
+          else
+            failed_step="$(gh api \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
+              --jq '.jobs[] | select(.name == "publish") | .steps[] | select(.conclusion == "failure") | .name' \
+              | head -n 1)"
+          fi
+          failed_step="${failed_step:-Unknown publish step}"
+          failure_slug="$(tr '[:upper:]' '[:lower:]' <<<"$failed_step" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
+
+          sonar_details=''
           report=.scannerwork/report-task.txt
-          if [ -s "$report" ]; then
+          if [ "$failed_step" = 'SonarQube quality gate' ] && [ -s "$report" ]; then
             ce_task_id="$(sed -n 's/^ceTaskId=//p' "$report")"
+            project_key="$(sed -n 's/^projectKey=//p' "$report")"
             if [ -n "$ce_task_id" ]; then
               ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
                 --get --data-urlencode "id=${ce_task_id}" \
@@ -417,33 +432,83 @@ jobs:
                     end
                 ' <<<"$gate_payload" 2>/dev/null || true)"
                 if [ -n "$gate_status" ]; then
-                  sonar_details="$(printf -- '- SonarQube Quality Gate: `%s`\n%s' "$gate_status" "$failed_conditions")"
+                  new_code_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
+                    --get --data-urlencode "project=${project_key}" \
+                    "${SONAR_HOST_URL%/}/api/new_code_periods/show" || true)"
+                  new_code_definition="$(jq -r '
+                    if (.type // "") == "" then
+                      "- New code definition: unavailable"
+                    elif (.value // "") == "" then
+                      "- New code definition: `\(.type)`"
+                    else
+                      "- New code definition: `\(.type)` (`\(.value)`)"
+                    end
+                  ' <<<"$new_code_payload" 2>/dev/null || echo '- New code definition: unavailable')"
+
+                  issues_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
+                    --get \
+                    --data-urlencode "componentKeys=${project_key}" \
+                    --data-urlencode "inNewCodePeriod=true" \
+                    --data-urlencode "resolved=false" \
+                    --data-urlencode "ps=500" \
+                    "${SONAR_HOST_URL%/}/api/issues/search" || true)"
+                  issue_total="$(jq -r '.paging.total // .total // empty' <<<"$issues_payload" 2>/dev/null || true)"
+                  issue_summary="$(jq -r '
+                    [.issues[]?.rule]
+                    | group_by(.)
+                    | map("- `\(.[0])`: \(length)")
+                    | .[]
+                  ' <<<"$issues_payload" 2>/dev/null || true)"
+                  issue_details="$(jq -r --arg project "${project_key}:" '
+                    .issues[]?
+                    | (.component // "unknown" | sub(("^" + $project); "")) as $path
+                    | (.line // "?") as $line
+                    | (.message // "No message" | gsub("`"; "\u2019") | gsub("[\\r\\n]+"; " ")) as $message
+                    | (.severity // .impacts[0].severity // "UNKNOWN") as $severity
+                    | "- `\($path):\($line)` — `\(.rule // "unknown")` / `\($severity)` — \($message)"
+                  ' <<<"$issues_payload" 2>/dev/null || true)"
+
+                  sonar_details="$(cat <<EOF
+
+          ### SonarQube
+
+          - Quality Gate: \`${gate_status}\`
+          ${failed_conditions}
+          ${new_code_definition}
+          - Open issues on new code: ${issue_total:-unavailable}
+
+          #### Rules
+
+          ${issue_summary:-Issue details unavailable from the SonarQube API.}
+
+          #### Findings
+
+          ${issue_details:-Issue details unavailable from the SonarQube API.}
+          EOF
+                  )"
                 fi
               fi
             fi
           fi
 
-          title='[tech debt] Main publish pipeline blocked'
-          body=$(cat <<EOF
+          cat > main-failure.md <<EOF
           Main publish pipeline failed.
 
+          - Failure point: \`publish / ${failed_step}\`
           - Commit: ${GITHUB_SHA}
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           ${sonar_details}
           EOF
-          )
           {
             echo "## Main publish failure"
             echo
-            echo "${sonar_details}"
+            cat main-failure.md
           } >> "$GITHUB_STEP_SUMMARY"
 
-          number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
-          if [ -n "$number" ]; then
-            gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
-          else
-            gh issue create --title "$title" --body "$body" --assignee "$GITHUB_REPOSITORY_OWNER"
-          fi
+          FAILURE_KEY="publish-${failure_slug}" \
+          FAILURE_TITLE="[tech debt] Main publish failed: ${failed_step}" \
+          LEGACY_TITLE='[tech debt] Main publish pipeline blocked' \
+            bash .github/scripts/upsert-main-failure-issue.sh main-failure.md
 
   report-validation-failure:
     name: report validation failure
@@ -479,10 +544,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          title='[tech debt] Main publish pipeline blocked'
-          body=$(cat <<EOF
+          failed_gates=()
+          [ "$QUALITY_RESULT" = success ] || failed_gates+=(quality)
+          [ "$AISLOP_RESULT" = success ] || failed_gates+=(aislop)
+          [ "$CODEQL_RESULT" = success ] || failed_gates+=(codeql)
+          [ "$ARCHITECTURE_RESULT" = success ] || failed_gates+=(architecture)
+          failed_csv="$(IFS=,; echo "${failed_gates[*]}")"
+          failure_slug="$(IFS=-; echo "${failed_gates[*]}")"
+
+          cat > main-failure.md <<EOF
           Main validation failed before publishing.
 
+          - Failure point: \`validation / ${failed_csv}\`
           - Commit: ${GITHUB_SHA}
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           - Quality: ${QUALITY_RESULT}
@@ -490,11 +563,7 @@ jobs:
           - CodeQL: ${CODEQL_RESULT}
           - Architecture: ${ARCHITECTURE_RESULT}
           EOF
-          )
 
-          number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
-          if [ -n "$number" ]; then
-            gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
-          else
-            gh issue create --title "$title" --body "$body" --assignee "$GITHUB_REPOSITORY_OWNER"
-          fi
+          FAILURE_KEY="validation-${failure_slug}" \
+          FAILURE_TITLE="[tech debt] Main validation failed: ${failed_csv}" \
+            bash .github/scripts/upsert-main-failure-issue.sh main-failure.md
