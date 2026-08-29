@@ -15,8 +15,8 @@ on:
   workflow_call:
 
 concurrency:
-  group: architecture-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: architecture-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

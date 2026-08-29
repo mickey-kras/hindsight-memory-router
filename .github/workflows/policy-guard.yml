@@ -28,14 +28,12 @@ jobs:
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
             const checkoutAction = ['actions', 'checkout'].join('/');
-            const privilegedWrites = [
-              ['id-token', 'write'].join(': '),
-              ['packages', 'write'].join(': '),
-              ['attestations', 'write'].join(': '),
-              ['issues', 'write'].join(': '),
+            const privilegedWriteKeys = [
+              'id-token',
+              'packages',
+              'attestations',
+              'issues',
             ];
-            const forbiddenPermission = ['permissions', 'write-all'].join(': ');
-            const targetEvent = ['pull_request', 'target'].join('_');
             const headTerms = [
               ['github.event.pull_request', 'head'].join('.'),
               ['github', 'head_ref'].join('.'),
@@ -96,7 +94,7 @@ jobs:
                 const line = lines[i];
                 kept.push(line);
 
-                const block = line.match(/^(\s*)[A-Za-z0-9_-]+:\s*[>|]/);
+                const block = line.match(/^(\s*)(?:-\s*)?[A-Za-z0-9_-]+:\s*[>|]/);
                 if (!block) continue;
 
                 const parentIndent = block[1].length;
@@ -125,6 +123,46 @@ jobs:
               return new RegExp(`^\\s*["']?${escaped}["']?\\s*:`, 'm').test(yamlSurface(content));
             }
 
+            function escapeRegex(value) {
+              return value.replace(/[.*+?^$()|[\]\\{}]/g, '\\$&');
+            }
+
+            function hasYamlScalar(content, key, value) {
+              const escapedKey = escapeRegex(key);
+              const escapedValue = escapeRegex(value);
+              return new RegExp(
+                `(?:^|[,{])\\s*["']?${escapedKey}["']?\\s*:\\s*["']?${escapedValue}["']?\\s*(?=$|[,}#])`,
+                'im',
+              ).test(yamlSurface(content));
+            }
+
+            function hasYamlEvent(content, event) {
+              if (hasYamlKey(content, event)) return true;
+
+              const escaped = escapeRegex(event);
+              const eventToken = new RegExp(`^["']?${escaped}["']?$`, 'i');
+              for (const line of yamlSurface(content).split('\n')) {
+                const match = line.match(/^\s*["']?on["']?\s*:\s*(.*?)\s*(?:#.*)?$/i);
+                if (!match) continue;
+
+                const value = match[1].trim();
+                if (eventToken.test(value)) return true;
+                if (value.startsWith('[') && value.endsWith(']')) {
+                  return value
+                    .slice(1, -1)
+                    .split(',')
+                    .some((item) => eventToken.test(item.trim()));
+                }
+                if (value.startsWith('{') && value.endsWith('}')) {
+                  return value
+                    .slice(1, -1)
+                    .split(',')
+                    .some((item) => eventToken.test(item.split(':', 1)[0].trim()));
+                }
+              }
+              return false;
+            }
+
             function unpinnedActions(content) {
               return yamlSurface(content)
                 .split('\n')
@@ -148,21 +186,23 @@ jobs:
               const surface = yamlSurface(content);
               const lower = surface.toLowerCase();
 
-              if (lower.split('\n').some((line) => line.trim() === forbiddenPermission)) {
+              if (hasYamlScalar(content, 'permissions', 'write-all')) {
                 fail(`${path}: broad write permissions are not allowed`);
               }
 
-              if (lower.includes(targetEvent) && lower.includes(checkoutAction)) {
+              if (hasYamlEvent(content, 'pull_request_target') && lower.includes(checkoutAction)) {
                 if (headTerms.some((term) => lower.includes(term))) {
                   fail(`${path}: trusted PR workflows must not checkout contributor head code`);
                 }
               }
 
-              const privileged = privilegedWrites.filter((permission) => lower.includes(permission));
+              const privileged = privilegedWriteKeys.filter((permission) =>
+                hasYamlScalar(content, permission, 'write'),
+              );
               if (privileged.length > 0 && path !== publishPath) {
                 fail(`${path}: privileged write permissions are only allowed in publish.yml`);
               }
-              if (privileged.length > 0 && hasYamlKey(content, 'pull_request')) {
+              if (privileged.length > 0 && hasYamlEvent(content, 'pull_request')) {
                 fail(`${path}: pull request workflows must not have privileged write permissions`);
               }
 
@@ -177,10 +217,10 @@ jobs:
                 fail('publish.yml: protected workflow must not be removed or renamed');
               } else {
                 const publish = await readFileAtHead(publishPath);
-                if (hasYamlKey(publish, 'pull_request')) {
+                if (hasYamlEvent(publish, 'pull_request')) {
                   fail('publish.yml: privileged workflow must not run on pull requests');
                 }
-                if (!hasYamlKey(publish, 'push')) {
+                if (!hasYamlEvent(publish, 'push')) {
                   fail('publish.yml: trusted push trigger must stay enabled');
                 }
                 if (!/^  publish:\s*$/m.test(publish)) {
@@ -191,6 +231,9 @@ jobs:
                 }
                 if (!publish.includes('ignore-unfixed: true')) {
                   fail('publish.yml: Trivy gate must ignore unfixed vulnerabilities');
+                }
+                if (!publish.includes('category: .github/workflows/publish.yml:container')) {
+                  fail('publish.yml: Trivy SARIF must preserve the required analysis configuration');
                 }
                 if (!publish.includes('uses: ./.github/workflows/aislop.yml')) {
                   fail('publish.yml: main validation must call the Aislop gate');

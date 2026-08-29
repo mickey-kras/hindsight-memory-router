@@ -1,6 +1,6 @@
 name: publish
 
-# Base policy migration markers; remove after #173.
+# Base policy migration markers; remove after #173. Tracked in #174.
 # pull_request:
 # name: container
 
@@ -210,6 +210,7 @@ jobs:
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: trivy-results.sarif
+          category: .github/workflows/publish.yml:container
 
       - name: Trivy critical gate
         # Policy contract equivalent: ignore-unfixed: true.
