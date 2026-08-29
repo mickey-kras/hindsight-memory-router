@@ -123,6 +123,13 @@ async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     assert invalid.value.code == "invalid_json"
     assert await app_module._json_body(request("POST", "/")) == {}
     assert await app_module._json_body(request("POST", "/", body={"x": 1})) == {"x": 1}
+    assert (
+        await app_module._json_body(request("POST", "/"), empty_as_none=True)
+        is app_module._EMPTY_BODY
+    )
+    assert (
+        await app_module._json_body(request("POST", "/", body=b"null"), empty_as_none=True) is None
+    )
 
 
 @pytest.mark.asyncio
@@ -244,10 +251,14 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
     )
     assert response.status_code == 401
+    assert payload(response) == {
+        "error": "unauthorized",
+        "message": "authentication required",
+    }
 
 
 @pytest.mark.asyncio
-async def test_encoded_writer_segment_preserves_routing() -> None:
+async def test_encoded_writer_segment_is_rejected() -> None:
     limits = SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock())
     policy = SimpleNamespace(
         limits=limits,
@@ -257,17 +268,16 @@ async def test_encoded_writer_segment_preserves_routing() -> None:
     )
     app_module.runtime.policy = policy
 
-    response = await app_module.dispatch(
-        "unused",
-        request(
-            "POST",
-            "/v1/default/banks/team%2Fwriter/memories",
-            body={"items": [{"content": "ok"}]},
-        ),
-    )
-    assert response.status_code == 200
-    policy.retain.assert_awaited_once()
-    assert policy.retain.await_args.args[0] == "team/writer"
+    with pytest.raises(HttpError, match="encoded path separators are not allowed"):
+        await app_module.dispatch(
+            "unused",
+            request(
+                "POST",
+                "/v1/default/banks/team%2Fwriter/memories",
+                body={"items": [{"content": "ok"}]},
+            ),
+        )
+    policy.retain.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -280,6 +290,33 @@ async def test_malformed_percent_encoding_falls_through_after_auth() -> None:
     assert response.status_code == 404
     assert payload(response)["error"] == "endpoint_not_allowed"
     policy.deny_endpoint.assert_awaited_with("GET", "/bad%ZZ")
+
+
+@pytest.mark.asyncio
+async def test_denied_bank_path_ignores_malformed_writer_segment() -> None:
+    policy = SimpleNamespace(
+        registry=SimpleNamespace(writers={"main": object()}),
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+    )
+    app_module.runtime.policy = policy
+
+    response = await app_module.dispatch("unused", request("GET", "/v1/default/banks/%ZZ/webhooks"))
+
+    assert response.status_code == 404
+    policy.deny_endpoint.assert_awaited_once_with("GET", "/v1/default/banks/%ZZ/webhooks")
+
+
+@pytest.mark.asyncio
+async def test_malformed_writer_segment_on_facade_route_is_rejected() -> None:
+    policy = SimpleNamespace(
+        registry=SimpleNamespace(writers={"main": object()}),
+        deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+    )
+    app_module.runtime.policy = policy
+
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        await app_module.dispatch("unused", request("GET", "/v1/default/banks/%ZZ/stats"))
+    policy.deny_endpoint.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -391,14 +428,47 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         "admin/quarantine/stats", request("GET", "/admin/quarantine/stats")
     )
     assert response.status_code == 401
+    assert payload(response) == {
+        "error": "unauthorized",
+        "message": "authentication required",
+    }
 
 
 @pytest.mark.asyncio
 async def test_lifespan_starts_and_stops_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     start = AsyncMock()
     stop = AsyncMock()
+    start_scanner = Mock()
+    shutdown_scanner = AsyncMock()
     monkeypatch.setattr(app_module.runtime, "start", start)
     monkeypatch.setattr(app_module.runtime, "stop", stop)
+    monkeypatch.setattr(app_module, "start_facade_scan_executor", start_scanner)
+    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor_async", shutdown_scanner)
     async with app_module.lifespan(app_module.app):
         start.assert_awaited_once()
+        start_scanner.assert_called_once_with()
     stop.assert_awaited_once()
+    shutdown_scanner.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_cleans_up_runtime_when_scanner_start_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    start = AsyncMock()
+    stop = AsyncMock()
+    start_scanner = Mock(side_effect=RuntimeError("scanner unavailable"))
+    shutdown_scanner = AsyncMock()
+    monkeypatch.setattr(app_module.runtime, "start", start)
+    monkeypatch.setattr(app_module.runtime, "stop", stop)
+    monkeypatch.setattr(app_module, "start_facade_scan_executor", start_scanner)
+    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor_async", shutdown_scanner)
+
+    with pytest.raises(RuntimeError, match="scanner unavailable"):
+        async with app_module.lifespan(app_module.app):
+            pass
+
+    start.assert_awaited_once_with()
+    start_scanner.assert_called_once_with()
+    shutdown_scanner.assert_awaited_once_with()
+    stop.assert_awaited_once_with()

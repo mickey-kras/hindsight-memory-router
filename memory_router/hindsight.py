@@ -16,6 +16,7 @@ from .observability import current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MAX_FACADE_RESPONSE_BYTES = 256 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
@@ -192,10 +193,26 @@ class HindsightGateway:
         return cast(dict[str, Any], value)
 
     async def openclaw_request(
-        self, operation: str, method: str, path: str, body: dict[str, Any] | None = None
+        self,
+        operation: str,
+        method: str,
+        path: str,
+        body: dict[str, Any] | None = None,
+        *,
+        expected_status: int = 200,
+        allow_empty_response: bool = False,
     ) -> Any:
         """Forward one allowlisted OpenClaw-facing Hindsight operation."""
-        return await self._request(operation, method, path, body, preserve_http_status=True)
+        return await self._request(
+            operation,
+            method,
+            path,
+            body,
+            preserve_http_status=True,
+            response_limit=min(self.max_response_bytes, MAX_FACADE_RESPONSE_BYTES),
+            expected_status=expected_status,
+            allow_empty_response=allow_empty_response,
+        )
 
     async def invalidate_memory(self, bank_id: str, memory_id: str, reason: str) -> None:
         await self._request(
@@ -213,8 +230,12 @@ class HindsightGateway:
         body: Any = None,
         *,
         preserve_http_status: bool = False,
+        response_limit: int | None = None,
+        expected_status: int | None = None,
+        allow_empty_response: bool = False,
     ) -> Any:
-        headers = {"content-type": "application/json"}
+        max_response_bytes = self.max_response_bytes if response_limit is None else response_limit
+        headers = {"content-type": "application/json"} if body is not None else {}
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         request_id = current_request_id()
@@ -231,18 +252,32 @@ class HindsightGateway:
             async with asyncio.timeout(self.timeout_ms / 1000.0):
                 response = await self.client.send(request, stream=True)
                 if not response.is_success:
+                    client_status = None
+                    if (
+                        preserve_http_status
+                        and 400 <= response.status_code < 500
+                        and response.status_code not in {401, 403}
+                    ):
+                        client_status = response.status_code
                     raise HindsightGatewayError(
                         "http",
                         upstream_status=response.status_code,
                         operation=operation,
                         method=method,
-                        client_status=response.status_code if preserve_http_status else None,
+                        client_status=client_status,
+                    )
+                if expected_status is not None and response.status_code != expected_status:
+                    raise HindsightGatewayError(
+                        "invalid-response",
+                        upstream_status=response.status_code,
+                        operation=operation,
+                        method=method,
                     )
                 content_length = response.headers.get("content-length")
                 if (
                     content_length
                     and content_length.isdigit()
-                    and int(content_length) > self.max_response_bytes
+                    and int(content_length) > max_response_bytes
                 ):
                     raise HindsightGatewayError(
                         "response-too-large",
@@ -254,7 +289,7 @@ class HindsightGateway:
                 size = 0
                 async for chunk in response.aiter_bytes():
                     size += len(chunk)
-                    if size > self.max_response_bytes:
+                    if size > max_response_bytes:
                         raise HindsightGatewayError(
                             "response-too-large",
                             upstream_status=response.status_code,
@@ -264,7 +299,14 @@ class HindsightGateway:
                     chunks.append(chunk)
                 raw = b"".join(chunks)
                 if not raw:
-                    return None
+                    if allow_empty_response:
+                        return None
+                    raise HindsightGatewayError(
+                        "invalid-response",
+                        upstream_status=response.status_code,
+                        operation=operation,
+                        method=method,
+                    )
                 try:
                     value = json.loads(raw, parse_constant=_reject_non_finite)
                     _assert_response_depth(value)

@@ -1,26 +1,30 @@
 # Configuration
 
-Memory Router is designed to start with safe built-in defaults for tuning and deployment settings. Environment variables normally override those defaults, but `QUARANTINE_PUBLIC_KEY` is required and has no default.
+Memory Router ships with safe defaults. Environment variables override them. `QUARANTINE_PUBLIC_KEY` is required.
 
-Use `.env.example` as the complete environment reference. With Docker Compose, `.env` is the canonical location for `QUARANTINE_PUBLIC_KEY` and any overrides you need.
+Use `.env.example` as the complete reference. Docker Compose reads your values from `.env`.
 
 ## Credentials
 
-Credentials intentionally have no shared defaults. With no router token configured, retain/recall/version endpoints fail closed. Admin capabilities also fail closed unless the required scoped token is configured.
+Credentials have no defaults. Router and admin endpoints fail closed until you set the required tokens.
 
 `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` is a development-only override. Explicit boolean values must be `true` or `false`.
 
 ## Registry
 
-If `MEMORY_ROUTER_REGISTRY` is absent, the built-in registry contains one framework-neutral writer named `main`. It reads and writes only the `main` bank and uses `source: application`.
+Without `MEMORY_ROUTER_REGISTRY`, the built-in `main` writer reads and writes only the `main` bank with `source: application`.
 
-`writer_registry.example.json` is intentionally different from the zero-config default. It preserves the historical bundled multi-writer topology (`main`, `ops`, `dev`, `creative`, `personal`, `research`) for deployments that already set:
+`writer_registry.example.json` keeps the earlier multi-writer example for deployments that use:
 
 ```text
 MEMORY_ROUTER_REGISTRY=/app/writer_registry.example.json
 ```
 
-Those deployments keep their existing writer/bank behavior across upgrade; the example now uses framework-neutral `source: application` values. New deployments that want the minimal default should leave `MEMORY_ROUTER_REGISTRY` unset. Treat the bundled file as a richer custom-registry example that can be copied and edited for deployment-specific policy.
+Leave `MEMORY_ROUTER_REGISTRY` unset for the minimal default. Copy the example when you need custom writer/bank policy.
+
+Every writer's `write_bank` must also appear in its `read_banks`; invalid registries fail startup.
+
+Writer IDs use `[A-Za-z0-9._:-]{1,128}`; `.` and `..` are rejected.
 
 ## Storage
 

@@ -374,31 +374,30 @@ async def test_postgres_periodic_sweep_prunes_cold_rate_limit_keys() -> None:
     assert "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?" in sql
 
 
-def test_write_only_writer_remains_valid_and_main_research_customization_remains_allowed() -> None:
-    configured = WriterRegistry.model_validate(
-        {
-            "writers": {
-                "write_only": {
-                    "role": "writer",
-                    "source": "application",
-                    "write_bank": "custom",
-                    "read_banks": [],
+def test_facade_writer_must_be_able_to_read_its_write_bank() -> None:
+    with pytest.raises(ValueError, match="write_bank must be present in read_banks"):
+        WriterRegistry.model_validate(
+            {
+                "writers": {
+                    "write_only": {
+                        "role": "writer",
+                        "source": "application",
+                        "write_bank": "custom",
+                        "read_banks": [],
+                    },
+                    "main": {
+                        "role": "default",
+                        "source": "application",
+                        "write_bank": "main",
+                        "read_banks": ["research"],
+                    },
                 },
-                "main": {
-                    "role": "default",
-                    "source": "application",
-                    "write_bank": "main",
-                    "read_banks": ["research"],
+                "defaults": {
+                    "unknown_writer_action": "review_queue",
+                    "suspicious_content_action": "review_queue",
                 },
-            },
-            "defaults": {
-                "unknown_writer_action": "review_queue",
-                "suspicious_content_action": "review_queue",
-            },
-        }
-    )
-    assert configured.writers["write_only"].read_banks == []
-    assert configured.writers["main"].read_banks == ["research"]
+            }
+        )
 
 
 @pytest.mark.asyncio

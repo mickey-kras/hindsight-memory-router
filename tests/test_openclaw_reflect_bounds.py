@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memory_router.errors import HttpError
+from memory_router.facade_routes import facade_route
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
 from memory_router.openclaw import OpenClawFacade
 
@@ -41,11 +42,10 @@ async def test_reflect_enforces_recall_bounds_before_quota_or_hindsight(
 
     with pytest.raises(HttpError) as blocked:
         await OpenClawFacade(policy).forward(
+            route=facade_route("POST", "reflect"),
             writer_id="openclaw",
-            method="POST",
-            resource="reflect",
+            params={},
             body=body,
-            read_operation=True,
         )
 
     assert blocked.value.status == 413

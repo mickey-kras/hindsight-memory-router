@@ -5,10 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "hindsight-memory-router"
 version = "0.0.0"
+license-files = ["LICENSE", "licenses/*.txt"]
 requires-python = ">=3.12"
 dependencies = [
   "agent-memory-guard==0.3.0",
   "aiosqlite==0.22.1",
+  "Pebble==5.2.1",
   "cryptography==50.0.0",
   "fastapi==0.141.1",
   "httpx==0.28.1",
@@ -31,6 +33,7 @@ dev = [
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
   "pytest-httpx==0.36.2",
+  "pyyaml==6.0.3",
   "ruff==0.16.1",
 ]
 
@@ -41,6 +44,9 @@ memory-router-migrate-legacy-quarantine = "memory_router.cli.migrate_legacy_quar
 
 [tool.setuptools.packages.find]
 include = ["memory_router*"]
+
+[tool.setuptools.package-data]
+memory_router = ["confusables_ascii.json"]
 
 [tool.ruff]
 target-version = "py312"

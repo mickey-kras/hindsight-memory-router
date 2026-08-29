@@ -20,17 +20,21 @@ EXPECTED_ROUTES = {
     "/admin/quarantine/items/{quarantine_id}/reject": {"post"},
     "/admin/quarantine/items/{quarantine_id}/postpone": {"post"},
 }
-OPENCLAW_ROUTES = {
-    "/v1/default/banks/{bank_id}": {"put"},
-    "/v1/default/banks/{bank_id}/config": {"patch"},
-    "/v1/default/banks/{bank_id}/mental-models": {"get", "post"},
-    "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": {
-        "get",
-        "patch",
-        "delete",
-    },
-    "/v1/default/banks/{bank_id}/reflect": {"post"},
-}
+
+
+def _facade_routes() -> dict[str, set[str]]:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    routes: dict[str, set[str]] = {}
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        routes.setdefault(path, set()).add(route.method.lower())
+    return routes
+
+
+OPENCLAW_ROUTES = _facade_routes()
 
 
 def _spec() -> dict[str, object]:
@@ -76,16 +80,7 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     for path, marker in markers.items():
         assert marker in source, f"OpenAPI path has no dispatcher marker: {path}"
 
-    openclaw_markers = {
-        "/v1/default/banks/{bank_id}": "bank_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/config": "config_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/mental-models": "mental_list_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}": "mental_item_match = re.fullmatch",
-        "/v1/default/banks/{bank_id}/reflect": "reflect_match = re.fullmatch",
-    }
-    assert set(openclaw_markers) == set(OPENCLAW_ROUTES)
-    for path, marker in openclaw_markers.items():
-        assert marker in source, f"OpenClaw OpenAPI path has no dispatcher marker: {path}"
+    assert "match_facade_route(method, pathname)" in source
 
 
 def test_version_and_recall_openapi_match_hindsight_facade() -> None:
@@ -113,6 +108,19 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     }
 
 
+def test_openclaw_openapi_success_statuses_match_dispatch() -> None:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    paths = _openclaw_spec()["paths"]
+    assert isinstance(paths, dict)
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        responses = paths[path][route.method.lower()]["responses"]
+        assert str(route.success_status) in responses
+
+
 def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> None:
     spec = _openclaw_spec()
     paths = spec["paths"]
@@ -124,7 +132,92 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
                 continue
             assert operation["security"] == [{"RouterToken": []}]
             responses = operation["responses"]
-            assert "401" in responses
-            assert "422" in responses
-            assert "4XX" in responses
-            assert "502" in responses
+            assert {"400", "401", "404", "422", "429", "4XX", "502", "503", "504"} <= set(responses)
+            assert ("413" in responses) is ("requestBody" in operation)
+
+
+def test_openclaw_openapi_documents_route_metadata_and_response_schemas() -> None:
+    from memory_router.facade_routes import FACADE_ROUTES
+
+    paths = _openclaw_spec()["paths"]
+    assert isinstance(paths, dict)
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}"
+        if route.template:
+            path += "/" + route.template
+        operation = paths[path][route.method.lower()]
+        query = {
+            parameter["name"]: parameter.get("required") is True
+            for parameter in operation.get("parameters", [])
+            if parameter.get("in") == "query"
+        }
+        assert query == {name: name in route.required_query_params for name in route.query_params}
+        request_body = operation.get("requestBody")
+        if route.body == "none":
+            assert request_body is None
+        else:
+            assert request_body["required"] is (route.body == "required")
+        success = operation["responses"][str(route.success_status)]
+        assert "schema" in success["content"]["application/json"]
+
+    assert paths["/v1/default/banks/{bank_id}/audit-logs/stats"]["get"]["operationId"] == (
+        "hindsightGetAuditLogsStats"
+    )
+    rate_limited = _openclaw_spec()["components"]["responses"]["RateLimited"]
+    assert "Retry-After" in rate_limited["headers"]
+    scan_unavailable = _openclaw_spec()["components"]["responses"]["ScanUnavailable"]
+    assert "Retry-After" in scan_unavailable["headers"]
+
+
+def test_openclaw_strict_contracts_have_exact_openapi_schemas() -> None:
+    spec = _openclaw_spec()
+    paths = spec["paths"]
+    expected = {
+        ("/v1/default/banks/{bank_id}", "put"): "BankProfileResponse",
+        ("/v1/default/banks/{bank_id}/config", "patch"): "BankConfigResponse",
+        ("/v1/default/banks/{bank_id}/mental-models", "get"): "MentalModelListResponse",
+        ("/v1/default/banks/{bank_id}/mental-models", "post"): "CreateMentalModelResponse",
+        (
+            "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}",
+            "get",
+        ): "MentalModelResponse",
+        (
+            "/v1/default/banks/{bank_id}/mental-models/{mental_model_id}",
+            "patch",
+        ): "MentalModelResponse",
+        ("/v1/default/banks/{bank_id}/reflect", "post"): "ReflectResponse",
+    }
+    for (path, method), schema_name in expected.items():
+        schema = paths[path][method]["responses"]["200"]["content"]["application/json"]["schema"]
+        assert schema == {"$ref": f"#/components/schemas/{schema_name}"}
+
+    schemas = spec["components"]["schemas"]
+    assert schemas["BankProfileResponse"]["required"] == [
+        "bank_id",
+        "name",
+        "disposition",
+        "mission",
+    ]
+    assert schemas["BankConfigResponse"]["required"] == ["bank_id", "config", "overrides"]
+    assert schemas["MentalModelResponse"]["required"] == ["id", "bank_id", "name"]
+    assert schemas["MentalModelListResponse"]["required"] == ["items"]
+    assert schemas["CreateMentalModelResponse"]["required"] == ["operation_id"]
+    assert schemas["ReflectResponse"]["required"] == ["text"]
+
+    reflect = paths["/v1/default/banks/{bank_id}/reflect"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    assert reflect["properties"]["query"] == {
+        "type": "string",
+        "minLength": 1,
+        "pattern": r"\S",
+    }
+    assert set(reflect["properties"]) == {
+        "query",
+        "max_tokens",
+        "budget",
+        "types",
+        "tags",
+        "tags_match",
+        "trace",
+    }

@@ -65,8 +65,8 @@ def load_registry(path: str | None = None) -> WriterRegistry:
     except ValidationError as exc:
         raise RuntimeError("invalid writer registry") from exc
     for writer_id in registry.writers:
-        if not WRITER_ID_PATTERN.fullmatch(writer_id):
-            raise RuntimeError("writer id must match [A-Za-z0-9._:-]{1,128}")
+        if writer_id in {".", ".."} or not WRITER_ID_PATTERN.fullmatch(writer_id):
+            raise RuntimeError("writer id must match [A-Za-z0-9._:-]{1,128} and cannot be . or ..")
     return registry
 
 

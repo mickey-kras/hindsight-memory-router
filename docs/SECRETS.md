@@ -30,13 +30,14 @@ SONAR_HOST_URL=<SonarQube base URL reachable from the GitHub runner>
 
 The SonarQube project must already exist with key `hindsight-memory-router`.
 
-## Required for private SonarQube access
+## Private SonarQube access
 
 ```text
-TAILSCALE_AUTHKEY=<Tailscale auth key>
+TAILSCALE_OAUTH_CLIENT_ID=<OAuth client ID>
+TAILSCALE_AUDIENCE=<OIDC audience>
 ```
 
-Use a reusable, ephemeral, pre-approved key with the minimum ACL scope. Prefer a tagged OAuth client when the tailnet supports it. Set an expiry and rotate before it.
+The current workflow uses Tailscale. Replace that connection step if your SonarQube network uses another method.
 
 ## Built-in GitHub secrets/tokens
 
@@ -67,8 +68,8 @@ Not currently required.
 ```text
 HINDSIGHT_API_KEY
 MEMORY_ROUTER_TOKEN
-real production .env values
-homelab private IPs or private service tokens
+production .env values
+private-network addresses or service tokens
 ```
 
-Those belong only in the private deployment repo/environment, not this public source repo.
+Keep them in your private deployment environment.

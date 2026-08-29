@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# integration-behavior-sha256: 00cfafa00bb37ce7382ed1ca3a20b5811978626c1467c0d27906423f6d98bd79
-
 mode="${1:-}"
 router_db="${2:-}"
 if [[ "$mode" != "fake" && "$mode" != "real" ]]; then
@@ -240,7 +238,7 @@ begin_check "safe recall endpoint succeeds"
 safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
 printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("results"), list)'
 if [[ "$mode" == "fake" ]]; then
-  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
+  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from physical-main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
 fi
 pass_check
 
@@ -338,7 +336,7 @@ pass_check
 
 begin_check "unsupported router and admin endpoints fail closed"
 denied_output="${root}/${tmp_dir}/denied-response.json"
-denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/memories/not-supported")"
+denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/export")"
 [[ "$denied_status" == "404" ]] || fail_check "unsupported router endpoint returned ${denied_status}"
 grep -q 'endpoint denied by memory-router policy' "$denied_output" || fail_check "unsupported router endpoint did not use policy denial"
 admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
@@ -346,7 +344,8 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 pass_check
 
 if [[ "$mode" == "fake" ]]; then
-  # Exact request shapes used by the current OpenClaw plugin and hindsight-agent-sdk.
+  # Fake Hindsight covers the full facade matrix. Real smoke covers core
+  # transport and SQLite/PostgreSQL parity, including retain/recall mutations.
   # shellcheck source=tests/integration/openclaw-compat.sh
   source tests/integration/openclaw-compat.sh
 
@@ -385,7 +384,7 @@ events = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines(
 retains = [event for event in events if event.get("kind") == "retain"]
 retained_banks = [event["bank_id"] for event in retains]
 recalled_banks = [event["bank_id"] for event in events if event.get("kind") == "recall"]
-assert "main" in retained_banks, retained_banks
+assert "physical-main" in retained_banks, retained_banks
 assert any(
     item.get("metadata", {}).get("router_decision") == "approved"
     for event in retains

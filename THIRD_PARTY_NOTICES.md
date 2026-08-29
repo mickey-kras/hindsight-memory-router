@@ -7,3 +7,21 @@ Memory Router depends on `agent-memory-guard` version `0.3.0`, published by the 
 The dependency is licensed under the Apache License, Version 2.0. Its license and source notices remain those of the upstream distribution.
 
 OWASP and the OWASP name are associated with the OWASP Foundation. Use of this dependency does not imply endorsement of Memory Router by OWASP or the OWASP Foundation.
+
+## Pebble
+
+Memory Router depends on Pebble version 5.2.1 for bounded process-pool task execution and worker replacement.
+
+Pebble is licensed under the GNU Lesser General Public License, version 3.0. Its license and source notices remain those of the upstream distribution.
+
+Source: https://github.com/noxdafox/pebble/tree/5.2.1
+
+The container includes `/app/licenses/LGPL-3.0.txt` and `/app/licenses/GPL-3.0.txt`.
+
+## Unicode Security Mechanisms
+
+The generated ASCII-confusable map uses Unicode UTS #39 data version 17.0.0.
+
+Source: https://www.unicode.org/Public/17.0.0/security/confusables.txt
+
+Unicode data is licensed under the Unicode License V3. The license text is included at `licenses/UNICODE-3.0.txt`.

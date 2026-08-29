@@ -11,6 +11,11 @@ AUTH_PATH = Path("memory_router/auth.py")
 HINDSIGHT_PATH = Path("memory_router/hindsight.py")
 LOGGING_PATH = Path("memory_router/logging.py")
 LOGGING_CONTRACT_PATH = Path("memory_router/logging_contract.py")
+OPENCLAW_PATH = Path("memory_router/openclaw.py")
+FACADE_ROUTES_PATH = Path("memory_router/facade_routes.py")
+SECURITY_PATH = Path("memory_router/security.py")
+SCAN_WINDOWS_PATH = Path("memory_router/scan_windows.py")
+UNICODE_SECURITY_PATH = Path("memory_router/unicode_security.py")
 SMOKE_PATH = Path("tests/integration/smoke.sh")
 OPENCLAW_SMOKE_PATH = Path("tests/integration/openclaw-compat.sh")
 
@@ -45,11 +50,6 @@ DIRECT_ROUTE_COVERAGE = {
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
 ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?"
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
-BANK_ROOT_REGEX = "regex:/v1/default/banks/([^/]+)"
-BANK_CONFIG_REGEX = "regex:/v1/default/banks/([^/]+)/config"
-MENTAL_LIST_REGEX = "regex:/v1/default/banks/([^/]+)/mental-models"
-MENTAL_ITEM_REGEX = "regex:/v1/default/banks/([^/]+)/mental-models/([^/]+)"
-REFLECT_REGEX = "regex:/v1/default/banks/([^/]+)/reflect"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {ADMIN_PREFIX, "method=='GET'", "pathname=='/admin/quarantine/queue'"}
@@ -79,19 +79,6 @@ DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {BANK_MEMORY_REGEX, "method=='POST'", "action=='recall'"}
     ): "safe recall endpoint succeeds",
-    frozenset(
-        {BANK_ROOT_REGEX, "method=='PUT'"}
-    ): "OpenClaw configured bank defaults use resolved bank",
-    frozenset(
-        {BANK_CONFIG_REGEX, "method=='PATCH'"}
-    ): "OpenClaw configured bank defaults use resolved bank",
-    frozenset(
-        {MENTAL_LIST_REGEX, "method in {'GET','POST'}"}
-    ): "OpenClaw knowledge-page list get create update delete succeeds",
-    frozenset(
-        {MENTAL_ITEM_REGEX, "method in {'DELETE','GET','PATCH'}"}
-    ): "OpenClaw knowledge-page list get create update delete succeeds",
-    frozenset({REFLECT_REGEX, "method=='POST'"}): "OpenClaw knowledge reflect shape succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
     "scoped admin tokens enforce read review and cleanup boundaries",
@@ -101,17 +88,16 @@ REQUIRED_WORKFLOW_CHECKS = {
     "recalled suspicious memory can be approved and remains allowed",
     "recalled suspicious memory stays blocked after reject and invalidates upstream",
     "OpenClaw auto-retain and document ingest shapes succeed",
+    "OpenClaw split payloads are blocked across retain items",
     "OpenClaw auto-recall and knowledge recall shapes succeed",
     "OpenClaw conditional requests reject nested injection before Hindsight",
+    "Extended Hindsight facade endpoints resolve through writer bank",
+    "Denied Hindsight surfaces fail closed at the router",
 }
 INTEGRATION_BEHAVIOR_PATHS = {
-    APP_PATH,
-    POLICY_PATH,
-    ADMIN_PATH,
-    AUTH_PATH,
-    HINDSIGHT_PATH,
-    LOGGING_PATH,
-    LOGGING_CONTRACT_PATH,
+    path
+    for path in Path("memory_router").rglob("*")
+    if path.is_file() and path.suffix in {".py", ".json"}
 }
 INTEGRATION_BEHAVIOR_MARKER_PREFIX = "# integration-behavior-sha256: "
 

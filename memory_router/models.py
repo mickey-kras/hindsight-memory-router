@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    field_validator,
+    model_validator,
+)
 
 BankId = str
 
@@ -97,6 +105,12 @@ class WriterRule(PassthroughModel):
         if not value.strip():
             raise ValueError("bank id cannot be empty")
         return value
+
+    @model_validator(mode="after")
+    def write_bank_must_be_readable(self) -> WriterRule:
+        if self.write_bank not in self.read_banks:
+            raise ValueError("write_bank must be present in read_banks")
+        return self
 
 
 class RegistryDefaults(PassthroughModel):

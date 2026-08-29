@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import quote
 
 import pytest
 from pydantic import ValidationError
@@ -125,3 +126,33 @@ async def test_dot_segments_and_trace_reach_normalized_deny_endpoint() -> None:
 def test_matched_segment_decode_remains_strict() -> None:
     with pytest.raises(HttpError, match="malformed percent-encoding"):
         app_module._decode_path_segment("bad%ZZ")
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        app_module._decode_path_segment("%FF")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%252e%252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%25252e%25252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%2525252e%2525252e")
+    assert app_module._decode_path_segment("%25FF") == "%FF"
+    assert app_module._decode_path_segment("item%252ename") == "item%2ename"
+    over_encoded = "%2eitem"
+    for _ in range(10):
+        over_encoded = quote(over_encoded, safe="")
+    with pytest.raises(HttpError, match="excessive nested encoding"):
+        app_module._decode_path_segment(over_encoded)
+    max_depth_dot = "%2e"
+    for _ in range(8):
+        max_depth_dot = quote(max_depth_dot, safe="")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment(max_depth_dot)
+    assert app_module._MAX_PATH_PROBE_DECODES == 8  # noqa: SLF001
+
+
+def test_trailing_dot_segment_preserves_trailing_slash() -> None:
+    assert app_module._normalize_dot_segments("/a/.") == "/a/"
+    assert app_module._normalize_dot_segments("/a/%2e") == "/a/"
+    assert app_module._normalize_dot_segments("/a/./b") == "/a/b"
+    assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
+    assert app_module._normalize_dot_segments("/..") == "/"
+    assert app_module._normalize_dot_segments("../a") == "a"

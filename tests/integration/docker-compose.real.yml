@@ -70,6 +70,7 @@ services:
       MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-read-token
       MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token
       MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-cleanup-token
+      MEMORY_ROUTER_REGISTRY: /app/integration-writer-registry.json
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
@@ -78,6 +79,7 @@ services:
       - "8890"
     volumes:
       - ${QUARANTINE_STATE_DIR:-./tmp/real-postgres/quarantine}:/state
+      - ./writer-registry.json:/app/integration-writer-registry.json:ro
     healthcheck:
       test:
         [

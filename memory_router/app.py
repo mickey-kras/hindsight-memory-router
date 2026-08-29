@@ -35,27 +35,34 @@ from .db import (
     validate_storage,
 )
 from .errors import HttpError
+from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
-from .openclaw import OpenClawFacade
+from .openclaw import (
+    OpenClawFacade,
+    shutdown_facade_scan_executor_async,
+    start_facade_scan_executor,
+)
 from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
 from .review_repository import recover_interrupted
 from .timestamps import iso_now
-from .validation import parse_recall_body, parse_retain_body
+from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
 configure_logging()
 _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
+_MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
+_EMPTY_BODY = object()
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -226,11 +233,27 @@ def _decode_path_segment(value: str) -> str:
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         )
     try:
-        return unquote(value, encoding="utf-8", errors="strict")
+        decoded = unquote(value, encoding="utf-8", errors="strict")
     except (UnicodeDecodeError, ValueError) as exc:
         raise HttpError(
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         ) from exc
+    probe = decoded
+    for _ in range(_MAX_PATH_PROBE_DECODES):
+        if "/" in probe:
+            raise HttpError(400, "invalid_path_segment", "encoded path separators are not allowed")
+        if probe in {".", ".."}:
+            raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
+        try:
+            next_probe = unquote(probe, encoding="utf-8", errors="strict")
+        except (UnicodeDecodeError, ValueError):
+            return decoded
+        if next_probe == probe:
+            return decoded
+        probe = next_probe
+    if probe in {".", ".."}:
+        raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
+    raise HttpError(400, "invalid_path_encoding", "path segment has excessive nested encoding")
 
 
 def _assert_json_depth(value: Any) -> None:
@@ -406,9 +429,40 @@ runtime = Runtime()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    runtime_started = False
+    scanner_start_attempted = False
     try:
         await runtime.start()
-    except Exception as exc:
+        runtime_started = True
+        scanner_start_attempted = True
+        await asyncio.to_thread(start_facade_scan_executor)
+    except BaseException as exc:
+        if scanner_start_attempted:
+            try:
+                await shutdown_facade_scan_executor_async()
+            except BaseException as cleanup_exc:
+                log_event(
+                    logger,
+                    "error",
+                    "application_stop_failed",
+                    operation="shutdown",
+                    error_kind="unexpected",
+                    error=cleanup_exc,
+                    outcome="failed",
+                )
+        if runtime_started:
+            try:
+                await runtime.stop()
+            except BaseException as cleanup_exc:
+                log_event(
+                    logger,
+                    "error",
+                    "application_stop_failed",
+                    operation="shutdown",
+                    error_kind="unexpected",
+                    error=cleanup_exc,
+                    outcome="failed",
+                )
         log_event(
             logger,
             "error",
@@ -435,6 +489,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 error=exc,
                 outcome="failed",
             )
+        finally:
+            await shutdown_facade_scan_executor_async()
         raise
     else:
         try:
@@ -450,6 +506,8 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 outcome="failed",
             )
             raise
+        finally:
+            await shutdown_facade_scan_executor_async()
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -490,7 +548,7 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
-async def _json_body(request: Request) -> Any:
+async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
     content_length = request.headers.get("content-length")
     if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
         raise HttpError(413, "payload_too_large", "payload too large")
@@ -500,7 +558,7 @@ async def _json_body(request: Request) -> Any:
         if len(body) > runtime.max_body_bytes:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
-        return {}
+        return _EMPTY_BODY if empty_as_none else {}
     try:
         value = json.loads(
             bytes(body), parse_constant=lambda raw: (_ for _ in ()).throw(ValueError(raw))
@@ -738,7 +796,10 @@ async def dispatch(path: str, request: Request) -> Response:
     method = request.method
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
-            return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return JSONResponse(
+                {"error": "unauthorized", "message": "authentication required"},
+                status_code=401,
+            )
         await _admin_rate(method)
         admin = _require_runtime(runtime.admin, "admin service")
         if method == "GET" and pathname == "/admin/quarantine/queue":
@@ -781,7 +842,9 @@ async def dispatch(path: str, request: Request) -> Response:
     if method == "GET" and pathname == "/version":
         return await _version_response()
     if not await _router_auth(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return JSONResponse(
+            {"error": "unauthorized", "message": "authentication required"}, status_code=401
+        )
     policy = _require_runtime(runtime.policy, "router policy")
 
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
@@ -795,79 +858,66 @@ async def dispatch(path: str, request: Request) -> Response:
         policy.limits.assert_retain_bounds(body)
         return JSONResponse(await policy.retain(writer_id, body))
 
-    bank_match = re.fullmatch(r"/v1/default/banks/([^/]+)", pathname)
-    config_match = re.fullmatch(r"/v1/default/banks/([^/]+)/config", pathname)
-    mental_list_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models", pathname)
-    mental_item_match = re.fullmatch(r"/v1/default/banks/([^/]+)/mental-models/([^/]+)", pathname)
-    reflect_match = re.fullmatch(r"/v1/default/banks/([^/]+)/reflect", pathname)
     facade = OpenClawFacade(policy)
-
-    if method == "PUT" and bank_match:
-        writer_id = _decode_path_segment(bank_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "bank body must be an object")
-        return JSONResponse(
-            await facade.forward(writer_id=writer_id, method=method, resource="", body=body)
-        )
-    if method == "PATCH" and config_match:
-        writer_id = _decode_path_segment(config_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "bank config body must be an object")
-        return JSONResponse(
-            await facade.forward(writer_id=writer_id, method=method, resource="config", body=body)
-        )
-    if method in {"GET", "POST"} and mental_list_match:
-        writer_id = _decode_path_segment(mental_list_match.group(1))
-        mental_body: dict[str, Any] | None = None
-        if method == "POST":
-            raw_body = await _json_body(request)
-            if not isinstance(raw_body, dict):
-                raise HttpError(400, "invalid_request", "mental-model body must be an object")
-            mental_body = raw_body
-        return JSONResponse(
-            await facade.forward(
-                writer_id=writer_id,
-                method=method,
-                resource="mental-models",
-                body=mental_body,
-                query=list(request.query_params.multi_items()),
-                read_operation=method == "GET",
-            )
-        )
-    if method in {"GET", "PATCH", "DELETE"} and mental_item_match:
-        writer_id = _decode_path_segment(mental_item_match.group(1))
-        mental_model_id = _decode_path_segment(mental_item_match.group(2))
-        body = None
-        if method == "PATCH":
-            raw_body = await _json_body(request)
-            if not isinstance(raw_body, dict):
-                raise HttpError(400, "invalid_request", "mental-model body must be an object")
-            body = raw_body
-        value = await facade.forward(
-            writer_id=writer_id,
-            method=method,
-            resource="mental-models",
-            mental_model_id=mental_model_id,
-            body=body,
-            query=list(request.query_params.multi_items()),
-            read_operation=method == "GET",
-        )
-        return JSONResponse(value)
-    if method == "POST" and reflect_match:
-        writer_id = _decode_path_segment(reflect_match.group(1))
-        body = await _json_body(request)
-        if not isinstance(body, dict):
-            raise HttpError(400, "invalid_request", "reflect body must be an object")
+    matched = None
+    if pathname.startswith("/v1/default/banks/"):
+        try:
+            facade_pathname = "/".join(_decode_path_segment(part) for part in pathname.split("/"))
+        except HttpError as exc:
+            if exc.code == "invalid_path_segment":
+                raise
+            matched = match_facade_route(method, pathname)
+            if matched is not None:
+                raise
+        else:
+            matched = match_facade_route(method, facade_pathname)
+    else:
+        matched = match_facade_route(method, pathname)
+    if matched is not None:
+        route, route_match = matched
+        writer_id = route_match.group("bank")
+        route_params = {name: route_match.group(name) for name in route.params}
+        facade_body: dict[str, Any] | None = None
+        if route.body != "none":
+            raw_body = await _json_body(request, empty_as_none=True)
+            if raw_body is _EMPTY_BODY:
+                if route.body == "required":
+                    raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
+            elif raw_body is None and route.body == "optional":
+                pass
+            elif not isinstance(raw_body, dict):
+                raise HttpError(
+                    400, "invalid_request", f"{route.body_label} body must be an object"
+                )
+            else:
+                facade_body = raw_body
+        if route.template == "reflect" and facade_body is not None:
+            facade_body = parse_reflect_body(facade_body)
         return JSONResponse(
             await facade.forward(
+                route=route,
                 writer_id=writer_id,
-                method=method,
-                resource="reflect",
-                body=body,
-                read_operation=True,
-            )
+                params=route_params,
+                body=facade_body,
+                query=list(request.query_params.multi_items()) or None,
+            ),
+            status_code=route.success_status,
         )
 
-    return JSONResponse(await policy.deny_endpoint(method, pathname), status_code=404)
+    denied_writer_id = None
+    denied_bank_match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
+    if denied_bank_match is not None:
+        try:
+            candidate = _decode_path_segment(denied_bank_match.group(1))
+        except HttpError:
+            candidate = None
+        if candidate is not None and candidate in getattr(
+            getattr(policy, "registry", None), "writers", {}
+        ):
+            denied_writer_id = candidate
+    denied = (
+        await policy.deny_endpoint(method, pathname)
+        if denied_writer_id is None
+        else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
+    )
+    return JSONResponse(denied, status_code=404)

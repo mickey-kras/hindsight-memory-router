@@ -6,6 +6,8 @@ import math
 import re
 from typing import Any
 
+from .facade_routes import FACADE_ROUTES
+
 SAFE_FIELDS = frozenset(
     {
         "request_id",
@@ -37,6 +39,7 @@ EVENTS = frozenset(
         "authentication_audit_failed",
         "bank_unavailable",
         "configuration_warning",
+        "facade_scan_failed",
         "hindsight_readiness_failed",
         "hindsight_readiness_recovered",
         "hindsight_request_failed",
@@ -64,8 +67,10 @@ ERROR_KINDS = frozenset(
         "rate-limit",
         "response-too-large",
         "storage",
+        "shutdown",
         "timeout",
         "unexpected",
+        "worker-crash",
     }
 )
 OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
@@ -76,6 +81,7 @@ OPERATIONS = frozenset(
     {
         "authenticate",
         "configuration",
+        "facade_scan",
         "health",
         "invalidate_memory",
         "openclaw_bank",
@@ -92,7 +98,7 @@ OPERATIONS = frozenset(
         "storage_health",
         "version",
     }
-)
+) | frozenset(f"openclaw_{route.operation}" for route in FACADE_ROUTES)
 METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"})
 REASONS = frozenset(
     {
