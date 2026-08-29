@@ -299,8 +299,15 @@ jobs:
                 if (!aislop.includes('npm run --silent aislop:ci:sarif')) {
                   fail('aislop.yml: main SARIF generation must stay present');
                 }
-                if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
-                  fail('aislop.yml: PR SARIF generation must stay change-scoped');
+                const activeAislop = aislop
+                  .split('\n')
+                  .filter((line) => !line.trimStart().startsWith('#'))
+                  .join('\n');
+                if (
+                  activeAislop.includes('npm run aislop:ci -- --human') ||
+                  activeAislop.includes('npm run --silent aislop:ci -- --sarif')
+                ) {
+                  fail('aislop.yml: PR and main must use the same full-repository scan');
                 }
                 if (!aislop.includes('name: Aislop findings gate')) {
                   fail('aislop.yml: zero-findings gate must stay present');
