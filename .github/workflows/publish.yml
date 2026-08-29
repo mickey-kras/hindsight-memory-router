@@ -16,8 +16,78 @@ permissions:
   contents: read
 
 jobs:
+  inspect-sonar:
+    name: inspect SonarQube gate
+    if: github.event_name == 'pull_request' && github.head_ref == 'ci/consolidate-release-gates'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TAILSCALE_AUDIENCE }}
+          tags: tag:github-sonar
+          use-cache: 'true'
+
+      - name: Read current SonarQube gate
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error \
+            --header "Authorization: Bearer ${SONAR_TOKEN}" \
+            --get --data-urlencode 'projectKey=hindsight-memory-router' \
+            "${SONAR_HOST_URL%/}/api/qualitygates/project_status" \
+            | jq -r '
+                .projectStatus
+                | "status=\(.status)",
+                  (
+                    .conditions[]
+                    | select(.status != "OK")
+                    | "\(.metricKey): actual=\(.actualValue // "n/a"), comparator=\(.comparator // "n/a"), threshold=\(.errorThreshold // "n/a")"
+                  )
+              '
+
+  quality:
+    name: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+
+  codeql:
+    name: codeql
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
   container:
     name: container
+    needs: [quality, codeql]
+    if: >-
+      ${{
+        always() &&
+        (
+          github.event_name == 'pull_request' ||
+          startsWith(github.ref, 'refs/tags/v') ||
+          (
+            github.ref == 'refs/heads/main' &&
+            needs.quality.result == 'success' &&
+            needs.codeql.result == 'success'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,7 +163,54 @@ jobs:
           context: .
           load: true
           provenance: false
-          tags: ${{ env.SOURCE_IMAGE }}
+          tags: |
+            ${{ env.SOURCE_IMAGE }}
+            hindsight-memory-router:ci
+
+      - name: Default Compose smoke
+        run: bash tests/integration/default-compose-smoke.sh
+
+      - name: Fake Hindsight router-storage parity
+        id: fake-smoke
+        run: |
+          set -uo pipefail
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake sqlite > >(tee fake-sqlite-smoke.log) 2>&1 &
+          sqlite_pid=$!
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake postgres > >(tee fake-postgres-smoke.log) 2>&1 &
+          postgres_pid=$!
+          status=0
+          wait "$sqlite_pid" || status=1
+          wait "$postgres_pid" || status=1
+          exit "$status"
+
+      - name: Upload fake smoke diagnostics
+        if: failure() && steps.fake-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fake-smoke-diagnostics
+          path: |
+            fake-sqlite-smoke.log
+            fake-postgres-smoke.log
+          if-no-files-found: error
+
+      - name: Real Hindsight router-storage parity
+        id: real-smoke
+        run: |
+          set -uo pipefail
+          status=0
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real sqlite > >(tee real-sqlite-smoke.log) 2>&1 || status=1
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real postgres > >(tee real-postgres-smoke.log) 2>&1 || status=1
+          exit "$status"
+
+      - name: Upload real smoke diagnostics
+        if: failure() && steps.real-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-smoke-diagnostics
+          path: |
+            real-sqlite-smoke.log
+            real-postgres-smoke.log
+          if-no-files-found: error
 
       - name: Trivy image report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -317,9 +434,11 @@ jobs:
           sonar_details='- SonarQube details: unavailable; failure occurred before a completed analysis or the API could not be queried.'
           report=.scannerwork/report-task.txt
           if [ -s "$report" ]; then
-            ce_task_url="$(sed -n 's/^ceTaskUrl=//p' "$report")"
-            if [ -n "$ce_task_url" ]; then
-              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" "$ce_task_url" || true)"
+            ce_task_id="$(sed -n 's/^ceTaskId=//p' "$report")"
+            if [ -n "$ce_task_id" ]; then
+              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
+                --get --data-urlencode "id=${ce_task_id}" \
+                "${SONAR_HOST_URL%/}/api/ce/task" || true)"
               analysis_id="$(jq -r '.task.analysisId // empty' <<<"$ce_payload" 2>/dev/null || true)"
               if [ -n "$analysis_id" ]; then
                 gate_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
@@ -357,6 +476,54 @@ jobs:
             echo
             echo "${sonar_details}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
+          else
+            gh issue create --title "$title" --body "$body" --assignee "$GITHUB_REPOSITORY_OWNER"
+          fi
+
+  report-validation-failure:
+    name: report validation failure
+    needs: [quality, codeql]
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' &&
+        (
+          needs.quality.result != 'success' ||
+          needs.codeql.result != 'success'
+        )
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Create or update main failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+        run: |
+          set -euo pipefail
+
+          title='[tech debt] Main publish pipeline blocked'
+          body=$(cat <<EOF
+          Main validation failed before publishing.
+
+          - Commit: ${GITHUB_SHA}
+          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Quality: ${QUALITY_RESULT}
+          - CodeQL: ${CODEQL_RESULT}
+          EOF
+          )
 
           number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
           if [ -n "$number" ]; then
