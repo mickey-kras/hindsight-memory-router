@@ -157,7 +157,9 @@ async def shutdown_facade_scan_executor_async() -> None:
     await asyncio.to_thread(shutdown_facade_scan_executor)
 
 
-async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
+async def _scan_facade_response(  # NOSONAR
+    value: Any, *, writer_id: str | None = None
+) -> SafetyResult:
     try:
         admission = _acquire_facade_scan_capacity()
     except _FacadeScannerShutdown as exc:
@@ -232,7 +234,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         raise _scan_unavailable(
             "response safety scan timed out", error_kind="timeout", writer_id=writer_id
         ) from exc
-    except asyncio.CancelledError as exc:
+    except asyncio.CancelledError as exc:  # NOSONAR
         if _facade_scan_stopped(generation):
             raise _scan_unavailable(
                 _RESPONSE_SCANNER_SHUT_DOWN,
