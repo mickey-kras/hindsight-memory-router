@@ -203,14 +203,10 @@ jobs:
               const privileged = privilegedWriteKeys.filter((permission) =>
                 hasYamlScalar(content, permission, 'write'),
               );
-              const ciSonarOidc =
-                path === ciPath &&
-                privileged.length === 1 &&
-                privileged[0] === 'id-token';
-              if (privileged.length > 0 && path !== publishPath && !ciSonarOidc) {
+              if (privileged.length > 0 && path !== publishPath) {
                 fail(`${path}: privileged write permissions are only allowed in publish.yml`);
               }
-              if (privileged.length > 0 && hasYamlEvent(content, 'pull_request') && !ciSonarOidc) {
+              if (privileged.length > 0 && hasYamlEvent(content, 'pull_request')) {
                 fail(`${path}: pull request workflows must not have privileged write permissions`);
               }
 
@@ -288,18 +284,6 @@ jobs:
                 if (!ci.includes('Gitleaks')) fail('ci.yml: Gitleaks step must stay present');
                 if (!ci.includes('Semgrep')) fail('ci.yml: Semgrep step must stay present');
                 if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
-                if (!ci.includes('name: SonarQube quality gate')) {
-                  fail('ci.yml: SonarQube PR and main quality gate must stay present');
-                }
-                if (!ci.includes('-Dsonar.pullrequest.key=')) {
-                  fail('ci.yml: SonarQube PR analysis must stay isolated from the main branch analysis');
-                }
-                if (!ci.includes('-Dsonar.projectVersion=')) {
-                  fail('ci.yml: SonarQube main analysis must advance the previous-version baseline');
-                }
-                if (!ci.includes("github.event.pull_request.head.repo.full_name == github.repository")) {
-                  fail('ci.yml: SonarQube secrets must stay unavailable to fork PRs');
-                }
                 if (!/^  container:\s*$/m.test(ci)) {
                   fail('ci.yml: required container PR job must stay present');
                 }
