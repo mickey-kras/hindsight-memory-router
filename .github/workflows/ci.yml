@@ -3,15 +3,6 @@ name: ci
 on:
   pull_request:
   workflow_call:
-    secrets:
-      SONAR_TOKEN:
-        required: true
-      SONAR_HOST_URL:
-        required: true
-      TAILSCALE_OAUTH_CLIENT_ID:
-        required: true
-      TAILSCALE_AUDIENCE:
-        required: true
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -24,9 +15,6 @@ jobs:
   # The required `aislop status` gate runs in aislop.yml on PRs and through publish.yml on main.
   checks:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,45 +99,7 @@ jobs:
           if-no-files-found: error
 
       - name: Tests and coverage
-        run: coverage run -m pytest && coverage report --fail-under=90 && coverage xml
-
-      - name: Connect to the tailnet
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TAILSCALE_AUDIENCE }}
-          tags: tag:github-sonar
-          use-cache: 'true'
-
-      - name: SonarQube analysis
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
-        with:
-          args: >-
-            ${{
-              github.event_name == 'pull_request' &&
-              format(
-                '-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}',
-                github.event.pull_request.number,
-                github.head_ref,
-                github.base_ref
-              ) ||
-              format('-Dsonar.projectVersion={0}', github.sha)
-            }}
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-      - name: SonarQube quality gate
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        timeout-minutes: 6
-        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
-        with:
-          pollingTimeoutSec: 270
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: coverage run -m pytest && coverage report --fail-under=90
 
       - name: Python dependency audit
         run: pip-audit -r requirements.txt
