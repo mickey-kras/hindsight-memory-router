@@ -247,13 +247,15 @@ def _decode_path_segment(value: str) -> str:
         try:
             next_probe = unquote(probe, encoding="utf-8", errors="strict")
         except (UnicodeDecodeError, ValueError):
-            return decoded
+            break
         if next_probe == probe:
-            return decoded
+            break
         probe = next_probe
-    if probe in {".", ".."}:
-        raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
-    raise HttpError(400, "invalid_path_encoding", "path segment has excessive nested encoding")
+    else:
+        if probe in {".", ".."}:
+            raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
+        raise HttpError(400, "invalid_path_encoding", "path segment has excessive nested encoding")
+    return decoded
 
 
 def _assert_json_depth(value: Any) -> None:
@@ -427,6 +429,35 @@ class Runtime:
 runtime = Runtime()
 
 
+async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool) -> None:
+    if scanner_started:
+        try:
+            await shutdown_facade_scan_executor_async()
+        except Exception as exc:
+            log_event(
+                logger,
+                "error",
+                "application_stop_failed",
+                operation="shutdown",
+                error_kind="unexpected",
+                error=exc,
+                outcome="failed",
+            )
+    if runtime_started:
+        try:
+            await runtime.stop()
+        except Exception as exc:
+            log_event(
+                logger,
+                "error",
+                "application_stop_failed",
+                operation="shutdown",
+                error_kind="unexpected",
+                error=exc,
+                outcome="failed",
+            )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     runtime_started = False
@@ -437,32 +468,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         scanner_start_attempted = True
         await asyncio.to_thread(start_facade_scan_executor)
     except BaseException as exc:
-        if scanner_start_attempted:
-            try:
-                await shutdown_facade_scan_executor_async()
-            except BaseException as cleanup_exc:
-                log_event(
-                    logger,
-                    "error",
-                    "application_stop_failed",
-                    operation="shutdown",
-                    error_kind="unexpected",
-                    error=cleanup_exc,
-                    outcome="failed",
-                )
-        if runtime_started:
-            try:
-                await runtime.stop()
-            except BaseException as cleanup_exc:
-                log_event(
-                    logger,
-                    "error",
-                    "application_stop_failed",
-                    operation="shutdown",
-                    error_kind="unexpected",
-                    error=cleanup_exc,
-                    outcome="failed",
-                )
+        await _cleanup_failed_start(
+            runtime_started=runtime_started,
+            scanner_started=scanner_start_attempted,
+        )
         log_event(
             logger,
             "error",
@@ -883,8 +892,11 @@ async def dispatch(path: str, request: Request) -> Response:
             if raw_body is _EMPTY_BODY:
                 if route.body == "required":
                     raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
-            elif raw_body is None and route.body == "optional":
-                pass
+            elif raw_body is None:
+                if route.body != "optional":
+                    raise HttpError(
+                        400, "invalid_request", f"{route.body_label} body must be an object"
+                    )
             elif not isinstance(raw_body, dict):
                 raise HttpError(
                     400, "invalid_request", f"{route.body_label} body must be an object"
