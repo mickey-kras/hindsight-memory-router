@@ -304,6 +304,9 @@ jobs:
                 if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
                   fail('aislop.yml: PR SARIF generation must stay present');
                 }
+                if (!hasYamlScalar(aislop, 'category', '.github/workflows/publish.yml:status')) {
+                  fail('aislop.yml: SARIF must preserve the default-branch configuration');
+                }
                 if (!aislop.includes('name: Aislop findings gate')) {
                   fail('aislop.yml: zero-findings gate must stay present');
                 }
@@ -339,6 +342,9 @@ jobs:
                 if (!codeql.includes('analyze:')) fail('codeql.yml: required analyze job must stay present');
                 if (!codeql.includes('github/codeql-action/analyze')) {
                   fail('codeql.yml: CodeQL analyze action must stay present');
+                }
+                if (!hasYamlScalar(codeql, 'category', '.github/workflows/publish.yml:analyze')) {
+                  fail('codeql.yml: analysis must preserve the default-branch configuration');
                 }
               }
             }
