@@ -26,7 +26,7 @@ MAX_NON_ASCII_CODEPOINTS = 65_536
 _IN_WORD_DIGIT = re.compile(r"(?<=[A-Za-z])\d(?=[A-Za-z])")
 
 
-_RULE_PUNCTUATION = re.compile(r"[^\w\s]|_")
+_RULE_PUNCTUATION = re.compile(r"(?!\s)[\W_]")
 
 
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
@@ -139,21 +139,25 @@ _RULE_SIGNAL_WORDS = frozenset(
 _ASCII_WORD = re.compile(r"[A-Za-z]+")
 
 
+_IGNORE_PREVIOUS_INSTRUCTIONS = "ignore previous instructions"
+_DISCLOSURE_RULE_REASON = "reveal secret"
+_API_KEY = "api key"
+
 _RULE_EDGE_SPECS: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("ignore", "previous", "instructions"), "ignore previous instructions"),
-    (("ignore", "all", "previous", "instructions"), "ignore previous instructions"),
+    (("ignore", "previous", "instructions"), _IGNORE_PREVIOUS_INSTRUCTIONS),
+    (("ignore", "all", "previous", "instructions"), _IGNORE_PREVIOUS_INSTRUCTIONS),
     (("you", "are", "now"), "you are now"),
     (("write", "this", "to", "memory"), "write this to memory"),
     (("remember", "this", "as", "truth"), "remember this as truth"),
     (("store", "this", "as", "core", "memory"), "store this as core memory"),
     (("overwrite", "permissions"), "overwrite permissions"),
-    (("reveal", "secret"), "reveal secret"),
-    (("reveal", "the", "secret"), "reveal secret"),
-    (("reveal", "token"), "reveal secret"),
-    (("reveal", "the", "token"), "reveal secret"),
-    (("reveal", "key"), "reveal secret"),
-    (("reveal", "the", "key"), "reveal secret"),
-    (("api", "key"), "api key"),
+    (("reveal", "secret"), _DISCLOSURE_RULE_REASON),
+    (("reveal", "the", "secret"), _DISCLOSURE_RULE_REASON),
+    (("reveal", "token"), _DISCLOSURE_RULE_REASON),
+    (("reveal", "the", "token"), _DISCLOSURE_RULE_REASON),
+    (("reveal", "key"), _DISCLOSURE_RULE_REASON),
+    (("reveal", "the", "key"), _DISCLOSURE_RULE_REASON),
+    (("api", "key"), _API_KEY),
     (("private", "key"), "private key"),
     (("begin", "openssh", "private", "key"), "private key block"),
 )
