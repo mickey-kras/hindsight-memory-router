@@ -66,6 +66,7 @@ _BASE64_COLON_AFTER = re.compile(r"\s*:")
 _BASE64_JSON_LABEL_AFTER = re.compile(r"[\"']\s*:\s*")
 _BASE64_NUMBERED_LABEL = re.compile(r"(?:part|chunk|fragment)\d*", re.I)
 _IN_WORD_DIGIT = re.compile(r"(?<=[A-Za-z])\d(?=[A-Za-z])")
+_RULE_PUNCTUATION = re.compile(r"[^\w\s]|_")
 _CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 _CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
@@ -2261,14 +2262,15 @@ def _rule_scan(
     for variant in scan_variants:
         if deadline is not None and time.monotonic() >= deadline:
             raise UnicodeScanDeadlineExceeded
-        for pattern, matched, reason in _RULES:
-            if (match := pattern.search(variant)) is not None:
-                finding = SafetyFinding(matched, reason, hits=(match.group(0),))
-                if not any(
-                    item.matched == finding.matched and item.reason == finding.reason
-                    for item in findings
-                ):
-                    findings.append(finding)
+        for candidate in dict.fromkeys((variant, _RULE_PUNCTUATION.sub(" ", variant))):
+            for pattern, matched, reason in _RULES:
+                if (match := pattern.search(candidate)) is not None:
+                    finding = SafetyFinding(matched, reason, hits=(match.group(0),))
+                    if not any(
+                        item.matched == finding.matched and item.reason == finding.reason
+                        for item in findings
+                    ):
+                        findings.append(finding)
     if variants.exhausted:
         findings.append(SafetyFinding("confusable_variant_limit", "span_limit"))
     return findings
@@ -2291,6 +2293,7 @@ def _split_instruction_rule_scan(
             raise UnicodeScanDeadlineExceeded
         scans = (
             (_SPLIT_RULES, variant),
+            (_SPLIT_RULES, _RULE_PUNCTUATION.sub(" ", variant)),
             (_COMPACT_SPLIT_RULES, re.sub(r"\s+", "", variant)),
         )
         for rules, candidate in scans:
