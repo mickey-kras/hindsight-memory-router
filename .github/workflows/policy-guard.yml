@@ -27,6 +27,7 @@ jobs:
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
+            const packagePath = 'package.json';
             const checkoutAction = ['actions', 'checkout'].join('/');
             const privilegedWriteKeys = [
               'id-token',
@@ -69,6 +70,7 @@ jobs:
                 path.startsWith(`${wfDir}/`) &&
                 (path.endsWith('.yml') || path.endsWith('.yaml')),
             );
+            const policySensitiveChanged = workflowChanged || changed.has(packagePath);
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -171,8 +173,8 @@ jobs:
                 .filter((value) => !/@[0-9a-f]{40}$/i.test(value));
             }
 
-            if (!workflowChanged) {
-              core.info('No workflow files changed. Policy guard passed.');
+            if (!policySensitiveChanged) {
+              core.info('No workflow or Aislop script policy files changed. Policy guard passed.');
               return;
             }
 
@@ -299,15 +301,8 @@ jobs:
                 if (!aislop.includes('npm run --silent aislop:ci:sarif')) {
                   fail('aislop.yml: main SARIF generation must stay present');
                 }
-                const activeAislop = aislop
-                  .split('\n')
-                  .filter((line) => !line.trimStart().startsWith('#'))
-                  .join('\n');
-                if (
-                  activeAislop.includes('npm run aislop:ci -- --human') ||
-                  activeAislop.includes('npm run --silent aislop:ci -- --sarif')
-                ) {
-                  fail('aislop.yml: PR and main must use the same full-repository scan');
+                if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
+                  fail('aislop.yml: PR SARIF generation must stay present');
                 }
                 if (!aislop.includes('name: Aislop findings gate')) {
                   fail('aislop.yml: zero-findings gate must stay present');
@@ -320,6 +315,17 @@ jobs:
                 }
                 if (!aislop.includes('workflow_call:')) {
                   fail('aislop.yml: main reusable gate must stay enabled');
+                }
+              }
+            }
+
+            if (changed.has(aislopPath) || changed.has(packagePath)) {
+              if (removedOrRenamed.has(packagePath)) {
+                fail('package.json: protected Aislop script configuration must not be removed');
+              } else {
+                const packageJson = JSON.parse(await readFileAtHead(packagePath));
+                if (packageJson.scripts?.['aislop:ci'] !== 'aislop ci') {
+                  fail('package.json: aislop:ci must remain a full-repository scan');
                 }
               }
             }
