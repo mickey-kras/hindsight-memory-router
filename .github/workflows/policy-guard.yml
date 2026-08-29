@@ -27,6 +27,7 @@ jobs:
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
+            const failureReporterPath = ['.github', 'scripts', 'upsert-main-failure-issue.sh'].join('/');
             const packagePath = 'package.json';
             const checkoutAction = ['actions', 'checkout'].join('/');
             const privilegedWriteKeys = [
@@ -70,7 +71,8 @@ jobs:
                 path.startsWith(`${wfDir}/`) &&
                 (path.endsWith('.yml') || path.endsWith('.yaml')),
             );
-            const policySensitiveChanged = workflowChanged || changed.has(packagePath);
+            const policySensitiveChanged =
+              workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath);
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -248,6 +250,26 @@ jobs:
                 }
                 if (!publish.includes("needs.aislop.result != 'success'")) {
                   fail('publish.yml: non-successful Aislop validation must be reported');
+                }
+                if (!publish.includes('bash .github/scripts/upsert-main-failure-issue.sh')) {
+                  fail('publish.yml: failure issues must use the deduplicating reporter');
+                }
+              }
+            }
+
+            if (changed.has(failureReporterPath)) {
+              if (removedOrRenamed.has(failureReporterPath)) {
+                fail('upsert-main-failure-issue.sh: protected reporter must not be removed or renamed');
+              } else {
+                const reporter = await readFileAtHead(failureReporterPath);
+                if (!reporter.includes('gh issue list --state all')) {
+                  fail('upsert-main-failure-issue.sh: reporter must search open and closed issues');
+                }
+                if (!reporter.includes('gh issue reopen')) {
+                  fail('upsert-main-failure-issue.sh: reporter must reopen matching closed issues');
+                }
+                if (!reporter.includes('main-failure:${FAILURE_KEY}')) {
+                  fail('upsert-main-failure-issue.sh: reporter must preserve stable failure keys');
                 }
               }
             }
