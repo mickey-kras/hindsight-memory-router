@@ -2,17 +2,17 @@ name: ci
 
 on:
   pull_request:
-  push:
-    branches: [main]
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
+  # The required `aislop status` gate runs in aislop.yml on PRs and through publish.yml on main.
   checks:
     runs-on: ubuntu-latest
     steps:
@@ -130,8 +130,35 @@ jobs:
         with:
           dockerfile: Dockerfile
 
-      - name: Docker build
-        run: docker build -t hindsight-memory-router:ci .
+  container:
+    name: container
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      SOURCE_IMAGE: hindsight-memory-router:ci
+      TRIVY_SKIP_VERSION_CHECK: "true"
+    steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Build image once
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          load: true
+          provenance: false
+          tags: ${{ env.SOURCE_IMAGE }}
 
       - name: Default Compose smoke
         run: bash tests/integration/default-compose-smoke.sh
@@ -178,37 +205,37 @@ jobs:
             real-postgres-smoke.log
           if-no-files-found: error
 
-  aislop:
-    name: aislop status
-    permissions:
-      contents: read
-      security-events: write
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Trivy image report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          fetch-depth: 0
+          image-ref: ${{ env.SOURCE_IMAGE }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          exit-code: 0
+          limit-severities-for-sarif: true
+          version: v0.71.2
 
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2
+      - name: Verify Trivy SARIF
+        run: test -s trivy-results.sarif
+
+      - name: Upload Trivy SARIF
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
-          egress-policy: audit
+          sarif_file: trivy-results.sarif
+          # Match the established default-branch configuration required by the ruleset.
+          category: .github/workflows/publish.yml:container
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Aislop quality gate
-        run: npm run aislop:ci:human
-
-      - name: Aislop SARIF
-        if: always()
-        run: npm run --silent aislop:ci:sarif > aislop.sarif
-
-      - name: Upload Aislop SARIF
-        if: always()
-        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
-        with:
-          sarif_file: aislop.sarif
+      - name: Trivy PR gate
+        env:
+          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
+        run: |
+          command -v trivy >/dev/null
+          trivy image \
+            --exit-code 1 \
+            --exit-on-eol 1 \
+            --severity MEDIUM,HIGH,CRITICAL \
+            --ignore-unfixed \
+            "${SOURCE_IMAGE}"

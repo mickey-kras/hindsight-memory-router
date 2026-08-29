@@ -12,18 +12,11 @@ on:
       - 'Makefile'
       - '.github/workflows/architecture.yml'
       - '.github/workflows/architecture-pages.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'docs/architecture/**'
-      - 'docs/architecture.md'
-      - 'memory_router/**'
-      - 'compat/openclaw.json'
-      - 'compose.yaml'
-      - 'scripts/architecture.sh'
-      - 'Makefile'
-      - '.github/workflows/architecture.yml'
-      - '.github/workflows/architecture-pages.yml'
+  workflow_call:
+
+concurrency:
+  group: architecture-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read

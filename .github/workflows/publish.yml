@@ -1,7 +1,10 @@
 name: publish
 
+# Base policy migration markers; remove after #173. Tracked in #174.
+# pull_request:
+# name: container
+
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -9,15 +12,61 @@ on:
       - "v*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
 jobs:
-  container:
-    name: container
+  quality:
+    name: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/ci.yml
+
+  aislop:
+    name: aislop
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/aislop.yml
+
+  codeql:
+    name: codeql
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      security-events: write
+    uses: ./.github/workflows/codeql.yml
+
+  architecture:
+    name: architecture
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/architecture.yml
+
+  publish:
+    name: publish
+    needs: [quality, aislop, codeql, architecture]
+    if: >-
+      ${{
+        always() &&
+        (
+          startsWith(github.ref, 'refs/tags/v') ||
+          (
+            github.ref == 'refs/heads/main' &&
+            needs.quality.result == 'success' &&
+            needs.aislop.result == 'success' &&
+            needs.codeql.result == 'success' &&
+            needs.architecture.result == 'success'
+          )
+        )
+      }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -93,7 +142,54 @@ jobs:
           context: .
           load: true
           provenance: false
-          tags: ${{ env.SOURCE_IMAGE }}
+          tags: |
+            ${{ env.SOURCE_IMAGE }}
+            hindsight-memory-router:ci
+
+      - name: Default Compose smoke
+        run: bash tests/integration/default-compose-smoke.sh
+
+      - name: Fake Hindsight router-storage parity
+        id: fake-smoke
+        run: |
+          set -uo pipefail
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake sqlite > >(tee fake-sqlite-smoke.log) 2>&1 &
+          sqlite_pid=$!
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh fake postgres > >(tee fake-postgres-smoke.log) 2>&1 &
+          postgres_pid=$!
+          status=0
+          wait "$sqlite_pid" || status=1
+          wait "$postgres_pid" || status=1
+          exit "$status"
+
+      - name: Upload fake smoke diagnostics
+        if: failure() && steps.fake-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fake-smoke-diagnostics
+          path: |
+            fake-sqlite-smoke.log
+            fake-postgres-smoke.log
+          if-no-files-found: error
+
+      - name: Real Hindsight router-storage parity
+        id: real-smoke
+        run: |
+          set -uo pipefail
+          status=0
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real sqlite > >(tee real-sqlite-smoke.log) 2>&1 || status=1
+          HMR_SKIP_BUILD=true bash tests/integration/smoke.sh real postgres > >(tee real-postgres-smoke.log) 2>&1 || status=1
+          exit "$status"
+
+      - name: Upload real smoke diagnostics
+        if: failure() && steps.real-smoke.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-smoke-diagnostics
+          path: |
+            real-sqlite-smoke.log
+            real-postgres-smoke.log
+          if-no-files-found: error
 
       - name: Trivy image report
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
@@ -101,8 +197,8 @@ jobs:
           image-ref: ${{ env.SOURCE_IMAGE }}
           format: sarif
           output: trivy-results.sarif
-          severity: ${{ github.event_name == 'pull_request' && 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL' || 'CRITICAL,HIGH' }}
-          ignore-unfixed: ${{ github.event_name != 'pull_request' }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
           exit-code: 0
           limit-severities-for-sarif: true
           version: v0.71.2
@@ -111,26 +207,12 @@ jobs:
         run: test -s trivy-results.sarif
 
       - name: Upload Trivy SARIF
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: trivy-results.sarif
-
-      - name: Trivy PR gate
-        if: github.event_name == 'pull_request'
-        env:
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
-        run: |
-          command -v trivy >/dev/null
-          trivy image \
-            --exit-code 1 \
-            --exit-on-eol 1 \
-            --severity MEDIUM,HIGH,CRITICAL \
-            --ignore-unfixed \
-            "${SOURCE_IMAGE}"
+          category: .github/workflows/publish.yml:container
 
       - name: Trivy critical gate
-        if: github.event_name != 'pull_request'
         # Policy contract equivalent: ignore-unfixed: true.
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
@@ -317,9 +399,11 @@ jobs:
           sonar_details='- SonarQube details: unavailable; failure occurred before a completed analysis or the API could not be queried.'
           report=.scannerwork/report-task.txt
           if [ -s "$report" ]; then
-            ce_task_url="$(sed -n 's/^ceTaskUrl=//p' "$report")"
-            if [ -n "$ce_task_url" ]; then
-              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" "$ce_task_url" || true)"
+            ce_task_id="$(sed -n 's/^ceTaskId=//p' "$report")"
+            if [ -n "$ce_task_id" ]; then
+              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
+                --get --data-urlencode "id=${ce_task_id}" \
+                "${SONAR_HOST_URL%/}/api/ce/task" || true)"
               analysis_id="$(jq -r '.task.analysisId // empty' <<<"$ce_payload" 2>/dev/null || true)"
               if [ -n "$analysis_id" ]; then
                 gate_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
@@ -357,6 +441,60 @@ jobs:
             echo
             echo "${sonar_details}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --body "$body" --add-assignee "$GITHUB_REPOSITORY_OWNER"
+          else
+            gh issue create --title "$title" --body "$body" --assignee "$GITHUB_REPOSITORY_OWNER"
+          fi
+
+  report-validation-failure:
+    name: report validation failure
+    needs: [quality, aislop, codeql, architecture]
+    if: >-
+      ${{
+        always() &&
+        github.event_name == 'push' &&
+        github.ref == 'refs/heads/main' &&
+        (
+          needs.quality.result != 'success' ||
+          needs.aislop.result != 'success' ||
+          needs.codeql.result != 'success' ||
+          needs.architecture.result != 'success'
+        )
+      }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
+        with:
+          egress-policy: audit
+
+      - name: Create or update main failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUALITY_RESULT: ${{ needs.quality.result }}
+          AISLOP_RESULT: ${{ needs.aislop.result }}
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
+        run: |
+          set -euo pipefail
+
+          title='[tech debt] Main publish pipeline blocked'
+          body=$(cat <<EOF
+          Main validation failed before publishing.
+
+          - Commit: ${GITHUB_SHA}
+          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Quality: ${QUALITY_RESULT}
+          - Aislop: ${AISLOP_RESULT}
+          - CodeQL: ${CODEQL_RESULT}
+          - Architecture: ${ARCHITECTURE_RESULT}
+          EOF
+          )
 
           number="$(gh issue list --state open --limit 1000 --json number,title --jq '.[] | select(.title == "[tech debt] Main publish pipeline blocked") | .number' | head -n 1)"
           if [ -n "$number" ]; then
