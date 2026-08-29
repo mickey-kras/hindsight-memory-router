@@ -253,22 +253,12 @@ _RuleToken = tuple[str, int, int]
 _RuleGap = tuple[int, frozenset[str], int, int]
 _DecodedBase64Candidate = tuple[str, str, int, int, bool, bool]
 
-# ---------------------------------------------------------------------------
-# Query rolling-window pre-screen.
-#
-# Every rolling/skip window scan runs the split-rule scanner and all AMG
-# detectors over the window text. For ASCII windows that are not keycap
-# digit-stripped, the confusable-variant helpers are the identity (see
-# unicode_security: ASCII input yields no variants), so those scans reduce to
-# pattern searches over the window and its whitespace-stripped form. For each
-# such pattern a conservative set of required literals is extracted: any match
-# of the pattern must contain at least one of them (compared
-# case-insensitively). Patterns whose requirement cannot be determined are
-# searched directly. A window containing none of the literals and matching
-# none of the unscreened patterns is cached as an empty scan without running
-# the full detector stack. Any doubt while collecting patterns disables the
-# screen entirely (``None``), reproducing the previous always-scan behavior.
-# ---------------------------------------------------------------------------
+# Query rolling-window pre-screen: for ASCII windows that are not keycap
+# digit-stripped the confusable-variant helpers are the identity, so scans
+# reduce to pattern searches. Each pattern contributes conservative required
+# literals; a window containing none of them (and matching no unscreened
+# pattern) is cached as an empty scan. Any doubt disables the screen (None),
+# reproducing the previous always-scan behavior.
 _DETECTOR_PATTERN_TABLES = {
     "ToolAbuseDetector": ("TOOL_ABUSE_PATTERNS", "UNSAFE_TOOL_OUTPUT_PATTERNS"),
     "PrivilegeEscalationDetector": ("ESCALATION_PATTERNS",),
@@ -295,27 +285,36 @@ def _regex_class_end(source: str, start: int) -> int | None:
     return None
 
 
+_REGEX_SKIP_CHARS = frozenset({"\\", "["})
+_REGEX_DEPTH_DELTA = {"(": 1, ")": -1}
+
+
+def _regex_skip_forward(source: str, index: int) -> int | None:
+    """Index past an escape or class at source[index]; None for other chars."""
+    char = source[index]
+    if char == "\\":
+        return index + 2
+    if char == "[":
+        return _regex_class_end(source, index)
+    return None
+
+
 def _regex_group_end(source: str, start: int) -> int | None:
     """Index just past the ')' matching the '(' at source[start]."""
     depth = 0
     index = start
     while index < len(source):
         char = source[index]
-        if char == "\\":
-            index += 2
-            continue
-        if char == "[":
-            end = _regex_class_end(source, index)
-            if end is None:
+        if char in _REGEX_SKIP_CHARS:
+            skipped = _regex_skip_forward(source, index)
+            if skipped is None:
                 return None
-            index = end
+            index = skipped
             continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth == 0:
-                return index + 1
+        delta = _REGEX_DEPTH_DELTA.get(char, 0)
+        depth += delta
+        if delta < 0 and depth == 0:
+            return index + 1
         index += 1
     return None
 
@@ -328,24 +327,19 @@ def _regex_top_alternatives(source: str) -> list[str] | None:
     parts: list[str] = []
     while index < len(source):
         char = source[index]
-        if char == "\\":
-            index += 2
-            continue
-        if char == "[":
-            end = _regex_class_end(source, index)
-            if end is None:
+        if char in _REGEX_SKIP_CHARS:
+            skipped = _regex_skip_forward(source, index)
+            if skipped is None:
                 return None
-            index = end
+            index = skipped
             continue
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-            if depth < 0:
-                return None
-        elif char == "|" and depth == 0:
+        if char == "|" and depth == 0:
             parts.append(source[last:index])
             last = index + 1
+        else:
+            depth += _REGEX_DEPTH_DELTA.get(char, 0)
+            if depth < 0:
+                return None
         index += 1
     if depth != 0:
         return None
