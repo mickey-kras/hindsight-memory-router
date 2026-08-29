@@ -32,9 +32,16 @@ jobs:
       security-events: write
     uses: ./.github/workflows/codeql.yml
 
+  architecture:
+    name: architecture
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/architecture.yml
+
   container:
     name: container
-    needs: [quality, codeql]
+    needs: [quality, codeql, architecture]
     if: >-
       ${{
         always() &&
@@ -44,7 +51,8 @@ jobs:
           (
             github.ref == 'refs/heads/main' &&
             needs.quality.result == 'success' &&
-            needs.codeql.result == 'success'
+            needs.codeql.result == 'success' &&
+            needs.architecture.result == 'success'
           )
         )
       }}
@@ -446,7 +454,7 @@ jobs:
 
   report-validation-failure:
     name: report validation failure
-    needs: [quality, codeql]
+    needs: [quality, codeql, architecture]
     if: >-
       ${{
         always() &&
@@ -454,7 +462,8 @@ jobs:
         github.ref == 'refs/heads/main' &&
         (
           needs.quality.result != 'success' ||
-          needs.codeql.result != 'success'
+          needs.codeql.result != 'success' ||
+          needs.architecture.result != 'success'
         )
       }}
     runs-on: ubuntu-latest
@@ -471,6 +480,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           QUALITY_RESULT: ${{ needs.quality.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
+          ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
         run: |
           set -euo pipefail
 
@@ -482,6 +492,7 @@ jobs:
           - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
           - Quality: ${QUALITY_RESULT}
           - CodeQL: ${CODEQL_RESULT}
+          - Architecture: ${ARCHITECTURE_RESULT}
           EOF
           )
 
