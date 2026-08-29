@@ -235,6 +235,9 @@ jobs:
                 if (!ci.includes('Trivy PR gate')) {
                   fail('ci.yml: Trivy PR gate must stay present');
                 }
+                if (!ci.includes('category: .github/workflows/publish.yml:container')) {
+                  fail('ci.yml: Trivy SARIF must preserve the required default-branch configuration');
+                }
               }
             }
 
