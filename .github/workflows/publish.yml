@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - fix/publish-failure-reporting
     tags:
       - "v*"
 
@@ -16,53 +15,6 @@ permissions:
   contents: read
 
 jobs:
-  sonar-diagnostics:
-    name: sonar diagnostics
-    if: github.ref == 'refs/heads/fix/publish-failure-reporting'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
-        with:
-          egress-policy: audit
-
-      - uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TAILSCALE_AUDIENCE }}
-          tags: tag:github-sonar
-          use-cache: 'true'
-
-      - name: Query current SonarQube findings
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: |
-          set -euo pipefail
-
-          project=hindsight-memory-router
-          gate="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-            --get --data-urlencode "projectKey=${project}" \
-            "${SONAR_HOST_URL%/}/api/qualitygates/project_status")"
-          new_code="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-            --get --data-urlencode "project=${project}" \
-            "${SONAR_HOST_URL%/}/api/new_code_periods/show")"
-          issues="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-            --get \
-            --data-urlencode "componentKeys=${project}" \
-            --data-urlencode "inNewCodePeriod=true" \
-            --data-urlencode "resolved=false" \
-            --data-urlencode "ps=500" \
-            "${SONAR_HOST_URL%/}/api/issues/search")"
-
-          jq -n \
-            --argjson gate "$gate" \
-            --argjson new_code "$new_code" \
-            --argjson issues "$issues" \
-            '{gate: $gate.projectStatus, new_code: $new_code, issues: $issues}'
-
   quality:
     name: quality
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
