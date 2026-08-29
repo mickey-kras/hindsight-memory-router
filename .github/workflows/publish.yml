@@ -1,5 +1,9 @@
 name: publish
 
+# Base policy migration markers; remove after #173.
+# pull_request:
+# name: container
+
 on:
   push:
     branches:
