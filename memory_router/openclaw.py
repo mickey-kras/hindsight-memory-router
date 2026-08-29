@@ -37,6 +37,10 @@ class _FacadeScannerShutdown(RuntimeError):
     pass
 
 
+_FACADE_SCANNER_SHUT_DOWN = "facade scanner shut down"
+_RESPONSE_SCANNER_SHUT_DOWN = "response safety scanner is shut down"
+
+
 def _new_facade_scan_executor() -> ProcessPool:
     return ProcessPool(
         max_workers=FACADE_SCAN_WORKERS,
@@ -87,9 +91,9 @@ def _get_facade_scan_executor(expected_generation: int | None = None) -> Process
     stale = None
     with _FACADE_SCAN_EXECUTOR_LOCK:
         if _FACADE_SCAN_SHUTDOWN:
-            raise _FacadeScannerShutdown("facade scanner shut down")
+            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
         if expected_generation is not None and expected_generation != _FACADE_SCAN_GENERATION:
-            raise _FacadeScannerShutdown("facade scanner shut down")
+            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
         if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
             stale = _FACADE_SCAN_EXECUTOR
             _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
@@ -124,7 +128,7 @@ def start_facade_scan_executor() -> None:
 def _acquire_facade_scan_capacity() -> tuple[int, BoundedSemaphore] | None:
     with _FACADE_SCAN_EXECUTOR_LOCK:
         if _FACADE_SCAN_SHUTDOWN:
-            raise _FacadeScannerShutdown("facade scanner shut down")
+            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
         capacity = _FACADE_SCAN_CAPACITY
         if not capacity.acquire(blocking=False):
             return None
@@ -158,7 +162,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         admission = _acquire_facade_scan_capacity()
     except _FacadeScannerShutdown as exc:
         raise _scan_unavailable(
-            "response safety scanner is shut down",
+            _RESPONSE_SCANNER_SHUT_DOWN,
             error_kind="shutdown",
             writer_id=writer_id,
         ) from exc
@@ -186,7 +190,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         with _FACADE_SCAN_EXECUTOR_LOCK:
             if _FACADE_SCAN_SHUTDOWN or generation != _FACADE_SCAN_GENERATION:
                 future.cancel()  # type: ignore[no-untyped-call]
-                raise _FacadeScannerShutdown("facade scanner shut down")
+                raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
             _FACADE_SCAN_FUTURES.add(future)
     except HttpError:
         capacity.release()
@@ -197,7 +201,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
     except _FacadeScannerShutdown as exc:
         capacity.release()
         raise _scan_unavailable(
-            "response safety scanner is shut down",
+            _RESPONSE_SCANNER_SHUT_DOWN,
             error_kind="shutdown",
             writer_id=writer_id,
         ) from exc
@@ -221,7 +225,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
         future.cancel()  # type: ignore[no-untyped-call]
         if _facade_scan_stopped(generation):
             raise _scan_unavailable(
-                "response safety scanner is shut down",
+                _RESPONSE_SCANNER_SHUT_DOWN,
                 error_kind="shutdown",
                 writer_id=writer_id,
             ) from exc
@@ -231,7 +235,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
     except asyncio.CancelledError as exc:
         if _facade_scan_stopped(generation):
             raise _scan_unavailable(
-                "response safety scanner is shut down",
+                _RESPONSE_SCANNER_SHUT_DOWN,
                 error_kind="shutdown",
                 writer_id=writer_id,
             ) from exc
@@ -245,7 +249,7 @@ async def _scan_facade_response(value: Any, *, writer_id: str | None = None) -> 
     except Exception as exc:
         if _facade_scan_stopped(generation):
             raise _scan_unavailable(
-                "response safety scanner is shut down",
+                _RESPONSE_SCANNER_SHUT_DOWN,
                 error_kind="shutdown",
                 writer_id=writer_id,
             ) from exc
