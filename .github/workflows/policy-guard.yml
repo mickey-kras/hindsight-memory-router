@@ -30,8 +30,12 @@ jobs:
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
             const checkoutAction = ['actions', 'checkout'].join('/');
-            const oidcWrite = ['id-token', 'write'].join(': ');
-            const packagesWrite = ['packages', 'write'].join(': ');
+            const privilegedWrites = [
+              ['id-token', 'write'].join(': '),
+              ['packages', 'write'].join(': '),
+              ['attestations', 'write'].join(': '),
+              ['issues', 'write'].join(': '),
+            ];
             const forbiddenPermission = ['permissions', 'write-all'].join(': ');
             const targetEvent = ['pull_request', 'target'].join('_');
             const headTerms = [
@@ -118,6 +122,19 @@ jobs:
                 .join('\n');
             }
 
+            function hasYamlKey(content, key) {
+              const escaped = key.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
+              return new RegExp(`^\\s*["']?${escaped}["']?\\s*:`, 'm').test(yamlSurface(content));
+            }
+
+            function unpinnedActions(content) {
+              return yamlSurface(content)
+                .split('\n')
+                .map((line) => line.match(/^\s*(?:-\s*)?uses:\s*([^\s#]+)/)?.[1])
+                .filter((value) => value && !value.startsWith('./'))
+                .filter((value) => !/@[0-9a-f]{40}$/i.test(value));
+            }
+
             if (!workflowChanged) {
               core.info('No workflow files changed. Policy guard passed.');
               return;
@@ -143,12 +160,17 @@ jobs:
                 }
               }
 
-              if (lower.includes(oidcWrite) && path !== publishPath) {
-                fail(`${path}: OIDC write permission is only allowed in the publish workflow`);
+              const privileged = privilegedWrites.filter((permission) => lower.includes(permission));
+              if (privileged.length > 0 && path !== publishPath) {
+                fail(`${path}: privileged write permissions are only allowed in publish.yml`);
+              }
+              if (privileged.length > 0 && hasYamlKey(content, 'pull_request')) {
+                fail(`${path}: pull request workflows must not have privileged write permissions`);
               }
 
-              if (lower.includes(packagesWrite) && path !== publishPath) {
-                fail(`${path}: package write permission is only allowed in the publish workflow`);
+              const unpinned = unpinnedActions(content);
+              if (unpinned.length > 0) {
+                fail(`${path}: actions must use full commit SHAs: ${unpinned.join(', ')}`);
               }
             }
 
@@ -157,13 +179,13 @@ jobs:
                 fail('publish.yml: protected workflow must not be removed or renamed');
               } else {
                 const publish = await readFileAtHead(publishPath);
-                if (!publish.includes('pull_request:')) {
-                  fail('publish.yml: pull request preflight trigger must stay enabled');
+                if (hasYamlKey(publish, 'pull_request')) {
+                  fail('publish.yml: privileged workflow must not run on pull requests');
                 }
-                if (!publish.includes('name: container')) {
-                  fail('publish.yml: required container preflight job must stay present');
+                if (!hasYamlKey(publish, 'push')) {
+                  fail('publish.yml: trusted push trigger must stay enabled');
                 }
-                if (!publish.includes('name: publish')) {
+                if (!/^  publish:\s*$/m.test(publish)) {
                   fail('publish.yml: real publish job must stay present');
                 }
                 if (!publish.includes('Trivy critical gate')) {
@@ -191,6 +213,24 @@ jobs:
                 if (!ci.includes('Gitleaks')) fail('ci.yml: Gitleaks step must stay present');
                 if (!ci.includes('Semgrep')) fail('ci.yml: Semgrep step must stay present');
                 if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
+                if (!/^  container:\s*$/m.test(ci)) {
+                  fail('ci.yml: required container PR job must stay present');
+                }
+                if (!ci.includes("if: github.event_name == 'pull_request'")) {
+                  fail('ci.yml: container job must stay restricted to pull requests');
+                }
+                if (!ci.includes('Default Compose smoke')) {
+                  fail('ci.yml: default Compose smoke must stay present');
+                }
+                if (!ci.includes('Fake Hindsight router-storage parity')) {
+                  fail('ci.yml: fake smoke gate must stay present');
+                }
+                if (!ci.includes('Real Hindsight router-storage parity')) {
+                  fail('ci.yml: real smoke gate must stay present');
+                }
+                if (!ci.includes('Trivy PR gate')) {
+                  fail('ci.yml: Trivy PR gate must stay present');
+                }
               }
             }
 

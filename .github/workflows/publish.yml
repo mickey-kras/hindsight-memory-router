@@ -1,7 +1,6 @@
 name: publish
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -9,8 +8,8 @@ on:
       - "v*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'push' }}
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -47,14 +46,13 @@ jobs:
       contents: read
     uses: ./.github/workflows/architecture.yml
 
-  container:
-    name: container
+  publish:
+    name: publish
     needs: [quality, aislop, codeql, architecture]
     if: >-
       ${{
         always() &&
         (
-          github.event_name == 'pull_request' ||
           startsWith(github.ref, 'refs/tags/v') ||
           (
             github.ref == 'refs/heads/main' &&
@@ -195,8 +193,8 @@ jobs:
           image-ref: ${{ env.SOURCE_IMAGE }}
           format: sarif
           output: trivy-results.sarif
-          severity: ${{ github.event_name == 'pull_request' && 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL' || 'CRITICAL,HIGH' }}
-          ignore-unfixed: ${{ github.event_name != 'pull_request' }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
           exit-code: 0
           limit-severities-for-sarif: true
           version: v0.71.2
@@ -205,26 +203,11 @@ jobs:
         run: test -s trivy-results.sarif
 
       - name: Upload Trivy SARIF
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: trivy-results.sarif
 
-      - name: Trivy PR gate
-        if: github.event_name == 'pull_request'
-        env:
-          TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
-        run: |
-          command -v trivy >/dev/null
-          trivy image \
-            --exit-code 1 \
-            --exit-on-eol 1 \
-            --severity MEDIUM,HIGH,CRITICAL \
-            --ignore-unfixed \
-            "${SOURCE_IMAGE}"
-
       - name: Trivy critical gate
-        if: github.event_name != 'pull_request'
         # Policy contract equivalent: ignore-unfixed: true.
         env:
           TRIVY_CACHE_DIR: ${{ github.workspace }}/.cache/trivy
