@@ -45,6 +45,9 @@ services:
       MEMORY_ROUTER_REGISTRY: /app/integration-writer-registry.json
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
+      # Integration harness exercises the full facade matrix for one writer in
+      # a single rate-limit window; production keeps the default of 30.
+      HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX: "64"
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
       QUARANTINE_DATABASE_URL: postgresql://quarantine:quarantine@postgres:5432/quarantine
     ports:
