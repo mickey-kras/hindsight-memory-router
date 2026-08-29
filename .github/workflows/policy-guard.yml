@@ -27,6 +27,7 @@ jobs:
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
+            const packagePath = 'package.json';
             const checkoutAction = ['actions', 'checkout'].join('/');
             const privilegedWriteKeys = [
               'id-token',
@@ -69,6 +70,7 @@ jobs:
                 path.startsWith(`${wfDir}/`) &&
                 (path.endsWith('.yml') || path.endsWith('.yaml')),
             );
+            const policySensitiveChanged = workflowChanged || changed.has(packagePath);
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -171,8 +173,8 @@ jobs:
                 .filter((value) => !/@[0-9a-f]{40}$/i.test(value));
             }
 
-            if (!workflowChanged) {
-              core.info('No workflow files changed. Policy guard passed.');
+            if (!policySensitiveChanged) {
+              core.info('No workflow or Aislop script policy files changed. Policy guard passed.');
               return;
             }
 
@@ -300,7 +302,10 @@ jobs:
                   fail('aislop.yml: main SARIF generation must stay present');
                 }
                 if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
-                  fail('aislop.yml: PR SARIF generation must stay change-scoped');
+                  fail('aislop.yml: PR SARIF generation must stay present');
+                }
+                if (!hasYamlScalar(aislop, 'category', '.github/workflows/publish.yml:status')) {
+                  fail('aislop.yml: SARIF must preserve the default-branch configuration');
                 }
                 if (!aislop.includes('name: Aislop findings gate')) {
                   fail('aislop.yml: zero-findings gate must stay present');
@@ -317,6 +322,17 @@ jobs:
               }
             }
 
+            if (changed.has(aislopPath) || changed.has(packagePath)) {
+              if (removedOrRenamed.has(packagePath)) {
+                fail('package.json: protected Aislop script configuration must not be removed');
+              } else {
+                const packageJson = JSON.parse(await readFileAtHead(packagePath));
+                if (packageJson.scripts?.['aislop:ci'] !== 'aislop ci') {
+                  fail('package.json: aislop:ci must remain a full-repository scan');
+                }
+              }
+            }
+
             if (changed.has(codeqlPath)) {
               if (removedOrRenamed.has(codeqlPath)) {
                 fail('codeql.yml: protected workflow must not be removed or renamed');
@@ -326,6 +342,9 @@ jobs:
                 if (!codeql.includes('analyze:')) fail('codeql.yml: required analyze job must stay present');
                 if (!codeql.includes('github/codeql-action/analyze')) {
                   fail('codeql.yml: CodeQL analyze action must stay present');
+                }
+                if (!hasYamlScalar(codeql, 'category', '.github/workflows/publish.yml:analyze')) {
+                  fail('codeql.yml: analysis must preserve the default-branch configuration');
                 }
               }
             }
