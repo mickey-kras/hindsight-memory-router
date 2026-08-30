@@ -17,6 +17,7 @@ dependencies = [
   "psycopg[binary]==3.3.4",
   "psycopg-pool==3.3.1",
   "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
   "rfc8785==0.1.4",
   "starlette==1.6.0",
   "structlog==26.1.0",
