@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -234,7 +234,7 @@ def _decode_path_segment(value: str) -> str:
         )
     try:
         decoded = unquote(value, encoding="utf-8", errors="strict")
-    except (UnicodeDecodeError, ValueError) as exc:
+    except ValueError as exc:
         raise HttpError(
             400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
         ) from exc
@@ -246,7 +246,7 @@ def _decode_path_segment(value: str) -> str:
             raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
         try:
             next_probe = unquote(probe, encoding="utf-8", errors="strict")
-        except (UnicodeDecodeError, ValueError):
+        except ValueError:
             break
         if next_probe == probe:
             break
@@ -431,31 +431,23 @@ runtime = Runtime()
 
 async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool) -> None:
     if scanner_started:
-        try:
-            await shutdown_facade_scan_executor_async()
-        except BaseException as exc:
-            log_event(
-                logger,
-                "error",
-                "application_stop_failed",
-                operation="shutdown",
-                error_kind="unexpected",
-                error=exc,
-                outcome="failed",
-            )
+        await _run_startup_cleanup(shutdown_facade_scan_executor_async())
     if runtime_started:
-        try:
-            await runtime.stop()
-        except BaseException as exc:
-            log_event(
-                logger,
-                "error",
-                "application_stop_failed",
-                operation="shutdown",
-                error_kind="unexpected",
-                error=exc,
-                outcome="failed",
-            )
+        await _run_startup_cleanup(runtime.stop())
+
+
+async def _run_startup_cleanup(cleanup: Awaitable[None]) -> None:
+    (result,) = await asyncio.gather(cleanup, return_exceptions=True)
+    if isinstance(result, BaseException):
+        log_event(
+            logger,
+            "error",
+            "application_stop_failed",
+            operation="shutdown",
+            error_kind="unexpected",
+            error=result,
+            outcome="failed",
+        )
 
 
 @asynccontextmanager
