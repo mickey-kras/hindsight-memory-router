@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import traceback
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -71,11 +72,58 @@ def test_typed_settings_preserve_strict_environment_parsing(
     with pytest.raises(RuntimeError, match="true or false"):
         config.load_settings()
 
-    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "false")
-    monkeypatch.setenv("MEMORY_ROUTER_TOKEN", "router-secret")
+    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "")
+    assert config.load_settings().memory_router_allow_anonymous is False
+
+    secrets = {
+        "MEMORY_ROUTER_TOKEN": "router-secret",
+        "MEMORY_ROUTER_ADMIN_TOKEN": "admin-secret",
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN": "read-secret",
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": "review-secret",
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": "cleanup-secret",
+        "HINDSIGHT_API_KEY": "hindsight-secret",
+    }
+    for name, value in secrets.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://user:database-secret@db/router")
     settings = config.load_settings()
-    assert "router-secret" not in repr(settings)
+    rendered = (repr(settings), str(settings), repr(settings.model_dump()))
+    for secret in (*secrets.values(), "database-secret"):
+        assert all(secret not in value for value in rendered)
     assert config.secret_value(settings.memory_router_token) == "router-secret"
+
+
+def test_typed_settings_ignore_lowercase_environment_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MEMORY_ROUTER_PORT", raising=False)
+    monkeypatch.setenv("memory_router_port", "9001")
+
+    assert config.load_settings().memory_router_port == 8890
+
+
+def test_typed_settings_suppress_secret_validation_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secrets = (
+        "router-secret",
+        "admin-secret",
+        "hindsight-secret",
+        "database-secret",
+    )
+    monkeypatch.setenv("MEMORY_ROUTER_TOKEN", secrets[0])
+    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", secrets[1])
+    monkeypatch.setenv("HINDSIGHT_API_KEY", secrets[2])
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", f"postgresql://user:{secrets[3]}@db/router")
+    monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "cluster")
+    monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "false")
+
+    with pytest.raises(RuntimeError) as raised:
+        config.load_settings()
+
+    rendered = "".join(traceback.format_exception(raised.value))
+    assert all(secret not in rendered for secret in secrets)
+    assert "ValidationError" not in rendered
 
 
 def test_registry_loading_and_validation(tmp_path: Path) -> None:

@@ -270,6 +270,55 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_main_preserves_structured_startup_failure_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = RuntimeError("configuration secret")
+    events: list[tuple[tuple[object, ...], dict[str, object]]] = []
+    monkeypatch.setattr(main_module, "configure_logging", lambda: None)
+    monkeypatch.setattr(main_module, "load_settings", lambda: (_ for _ in ()).throw(failure))
+    monkeypatch.setattr(
+        main_module,
+        "log_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        main_module.main()
+
+    assert exited.value.code == 3
+    assert events == [
+        (
+            (main_module.logger, "error", "application_start_failed"),
+            {
+                "operation": "startup",
+                "error_kind": "unexpected",
+                "error": failure,
+                "outcome": "failed",
+            },
+        )
+    ]
+
+
+def test_runtime_configure_validates_and_applies_request_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_MAX_BODY_BYTES", "2048")
+    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
+    settings = app_module.load_settings()
+    runtime = app_module.Runtime()
+
+    runtime.configure(settings)
+
+    assert runtime.max_body_bytes == 2048
+    assert runtime.allow_anonymous is True
+
+    invalid = settings.model_copy()
+    invalid.memory_router_max_body_bytes = 0
+    with pytest.raises(RuntimeError, match="MEMORY_ROUTER_MAX_BODY_BYTES must be >= 1"):
+        runtime.configure(invalid)
+
+
 @pytest.mark.asyncio
 async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     monkeypatch: pytest.MonkeyPatch,

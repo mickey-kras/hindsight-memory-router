@@ -25,6 +25,7 @@ from .config import (
     load_registry,
     load_settings,
     secret_value,
+    validate_settings,
 )
 from .db import (
     PostgresDatabase,
@@ -281,11 +282,15 @@ class Runtime:
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.sweeper: asyncio.Task[None] | None = None
-        self.settings = settings
-        self._apply_request_settings(settings or RouterSettings.model_construct())
+        self.settings: RouterSettings | None = None
+        if settings is None:
+            self._apply_request_settings(RouterSettings.model_construct())
+        else:
+            self.configure(settings)
         self.review_stale_seconds = 60
 
     def configure(self, settings: RouterSettings) -> None:
+        settings = validate_settings(settings)
         self.settings = settings
         self._apply_request_settings(settings)
 

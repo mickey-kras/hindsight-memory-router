@@ -71,7 +71,6 @@ class RouterSettings(BaseSettings):
     model_config = SettingsConfigDict(
         case_sensitive=True,
         extra="ignore",
-        populate_by_name=True,
     )
 
     memory_router_port: PositiveInt = Field(8890, validation_alias="MEMORY_ROUTER_PORT")
@@ -120,6 +119,8 @@ class RouterSettings(BaseSettings):
     quarantine_database_url: str = Field(
         DEFAULT_DATABASE_URL,
         validation_alias="QUARANTINE_DATABASE_URL",
+        exclude=True,
+        repr=False,
     )
     quarantine_public_key: str = Field("", validation_alias="QUARANTINE_PUBLIC_KEY")
     quarantine_max_item_bytes: NonNegativeInt = Field(
@@ -196,35 +197,58 @@ class RouterSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_deployment(self) -> RouterSettings:
-        if self.memory_router_deployment_mode == "cluster":
-            if not self.quarantine_database_url.startswith(("postgres://", "postgresql://")):
-                raise ValueError("cluster deployment requires PostgreSQL quarantine storage")
-            if not self.memory_router_external_admin_rate_limit:
-                raise ValueError(
-                    "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
-                )
+        if (
+            self.memory_router_deployment_mode == "cluster"
+            and not self.quarantine_database_url.startswith(("postgres://", "postgresql://"))
+        ):
+            raise ValueError("cluster deployment requires PostgreSQL quarantine storage")
+        if (
+            self.memory_router_deployment_mode == "cluster"
+            and not self.memory_router_external_admin_rate_limit
+        ):
+            raise ValueError(
+                "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
+            )
         return self
 
 
-def load_settings() -> RouterSettings:
+def _settings_error_message(exc: ValidationError) -> str:
+    error = exc.errors()[0]
+    location = error.get("loc", ())
+    name = str(location[0]) if location else "memory-router settings"
+    error_type = error.get("type")
+    context = error.get("ctx")
+    if error_type == "greater_than_equal" and isinstance(context, dict):
+        return f"{name} must be >= {context['ge']}"
+    if name == "MEMORY_ROUTER_DEPLOYMENT_MODE" and error_type == "literal_error":
+        return "MEMORY_ROUTER_DEPLOYMENT_MODE must be single or cluster"
+    if isinstance(context, dict) and isinstance(context.get("error"), ValueError):
+        detail = str(context["error"])
+        return detail if not location else f"{name} {detail}"
+    return f"invalid {name}"
+
+
+def _validated_settings(values: dict[str, Any]) -> RouterSettings:
     try:
-        return RouterSettings()  # type: ignore[call-arg]  # BaseSettings loads defaults and env values
+        return RouterSettings(**values)
     except ValidationError as exc:
-        error = exc.errors()[0]
-        location = error.get("loc", ())
-        name = str(location[0]) if location else "memory-router settings"
-        error_type = error.get("type")
-        context = error.get("ctx")
-        if error_type == "greater_than_equal" and isinstance(context, dict):
-            message = f"{name} must be >= {context['ge']}"
-        elif name == "MEMORY_ROUTER_DEPLOYMENT_MODE" and error_type == "literal_error":
-            message = "MEMORY_ROUTER_DEPLOYMENT_MODE must be single or cluster"
-        elif isinstance(context, dict) and isinstance(context.get("error"), ValueError):
-            detail = str(context["error"])
-            message = detail if not location else f"{name} {detail}"
-        else:
-            message = f"invalid {name}"
-        raise RuntimeError(message) from exc
+        raise RuntimeError(_settings_error_message(exc)) from None
+
+
+def load_settings(*, quarantine_database_url: str | None = None) -> RouterSettings:
+    values: dict[str, Any] = {}
+    if quarantine_database_url is not None:
+        values["QUARANTINE_DATABASE_URL"] = quarantine_database_url
+    return _validated_settings(values)
+
+
+def validate_settings(settings: RouterSettings) -> RouterSettings:
+    values = {
+        alias: getattr(settings, name)
+        for name, field in RouterSettings.model_fields.items()
+        if isinstance(alias := field.validation_alias, str)
+    }
+    return _validated_settings(values)
 
 
 def secret_value(value: SecretStr | None) -> str | None:
