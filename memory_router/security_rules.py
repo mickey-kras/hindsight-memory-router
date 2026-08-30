@@ -324,10 +324,10 @@ def _bare_secret_name_fragments(
     fragments: Iterable[str],
     context_fields: Iterable[tuple[str, str, bool]],
 ) -> bool:
-    if matched not in {"api key", "private key"}:
+    if matched not in {_API_KEY, "private key"}:
         return False
     matched_words = matched.split()
-    if matched == "api key":
+    if matched == _API_KEY:
         return _has_bare_secret_word_sequence(list(fragments), matched_words)
     materialized = list(context_fields)
     groups = (
