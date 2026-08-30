@@ -1,0 +1,8 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+shots.mjs
+*.tsbuildinfo
+tests/fixtures/*
+!tests/fixtures/.gitkeep
