@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 ALLOWED_URL_LITERALS = {
-    ("memory_router/app.py", "http://hindsight:8888"),
+    ("memory_router/config.py", "http://hindsight:8888"),
 }
 URL_PATTERN = re.compile(r"https?://[^\"'`\s\\]+")
 

@@ -11,10 +11,7 @@ import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from .config import assert_deployment_mode
-
 CAPACITY_LOCK_ID = 72_499_123
-DEFAULT_DATABASE_URL = "sqlite:./data/quarantine.db"
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS quarantine_items (
@@ -217,7 +214,6 @@ class PostgresDatabase(Database):
 
 
 async def create_database(url: str) -> Database:
-    assert_deployment_mode(url)
     if is_postgres(url):
         db: Database = PostgresDatabase(url)
     elif url.startswith("sqlite:"):

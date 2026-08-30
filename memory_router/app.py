@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import re
 import time
 from collections.abc import AsyncIterator, Awaitable
@@ -20,15 +19,15 @@ from fastapi.responses import JSONResponse
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
 from .config import (
+    RouterSettings,
     assert_auth_environment,
-    assert_deployment_mode,
     assert_no_private_key_environment,
-    boolean_env,
-    integer_env,
     load_registry,
+    load_settings,
+    secret_value,
+    validate_settings,
 )
 from .db import (
-    DEFAULT_DATABASE_URL,
     PostgresDatabase,
     create_database,
     is_postgres,
@@ -271,7 +270,7 @@ def _assert_json_depth(value: Any) -> None:
 
 
 class Runtime:
-    def __init__(self) -> None:
+    def __init__(self, settings: RouterSettings | None = None) -> None:
         self.database: Any = None
         self.rate_limit_database: PostgresDatabase | None = None
         self.repository: QuarantineRepository | None = None
@@ -283,37 +282,42 @@ class Runtime:
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.sweeper: asyncio.Task[None] | None = None
-        self.max_body_bytes = integer_env("MEMORY_ROUTER_MAX_BODY_BYTES", 1_048_576, minimum=1)
-        self.router_token = os.environ.get("MEMORY_ROUTER_TOKEN")
-        self.allow_anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
-        self.admin_tokens = {
-            "legacy": os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN"),
-            "read": os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN"),
-            "review": os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"),
-            "cleanup": os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"),
-        }
-        self.admin_read_max = integer_env("MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX", 120, minimum=1)
-        self.admin_write_max = integer_env(
-            "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX", 30, minimum=1
-        )
-        self.admin_window = integer_env(
-            "MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1
-        )
-        self.auth_failure_max = integer_env(
-            "MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_MAX", 120, minimum=1
-        )
-        self.auth_failure_window = integer_env(
-            "MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1
-        )
+        self.settings: RouterSettings | None = None
+        if settings is None:
+            self._apply_request_settings(RouterSettings.model_construct())
+        else:
+            self.configure(settings)
         self.review_stale_seconds = 60
 
+    def configure(self, settings: RouterSettings) -> None:
+        settings = validate_settings(settings)
+        self.settings = settings
+        self._apply_request_settings(settings)
+
+    def _apply_request_settings(self, settings: RouterSettings) -> None:
+        self.max_body_bytes = settings.memory_router_max_body_bytes
+        self.router_token = secret_value(settings.memory_router_token)
+        self.allow_anonymous = settings.memory_router_allow_anonymous
+        self.admin_tokens = {
+            "legacy": secret_value(settings.memory_router_admin_token),
+            "read": secret_value(settings.memory_router_admin_read_token),
+            "review": secret_value(settings.memory_router_admin_review_token),
+            "cleanup": secret_value(settings.memory_router_admin_cleanup_token),
+        }
+        self.admin_read_max = settings.memory_router_admin_rate_limit_read_max
+        self.admin_write_max = settings.memory_router_admin_rate_limit_write_max
+        self.admin_window = settings.memory_router_admin_rate_limit_window_ms
+        self.auth_failure_max = settings.memory_router_auth_failure_rate_limit_max
+        self.auth_failure_window = settings.memory_router_auth_failure_rate_limit_window_ms
+
     async def start(self) -> None:
+        settings = self.settings or load_settings()
+        self.configure(settings)
         assert_no_private_key_environment()
-        assert_auth_environment()
-        hindsight_timeout_ms = integer_env("HINDSIGHT_TIMEOUT_MS", 10_000, minimum=1)
+        assert_auth_environment(settings)
+        hindsight_timeout_ms = settings.hindsight_timeout_ms
         self.review_stale_seconds = max(60, (hindsight_timeout_ms + 999) // 1000 + 30)
-        database_url = os.environ.get("QUARANTINE_DATABASE_URL", DEFAULT_DATABASE_URL)
-        assert_deployment_mode(database_url)
+        database_url = settings.quarantine_database_url
         self.database = await create_database(database_url)
         self.repository = QuarantineRepository(self.database)
         await validate_storage(self.database, database_url)
@@ -326,45 +330,40 @@ class Runtime:
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
         self.auth_limiter = InMemoryRateLimiter()
-        public_key = os.environ.get("QUARANTINE_PUBLIC_KEY", "")
         limits = QuarantineLimits(
-            max_item_bytes=integer_env("QUARANTINE_MAX_ITEM_BYTES", 1_048_576),
-            max_pending_items=integer_env("QUARANTINE_MAX_PENDING_ITEMS", 1_000),
-            max_pending_items_per_writer=integer_env("QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER", 50),
-            max_encrypted_bytes=integer_env("QUARANTINE_MAX_ENCRYPTED_BYTES", 104_857_600),
-            rate_limit_max=integer_env("QUARANTINE_RATE_LIMIT_MAX", 30),
-            rate_limit_window_ms=integer_env("QUARANTINE_RATE_LIMIT_WINDOW_MS", 60_000),
-            rate_limit_global_max=integer_env("QUARANTINE_RATE_LIMIT_GLOBAL_MAX", 300),
-            distinct_family_limit_max=integer_env("QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX", 10),
-            requarantine_ops_max=integer_env("QUARANTINE_REQUARANTINE_OPS_MAX", 1_000),
-            item_ttl_days=integer_env("QUARANTINE_ITEM_TTL_DAYS", 30),
+            max_item_bytes=settings.quarantine_max_item_bytes,
+            max_pending_items=settings.quarantine_max_pending_items,
+            max_pending_items_per_writer=settings.quarantine_max_pending_items_per_writer,
+            max_encrypted_bytes=settings.quarantine_max_encrypted_bytes,
+            rate_limit_max=settings.quarantine_rate_limit_max,
+            rate_limit_window_ms=settings.quarantine_rate_limit_window_ms,
+            rate_limit_global_max=settings.quarantine_rate_limit_global_max,
+            distinct_family_limit_max=settings.quarantine_distinct_family_limit_max,
+            requarantine_ops_max=settings.quarantine_requarantine_ops_max,
+            item_ttl_days=settings.quarantine_item_ttl_days,
         )
-        store = QuarantineStore(public_key, self.repository, limits, self.quarantine_limiter)
+        store = QuarantineStore(
+            settings.quarantine_public_key, self.repository, limits, self.quarantine_limiter
+        )
         hindsight = HindsightGateway(
-            os.environ.get("HINDSIGHT_BASE_URL", "http://hindsight:8888"),
-            os.environ.get("HINDSIGHT_API_KEY"),
+            settings.hindsight_base_url,
+            secret_value(settings.hindsight_api_key),
             hindsight_timeout_ms,
-            integer_env("HINDSIGHT_MAX_RESPONSE_BYTES", 4 * 1024 * 1024, minimum=1),
+            settings.hindsight_max_response_bytes,
         )
         self.hindsight = hindsight
         hconfig = HindsightLimitConfig(
-            retain_writer_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX", 30, minimum=1),
-            retain_global_max=integer_env("HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX", 300, minimum=1),
-            recall_writer_max=integer_env("HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX", 120, minimum=1),
-            recall_global_max=integer_env(
-                "HINDSIGHT_RECALL_RATE_LIMIT_GLOBAL_MAX", 1200, minimum=1
-            ),
-            rate_limit_window_ms=integer_env("HINDSIGHT_RATE_LIMIT_WINDOW_MS", 60_000, minimum=1),
-            max_retain_items=integer_env("HINDSIGHT_RETAIN_MAX_ITEMS", 100, minimum=1),
-            max_retain_content_bytes=integer_env(
-                "HINDSIGHT_RETAIN_MAX_CONTENT_BYTES", 524_288, minimum=1
-            ),
-            max_recall_query_bytes=integer_env(
-                "HINDSIGHT_RECALL_MAX_QUERY_BYTES", 32_768, minimum=1
-            ),
-            max_recall_max_tokens=integer_env("HINDSIGHT_RECALL_MAX_TOKENS", 8192, minimum=1),
+            retain_writer_max=settings.hindsight_retain_rate_limit_writer_max,
+            retain_global_max=settings.hindsight_retain_rate_limit_global_max,
+            recall_writer_max=settings.hindsight_recall_rate_limit_writer_max,
+            recall_global_max=settings.hindsight_recall_rate_limit_global_max,
+            rate_limit_window_ms=settings.hindsight_rate_limit_window_ms,
+            max_retain_items=settings.hindsight_retain_max_items,
+            max_retain_content_bytes=settings.hindsight_retain_max_content_bytes,
+            max_recall_query_bytes=settings.hindsight_recall_max_query_bytes,
+            max_recall_max_tokens=settings.hindsight_recall_max_tokens,
         )
-        registry = load_registry(os.environ.get("MEMORY_ROUTER_REGISTRY"))
+        registry = load_registry(settings.memory_router_registry)
         hindsight_limiter = (
             self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
         )
@@ -375,12 +374,12 @@ class Runtime:
             hindsight,
             registry,
             hindsight_limits,
-            integer_env("QUARANTINE_MAX_POSTPONES", 3),
+            settings.quarantine_max_postpones,
             self.review_stale_seconds,
         )
         self.auditor = AuthFailureAuditor(store)
-        interval = integer_env("QUARANTINE_SWEEP_INTERVAL_SECONDS", 3600)
-        retention = integer_env("QUARANTINE_EVENT_RETENTION_DAYS", 90)
+        interval = settings.quarantine_sweep_interval_seconds
+        retention = settings.quarantine_event_retention_days
         if interval > 0:
             self.sweeper = asyncio.create_task(self._sweep_loop(interval, retention))
 

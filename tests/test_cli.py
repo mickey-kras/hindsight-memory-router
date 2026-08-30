@@ -77,6 +77,20 @@ def test_migrate_legacy_quarantine_cli_requires_stdin_key(monkeypatch, capsys) -
     assert "required on stdin" in capsys.readouterr().err
 
 
+def test_migrate_legacy_quarantine_cli_rejects_sqlite_in_cluster(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "cluster")
+    monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "true")
+    monkeypatch.setattr(sys, "stdin", io.StringIO("key"))
+
+    assert (
+        migrate_cli.run(
+            ["--queue", "queue.jsonl", "--objects", "objects", "--database", "sqlite:test.db"]
+        )
+        == 1
+    )
+    assert "cluster deployment requires PostgreSQL" in capsys.readouterr().err
+
+
 def test_migrate_legacy_quarantine_main(monkeypatch) -> None:
     monkeypatch.setattr(migrate_cli, "run", lambda: 7)
 
