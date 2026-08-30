@@ -8,6 +8,10 @@ BodyMode = Literal["none", "optional", "required"]
 ResponseMode = Literal["object", "array"]
 RequestScanMode = Literal["recall", "retain"]
 
+_MENTAL_MODEL_PATH = "mental-models/{mental_model_id}"
+_DOCUMENT_PATH = "documents/{document_id}"
+_DIRECTIVE_PATH = "directives/{directive_id}"
+
 
 @dataclass(frozen=True, slots=True)
 class FacadeRoute:
@@ -97,7 +101,7 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     ),
     _route(
         "GET",
-        "mental-models/{mental_model_id}",
+        _MENTAL_MODEL_PATH,
         read=True,
         body="none",
         strict=True,
@@ -105,13 +109,13 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     ),
     _route(
         "PATCH",
-        "mental-models/{mental_model_id}",
+        _MENTAL_MODEL_PATH,
         read=False,
         body="required",
         strict=True,
         body_label="mental-model",
     ),
-    _route("DELETE", "mental-models/{mental_model_id}", read=False, body="none", strict=True),
+    _route("DELETE", _MENTAL_MODEL_PATH, read=False, body="none", strict=True),
     _route("POST", "reflect", read=True, body="required", strict=True, body_label="reflect"),
     # Bank management.
     _route("PATCH", "", read=False, body="required", body_label="bank"),
@@ -175,9 +179,9 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         body="none",
         query=("q", "tags", "tags_match", "limit", "offset"),
     ),
-    _route("GET", "documents/{document_id}", read=True, body="none"),
-    _route("PATCH", "documents/{document_id}", read=False, body="required"),
-    _route("DELETE", "documents/{document_id}", read=False, body="none"),
+    _route("GET", _DOCUMENT_PATH, read=True, body="none"),
+    _route("PATCH", _DOCUMENT_PATH, read=False, body="required"),
+    _route("DELETE", _DOCUMENT_PATH, read=False, body="none"),
     _route(
         "GET",
         "documents/{document_id}/chunks",
@@ -210,9 +214,9 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         query=("tags", "tags_match", "active_only", "limit", "offset"),
     ),
     _route("POST", "directives", read=False, body="required"),
-    _route("GET", "directives/{directive_id}", read=True, body="none"),
-    _route("PATCH", "directives/{directive_id}", read=False, body="required"),
-    _route("DELETE", "directives/{directive_id}", read=False, body="none"),
+    _route("GET", _DIRECTIVE_PATH, read=True, body="none"),
+    _route("PATCH", _DIRECTIVE_PATH, read=False, body="required"),
+    _route("DELETE", _DIRECTIVE_PATH, read=False, body="none"),
     # Observations.
     _route("GET", "observations/scopes", read=True, body="none"),
     _route("DELETE", "observations", read=False, body="none"),

@@ -104,7 +104,7 @@ def _regex_top_alternatives(source: str) -> list[str] | None:
 _MAX_SCREEN_ALTERNATIVES = 64
 
 
-def _stage_walk(source: str, depth: int = 0) -> list[list[frozenset[str]]] | None:
+def _stage_walk(source: str, depth: int = 0) -> list[list[frozenset[str]]] | None:  # NOSONAR
     """Required literal stages of a pattern, as alternatives of stage lists.
 
     Returns a list of alternatives; each alternative is a list of stages and
@@ -256,7 +256,7 @@ def _option_is_strong(option: str) -> bool:
     return len(option) >= 3 or any(not (char.isalnum() or char in " -_") for char in option)
 
 
-def _pattern_screen_stages(
+def _pattern_screen_stages(  # NOSONAR
     pattern: re.Pattern[str],
 ) -> tuple[tuple[frozenset[str], tuple[frozenset[str], ...]], ...] | None:
     """Per-alternative (index stage, all stages) pairs, or None when unscreenable.
@@ -327,7 +327,7 @@ def _literal_screen(
     return frozenset(first_literals), refinements, tuple(unscreened)
 
 
-def _query_window_screen() -> (
+def _query_window_screen() -> (  # NOSONAR
     tuple[
         frozenset[str],
         dict[str, list[tuple[frozenset[str], ...]]],

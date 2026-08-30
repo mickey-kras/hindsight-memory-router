@@ -23,6 +23,14 @@ jobs:
       security-events: write
     uses: ./.github/workflows/ci.yml
 
+  update-pr-branches:
+    name: update PR branches
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/pr-branch-updater.yml
+
   aislop:
     name: aislop
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

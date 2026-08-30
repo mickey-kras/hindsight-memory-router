@@ -1,8 +1,7 @@
 name: pr branch updater
 
 on:
-  push:
-    branches: [main]
+  workflow_call:
   workflow_dispatch:
 
 permissions:

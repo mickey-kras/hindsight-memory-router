@@ -4,7 +4,6 @@ on:
   pull_request:
     types: [opened, reopened, synchronize, ready_for_review]
   push:
-    branches: [main]
     tags: ['v*']
 
 permissions:
@@ -80,22 +79,4 @@ jobs:
           if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
             echo "Release tag must point to a commit reachable from main: $REF_NAME" >&2
             exit 1
-          fi
-
-  remove-legacy-pages-branch:
-    name: remove legacy pages branch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Remove obsolete gh-pages branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/gh-pages" >/dev/null 2>&1; then
-            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/gh-pages"
           fi
