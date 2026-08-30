@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import secrets
 from dataclasses import dataclass
@@ -9,7 +8,7 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity
-from .envelope import canonical_decrypted, create_envelope, decode_public_key
+from .envelope import create_envelope, decode_public_key, estimate_envelope_size
 from .errors import HttpError
 from .repository import Capacity, QuarantineRepository
 
@@ -107,32 +106,7 @@ class QuarantineStore:
 
     def _assert_item_size(self, input_: dict[str, Any], quarantine_id: str) -> None:
         decrypted = self._decrypted(input_, quarantine_id)
-        plaintext_bytes = len(canonical_decrypted(decrypted).encode("utf-8"))
-        wrapped_b64_len = 4 * ((self.public_key_bytes + 2) // 3)
-        ciphertext_b64_len = 4 * ((plaintext_bytes + 2) // 3)
-        envelope: dict[str, Any] = {
-            "version": 1,
-            "quarantine_id": quarantine_id,
-            "created_at": input_["timestamp"],
-            "reason": input_["reason"],
-        }
-        if input_.get("writerId") is not None:
-            envelope["writer_id"] = input_["writerId"]
-        if input_.get("source") is not None:
-            envelope["source"] = input_["source"]
-        envelope["sha256"] = "0" * 64
-        envelope["encryption"] = {
-            "algorithm": "AES-256-GCM",
-            "key_wrap": "RSA-OAEP-SHA256",
-            "aad": "metadata-v1",
-            "wrapped_key_b64": "A" * wrapped_b64_len,
-            "iv_b64": "A" * 16,
-            "tag_b64": "A" * 24,
-        }
-        envelope["ciphertext_b64"] = "A" * ciphertext_b64_len
-        encrypted_bytes = len(
-            json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        )
+        encrypted_bytes = estimate_envelope_size(decrypted, self.public_key_bytes)
         if encrypted_bytes > self.limits.max_item_bytes:
             raise HttpError(
                 413,

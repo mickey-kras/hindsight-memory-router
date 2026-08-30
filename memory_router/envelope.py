@@ -162,15 +162,13 @@ def _aad(envelope: dict[str, Any]) -> bytes:
     return canonical_json(result).encode("utf-8")
 
 
-def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, Any]:
-    parsed = parse_decrypted(value)
-    plaintext = canonical_decrypted(parsed).encode("utf-8")
-    key = AESGCM.generate_key(bit_length=256)
-    iv = os.urandom(12)
-    wrapped = decode_public_key(public_key_input).encrypt(
-        key,
-        padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
-    )
+def _base64_length(byte_length: int) -> int:
+    return 4 * ((byte_length + 2) // 3)
+
+
+def _envelope_metadata(
+    parsed: dict[str, Any], digest: str, wrapped_key_b64: str, iv_b64: str
+) -> dict[str, Any]:
     envelope: dict[str, Any] = {
         "version": 1,
         "quarantine_id": parsed["quarantine_id"],
@@ -181,14 +179,49 @@ def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, A
         envelope["writer_id"] = parsed["writer_id"]
     if "source" in parsed:
         envelope["source"] = parsed["source"]
-    envelope["sha256"] = sha256_hex(plaintext.decode("utf-8"))
+    envelope["sha256"] = digest
     envelope["encryption"] = {
         "algorithm": "AES-256-GCM",
         "key_wrap": "RSA-OAEP-SHA256",
         "aad": AAD_FORMAT,
-        ENVELOPE_WRAPPED_FIELD: base64.b64encode(wrapped).decode("ascii"),
-        "iv_b64": base64.b64encode(iv).decode("ascii"),
+        ENVELOPE_WRAPPED_FIELD: wrapped_key_b64,
+        "iv_b64": iv_b64,
     }
+    return envelope
+
+
+def estimate_envelope_size(value: dict[str, Any], wrapped_key_bytes: int) -> int:
+    """Return the exact serialized byte size of a v1 envelope without encrypting."""
+    if wrapped_key_bytes <= 0:
+        raise ValueError("wrapped key size must be positive")
+    parsed = parse_decrypted(value)
+    plaintext_bytes = len(canonical_decrypted(parsed).encode("utf-8"))
+    envelope = _envelope_metadata(
+        parsed,
+        "0" * 64,
+        "A" * _base64_length(wrapped_key_bytes),
+        "A" * _base64_length(12),
+    )
+    envelope["encryption"]["tag_b64"] = "A" * _base64_length(16)
+    envelope["ciphertext_b64"] = "A" * _base64_length(plaintext_bytes)
+    return len(json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+
+def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, Any]:
+    parsed = parse_decrypted(value)
+    plaintext = canonical_decrypted(parsed).encode("utf-8")
+    key = AESGCM.generate_key(bit_length=256)
+    iv = os.urandom(12)
+    wrapped = decode_public_key(public_key_input).encrypt(
+        key,
+        padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+    )
+    envelope = _envelope_metadata(
+        parsed,
+        sha256_hex(plaintext.decode("utf-8")),
+        base64.b64encode(wrapped).decode("ascii"),
+        base64.b64encode(iv).decode("ascii"),
+    )
     ciphertext_tag = AESGCM(key).encrypt(iv, plaintext, _aad(envelope))
     envelope["encryption"]["tag_b64"] = base64.b64encode(ciphertext_tag[-16:]).decode("ascii")
     envelope["ciphertext_b64"] = base64.b64encode(ciphertext_tag[:-16]).decode("ascii")

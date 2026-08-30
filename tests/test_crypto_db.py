@@ -13,7 +13,12 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from memory_router.canonical import canonical_json, sha256_hex
 from memory_router.db import create_database
-from memory_router.envelope import canonical_decrypted, create_envelope, decrypt_envelope
+from memory_router.envelope import (
+    canonical_decrypted,
+    create_envelope,
+    decrypt_envelope,
+    estimate_envelope_size,
+)
 
 
 def keypair() -> tuple[str, str]:
@@ -83,6 +88,41 @@ def test_envelope_round_trip_preserves_existing_format() -> None:
     assert len(base64.b64decode(envelope["encryption"]["iv_b64"])) == 12
     assert len(base64.b64decode(envelope["encryption"]["tag_b64"])) == 16
     assert decrypt_envelope(envelope, private) == decrypted()
+
+
+@pytest.mark.parametrize("key_size", [2048, 4096])
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {},
+        {"writer_id": "main", "source": "openclaw"},
+        {"writer_id": "mäin", "source": "приложение"},
+    ],
+)
+def test_envelope_size_estimate_matches_serialized_envelope(
+    key_size: int, metadata: dict[str, str]
+) -> None:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
+    public = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+    value = {
+        "quarantine_id": "q_20260808_0123456789abcdef",
+        "created_at": "2026-08-08T05:00:00.000Z",
+        "reason": "suspicious_content",
+        "payload": {"content": "безопасный text", "items": [True, 1]},
+        **metadata,
+    }
+
+    envelope = create_envelope(value, public)
+    actual = len(json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+
+    assert estimate_envelope_size(value, key_size // 8) == actual
 
 
 def test_authenticated_metadata_tampering_fails() -> None:
