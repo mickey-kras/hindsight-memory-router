@@ -6,7 +6,7 @@ import json
 import os
 import sys
 
-from memory_router.db import DEFAULT_DATABASE_URL
+from memory_router.config import DEFAULT_DATABASE_URL
 from memory_router.legacy_migration import migrate_legacy_quarantine
 
 

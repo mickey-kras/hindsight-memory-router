@@ -14,9 +14,10 @@ async def test_postgres_runtime_keeps_auth_failure_limiter_in_memory(
 ) -> None:
     monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://db")
     monkeypatch.setenv("QUARANTINE_SWEEP_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "cluster")
+    monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "true")
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
-    monkeypatch.setattr(app_module, "assert_auth_environment", lambda: None)
-    monkeypatch.setattr(app_module, "assert_deployment_mode", lambda _: None)
+    monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
     primary_db = SimpleNamespace()
     monkeypatch.setattr(app_module, "create_database", AsyncMock(return_value=primary_db))

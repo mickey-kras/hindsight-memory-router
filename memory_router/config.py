@@ -4,14 +4,18 @@ import json
 import logging
 import os
 from pathlib import Path
+from typing import Annotated, Any, Literal
 
-from pydantic import ValidationError
+from pydantic import BeforeValidator, Field, SecretStr, ValidationError, model_validator
+from pydantic_core import PydanticUseDefault
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .logging import log_event
 from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
 
 logger = logging.getLogger(__name__)
+DEFAULT_DATABASE_URL = "sqlite:./data/quarantine.db"
 
 DEFAULT_REGISTRY = WriterRegistry.model_validate(
     {
@@ -31,29 +35,200 @@ DEFAULT_REGISTRY = WriterRegistry.model_validate(
 )
 
 
-def integer_env(name: str, default: int, *, minimum: int = 0) -> int:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        value = default
-    else:
+def _exact_integer(value: Any) -> int:
+    if value == "":
+        raise PydanticUseDefault()
+    if isinstance(value, bool):
+        raise ValueError("must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
         try:
-            value = int(raw, 10)
+            return int(value, 10)
         except ValueError as exc:
-            raise RuntimeError(f"{name} must be an integer") from exc
-    if value < minimum:
-        raise RuntimeError(f"{name} must be >= {minimum}")
-    return value
+            raise ValueError("must be an integer") from exc
+    raise ValueError("must be an integer")
 
 
-def boolean_env(name: str, default: bool = False) -> bool:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    if raw == "true":
+def _exact_boolean(value: Any) -> bool:
+    if value == "":
+        raise PydanticUseDefault()
+    if isinstance(value, bool):
+        return value
+    if value == "true":
         return True
-    if raw == "false":
+    if value == "false":
         return False
-    raise RuntimeError(f"{name} must be true or false")
+    raise ValueError("must be true or false")
+
+
+NonNegativeInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=0)]
+PositiveInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=1)]
+ExactBool = Annotated[bool, BeforeValidator(_exact_boolean)]
+
+
+class RouterSettings(BaseSettings):
+    model_config = SettingsConfigDict(
+        case_sensitive=True,
+        extra="ignore",
+        populate_by_name=True,
+    )
+
+    memory_router_port: PositiveInt = Field(8890, validation_alias="MEMORY_ROUTER_PORT")
+    memory_router_max_body_bytes: PositiveInt = Field(
+        1_048_576, validation_alias="MEMORY_ROUTER_MAX_BODY_BYTES"
+    )
+    memory_router_token: SecretStr | None = Field(None, validation_alias="MEMORY_ROUTER_TOKEN")
+    memory_router_allow_anonymous: ExactBool = Field(
+        False, validation_alias="MEMORY_ROUTER_ALLOW_ANONYMOUS"
+    )
+    memory_router_admin_token: SecretStr | None = Field(
+        None, validation_alias="MEMORY_ROUTER_ADMIN_TOKEN"
+    )
+    memory_router_admin_read_token: SecretStr | None = Field(
+        None, validation_alias="MEMORY_ROUTER_ADMIN_READ_TOKEN"
+    )
+    memory_router_admin_review_token: SecretStr | None = Field(
+        None, validation_alias="MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"
+    )
+    memory_router_admin_cleanup_token: SecretStr | None = Field(
+        None, validation_alias="MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"
+    )
+    memory_router_admin_rate_limit_read_max: PositiveInt = Field(
+        120, validation_alias="MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX"
+    )
+    memory_router_admin_rate_limit_write_max: PositiveInt = Field(
+        30, validation_alias="MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX"
+    )
+    memory_router_admin_rate_limit_window_ms: PositiveInt = Field(
+        60_000, validation_alias="MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS"
+    )
+    memory_router_auth_failure_rate_limit_max: PositiveInt = Field(
+        120, validation_alias="MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_MAX"
+    )
+    memory_router_auth_failure_rate_limit_window_ms: PositiveInt = Field(
+        60_000, validation_alias="MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_WINDOW_MS"
+    )
+    memory_router_registry: str | None = Field(None, validation_alias="MEMORY_ROUTER_REGISTRY")
+    memory_router_deployment_mode: Literal["single", "cluster"] = Field(
+        "single", validation_alias="MEMORY_ROUTER_DEPLOYMENT_MODE"
+    )
+    memory_router_external_admin_rate_limit: ExactBool = Field(
+        False, validation_alias="MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT"
+    )
+
+    quarantine_database_url: str = Field(
+        DEFAULT_DATABASE_URL,
+        validation_alias="QUARANTINE_DATABASE_URL",
+    )
+    quarantine_public_key: str = Field("", validation_alias="QUARANTINE_PUBLIC_KEY")
+    quarantine_max_item_bytes: NonNegativeInt = Field(
+        1_048_576, validation_alias="QUARANTINE_MAX_ITEM_BYTES"
+    )
+    quarantine_max_pending_items: NonNegativeInt = Field(
+        1_000, validation_alias="QUARANTINE_MAX_PENDING_ITEMS"
+    )
+    quarantine_max_pending_items_per_writer: NonNegativeInt = Field(
+        50, validation_alias="QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER"
+    )
+    quarantine_max_encrypted_bytes: NonNegativeInt = Field(
+        104_857_600, validation_alias="QUARANTINE_MAX_ENCRYPTED_BYTES"
+    )
+    quarantine_rate_limit_max: NonNegativeInt = Field(
+        30, validation_alias="QUARANTINE_RATE_LIMIT_MAX"
+    )
+    quarantine_rate_limit_window_ms: NonNegativeInt = Field(
+        60_000, validation_alias="QUARANTINE_RATE_LIMIT_WINDOW_MS"
+    )
+    quarantine_rate_limit_global_max: NonNegativeInt = Field(
+        300, validation_alias="QUARANTINE_RATE_LIMIT_GLOBAL_MAX"
+    )
+    quarantine_distinct_family_limit_max: NonNegativeInt = Field(
+        10, validation_alias="QUARANTINE_DISTINCT_FAMILY_LIMIT_MAX"
+    )
+    quarantine_requarantine_ops_max: NonNegativeInt = Field(
+        1_000, validation_alias="QUARANTINE_REQUARANTINE_OPS_MAX"
+    )
+    quarantine_item_ttl_days: NonNegativeInt = Field(
+        30, validation_alias="QUARANTINE_ITEM_TTL_DAYS"
+    )
+    quarantine_max_postpones: NonNegativeInt = Field(3, validation_alias="QUARANTINE_MAX_POSTPONES")
+    quarantine_sweep_interval_seconds: NonNegativeInt = Field(
+        3_600, validation_alias="QUARANTINE_SWEEP_INTERVAL_SECONDS"
+    )
+    quarantine_event_retention_days: NonNegativeInt = Field(
+        90, validation_alias="QUARANTINE_EVENT_RETENTION_DAYS"
+    )
+
+    hindsight_base_url: str = Field("http://hindsight:8888", validation_alias="HINDSIGHT_BASE_URL")
+    hindsight_api_key: SecretStr | None = Field(None, validation_alias="HINDSIGHT_API_KEY")
+    hindsight_timeout_ms: PositiveInt = Field(10_000, validation_alias="HINDSIGHT_TIMEOUT_MS")
+    hindsight_max_response_bytes: PositiveInt = Field(
+        4 * 1024 * 1024, validation_alias="HINDSIGHT_MAX_RESPONSE_BYTES"
+    )
+    hindsight_retain_rate_limit_writer_max: PositiveInt = Field(
+        30, validation_alias="HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX"
+    )
+    hindsight_retain_rate_limit_global_max: PositiveInt = Field(
+        300, validation_alias="HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX"
+    )
+    hindsight_recall_rate_limit_writer_max: PositiveInt = Field(
+        120, validation_alias="HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX"
+    )
+    hindsight_recall_rate_limit_global_max: PositiveInt = Field(
+        1_200, validation_alias="HINDSIGHT_RECALL_RATE_LIMIT_GLOBAL_MAX"
+    )
+    hindsight_rate_limit_window_ms: PositiveInt = Field(
+        60_000, validation_alias="HINDSIGHT_RATE_LIMIT_WINDOW_MS"
+    )
+    hindsight_retain_max_items: PositiveInt = Field(
+        100, validation_alias="HINDSIGHT_RETAIN_MAX_ITEMS"
+    )
+    hindsight_retain_max_content_bytes: PositiveInt = Field(
+        524_288, validation_alias="HINDSIGHT_RETAIN_MAX_CONTENT_BYTES"
+    )
+    hindsight_recall_max_query_bytes: PositiveInt = Field(
+        32_768, validation_alias="HINDSIGHT_RECALL_MAX_QUERY_BYTES"
+    )
+    hindsight_recall_max_tokens: PositiveInt = Field(
+        8_192, validation_alias="HINDSIGHT_RECALL_MAX_TOKENS"
+    )
+
+    @model_validator(mode="after")
+    def validate_deployment(self) -> RouterSettings:
+        if self.memory_router_deployment_mode == "cluster":
+            if not self.quarantine_database_url.startswith(("postgres://", "postgresql://")):
+                raise ValueError("cluster deployment requires PostgreSQL quarantine storage")
+            if not self.memory_router_external_admin_rate_limit:
+                raise ValueError(
+                    "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
+                )
+        return self
+
+
+def load_settings() -> RouterSettings:
+    try:
+        return RouterSettings()  # type: ignore[call-arg]  # BaseSettings loads defaults and env values
+    except ValidationError as exc:
+        error = exc.errors()[0]
+        location = error.get("loc", ())
+        name = str(location[0]) if location else "memory-router settings"
+        error_type = error.get("type")
+        context = error.get("ctx")
+        if error_type == "greater_than_equal" and isinstance(context, dict):
+            message = f"{name} must be >= {context['ge']}"
+        elif name == "MEMORY_ROUTER_DEPLOYMENT_MODE" and error_type == "literal_error":
+            message = "MEMORY_ROUTER_DEPLOYMENT_MODE must be single or cluster"
+        elif isinstance(context, dict) and isinstance(context.get("error"), ValueError):
+            detail = str(context["error"])
+            message = detail if not location else f"{name} {detail}"
+        else:
+            message = f"invalid {name}"
+        raise RuntimeError(message) from exc
+
+
+def secret_value(value: SecretStr | None) -> str | None:
+    return value.get_secret_value() if value is not None else None
 
 
 def load_registry(path: str | None = None) -> WriterRegistry:
@@ -78,11 +253,9 @@ def assert_no_private_key_environment() -> None:
         raise RuntimeError(f"{injected} must not be available to the memory-router process")
 
 
-def assert_auth_environment() -> None:
-    router_token = os.environ.get("MEMORY_ROUTER_TOKEN")
-    anonymous = boolean_env("MEMORY_ROUTER_ALLOW_ANONYMOUS", False)
-    if not router_token:
-        if anonymous:
+def assert_auth_environment(settings: RouterSettings) -> None:
+    if not secret_value(settings.memory_router_token):
+        if settings.memory_router_allow_anonymous:
             log_event(
                 logger,
                 "warning",
@@ -100,8 +273,7 @@ def assert_auth_environment() -> None:
                 outcome="degraded",
                 reason="router-token-missing",
             )
-    legacy = os.environ.get("MEMORY_ROUTER_ADMIN_TOKEN")
-    if legacy:
+    if secret_value(settings.memory_router_admin_token):
         log_event(
             logger,
             "warning",
@@ -111,8 +283,8 @@ def assert_auth_environment() -> None:
             reason="legacy-admin-token",
         )
         return
-    if not os.environ.get("MEMORY_ROUTER_ADMIN_READ_TOKEN") and not os.environ.get(
-        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"
+    if not secret_value(settings.memory_router_admin_read_token) and not secret_value(
+        settings.memory_router_admin_review_token
     ):
         log_event(
             logger,
@@ -122,7 +294,7 @@ def assert_auth_environment() -> None:
             outcome="degraded",
             reason="admin-read-token-missing",
         )
-    if not os.environ.get("MEMORY_ROUTER_ADMIN_REVIEW_TOKEN"):
+    if not secret_value(settings.memory_router_admin_review_token):
         log_event(
             logger,
             "warning",
@@ -131,7 +303,7 @@ def assert_auth_environment() -> None:
             outcome="degraded",
             reason="admin-review-token-missing",
         )
-    if not os.environ.get("MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN"):
+    if not secret_value(settings.memory_router_admin_cleanup_token):
         log_event(
             logger,
             "warning",
@@ -140,17 +312,3 @@ def assert_auth_environment() -> None:
             outcome="degraded",
             reason="admin-cleanup-token-missing",
         )
-
-
-def assert_deployment_mode(database_url: str) -> None:
-    mode = os.environ.get("MEMORY_ROUTER_DEPLOYMENT_MODE", "single")
-    external_admin = boolean_env("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", False)
-    if mode not in {"single", "cluster"}:
-        raise RuntimeError("MEMORY_ROUTER_DEPLOYMENT_MODE must be single or cluster")
-    if mode == "cluster":
-        if not database_url.startswith(("postgres://", "postgresql://")):
-            raise RuntimeError("cluster deployment requires PostgreSQL quarantine storage")
-        if not external_admin:
-            raise RuntimeError(
-                "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
-            )

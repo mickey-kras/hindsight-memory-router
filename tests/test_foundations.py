@@ -48,26 +48,34 @@ async def test_auth_failure_auditor_records_and_survives_store_failure(
     assert caplog.text.count("authentication_audit_failed") == 1
 
 
-def test_environment_parsers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("INT", raising=False)
-    assert config.integer_env("INT", 7, minimum=1) == 7
-    monkeypatch.setenv("INT", "9")
-    assert config.integer_env("INT", 7, minimum=1) == 9
-    monkeypatch.setenv("INT", "bad")
+def test_typed_settings_preserve_strict_environment_parsing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MEMORY_ROUTER_PORT", raising=False)
+    assert config.load_settings().memory_router_port == 8890
+    monkeypatch.setenv("MEMORY_ROUTER_PORT", "9")
+    assert config.load_settings().memory_router_port == 9
+    monkeypatch.setenv("MEMORY_ROUTER_PORT", "bad")
     with pytest.raises(RuntimeError, match="must be an integer"):
-        config.integer_env("INT", 7)
-    monkeypatch.setenv("INT", "0")
+        config.load_settings()
+    monkeypatch.setenv("MEMORY_ROUTER_PORT", "0")
     with pytest.raises(RuntimeError, match="must be >= 1"):
-        config.integer_env("INT", 7, minimum=1)
+        config.load_settings()
 
-    monkeypatch.delenv("BOOL", raising=False)
-    assert config.boolean_env("BOOL", True)
+    monkeypatch.setenv("MEMORY_ROUTER_PORT", "")
+    assert config.load_settings().memory_router_port == 8890
     for raw, expected in (("true", True), ("false", False)):
-        monkeypatch.setenv("BOOL", raw)
-        assert config.boolean_env("BOOL") is expected
-    monkeypatch.setenv("BOOL", "1")
+        monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", raw)
+        assert config.load_settings().memory_router_allow_anonymous is expected
+    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "1")
     with pytest.raises(RuntimeError, match="true or false"):
-        config.boolean_env("BOOL")
+        config.load_settings()
+
+    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "false")
+    monkeypatch.setenv("MEMORY_ROUTER_TOKEN", "router-secret")
+    settings = config.load_settings()
+    assert "router-secret" not in repr(settings)
+    assert config.secret_value(settings.memory_router_token) == "router-secret"
 
 
 def test_registry_loading_and_validation(tmp_path: Path) -> None:
@@ -168,7 +176,7 @@ def test_environment_assertions(
         config.assert_no_private_key_environment()
     monkeypatch.delenv("QUARANTINE_PRIVATE_KEY")
 
-    config.assert_auth_environment()
+    config.assert_auth_environment(config.load_settings())
     assert {
         record.reason  # type: ignore[attr-defined]
         for record in caplog.records
@@ -182,7 +190,7 @@ def test_environment_assertions(
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
     monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
-    config.assert_auth_environment()
+    config.assert_auth_environment(config.load_settings())
     assert {
         record.reason  # type: ignore[attr-defined]
         for record in caplog.records
@@ -193,17 +201,20 @@ def test_environment_assertions(
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "bad")
     with pytest.raises(RuntimeError, match="single or cluster"):
-        config.assert_deployment_mode("sqlite:///x")
+        config.load_settings()
     monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "cluster")
     monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "false")
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "sqlite:///x")
     with pytest.raises(RuntimeError, match="PostgreSQL"):
-        config.assert_deployment_mode("sqlite:///x")
+        config.load_settings()
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://db")
     with pytest.raises(RuntimeError, match="EXTERNAL_ADMIN"):
-        config.assert_deployment_mode("postgresql://db")
+        config.load_settings()
     monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "true")
-    config.assert_deployment_mode("postgresql://db")
+    assert config.load_settings().quarantine_database_url == "postgresql://db"
     monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "single")
-    config.assert_deployment_mode("sqlite:///x")
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "sqlite:///x")
+    assert config.load_settings().quarantine_database_url == "sqlite:///x"
 
 
 @pytest.mark.parametrize(
