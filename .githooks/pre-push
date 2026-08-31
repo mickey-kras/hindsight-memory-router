@@ -4,5 +4,6 @@ set -eu
 python -m ruff format --check memory_router tests
 python -m ruff check memory_router tests
 python -m mypy memory_router
-python -m pytest
+python -m coverage run -m pytest
+python -m coverage report
 npm run check
