@@ -271,28 +271,31 @@ def _append_rule_matches(
 def _rule_scan(
     value: str, *, deadline: float | None = None, strip_inword_digits: bool = False
 ) -> list[SafetyFinding]:
-    findings: list[SafetyFinding] = []
-    seen: set[tuple[str, str]] = set()
-    variants = confusable_rule_variant_set(value, deadline=deadline)
-    scan_variants = dict.fromkeys(
-        candidate
-        for variant in (value, *variants.variants)
-        for candidate in (
-            (variant, _IN_WORD_DIGIT.sub("", variant)) if strip_inword_digits else (variant,)
-        )
+    return _scan_rule_variants(
+        value,
+        deadline=deadline,
+        strip_inword_digits=strip_inword_digits,
+        include_compact_split=False,
     )
-    for variant in scan_variants:
-        if deadline is not None and time.monotonic() >= deadline:
-            raise UnicodeScanDeadlineExceeded
-        for candidate in dict.fromkeys((variant, _RULE_PUNCTUATION.sub(" ", variant))):
-            _append_rule_matches(findings, seen, _RULES, candidate)
-    if variants.exhausted:
-        findings.append(SafetyFinding("confusable_variant_limit", "span_limit"))
-    return findings
 
 
 def _split_instruction_rule_scan(
     value: str, *, deadline: float | None = None, strip_inword_digits: bool = False
+) -> list[SafetyFinding]:
+    return _scan_rule_variants(
+        value,
+        deadline=deadline,
+        strip_inword_digits=strip_inword_digits,
+        include_compact_split=True,
+    )
+
+
+def _scan_rule_variants(
+    value: str,
+    *,
+    deadline: float | None,
+    strip_inword_digits: bool,
+    include_compact_split: bool,
 ) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
     seen: set[tuple[str, str]] = set()
@@ -307,11 +310,13 @@ def _split_instruction_rule_scan(
     for variant in scan_variants:
         if deadline is not None and time.monotonic() >= deadline:
             raise UnicodeScanDeadlineExceeded
-        scans = (
-            (_SPLIT_RULES, variant),
-            (_SPLIT_RULES, _RULE_PUNCTUATION.sub(" ", variant)),
-            (_COMPACT_SPLIT_RULES, re.sub(r"\s+", "", variant)),
-        )
+        rules = _SPLIT_RULES if include_compact_split else _RULES
+        scans = [
+            (rules, variant),
+            (rules, _RULE_PUNCTUATION.sub(" ", variant)),
+        ]
+        if include_compact_split:
+            scans.append((_COMPACT_SPLIT_RULES, re.sub(r"\s+", "", variant)))
         for rules, candidate in scans:
             _append_rule_matches(findings, seen, rules, candidate)
     if variants.exhausted:
