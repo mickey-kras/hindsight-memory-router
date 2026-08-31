@@ -77,7 +77,7 @@ class QuarantineRepository:
             rows = await tx.fetchall(
                 "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') "
                 "AND NOT(expires_at IS NOT NULL AND expires_at<=?) "
-                "ORDER BY created_at ASC LIMIT ? OFFSET ?",
+                "ORDER BY created_at ASC, quarantine_id ASC LIMIT ? OFFSET ?",
                 (at, limit, offset),
             )
         return [_summary(stored(row) or {}) for row in rows]
@@ -377,6 +377,8 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
         "status",
         "postpone_count",
         "requarantine_count",
+        "encrypted_bytes",
+        "expires_at",
     )
     return {key: item[key] for key in keys if item.get(key) is not None}
 
