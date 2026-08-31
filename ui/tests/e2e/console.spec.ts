@@ -49,6 +49,15 @@ test("stats and queue render after connect", async ({ page }, testInfo) => {
   }
 });
 
+test("loads reviewable items beyond the first page", async ({ page }) => {
+  await page.request.post("http://127.0.0.1:8899/__seed-more");
+  await connect(page);
+  await expect(page.getByText("100 shown / 105 reviewable")).toBeVisible();
+  await page.getByTestId("load-more").click();
+  await expect(page.getByText("105 shown / 105 reviewable")).toBeVisible();
+  await expect(page.getByTestId("load-more")).toBeHidden();
+});
+
 test("wrong read token surfaces a 401", async ({ page }) => {
   await page.goto("/");
   await page.getByPlaceholder("MEMORY_ROUTER_ADMIN_READ_TOKEN").fill("wrong-token");
@@ -137,6 +146,43 @@ test("cleanup preview then execute", async ({ page }) => {
   await page.getByTestId("cleanup-execute").click();
   await expect(page.getByText(/cleanup removed 3 items/)).toBeVisible();
   await expect(page.getByText("Quarantine is empty.")).toBeVisible();
+  await expect(page.getByTestId("cleanup-execute")).toBeDisabled();
+});
+
+test("mock cleanup honors older_than", async ({ page }) => {
+  const response = await page.request.post("http://127.0.0.1:8899/admin/quarantine/cleanup", {
+    headers: { authorization: `Bearer ${CLEANUP}` },
+    data: { dry_run: true, older_than: "2026-08-29T00:00:00.000Z" },
+  });
+  expect(response.status()).toBe(200);
+  expect((await response.json()).count).toBe(1);
+});
+
+test("mock enforces postpone limit and review response contracts", async ({ page }) => {
+  for (let count = 1; count <= 3; count += 1) {
+    const response = await page.request.post(
+      `http://127.0.0.1:8899/admin/quarantine/items/${RETAIN_ID}/postpone`,
+      { headers: { authorization: `Bearer ${REVIEW}` } },
+    );
+    expect(await response.json()).toEqual({ postponed: true, quarantine_id: RETAIN_ID, count });
+  }
+  const limited = await page.request.post(
+    `http://127.0.0.1:8899/admin/quarantine/items/${RETAIN_ID}/postpone`,
+    { headers: { authorization: `Bearer ${REVIEW}` } },
+  );
+  expect(limited.status()).toBe(409);
+
+  const rejected = await page.request.post(
+    `http://127.0.0.1:8899/admin/quarantine/items/${RECALL_ID}/reject`,
+    { headers: { authorization: `Bearer ${REVIEW}` } },
+  );
+  expect(await rejected.json()).toEqual({
+    reviewed: true,
+    allowed: false,
+    quarantine_id: RECALL_ID,
+    source_bank: "openclaw-main",
+    source_memory_id: "mem_01J8ZK3W0Q",
+  });
 });
 
 test("cleanup execute is blocked without a preview", async ({ page }) => {

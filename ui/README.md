@@ -9,6 +9,7 @@ Quarantine review console for hindsight-memory-router. Static export, no backend
 
 ```bash
 npm install
+npm run fixtures                    # disposable local crypto fixtures
 node tests/e2e/mockRouter.mjs 8899   # mock router with golden fixtures
 npm run dev                          # vite proxies /admin to the mock
 ```

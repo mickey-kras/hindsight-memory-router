@@ -14,6 +14,7 @@ const TOKENS = {
   review: "e2e-review-token",
   cleanup: "e2e-cleanup-token",
 };
+const MAX_POSTPONES = 3;
 
 function deepEqual(a, b) {
   if (a === b) return true;
@@ -91,6 +92,21 @@ export function startMockRouter(port = 8899) {
       reset();
       return finish(200, { reset: true });
     }
+    if (url.pathname === "/__seed-more" && req.method === "POST") {
+      const template = items.values().next().value;
+      for (let index = 0; index < 102; index += 1) {
+        const quarantineId = `q_seed_${index.toString(16).padStart(16, "0")}`;
+        items.set(quarantineId, {
+          ...template,
+          record: {
+            ...template.record,
+            quarantine_id: quarantineId,
+            created_at: new Date(Date.parse(template.record.created_at) + index).toISOString(),
+          },
+        });
+      }
+      return finish(200, { seeded: 102 });
+    }
 
     if (!url.pathname.startsWith("/admin/quarantine")) {
       return finish(404, { error: "not_found", message: "not found" });
@@ -127,7 +143,9 @@ export function startMockRouter(port = 8899) {
             : ["pending", "postponed"].includes(i.record.status),
         );
         const matched = pool.filter(
-          (i) => !parsed.reasons || parsed.reasons.includes(i.record.reason),
+          (i) =>
+            (!parsed.reasons || parsed.reasons.includes(i.record.reason)) &&
+            (!parsed.older_than || Date.parse(i.record.created_at) < Date.parse(parsed.older_than)),
         );
         const bytes = matched.reduce((sum, i) => sum + (i.record.encrypted_bytes ?? 0), 0);
         if (parsed.dry_run !== false) {
@@ -173,14 +191,31 @@ export function startMockRouter(port = 8899) {
             message: "decrypted quarantine content differs from the original item",
           });
         }
+        if (!["retain_request", "recalled_memory"].includes(item.record.kind)) {
+          return finish(409, {
+            error: "invalid_review_action",
+            message: "this quarantine item cannot be approved into memory",
+          });
+        }
         item.record.status = "reviewed_allowed";
         eventCount += 1;
         actions.push({ action: "approve", quarantine_id: item.record.quarantine_id, decrypted: parsed.decrypted });
-        finish(200, {
-          approved: true,
-          quarantine_id: item.record.quarantine_id,
-          target_bank: "openclaw-main",
-        });
+        finish(
+          200,
+          item.record.kind === "recalled_memory"
+            ? {
+                reviewed: true,
+                allowed: true,
+                quarantine_id: item.record.quarantine_id,
+                source_bank: item.record.source_bank,
+                source_memory_id: item.record.source_memory_id,
+              }
+            : {
+                approved: true,
+                quarantine_id: item.record.quarantine_id,
+                target_bank: "openclaw-main",
+              },
+        );
       });
       return;
     }
@@ -189,10 +224,28 @@ export function startMockRouter(port = 8899) {
       item.record.status = "reviewed_blocked";
       eventCount += 1;
       actions.push({ action: "reject", quarantine_id: item.record.quarantine_id });
-      return finish(200, { rejected: true, quarantine_id: item.record.quarantine_id });
+      return finish(
+        200,
+        item.record.kind === "recalled_memory"
+          ? {
+              reviewed: true,
+              allowed: false,
+              quarantine_id: item.record.quarantine_id,
+              source_bank: item.record.source_bank,
+              source_memory_id: item.record.source_memory_id,
+            }
+          : { rejected: true, quarantine_id: item.record.quarantine_id },
+      );
     }
 
     if (req.method === "POST" && action === "postpone") {
+      if (item.record.postpone_count >= MAX_POSTPONES) {
+        return finish(409, {
+          error: "postpone_limit_reached",
+          message:
+            "maximum postpone count reached; approve, reject, or wait for QUARANTINE_ITEM_TTL_DAYS expiry",
+        });
+      }
       item.record.postpone_count += 1;
       item.record.status = "postponed";
       eventCount += 1;

@@ -14,6 +14,8 @@ import { ItemDetail } from "./components/ItemDetail";
 import { CleanupPanel } from "./components/CleanupPanel";
 import { Banner } from "./components/Banner";
 
+const QUEUE_PAGE_SIZE = 100;
+
 export default function App() {
   const [tokens, setTokens] = useState<AdminTokens | null>(() => loadTokens());
   const [stats, setStats] = useState<QuarantineStats | null>(null);
@@ -24,13 +26,17 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [showCleanup, setShowCleanup] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!tokens) return;
     setLoading(true);
     setError(null);
     try {
-      const [queue, nextStats] = await Promise.all([listQueue(tokens), fetchStats(tokens)]);
+      const [queue, nextStats] = await Promise.all([
+        listQueue(tokens, QUEUE_PAGE_SIZE),
+        fetchStats(tokens),
+      ]);
       setItems(queue.items);
       setTotal(queue.total);
       setStats(nextStats);
@@ -44,6 +50,21 @@ export default function App() {
       setLoading(false);
     }
   }, [tokens]);
+
+  const loadMore = useCallback(async () => {
+    if (!tokens || loadingMore || items.length >= total) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const queue = await listQueue(tokens, QUEUE_PAGE_SIZE, items.length);
+      setItems((current) => [...current, ...queue.items]);
+      setTotal(queue.total);
+    } catch (err) {
+      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [items.length, loadingMore, tokens, total]);
 
   useEffect(() => {
     void refresh();
@@ -117,6 +138,8 @@ export default function App() {
           items={items}
           total={total}
           selectedId={selected?.quarantine_id ?? null}
+          loadingMore={loadingMore}
+          onLoadMore={() => void loadMore()}
           onSelect={(item) =>
             setSelected((current) =>
               current?.quarantine_id === item.quarantine_id ? null : item,

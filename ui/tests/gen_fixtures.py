@@ -3,8 +3,8 @@
 Run from anywhere: python3 ui/tests/gen_fixtures.py
 Requires: cryptography, pydantic, and rfc8785 (router runtime dependencies).
 
-Rewrites every file in ui/tests/fixtures/, including a fresh test-only RSA
-keypair. The committed keypair protects fake data only; it is not a secret.
+Rewrites the gitignored files in ui/tests/fixtures/, including a fresh test-only
+RSA keypair for synthetic data. Test lifecycle hooks remove them after use.
 """
 
 import json

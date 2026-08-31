@@ -3,7 +3,7 @@
 // (static UI same-origin with the router admin API, no CORS).
 
 import { createServer } from "node:http";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { startMockRouter } from "./mockRouter.mjs";
@@ -12,6 +12,12 @@ const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const DIST = path.join(ROOT, "dist");
 const UI_PORT = Number(process.env.UI_PORT ?? 4173);
 const MOCK_PORT = Number(process.env.MOCK_PORT ?? 8899);
+
+try {
+  await access(path.join(DIST, "index.html"));
+} catch {
+  throw new Error("ui/dist is missing; run npm run build before npm run test:e2e");
+}
 
 const MIME = {
   ".html": "text/html",

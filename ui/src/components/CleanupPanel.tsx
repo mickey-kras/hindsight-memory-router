@@ -52,6 +52,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
           dry_run: false,
           expected_count: preview.count,
         });
+        setPreview(null);
         onDone(`cleanup removed ${result.count} items (${formatBytes(result.encrypted_bytes)})`);
       }
     } catch (err) {

@@ -5,7 +5,9 @@ interface Props {
   items: QuarantineItemSummary[];
   total: number;
   selectedId: string | null;
+  loadingMore: boolean;
   onSelect: (item: QuarantineItemSummary) => void;
+  onLoadMore: () => void;
 }
 
 function Badge({ text, style }: { text: string; style: string }) {
@@ -16,7 +18,7 @@ function Badge({ text, style }: { text: string; style: string }) {
   );
 }
 
-export function QueueView({ items, total, selectedId, onSelect }: Props) {
+export function QueueView({ items, total, selectedId, loadingMore, onSelect, onLoadMore }: Props) {
   if (items.length === 0) {
     return (
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-10 text-center text-sm text-zinc-500">
@@ -105,6 +107,18 @@ export function QueueView({ items, total, selectedId, onSelect }: Props) {
           </button>
         ))}
       </div>
+
+      {items.length < total && (
+        <button
+          type="button"
+          onClick={onLoadMore}
+          disabled={loadingMore}
+          data-testid="load-more"
+          className="mt-3 w-full rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+        >
+          {loadingMore ? "Loading..." : `Load more (${total - items.length} remaining)`}
+        </button>
+      )}
     </div>
   );
 }
