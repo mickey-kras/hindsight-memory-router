@@ -157,17 +157,19 @@ async def shutdown_facade_scan_executor_async() -> None:
     await asyncio.to_thread(shutdown_facade_scan_executor)
 
 
+def _response_scanner_shutdown(writer_id: str | None) -> HttpError:
+    return _scan_unavailable(
+        _RESPONSE_SCANNER_SHUT_DOWN, error_kind="shutdown", writer_id=writer_id
+    )
+
+
 async def _scan_facade_response(  # NOSONAR
     value: Any, *, writer_id: str | None = None
 ) -> SafetyResult:
     try:
         admission = _acquire_facade_scan_capacity()
     except _FacadeScannerShutdown as exc:
-        raise _scan_unavailable(
-            _RESPONSE_SCANNER_SHUT_DOWN,
-            error_kind="shutdown",
-            writer_id=writer_id,
-        ) from exc
+        raise _response_scanner_shutdown(writer_id) from exc
     if admission is None:
         raise _scan_unavailable(
             "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
@@ -194,19 +196,12 @@ async def _scan_facade_response(  # NOSONAR
                 future.cancel()  # type: ignore[no-untyped-call]
                 raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
             _FACADE_SCAN_FUTURES.add(future)
-    except HttpError:
-        capacity.release()
-        raise
-    except asyncio.CancelledError:
+    except (HttpError, asyncio.CancelledError):
         capacity.release()
         raise
     except _FacadeScannerShutdown as exc:
         capacity.release()
-        raise _scan_unavailable(
-            _RESPONSE_SCANNER_SHUT_DOWN,
-            error_kind="shutdown",
-            writer_id=writer_id,
-        ) from exc
+        raise _response_scanner_shutdown(writer_id) from exc
     except Exception as exc:
         capacity.release()
         raise _scan_unavailable(
@@ -226,21 +221,13 @@ async def _scan_facade_response(  # NOSONAR
     except TimeoutError as exc:
         future.cancel()  # type: ignore[no-untyped-call]
         if _facade_scan_stopped(generation):
-            raise _scan_unavailable(
-                _RESPONSE_SCANNER_SHUT_DOWN,
-                error_kind="shutdown",
-                writer_id=writer_id,
-            ) from exc
+            raise _response_scanner_shutdown(writer_id) from exc
         raise _scan_unavailable(
             "response safety scan timed out", error_kind="timeout", writer_id=writer_id
         ) from exc
     except asyncio.CancelledError as exc:  # NOSONAR
         if _facade_scan_stopped(generation):
-            raise _scan_unavailable(
-                _RESPONSE_SCANNER_SHUT_DOWN,
-                error_kind="shutdown",
-                writer_id=writer_id,
-            ) from exc
+            raise _response_scanner_shutdown(writer_id) from exc
         raise
     except ProcessExpired as exc:
         raise _scan_unavailable(
@@ -250,11 +237,7 @@ async def _scan_facade_response(  # NOSONAR
         ) from exc
     except Exception as exc:
         if _facade_scan_stopped(generation):
-            raise _scan_unavailable(
-                _RESPONSE_SCANNER_SHUT_DOWN,
-                error_kind="shutdown",
-                writer_id=writer_id,
-            ) from exc
+            raise _response_scanner_shutdown(writer_id) from exc
         raise _scan_unavailable(
             "response safety scanner failed",
             error_kind="unexpected",

@@ -47,5 +47,17 @@ def _rfc8785_safe(value: Any) -> Any:
             raise ValueError("value must contain JSON values only")
 
 
+def assert_json_depth(value: Any, *, max_depth: int) -> None:
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            raise ValueError("JSON nesting depth exceeds limit")
+        if isinstance(current, dict):
+            stack.extend((entry, depth + 1) for entry in current.values())
+        elif isinstance(current, list):
+            stack.extend((entry, depth + 1) for entry in current)
+
+
 def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()

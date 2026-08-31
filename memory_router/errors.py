@@ -15,3 +15,9 @@ class HttpError(Exception):
 
     def body(self) -> dict[str, str]:
         return {"error": self.code, "message": self.message}
+
+
+def rate_limit_error(
+    *, code: str, message: str, headers: dict[str, str] | None = None
+) -> HttpError:
+    return HttpError(429, code, message, headers if headers is not None else {})

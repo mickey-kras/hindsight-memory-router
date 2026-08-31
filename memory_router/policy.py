@@ -226,45 +226,36 @@ class RouterPolicy:
             )
         return False
 
+    async def _quarantine_placeholder_or_degrade(
+        self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
+    ) -> None:
+        try:
+            await self._quarantine_oversized_recalled(writer_id, source, bank_id, result)
+        except HttpError as placeholder_exc:
+            if not self._quarantine_unavailable(placeholder_exc):
+                raise
+            self._log_degradation(
+                "quarantine_placeholder_unavailable",
+                {
+                    "writer_id": writer_id,
+                    "bank_id": bank_id,
+                    "memory_id": result.get("id"),
+                    "status": placeholder_exc.status,
+                    "code": placeholder_exc.code,
+                },
+            )
+
     async def _allow_recalled_or_degrade(
         self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
     ) -> bool:
         try:
             return await self._allow_recalled(writer_id, source, bank_id, result)
         except ValueError:
-            try:
-                await self._quarantine_oversized_recalled(writer_id, source, bank_id, result)
-            except HttpError as placeholder_exc:
-                if not self._quarantine_unavailable(placeholder_exc):
-                    raise
-                self._log_degradation(
-                    "quarantine_placeholder_unavailable",
-                    {
-                        "writer_id": writer_id,
-                        "bank_id": bank_id,
-                        "memory_id": result.get("id"),
-                        "status": placeholder_exc.status,
-                        "code": placeholder_exc.code,
-                    },
-                )
+            await self._quarantine_placeholder_or_degrade(writer_id, source, bank_id, result)
             return False
         except HttpError as exc:
             if exc.status == 413 and exc.code == "quarantine_item_too_large":
-                try:
-                    await self._quarantine_oversized_recalled(writer_id, source, bank_id, result)
-                except HttpError as placeholder_exc:
-                    if not self._quarantine_unavailable(placeholder_exc):
-                        raise
-                    self._log_degradation(
-                        "quarantine_placeholder_unavailable",
-                        {
-                            "writer_id": writer_id,
-                            "bank_id": bank_id,
-                            "memory_id": result.get("id"),
-                            "status": placeholder_exc.status,
-                            "code": placeholder_exc.code,
-                        },
-                    )
+                await self._quarantine_placeholder_or_degrade(writer_id, source, bank_id, result)
                 return False
             if not self._quarantine_unavailable(exc):
                 raise

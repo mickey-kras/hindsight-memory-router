@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from memory_router.errors import rate_limit_error
 from memory_router.hindsight import HindsightGatewayError
 
 
@@ -29,3 +30,13 @@ def test_hindsight_timeout_preserves_504_mapping() -> None:
         "method": "POST",
         "timeout_ms": 10_000,
     }
+
+
+def test_rate_limit_error_builds_public_error() -> None:
+    error = rate_limit_error(
+        code="auth_rate_limited", message="too many", headers={"retry-after": "1"}
+    )
+    assert error.status == 429
+    assert error.code == "auth_rate_limited"
+    assert error.message == "too many"
+    assert error.headers == {"retry-after": "1"}

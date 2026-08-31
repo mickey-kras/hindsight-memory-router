@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
 
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
-from .repository import QuarantineRepository, insert_event, stored
+from .repository import QuarantineRepository, insert_event, is_expired, stored
+from .timestamps import parse_iso
 
-_REVIEW_STALE_SECONDS = 60
+REVIEW_STALE_SECONDS = 60
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
@@ -18,18 +18,13 @@ def _item_query(tx: Any) -> str:
     return _SELECT_ITEM_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_ITEM
 
 
-def _stale(updated_at: str, at: str, stale_seconds: int = _REVIEW_STALE_SECONDS) -> bool:
+def _stale(updated_at: str, at: str, stale_seconds: int = REVIEW_STALE_SECONDS) -> bool:
     try:
-        updated = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-        current = datetime.fromisoformat(at.replace("Z", "+00:00"))
+        updated = parse_iso(updated_at)
+        current = parse_iso(at)
     except ValueError:
         return False
     return (current - updated).total_seconds() >= stale_seconds
-
-
-def _expired(item: dict[str, Any], at: str) -> bool:
-    expires_at = item.get("expires_at")
-    return expires_at is not None and str(expires_at) <= at
 
 
 def _assert_reviewable(item: dict[str, Any], at: str) -> None:
@@ -37,7 +32,7 @@ def _assert_reviewable(item: dict[str, Any], at: str) -> None:
         raise HttpError(
             409, "quarantine_already_finalized", "quarantine item is not pending review"
         )
-    if _expired(item, at):
+    if is_expired(item, at):
         raise HttpError(409, "quarantine_expired", "quarantine item has expired")
 
 
@@ -276,7 +271,7 @@ async def remove(
 
 
 async def recover_interrupted(
-    repository: QuarantineRepository, at: str, stale_seconds: int = _REVIEW_STALE_SECONDS
+    repository: QuarantineRepository, at: str, stale_seconds: int = REVIEW_STALE_SECONDS
 ) -> None:
     async with repository.db.transaction() as tx:
         query = _SELECT_IN_PROGRESS_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_IN_PROGRESS
@@ -284,7 +279,7 @@ async def recover_interrupted(
         for row in rows:
             if not _stale(str(row["updated_at"]), at, stale_seconds):
                 continue
-            if _expired(row, at):
+            if is_expired(row, at):
                 await _expire_stale_claim(tx, row, at)
             else:
                 await _restore_stale_claim(tx, row, at)
@@ -302,7 +297,7 @@ async def _recover_stale_for_action(
         or not _stale(str(item.get("updated_at") or ""), at, stale_seconds)
     ):
         return item, False
-    if _expired(item, at):
+    if is_expired(item, at):
         await _expire_stale_claim(tx, item, at)
         return item, True
     await _restore_stale_claim(tx, item, at)

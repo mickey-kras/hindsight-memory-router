@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any, cast
 
 from .canonical import sha256_hex
@@ -11,6 +11,7 @@ from .dedupe import request_family_identity
 from .envelope import create_envelope, decode_public_key, estimate_envelope_size
 from .errors import HttpError
 from .repository import Capacity, QuarantineRepository
+from .timestamps import iso_format, parse_iso
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,19 +141,14 @@ class QuarantineStore:
         }
         if self.limits.item_ttl_days > 0:
             try:
-                created = datetime.fromisoformat(input_["timestamp"].replace("Z", "+00:00"))
+                created = parse_iso(input_["timestamp"])
             except ValueError as exc:
                 raise HttpError(
                     400,
                     "invalid_quarantine_timestamp",
                     "quarantine timestamp must be an ISO timestamp",
                 ) from exc
-            item["expires_at"] = (
-                (created + timedelta(days=self.limits.item_ttl_days))
-                .astimezone(UTC)
-                .isoformat(timespec="milliseconds")
-                .replace("+00:00", "Z")
-            )
+            item["expires_at"] = iso_format(created + timedelta(days=self.limits.item_ttl_days))
         return item
 
     async def _known_identity(self, input_: dict[str, Any], item_exists: bool) -> bool:

@@ -21,10 +21,10 @@ def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
     app_module._storage_readiness_log_state = app_module._ReadinessLogState(
         "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
     )
-    app_module._readiness_cache = None
-    app_module._readiness_lock = None
-    app_module._version_cache = None
-    app_module._version_lock = None
+    app_module._readiness.cache = None
+    app_module._readiness.lock = None
+    app_module._version.cache = None
+    app_module._version.lock = None
     yield
     vars(app_module.runtime).clear()
     vars(app_module.runtime).update(previous_runtime)

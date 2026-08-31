@@ -9,7 +9,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
 
-from .canonical import canonical_json
+from .canonical import assert_json_depth, canonical_json
 from .errors import HttpError
 from .models import RecallResponse
 from .observability import current_request_id
@@ -101,15 +101,10 @@ class HindsightGatewayError(HttpError):
 
 
 def _assert_response_depth(value: Any) -> None:
-    stack: list[tuple[Any, int]] = [(value, 1)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > MAX_HINDSIGHT_JSON_DEPTH:
-            raise ValueError("upstream JSON nesting depth exceeds limit")
-        if isinstance(current, dict):
-            stack.extend((entry, depth + 1) for entry in current.values())
-        elif isinstance(current, list):
-            stack.extend((entry, depth + 1) for entry in current)
+    try:
+        assert_json_depth(value, max_depth=MAX_HINDSIGHT_JSON_DEPTH)
+    except ValueError as exc:
+        raise ValueError("upstream JSON nesting depth exceeds limit") from exc
 
 
 def _assert_finite_numbers(value: Any) -> None:
