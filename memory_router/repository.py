@@ -383,12 +383,13 @@ def _summary(item: dict[str, Any]) -> dict[str, Any]:
     return {key: item[key] for key in keys if item.get(key) is not None}
 
 
+def is_expired(item: dict[str, Any], at: str) -> bool:
+    expires_at = item.get("expires_at")
+    return expires_at is not None and str(expires_at) <= at
+
+
 def _expired(item: dict[str, Any], at: str) -> bool:
-    return (
-        item.get("status") in {"pending", "postponed"}
-        and item.get("expires_at") is not None
-        and item["expires_at"] <= at
-    )
+    return item.get("status") in {"pending", "postponed"} and is_expired(item, at)
 
 
 def _same_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
