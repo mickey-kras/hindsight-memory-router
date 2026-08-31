@@ -117,33 +117,18 @@ run_check "remove stale compose stack" cleanup
 if [[ "${HMR_SKIP_BUILD:-false}" != "true" ]]; then
   run_check "build memory-router image" docker build -t hindsight-memory-router:ci .
 fi
-run_check "start compose stack" docker compose -p "$project" -f "$compose_file" up -d
+run_check "start compose stack" docker compose -p "$project" -f "$compose_file" up --wait --wait-timeout 120
 
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
 
 begin_check "router liveness is dependency independent"
-for _ in {1..60}; do
-  if curl --max-time 5 -fsS "${router_url}/health/live" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
 live_response="$(curl --max-time 5 -fsS "${router_url}/health/live")"
 printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "alive"; assert isinstance(data["version"], str) and data["version"]; assert isinstance(data["uptime_seconds"], (int, float)) and data["uptime_seconds"] >= 0' || fail_check "router /health/live response was unexpected"
 pass_check
 
 begin_check "router readiness and internal Hindsight become reachable"
-for _ in {1..60}; do
-  if curl --max-time 5 -fsS "${router_url}/health" >/dev/null 2>&1 && \
-    curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null 2>&1 && \
-    curl --max-time 5 -fsS "${router_url}/ready" >/dev/null 2>&1 && \
-    docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
 health_response="$(curl --max-time 5 -fsS "${router_url}/health")"
 ready_response="$(curl --max-time 5 -fsS "${router_url}/health/ready")"
 legacy_ready_response="$(curl --max-time 5 -fsS "${router_url}/ready")"
