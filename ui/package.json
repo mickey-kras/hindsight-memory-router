@@ -1,0 +1,34 @@
+{
+  "name": "memory-router-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "fixtures": "python3 tests/gen_fixtures.py",
+    "fixtures:clean": "python3 tests/gen_fixtures.py --clean",
+    "pretest": "npm run fixtures",
+    "test": "vitest run",
+    "posttest": "npm run fixtures:clean",
+    "pretest:e2e": "npm run fixtures",
+    "test:e2e": "playwright test",
+    "posttest:e2e": "npm run fixtures:clean"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0",
+    "@tailwindcss/vite": "^4.1.11",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react": "^4.6.0",
+    "tailwindcss": "^4.1.11",
+    "typescript": "^5.9.2",
+    "vite": "^7.0.4",
+    "vitest": "^3.2.4"
+  }
+}

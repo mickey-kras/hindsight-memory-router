@@ -125,6 +125,21 @@ async def test_repository_store_get_refresh_list_stats_and_memory_lookup(
 
 
 @pytest.mark.asyncio
+async def test_list_reviewable_has_stable_tiebreaker_and_complete_summary(
+    repository: QuarantineRepository,
+) -> None:
+    capacity = Capacity(10, 10, 100_000)
+    for qid in ("q_b", "q_a"):
+        value = item(qid, expires="2027-01-01T00:00:00.000Z")
+        await repository.store(value, capacity, mode="id", at="2026-01-01T00:00:00.000Z")
+
+    rows = await repository.list_reviewable(10, 0, "2026-01-02T00:00:00.000Z")
+    assert [row["quarantine_id"] for row in rows] == ["q_a", "q_b"]
+    assert rows[0]["encrypted_bytes"] > 0
+    assert rows[0]["expires_at"] == "2027-01-01T00:00:00.000Z"
+
+
+@pytest.mark.asyncio
 async def test_reviewed_request_dedupe_does_not_reopen(repository: QuarantineRepository) -> None:
     capacity = Capacity(10, 10, 100_000)
     original = item("q", dedupe="d")
