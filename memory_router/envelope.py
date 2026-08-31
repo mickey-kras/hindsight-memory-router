@@ -5,7 +5,7 @@ import hmac
 import json
 import os
 import re
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -25,14 +25,7 @@ QuarantineReason = Literal[
     "denied_endpoint",
     "auth_failed",
 ]
-_REASONS = {
-    "unknown_writer",
-    "suspicious_content",
-    "suspicious_query",
-    "recalled_suspicious_memory",
-    "denied_endpoint",
-    "auth_failed",
-}
+_REASONS = frozenset(get_args(QuarantineReason))
 
 
 class DecryptedQuarantine(BaseModel):
@@ -103,17 +96,18 @@ def canonical_decrypted(value: dict[str, Any]) -> str:
     return canonical_json(result)
 
 
+def _pem_bytes(trimmed: str, *, marker: str) -> bytes:
+    if marker in trimmed:
+        return trimmed.replace("\\n", "\n").encode()
+    return base64.b64decode(trimmed, validate=True)
+
+
 def decode_public_key(value: str) -> rsa.RSAPublicKey:
     trimmed = value.strip()
     if not trimmed:
         raise ValueError("QUARANTINE_PUBLIC_KEY is required")
     try:
-        pem = (
-            trimmed.replace("\\n", "\n").encode()
-            if "BEGIN PUBLIC KEY" in trimmed
-            else base64.b64decode(trimmed, validate=True)
-        )
-        key = serialization.load_pem_public_key(pem)
+        key = serialization.load_pem_public_key(_pem_bytes(trimmed, marker="BEGIN PUBLIC KEY"))
     except Exception as exc:
         raise ValueError("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPublicKey):
@@ -126,12 +120,9 @@ def decode_private_key(value: str) -> rsa.RSAPrivateKey:
     if not trimmed:
         raise ValueError("private key is required")
     try:
-        pem = (
-            trimmed.replace("\\n", "\n").encode()
-            if "BEGIN " in trimmed
-            else base64.b64decode(trimmed, validate=True)
+        key = serialization.load_pem_private_key(
+            _pem_bytes(trimmed, marker="BEGIN "), password=None
         )
-        key = serialization.load_pem_private_key(pem, password=None)
     except Exception as exc:
         raise ValueError("private key must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPrivateKey):
