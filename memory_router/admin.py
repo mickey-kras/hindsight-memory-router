@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hmac
-from datetime import datetime
 from typing import Any, cast
 
 from .canonical import sha256_hex
@@ -10,7 +9,9 @@ from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .maintenance import cleanup, preview_cleanup
 from .policy import prepare_retain_body
+from .repository import is_expired
 from .review_repository import (
+    REVIEW_STALE_SECONDS,
     claim_review,
     complete_side_effect,
     finish_approve_memory,
@@ -21,7 +22,7 @@ from .review_repository import (
     remove,
 )
 from .security import scan_retain_body
-from .timestamps import iso_now
+from .timestamps import iso_now, parse_iso
 from .validation import parse_retain_body
 
 
@@ -33,7 +34,7 @@ class QuarantineAdminService:
         registry: Any,
         limits: Any,
         max_postpones: int = 3,
-        review_stale_seconds: int = 60,
+        review_stale_seconds: int = REVIEW_STALE_SECONDS,
     ) -> None:
         self.repository = repository
         self.hindsight = hindsight
@@ -292,7 +293,7 @@ class QuarantineAdminService:
         older_than = body.get("older_than")
         if older_than is not None:
             try:
-                datetime.fromisoformat(str(older_than).replace("Z", "+00:00"))
+                parse_iso(str(older_than))
             except ValueError as exc:
                 raise HttpError(
                     400, "invalid_cleanup_time", "older_than must be an ISO timestamp"
@@ -342,8 +343,7 @@ class QuarantineAdminService:
 
     @staticmethod
     def _assert_not_expired(item: dict[str, Any]) -> None:
-        expires_at = item.get("expires_at")
-        if expires_at is not None and str(expires_at) <= iso_now():
+        if is_expired(item, iso_now()):
             raise HttpError(409, "quarantine_expired", "quarantine item has expired")
 
     @staticmethod
