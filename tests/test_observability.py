@@ -348,17 +348,17 @@ async def test_storage_readiness_timeout_is_recorded(
 
 @pytest.mark.asyncio
 async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None:
-    app_module._readiness_cache = (
+    app_module._readiness.cache = (
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
     )
-    app_module._readiness_lock = asyncio.Lock()
-    await app_module._readiness_lock.acquire()
+    app_module._readiness.lock = asyncio.Lock()
+    await app_module._readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness_lock.release()
+        app_module._readiness.lock.release()
 
     assert response.status_code == 200
     assert response.body == b'{"status":"healthy"}'
@@ -366,17 +366,17 @@ async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None
 
 @pytest.mark.asyncio
 async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
-    app_module._readiness_cache = (
+    app_module._readiness.cache = (
         time.monotonic() - app_module._CACHE_MAX_STALENESS_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
     )
-    app_module._readiness_lock = asyncio.Lock()
-    await app_module._readiness_lock.acquire()
+    app_module._readiness.lock = asyncio.Lock()
+    await app_module._readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness_lock.release()
+        app_module._readiness.lock.release()
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"status": "unhealthy"}
@@ -384,12 +384,12 @@ async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
 
 @pytest.mark.asyncio
 async def test_readiness_cold_refresh_returns_503_instead_of_queueing() -> None:
-    app_module._readiness_lock = asyncio.Lock()
-    await app_module._readiness_lock.acquire()
+    app_module._readiness.lock = asyncio.Lock()
+    await app_module._readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness_lock.release()
+        app_module._readiness.lock.release()
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"status": "unhealthy"}
@@ -403,7 +403,7 @@ async def test_readiness_ttl_expiry_refetches_dependencies(
     health = AsyncMock(return_value={"status": "healthy", "database": "connected"})
     monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=ping))
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=health))
-    app_module._readiness_cache = (
+    app_module._readiness.cache = (
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
         503,
         b'{"status":"unhealthy"}',
@@ -443,7 +443,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
     monkeypatch.setattr(app_module.runtime, "hindsight", None)
 
     for _ in range(2):
-        app_module._readiness_cache = None
+        app_module._readiness.cache = None
         response = await app_module._health_ready_response()
         assert response.status_code == 503
 
@@ -456,7 +456,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
         ),
     )
     for _ in range(2):
-        app_module._readiness_cache = None
+        app_module._readiness.cache = None
         response = await app_module._health_ready_response()
         assert response.status_code == 200
 
@@ -488,11 +488,11 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
     assert second.status_code == 503
     version.assert_awaited_once()
 
-    assert app_module._version_cache is not None
-    app_module._version_cache = (
+    assert app_module._version.cache is not None
+    app_module._version.cache = (
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
-        app_module._version_cache[1],
-        app_module._version_cache[2],
+        app_module._version.cache[1],
+        app_module._version.cache[2],
     )
     await app_module._version_response()
     assert version.await_count == 2
@@ -507,13 +507,13 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
 )
 @pytest.mark.asyncio
 async def test_version_stale_response_is_bounded(age: float, expected_status: int) -> None:
-    app_module._version_cache = (time.monotonic() - age, 200, b'{"api_version":"cached"}')
-    app_module._version_lock = asyncio.Lock()
-    await app_module._version_lock.acquire()
+    app_module._version.cache = (time.monotonic() - age, 200, b'{"api_version":"cached"}')
+    app_module._version.lock = asyncio.Lock()
+    await app_module._version.lock.acquire()
     try:
         response = await app_module._version_response()
     finally:
-        app_module._version_lock.release()
+        app_module._version.lock.release()
 
     assert response.status_code == expected_status
 
