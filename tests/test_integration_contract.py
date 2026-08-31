@@ -17,6 +17,7 @@ SECURITY_PATH = Path("memory_router/security.py")
 SCAN_WINDOWS_PATH = Path("memory_router/scan_windows.py")
 UNICODE_SECURITY_PATH = Path("memory_router/unicode_security.py")
 SMOKE_PATH = Path("tests/integration/smoke.sh")
+DEFAULT_COMPOSE_SMOKE_PATH = Path("tests/integration/default-compose-smoke.sh")
 OPENCLAW_SMOKE_PATH = Path("tests/integration/openclaw-compat.sh")
 
 HTTP_DECORATOR_METHODS = {
@@ -316,6 +317,21 @@ def test_behavior_changes_require_integration_smoke_update() -> None:
     ).splitlines()
 
     assert marker in smoke_lines
+
+
+def test_compose_wait_replaces_only_full_stack_readiness_polling() -> None:
+    smoke = SMOKE_PATH.read_text(encoding="utf-8")
+    default_smoke = DEFAULT_COMPOSE_SMOKE_PATH.read_text(encoding="utf-8")
+    startup_checks = smoke.split('run_check "start compose stack"', 1)[1].split(
+        'begin_check "authentication and network boundaries hold"', 1
+    )[0]
+
+    assert "up --wait --wait-timeout 120" in smoke
+    assert "for _ in" not in startup_checks
+    assert 'live_response="$(curl --max-time 5 -fsS "${router_url}/health/live")"' in smoke
+    assert "urllib.request.urlopen('http://hindsight:8888/health', timeout=2)" in smoke
+    assert '"${compose[@]}" up -d --no-build' in default_smoke
+    assert "wait_for_liveness" in default_smoke
 
 
 def test_every_declared_operation_and_workflow_has_integration_smoke_coverage() -> None:
