@@ -257,6 +257,7 @@ admin_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authori
 [[ "$admin_status" == "401" ]] || fail_check "router token accessed admin queue"
 queue_response="$(admin_get "/admin/quarantine/queue")"
 printf '%s' "$queue_response" | grep -q "$unknown_id" || fail_check "admin queue missing unknown item"
+printf '%s' "$queue_response" | python3 -c 'import json,sys; item=next(value for value in json.load(sys.stdin)["items"] if value["quarantine_id"] == "'"$unknown_id"'"); assert item["encrypted_bytes"] > 0 and item["expires_at"]' || fail_check "admin queue missing encrypted size or expiry metadata"
 if printf '%s' "$queue_response" | grep -q "$unknown_marker"; then
   fail_check "admin queue leaked plaintext"
 fi

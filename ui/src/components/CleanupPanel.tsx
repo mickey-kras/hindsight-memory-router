@@ -56,6 +56,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
         onDone(`cleanup removed ${result.count} items (${formatBytes(result.encrypted_bytes)})`);
       }
     } catch (err) {
+      if (!dryRun && err instanceof ApiError && err.status === 409) setPreview(null);
       setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "cleanup failed");
     } finally {
       setBusy(false);
@@ -70,6 +71,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
         <label className="flex items-center gap-2 text-zinc-300">
           Scope
           <select
+            disabled={busy}
             value={scope}
             onChange={(e) => {
               setScope(e.target.value as "pending" | "all");
@@ -84,6 +86,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
         <label className="flex items-center gap-2 text-zinc-300">
           Older than
           <input
+            disabled={busy}
             type="datetime-local"
             value={olderThan}
             onChange={(e) => {
@@ -106,6 +109,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
             }`}
           >
             <input
+              disabled={busy}
               type="checkbox"
               className="sr-only"
               checked={reasons.includes(reason)}

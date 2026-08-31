@@ -10,6 +10,7 @@ import { startMockRouter } from "./mockRouter.mjs";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const DIST = path.join(ROOT, "dist");
+const DIST_PREFIX = `${DIST}${path.sep}`;
 const UI_PORT = Number(process.env.UI_PORT ?? 4173);
 const MOCK_PORT = Number(process.env.MOCK_PORT ?? 8899);
 
@@ -54,7 +55,7 @@ const server = createServer((req, res) => {
 
   const rel = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
   const file = path.join(DIST, rel);
-  if (!file.startsWith(DIST)) {
+  if (!file.startsWith(DIST_PREFIX)) {
     res.writeHead(403).end();
     return;
   }
@@ -64,10 +65,15 @@ const server = createServer((req, res) => {
       res.end(content);
     })
     .catch(() => {
-      readFile(path.join(DIST, "index.html")).then((content) => {
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end(content);
-      });
+      readFile(path.join(DIST, "index.html"))
+        .then((content) => {
+          res.writeHead(200, { "Content-Type": "text/html" });
+          res.end(content);
+        })
+        .catch(() => {
+          res.writeHead(500, { "Content-Type": "text/plain" });
+          res.end("ui/dist/index.html is unavailable");
+        });
     });
 });
 

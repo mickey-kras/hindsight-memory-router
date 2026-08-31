@@ -15,6 +15,13 @@ const TOKENS = {
   cleanup: "e2e-cleanup-token",
 };
 const MAX_POSTPONES = 3;
+const FINAL_STATUSES = new Set([
+  "review_in_progress",
+  "review_side_effect_started",
+  "review_side_effect_completed",
+  "reviewed_allowed",
+  "reviewed_blocked",
+]);
 
 function deepEqual(a, b) {
   if (a === b) return true;
@@ -54,8 +61,14 @@ export function startMockRouter(port = 8899) {
   };
   reset();
 
+  const expired = (item) =>
+    ["pending", "postponed"].includes(item.record.status) &&
+    item.record.expires_at &&
+    item.record.expires_at <= new Date().toISOString();
   const reviewable = () =>
-    [...items.values()].filter((i) => ["pending", "postponed"].includes(i.record.status));
+    [...items.values()].filter(
+      (i) => ["pending", "postponed"].includes(i.record.status) && !expired(i),
+    );
 
   const stats = () => {
     const all = [...items.values()];
@@ -77,7 +90,9 @@ export function startMockRouter(port = 8899) {
 
   const authorized = (req, scope) => {
     const header = req.headers.authorization ?? "";
-    return header === `Bearer ${TOKENS[scope]}`;
+    return scope === "read"
+      ? [TOKENS.read, TOKENS.review].some((token) => header === `Bearer ${token}`)
+      : header === `Bearer ${TOKENS[scope]}`;
   };
 
   const server = createServer((req, res) => {
@@ -94,6 +109,7 @@ export function startMockRouter(port = 8899) {
     }
     if (url.pathname === "/__seed-more" && req.method === "POST") {
       const template = items.values().next().value;
+      // Pagination-only summaries intentionally reuse the template envelope; do not decrypt them.
       for (let index = 0; index < 102; index += 1) {
         const quarantineId = `q_seed_${index.toString(16).padStart(16, "0")}`;
         items.set(quarantineId, {
@@ -135,27 +151,66 @@ export function startMockRouter(port = 8899) {
       let body = "";
       req.on("data", (chunk) => (body += chunk));
       req.on("end", () => {
-        const parsed = JSON.parse(body);
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          return finish(400, { error: "invalid_cleanup", message: "cleanup body must be JSON" });
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return finish(400, { error: "invalid_cleanup", message: "cleanup body must be an object" });
+        }
         const scopeValue = parsed.scope ?? "pending";
+        if (!["pending", "all"].includes(scopeValue)) {
+          return finish(400, {
+            error: "invalid_cleanup",
+            message: "cleanup scope must be pending or all",
+          });
+        }
+        if (parsed.reasons !== undefined && !Array.isArray(parsed.reasons)) {
+          return finish(400, {
+            error: "invalid_cleanup",
+            message: "cleanup reasons must be an array",
+          });
+        }
+        if (parsed.reasons?.some((reason) => typeof reason !== "string")) {
+          return finish(400, {
+            error: "invalid_cleanup",
+            message: "cleanup reasons must contain strings",
+          });
+        }
+        if (parsed.older_than !== undefined && typeof parsed.older_than !== "string") {
+          return finish(400, { error: "invalid_cleanup", message: "older_than must be a string" });
+        }
         const pool = [...items.values()].filter((i) =>
           scopeValue === "all"
-            ? true
+            ? !FINAL_STATUSES.has(i.record.status)
             : ["pending", "postponed"].includes(i.record.status),
         );
         const matched = pool.filter(
           (i) =>
             (!parsed.reasons || parsed.reasons.includes(i.record.reason)) &&
-            (!parsed.older_than || Date.parse(i.record.created_at) < Date.parse(parsed.older_than)),
+            (!parsed.older_than || i.record.created_at < parsed.older_than),
         );
         const bytes = matched.reduce((sum, i) => sum + (i.record.encrypted_bytes ?? 0), 0);
         if (parsed.dry_run !== false) {
           actions.push({ action: "cleanup_preview", count: matched.length });
           return finish(200, { dry_run: true, count: matched.length, encrypted_bytes: bytes });
         }
+        if (
+          !Number.isInteger(parsed.expected_count) ||
+          typeof parsed.expected_count === "boolean" ||
+          parsed.expected_count < 0
+        ) {
+          return finish(400, {
+            error: "expected_count_required",
+            message: "expected_count from a dry run is required",
+          });
+        }
         if (parsed.expected_count !== matched.length) {
           return finish(409, {
-            error: "cleanup_selection_changed",
-            message: "cleanup selection changed since preview",
+            error: "quarantine_cleanup_changed",
+            message: "quarantine cleanup selection changed after preview",
           });
         }
         for (const item of matched) items.delete(item.record.quarantine_id);
@@ -167,14 +222,33 @@ export function startMockRouter(port = 8899) {
     }
 
     const match = url.pathname.match(
-      /^\/admin\/quarantine\/items\/(q_[0-9A-Za-z]+_[0-9a-f]{16})(\/(approve|reject|postpone))?$/,
+      /^\/admin\/quarantine\/items\/([^/]+)(\/(approve|reject|postpone))?$/,
     );
     if (!match) return finish(404, { error: "not_found", message: "not found" });
+    if (!/^q_[0-9A-Za-z]+_[0-9a-f]{16}$/.test(match[1])) {
+      return finish(400, { error: "invalid_quarantine_id", message: "invalid quarantine_id" });
+    }
     const item = items.get(match[1]);
     if (!item) {
       return finish(404, { error: "quarantine_not_found", message: "quarantine item not found" });
     }
     const action = match[3];
+
+    if (FINAL_STATUSES.has(item.record.status)) {
+      return finish(409, {
+        error: "quarantine_already_finalized",
+        message: "quarantine item is not pending review",
+      });
+    }
+    if (expired(item)) {
+      return finish(409, { error: "quarantine_expired", message: "quarantine item has expired" });
+    }
+    if (!item.encrypted) {
+      return finish(409, {
+        error: "quarantine_payload_unavailable",
+        message: "quarantine payload is no longer available",
+      });
+    }
 
     if (req.method === "GET" && !action) {
       return finish(200, { record: item.record, encrypted: item.encrypted });
@@ -197,9 +271,22 @@ export function startMockRouter(port = 8899) {
             message: "this quarantine item cannot be approved into memory",
           });
         }
+        if (
+          item.record.kind === "retain_request" &&
+          parsed.decrypted?.payload?.writer_id !== "main"
+        ) {
+          return finish(409, {
+            error: "writer_not_registered",
+            message: "register the writer before approving its original retain request",
+          });
+        }
         item.record.status = "reviewed_allowed";
         eventCount += 1;
-        actions.push({ action: "approve", quarantine_id: item.record.quarantine_id, decrypted: parsed.decrypted });
+        actions.push({
+          action: "approve",
+          quarantine_id: item.record.quarantine_id,
+          decrypted: parsed.decrypted,
+        });
         finish(
           200,
           item.record.kind === "recalled_memory"

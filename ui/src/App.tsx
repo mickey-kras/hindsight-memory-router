@@ -57,7 +57,11 @@ export default function App() {
     setError(null);
     try {
       const queue = await listQueue(tokens, QUEUE_PAGE_SIZE, items.length);
-      setItems((current) => [...current, ...queue.items]);
+      setItems((current) => {
+        const byId = new Map(current.map((item) => [item.quarantine_id, item]));
+        for (const item of queue.items) byId.set(item.quarantine_id, item);
+        return [...byId.values()];
+      });
       setTotal(queue.total);
     } catch (err) {
       setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");

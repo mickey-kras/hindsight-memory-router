@@ -12,6 +12,7 @@ const QUERY_ID = "q_query_f00df00df00df00d";
 const READ = "e2e-read-token";
 const REVIEW = "e2e-review-token";
 const CLEANUP = "e2e-cleanup-token";
+const MOCK_ORIGIN = `http://127.0.0.1:${process.env.MOCK_PORT ?? "8899"}`;
 
 async function connect(page: Page, tokens: { read?: string; review?: string; cleanup?: string } = {}) {
   await page.goto("/");
@@ -23,12 +24,13 @@ async function connect(page: Page, tokens: { read?: string; review?: string; cle
 }
 
 async function mockActions(page: Page): Promise<Array<Record<string, unknown>>> {
-  const response = await page.request.get("http://127.0.0.1:8899/__actions");
+  const response = await page.request.get(`${MOCK_ORIGIN}/__actions`);
   return (await response.json()) as Array<Record<string, unknown>>;
 }
 
 test.beforeEach(async ({ page }) => {
-  await page.request.post(`http://127.0.0.1:8899/__reset`).catch(() => undefined);
+  const response = await page.request.post(`${MOCK_ORIGIN}/__reset`);
+  expect(response.ok()).toBe(true);
 });
 
 test("connect screen probes the router and shows the version", async ({ page }) => {
@@ -50,12 +52,12 @@ test("stats and queue render after connect", async ({ page }, testInfo) => {
 });
 
 test("loads reviewable items beyond the first page", async ({ page }) => {
-  await page.request.post("http://127.0.0.1:8899/__seed-more");
+  await page.request.post(`${MOCK_ORIGIN}/__seed-more`);
   await connect(page);
   await expect(page.getByText("100 shown / 105 reviewable")).toBeVisible();
   await page.getByTestId("load-more").click();
   await expect(page.getByText("105 shown / 105 reviewable")).toBeVisible();
-  await expect(page.getByTestId("load-more")).toBeHidden();
+  await expect(page.getByTestId("load-more")).toHaveCount(0);
 });
 
 test("wrong read token surfaces a 401", async ({ page }) => {
@@ -149,8 +151,27 @@ test("cleanup preview then execute", async ({ page }) => {
   await expect(page.getByTestId("cleanup-execute")).toBeDisabled();
 });
 
-test("mock cleanup honors older_than", async ({ page }) => {
-  const response = await page.request.post("http://127.0.0.1:8899/admin/quarantine/cleanup", {
+test("cleanup selection conflict clears the stale preview", async ({ page }) => {
+  await connect(page);
+  await page.getByRole("button", { name: "Cleanup", exact: true }).click();
+  await page.getByTestId("cleanup-preview-run").click();
+  await expect(page.getByTestId("cleanup-preview")).toContainText("3 items");
+
+  const changed = await page.request.post(`${MOCK_ORIGIN}/admin/quarantine/cleanup`, {
+    headers: { authorization: `Bearer ${CLEANUP}` },
+    data: { dry_run: false, expected_count: 3 },
+  });
+  expect(changed.ok()).toBe(true);
+
+  await page.getByTestId("cleanup-execute").click();
+  await expect(page.getByRole("alert")).toContainText("quarantine_cleanup_changed");
+  await expect(page.getByTestId("cleanup-preview")).toHaveCount(0);
+  await expect(page.getByTestId("cleanup-execute")).toBeDisabled();
+});
+
+test("mock cleanup honors older_than", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "phone", "API contract pin is viewport-independent");
+  const response = await page.request.post(`${MOCK_ORIGIN}/admin/quarantine/cleanup`, {
     headers: { authorization: `Bearer ${CLEANUP}` },
     data: { dry_run: true, older_than: "2026-08-29T00:00:00.000Z" },
   });
@@ -158,22 +179,23 @@ test("mock cleanup honors older_than", async ({ page }) => {
   expect((await response.json()).count).toBe(1);
 });
 
-test("mock enforces postpone limit and review response contracts", async ({ page }) => {
+test("mock enforces postpone limit and review response contracts", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "phone", "API contract pin is viewport-independent");
   for (let count = 1; count <= 3; count += 1) {
     const response = await page.request.post(
-      `http://127.0.0.1:8899/admin/quarantine/items/${RETAIN_ID}/postpone`,
+      `${MOCK_ORIGIN}/admin/quarantine/items/${RETAIN_ID}/postpone`,
       { headers: { authorization: `Bearer ${REVIEW}` } },
     );
     expect(await response.json()).toEqual({ postponed: true, quarantine_id: RETAIN_ID, count });
   }
   const limited = await page.request.post(
-    `http://127.0.0.1:8899/admin/quarantine/items/${RETAIN_ID}/postpone`,
+    `${MOCK_ORIGIN}/admin/quarantine/items/${RETAIN_ID}/postpone`,
     { headers: { authorization: `Bearer ${REVIEW}` } },
   );
   expect(limited.status()).toBe(409);
 
   const rejected = await page.request.post(
-    `http://127.0.0.1:8899/admin/quarantine/items/${RECALL_ID}/reject`,
+    `${MOCK_ORIGIN}/admin/quarantine/items/${RECALL_ID}/reject`,
     { headers: { authorization: `Bearer ${REVIEW}` } },
   );
   expect(await rejected.json()).toEqual({

@@ -8,7 +8,8 @@ Quarantine review console for hindsight-memory-router. Static export, no backend
 ## Develop
 
 ```bash
-npm install
+python3 -m pip install -r ../requirements.txt
+npm ci
 npm run fixtures                    # disposable local crypto fixtures
 node tests/e2e/mockRouter.mjs 8899   # mock router with golden fixtures
 npm run dev                          # vite proxies /admin to the mock
@@ -40,6 +41,7 @@ server {
     add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'" always;
     add_header Referrer-Policy no-referrer always;
     location /admin/  { proxy_pass http://memory-router:8890; }
+    location = /health { proxy_pass http://memory-router:8890; }
     location /health/ { proxy_pass http://memory-router:8890; }
     location /version { proxy_pass http://memory-router:8890; }
 }

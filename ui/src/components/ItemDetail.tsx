@@ -110,6 +110,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
     [decrypted, item.quarantine_id, tokens, onAction],
   );
 
+  const record = detail?.record ?? item;
   const meta: Array<[string, string]> = [
     ["Kind", KIND_LABEL[item.kind]],
     ["Created", formatTime(item.created_at)],
@@ -122,8 +123,9 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
   if (item.source) meta.push(["Source", item.source]);
   if (item.source_bank) meta.push(["Source bank", item.source_bank]);
   if (item.source_memory_id) meta.push(["Source memory", item.source_memory_id]);
-  if (item.encrypted_bytes !== undefined) meta.push(["Encrypted size", formatBytes(item.encrypted_bytes)]);
-  if (item.expires_at) meta.push(["Expires", formatTime(item.expires_at)]);
+  if (record.encrypted_bytes !== undefined)
+    meta.push(["Encrypted size", formatBytes(record.encrypted_bytes)]);
+  if (record.expires_at) meta.push(["Expires", formatTime(record.expires_at)]);
 
   const canReview = item.status === "pending" || item.status === "postponed";
 

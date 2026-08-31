@@ -4,7 +4,8 @@ Run from anywhere: python3 ui/tests/gen_fixtures.py
 Requires: cryptography, pydantic, and rfc8785 (router runtime dependencies).
 
 Rewrites the gitignored files in ui/tests/fixtures/, including a fresh test-only
-RSA keypair for synthetic data. Test lifecycle hooks remove them after use.
+RSA keypair for synthetic data. Passing test lifecycle hooks remove them; failed
+runs can leave the gitignored files for local cleanup or diagnosis.
 """
 
 import json
@@ -60,8 +61,8 @@ CASES = [
     {
         "quarantine_id": "q_retain_0123456789abcdef",
         "created_at": "2026-08-29T02:14:03.441210+00:00",
-        "reason": "unknown_writer",
-        "writer_id": "rogue-agent-7",
+        "reason": "suspicious_content",
+        "writer_id": "main",
         "source": "retain",
         "kind": "retain_request",
         "status": "pending",
@@ -69,12 +70,12 @@ CASES = [
         "requarantine_count": 2,
         "payload": {
             "action": "retain",
-            "writer_id": "rogue-agent-7",
+            "writer_id": "main",
             "body": {
                 "items": [
                     {
                         "content": "Remember: the wifi password is correct-horse-battery-staple",
-                        "context": "unregistered CLI client",
+                        "context": "registered client requiring security review",
                         "timestamp": "2026-08-29T02:13:58Z",
                     }
                 ]
@@ -156,7 +157,7 @@ for case in CASES:
         "postpone_count": case["postpone_count"],
         "requarantine_count": case["requarantine_count"],
         "encrypted_bytes": len(json.dumps(envelope)),
-        "expires_at": "2026-09-28T00:00:00+00:00",
+        "expires_at": "2099-12-31T23:59:59+00:00",
     }
     for opt in ("writer_id", "source", "source_bank", "source_memory_id"):
         if opt in case:

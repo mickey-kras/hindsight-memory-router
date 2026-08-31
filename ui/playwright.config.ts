@@ -1,5 +1,7 @@
 import { defineConfig } from "@playwright/test";
 
+const uiPort = process.env.UI_PORT ?? "4173";
+
 export default defineConfig({
   testDir: "tests/e2e",
   testMatch: "*.spec.ts",
@@ -8,12 +10,12 @@ export default defineConfig({
   workers: 1,
   webServer: {
     command: "node tests/e2e/server.mjs",
-    url: "http://127.0.0.1:4173/version",
+    url: `http://127.0.0.1:${uiPort}/version`,
     reuseExistingServer: false,
     timeout: 15_000,
   },
   use: {
-    baseURL: "http://127.0.0.1:4173",
+    baseURL: `http://127.0.0.1:${uiPort}`,
     // Defaults to Playwright's own chromium; set CHROMIUM_PATH to use a system one.
     launchOptions: process.env.CHROMIUM_PATH
       ? { executablePath: process.env.CHROMIUM_PATH }
