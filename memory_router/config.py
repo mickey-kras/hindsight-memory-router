@@ -16,6 +16,7 @@ from .models import WriterRegistry
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATABASE_URL = "sqlite:./data/quarantine.db"
+_INTEGER_ERROR = "must be an integer"
 
 DEFAULT_REGISTRY = WriterRegistry.model_validate(
     {
@@ -39,15 +40,15 @@ def _exact_integer(value: Any) -> int:
     if value == "":
         raise PydanticUseDefault()
     if isinstance(value, bool):
-        raise ValueError("must be an integer")
+        raise ValueError(_INTEGER_ERROR)
     if isinstance(value, int):
         return value
     if isinstance(value, str):
         try:
             return int(value, 10)
         except ValueError as exc:
-            raise ValueError("must be an integer") from exc
-    raise ValueError("must be an integer")
+            raise ValueError(_INTEGER_ERROR) from exc
+    raise ValueError(_INTEGER_ERROR)
 
 
 def _exact_boolean(value: Any) -> bool:
