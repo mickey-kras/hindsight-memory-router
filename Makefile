@@ -9,17 +9,17 @@ install:
 	npm ci
 
 format:
-	ruff format --check memory_router tests
+	python -m ruff format --check memory_router tests
 
 lint:
-	ruff check memory_router tests
+	python -m ruff check memory_router tests
 
 mypy:
-	mypy memory_router
+	python -m mypy memory_router
 
 test:
-	coverage run -m pytest
-	coverage report
+	python -m coverage run -m pytest
+	python -m coverage report
 
 check: format lint mypy test
 	npm run check
