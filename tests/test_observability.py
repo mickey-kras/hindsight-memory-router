@@ -348,7 +348,7 @@ async def test_storage_readiness_timeout_is_recorded(
 
 @pytest.mark.asyncio
 async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None:
-    app_module._readiness.cache = (
+    app_module._readiness.cache = app_module._CachedProbe(
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
@@ -366,7 +366,7 @@ async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None
 
 @pytest.mark.asyncio
 async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
-    app_module._readiness.cache = (
+    app_module._readiness.cache = app_module._CachedProbe(
         time.monotonic() - app_module._CACHE_MAX_STALENESS_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
@@ -403,7 +403,7 @@ async def test_readiness_ttl_expiry_refetches_dependencies(
     health = AsyncMock(return_value={"status": "healthy", "database": "connected"})
     monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=ping))
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=health))
-    app_module._readiness.cache = (
+    app_module._readiness.cache = app_module._CachedProbe(
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
         503,
         b'{"status":"unhealthy"}',
@@ -489,10 +489,10 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
     version.assert_awaited_once()
 
     assert app_module._version.cache is not None
-    app_module._version.cache = (
+    app_module._version.cache = app_module._CachedProbe(
         time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
-        app_module._version.cache[1],
-        app_module._version.cache[2],
+        app_module._version.cache.status_code,
+        app_module._version.cache.body,
     )
     await app_module._version_response()
     assert version.await_count == 2
@@ -507,7 +507,9 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
 )
 @pytest.mark.asyncio
 async def test_version_stale_response_is_bounded(age: float, expected_status: int) -> None:
-    app_module._version.cache = (time.monotonic() - age, 200, b'{"api_version":"cached"}')
+    app_module._version.cache = app_module._CachedProbe(
+        time.monotonic() - age, 200, b'{"api_version":"cached"}'
+    )
     app_module._version.lock = asyncio.Lock()
     await app_module._version.lock.acquire()
     try:

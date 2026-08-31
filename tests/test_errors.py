@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import pytest
-
-from memory_router.errors import HttpError, rewrap_rate_limited
+from memory_router.errors import rate_limit_error
 from memory_router.hindsight import HindsightGatewayError
 
 
@@ -34,15 +32,11 @@ def test_hindsight_timeout_preserves_504_mapping() -> None:
     }
 
 
-def test_rewrap_rate_limited_replaces_only_429() -> None:
-    with pytest.raises(HttpError) as replaced:
-        rewrap_rate_limited(
-            HttpError(429, "raw", "raw"), code="auth_rate_limited", message="too many"
-        )
-    assert replaced.value.code == "auth_rate_limited"
-    assert replaced.value.status == 429
-
-    original = HttpError(503, "limiter_down", "limiter unavailable")
-    with pytest.raises(HttpError) as reraised:
-        rewrap_rate_limited(original, code="auth_rate_limited", message="too many")
-    assert reraised.value is original
+def test_rate_limit_error_builds_public_error() -> None:
+    error = rate_limit_error(
+        code="auth_rate_limited", message="too many", headers={"retry-after": "1"}
+    )
+    assert error.status == 429
+    assert error.code == "auth_rate_limited"
+    assert error.message == "too many"
+    assert error.headers == {"retry-after": "1"}

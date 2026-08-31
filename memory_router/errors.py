@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import NoReturn
 
 
 @dataclass(slots=True)
@@ -18,9 +17,7 @@ class HttpError(Exception):
         return {"error": self.code, "message": self.message}
 
 
-def rewrap_rate_limited(
-    exc: HttpError, *, code: str, message: str, headers: dict[str, str] | None = None
-) -> NoReturn:
-    if exc.status == 429:
-        raise HttpError(429, code, message, headers if headers is not None else {}) from exc
-    raise exc
+def rate_limit_error(
+    *, code: str, message: str, headers: dict[str, str] | None = None
+) -> HttpError:
+    return HttpError(429, code, message, headers if headers is not None else {})

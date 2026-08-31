@@ -71,7 +71,7 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     assert response.status_code == 200
     assert payload(response) == upstream_health
     cached = app_module._readiness.cache
-    assert cached is not None and isinstance(cached[2], bytes)
+    assert cached is not None and isinstance(cached.body, bytes)
     assert app_module._readiness.cache is cached
 
     repository.ping.side_effect = RuntimeError("database down")

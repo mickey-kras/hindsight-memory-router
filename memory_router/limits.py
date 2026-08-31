@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .errors import HttpError, rewrap_rate_limited
+from .errors import HttpError, rate_limit_error
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +70,14 @@ class HindsightLimits:
                 ]
             )
         except HttpError as exc:
+            if exc.status != 429:
+                raise
             retry_after = max(1, (self.config.rate_limit_window_ms + 999) // 1000)
-            rewrap_rate_limited(
-                exc,
+            raise rate_limit_error(
                 code="hindsight_rate_limited",
                 message=f"too many Hindsight {kind} requests",
                 headers={"retry-after": str(retry_after)},
-            )
+            ) from exc
 
 
 def _string_value_bytes(value: Any) -> int:

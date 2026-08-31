@@ -7,6 +7,7 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -34,7 +35,7 @@ from .db import (
     is_postgres,
     validate_storage,
 )
-from .errors import HttpError, rewrap_rate_limited
+from .errors import HttpError, rate_limit_error
 from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -191,28 +192,38 @@ _REFRESH_TIMEOUT_SECONDS = 15.0
 _DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
 
 
+@dataclass(frozen=True, slots=True)
+class _CachedProbe:
+    created_at: float
+    status_code: int
+    body: bytes
+
+
 class _ProbeCache:
     def __init__(self, fallback: dict[str, Any]) -> None:
-        self.cache: tuple[float, int, bytes] | None = None
+        self.cache: _CachedProbe | None = None
         self.lock: asyncio.Lock | None = None
         self.fallback = fallback
 
     async def get(self, refresh: Callable[[], Awaitable[Response]]) -> Response:
         now = time.monotonic()
-        if self.cache is not None and now - self.cache[0] < _READINESS_CACHE_SECONDS:
+        if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
             return _cached_probe_response(self.cache)
         if self.lock is None:
             self.lock = asyncio.Lock()
         if self.lock.locked():
-            if self.cache is not None and now - self.cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
+            if (
+                self.cache is not None
+                and now - self.cache.created_at <= _CACHE_MAX_STALENESS_SECONDS
+            ):
                 return _cached_probe_response(self.cache)
             return JSONResponse(self.fallback, status_code=503)
         async with self.lock:
             now = time.monotonic()
-            if self.cache is not None and now - self.cache[0] < _READINESS_CACHE_SECONDS:
+            if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
                 return _cached_probe_response(self.cache)
             response = await refresh()
-            self.cache = (time.monotonic(), response.status_code, bytes(response.body))
+            self.cache = _CachedProbe(time.monotonic(), response.status_code, bytes(response.body))
             return response
 
 
@@ -591,9 +602,11 @@ async def _auth_failure_rate(route_group: str) -> None:
             [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
         )
     except HttpError as exc:
-        rewrap_rate_limited(
-            exc, code="auth_rate_limited", message="too many authentication failures"
-        )
+        if exc.status != 429:
+            raise
+        raise rate_limit_error(
+            code="auth_rate_limited", message="too many authentication failures"
+        ) from exc
 
 
 async def _router_auth(request: Request) -> bool:
@@ -633,9 +646,11 @@ async def _admin_rate(method: str) -> None:
             [(f"admin:{request_class}", maximum, runtime.admin_window)]
         )
     except HttpError as exc:
-        rewrap_rate_limited(
-            exc, code="admin_rate_limited", message=f"too many admin {request_class} requests"
-        )
+        if exc.status != 429:
+            raise
+        raise rate_limit_error(
+            code="admin_rate_limited", message=f"too many admin {request_class} requests"
+        ) from exc
 
 
 @app.get("/health/live")
@@ -679,8 +694,10 @@ async def _hindsight_health(
     return True, response, None, duration_ms
 
 
-def _cached_probe_response(cached: tuple[float, int, bytes]) -> Response:
-    return Response(content=cached[2], status_code=cached[1], media_type="application/json")
+def _cached_probe_response(cached: _CachedProbe) -> Response:
+    return Response(
+        content=cached.body, status_code=cached.status_code, media_type="application/json"
+    )
 
 
 async def _health_ready_response() -> Response:
