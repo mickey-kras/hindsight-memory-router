@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
+from .canonical import assert_json_depth
 from .config import (
     RouterSettings,
     assert_auth_environment,
@@ -33,7 +34,7 @@ from .db import (
     is_postgres,
     validate_storage,
 )
-from .errors import HttpError
+from .errors import HttpError, rewrap_rate_limited
 from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway, HindsightGatewayError
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -49,8 +50,8 @@ from .policy import RouterPolicy
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
-from .review_repository import recover_interrupted
-from .timestamps import iso_now
+from .review_repository import REVIEW_STALE_SECONDS, recover_interrupted
+from .timestamps import iso_format, iso_now
 from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
@@ -188,10 +189,40 @@ _READINESS_CACHE_SECONDS = 1.0
 _CACHE_MAX_STALENESS_SECONDS = 5.0
 _REFRESH_TIMEOUT_SECONDS = 15.0
 _DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
-_readiness_cache: tuple[float, int, bytes] | None = None
-_readiness_lock: asyncio.Lock | None = None
-_version_cache: tuple[float, int, bytes] | None = None
-_version_lock: asyncio.Lock | None = None
+
+
+class _ProbeCache:
+    def __init__(self, fallback: dict[str, Any]) -> None:
+        self.cache: tuple[float, int, bytes] | None = None
+        self.lock: asyncio.Lock | None = None
+        self.fallback = fallback
+
+    async def get(self, refresh: Callable[[], Awaitable[Response]]) -> Response:
+        now = time.monotonic()
+        if self.cache is not None and now - self.cache[0] < _READINESS_CACHE_SECONDS:
+            return _cached_probe_response(self.cache)
+        if self.lock is None:
+            self.lock = asyncio.Lock()
+        if self.lock.locked():
+            if self.cache is not None and now - self.cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
+                return _cached_probe_response(self.cache)
+            return JSONResponse(self.fallback, status_code=503)
+        async with self.lock:
+            now = time.monotonic()
+            if self.cache is not None and now - self.cache[0] < _READINESS_CACHE_SECONDS:
+                return _cached_probe_response(self.cache)
+            response = await refresh()
+            self.cache = (time.monotonic(), response.status_code, bytes(response.body))
+            return response
+
+
+_readiness = _ProbeCache(fallback={"status": "unhealthy"})
+_version = _ProbeCache(
+    fallback={
+        "error": "hindsight_unavailable",
+        "message": "Upstream memory service is unavailable",
+    }
+)
 
 
 def _require_runtime[T](value: T | None, component: str) -> T:
@@ -258,15 +289,10 @@ def _decode_path_segment(value: str) -> str:
 
 
 def _assert_json_depth(value: Any) -> None:
-    stack: list[tuple[Any, int]] = [(value, 1)]
-    while stack:
-        current, depth = stack.pop()
-        if depth > _MAX_JSON_DEPTH:
-            raise HttpError(400, "json_too_deep", "JSON nesting depth exceeds limit")
-        if isinstance(current, dict):
-            stack.extend((entry, depth + 1) for entry in current.values())
-        elif isinstance(current, list):
-            stack.extend((entry, depth + 1) for entry in current)
+    try:
+        assert_json_depth(value, max_depth=_MAX_JSON_DEPTH)
+    except ValueError as exc:
+        raise HttpError(400, "json_too_deep", "JSON nesting depth exceeds limit") from exc
 
 
 class Runtime:
@@ -287,7 +313,7 @@ class Runtime:
             self._apply_request_settings(RouterSettings.model_construct())
         else:
             self.configure(settings)
-        self.review_stale_seconds = 60
+        self.review_stale_seconds = REVIEW_STALE_SECONDS
 
     def configure(self, settings: RouterSettings) -> None:
         settings = validate_settings(settings)
@@ -316,7 +342,9 @@ class Runtime:
         assert_no_private_key_environment()
         assert_auth_environment(settings)
         hindsight_timeout_ms = settings.hindsight_timeout_ms
-        self.review_stale_seconds = max(60, (hindsight_timeout_ms + 999) // 1000 + 30)
+        self.review_stale_seconds = max(
+            REVIEW_STALE_SECONDS, (hindsight_timeout_ms + 999) // 1000 + 30
+        )
         database_url = settings.quarantine_database_url
         self.database = await create_database(database_url)
         self.repository = QuarantineRepository(self.database)
@@ -407,11 +435,7 @@ class Runtime:
                 await recover_interrupted(repository, at, self.review_stale_seconds)
                 await sweep_expired(repository, at)
                 if retention_days > 0:
-                    cutoff = (
-                        (datetime.now(UTC) - timedelta(days=retention_days))
-                        .isoformat(timespec="milliseconds")
-                        .replace("+00:00", "Z")
-                    )
+                    cutoff = iso_format(datetime.now(UTC) - timedelta(days=retention_days))
                     await prune_events_before(repository, cutoff, at)
             except Exception as exc:
                 log_event(
@@ -449,6 +473,25 @@ async def _run_startup_cleanup(cleanup: Awaitable[None]) -> None:
         )
 
 
+async def _stop_runtime(*, reraise: bool) -> None:
+    try:
+        await runtime.stop()
+    except BaseException as exc:
+        log_event(
+            logger,
+            "error",
+            "application_stop_failed",
+            operation="shutdown",
+            error_kind="unexpected",
+            error=exc,
+            outcome="failed",
+        )
+        if reraise:
+            raise
+    finally:
+        await shutdown_facade_scan_executor_async()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     runtime_started = False
@@ -477,37 +520,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     except BaseException:
-        try:
-            await runtime.stop()
-        except BaseException as exc:
-            log_event(
-                logger,
-                "error",
-                "application_stop_failed",
-                operation="shutdown",
-                error_kind="unexpected",
-                error=exc,
-                outcome="failed",
-            )
-        finally:
-            await shutdown_facade_scan_executor_async()
+        await _stop_runtime(reraise=False)
         raise
     else:
-        try:
-            await runtime.stop()
-        except BaseException as exc:
-            log_event(
-                logger,
-                "error",
-                "application_stop_failed",
-                operation="shutdown",
-                error_kind="unexpected",
-                error=exc,
-                outcome="failed",
-            )
-            raise
-        finally:
-            await shutdown_facade_scan_executor_async()
+        await _stop_runtime(reraise=True)
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
@@ -575,9 +591,9 @@ async def _auth_failure_rate(route_group: str) -> None:
             [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
         )
     except HttpError as exc:
-        if exc.status == 429:
-            raise HttpError(429, "auth_rate_limited", "too many authentication failures") from exc
-        raise
+        rewrap_rate_limited(
+            exc, code="auth_rate_limited", message="too many authentication failures"
+        )
 
 
 async def _router_auth(request: Request) -> bool:
@@ -617,11 +633,9 @@ async def _admin_rate(method: str) -> None:
             [(f"admin:{request_class}", maximum, runtime.admin_window)]
         )
     except HttpError as exc:
-        if exc.status == 429:
-            raise HttpError(
-                429, "admin_rate_limited", f"too many admin {request_class} requests"
-            ) from exc
-        raise
+        rewrap_rate_limited(
+            exc, code="admin_rate_limited", message=f"too many admin {request_class} requests"
+        )
 
 
 @app.get("/health/live")
@@ -665,28 +679,12 @@ async def _hindsight_health(
     return True, response, None, duration_ms
 
 
-def _cached_readiness_response(cached: tuple[float, int, bytes]) -> Response:
+def _cached_probe_response(cached: tuple[float, int, bytes]) -> Response:
     return Response(content=cached[2], status_code=cached[1], media_type="application/json")
 
 
 async def _health_ready_response() -> Response:
-    global _readiness_cache, _readiness_lock
-    now = time.monotonic()
-    if _readiness_cache is not None and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
-        return _cached_readiness_response(_readiness_cache)
-    if _readiness_lock is None:
-        _readiness_lock = asyncio.Lock()
-    if _readiness_lock.locked():
-        if (
-            _readiness_cache is not None
-            and now - _readiness_cache[0] <= _CACHE_MAX_STALENESS_SECONDS
-        ):
-            return _cached_readiness_response(_readiness_cache)
-        return JSONResponse({"status": "unhealthy"}, status_code=503)
-    async with _readiness_lock:
-        now = time.monotonic()
-        if _readiness_cache is not None and now - _readiness_cache[0] < _READINESS_CACHE_SECONDS:
-            return _cached_readiness_response(_readiness_cache)
+    async def refresh() -> Response:
         status_code = 200
         payload: Any
         try:
@@ -704,9 +702,9 @@ async def _health_ready_response() -> Response:
                 payload = hindsight_response
         except Exception:
             status_code, payload = 503, {"status": "unhealthy"}
-        response = JSONResponse(payload, status_code=status_code)
-        _readiness_cache = (time.monotonic(), status_code, bytes(response.body))
-        return response
+        return JSONResponse(payload, status_code=status_code)
+
+    return await _readiness.get(refresh)
 
 
 @app.get("/health")
@@ -721,57 +719,28 @@ async def ready() -> Response:
 
 
 async def _version_response() -> Response:
-    global _version_cache, _version_lock
-    now = time.monotonic()
-    if _version_cache is not None and now - _version_cache[0] < _READINESS_CACHE_SECONDS:
-        return Response(
-            content=_version_cache[2],
-            status_code=_version_cache[1],
-            media_type="application/json",
-        )
-    if _version_lock is None:
-        _version_lock = asyncio.Lock()
-    if _version_lock.locked():
-        if _version_cache is not None and now - _version_cache[0] <= _CACHE_MAX_STALENESS_SECONDS:
-            return Response(
-                content=_version_cache[2],
-                status_code=_version_cache[1],
-                media_type="application/json",
-            )
-        return JSONResponse(
-            {"error": "hindsight_unavailable", "message": "Upstream memory service is unavailable"},
-            status_code=503,
-        )
-    async with _version_lock:
-        now = time.monotonic()
-        if _version_cache is not None and now - _version_cache[0] < _READINESS_CACHE_SECONDS:
-            return Response(
-                content=_version_cache[2],
-                status_code=_version_cache[1],
-                media_type="application/json",
-            )
+    async def refresh() -> Response:
         try:
             hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
             payload = await asyncio.wait_for(hindsight.version(), timeout=_REFRESH_TIMEOUT_SECONDS)
         except TimeoutError as exc:
             error = HindsightGatewayError("timeout", operation="version", method="GET")
             error.__cause__ = exc
-            return _cache_version_failure(error)
+            return _version_failure(error)
         except HindsightGatewayError as exc:
-            return _cache_version_failure(exc)
+            return _version_failure(exc)
         except Exception as exc:
             error = HindsightGatewayError(
                 "network", operation="version", method="GET", client_status=503
             )
             error.__cause__ = exc
-            return _cache_version_failure(error)
-        response = JSONResponse(payload)
-        _version_cache = (time.monotonic(), response.status_code, bytes(response.body))
-        return response
+            return _version_failure(error)
+        return JSONResponse(payload)
+
+    return await _version.get(refresh)
 
 
-def _cache_version_failure(error: HindsightGatewayError) -> Response:
-    global _version_cache
+def _version_failure(error: HindsightGatewayError) -> Response:
     log_event(
         logger,
         "warning",
@@ -781,9 +750,7 @@ def _cache_version_failure(error: HindsightGatewayError) -> Response:
         outcome="failed",
         route_class="version",
     )
-    response = JSONResponse(error.body(), status_code=error.status, headers=error.headers)
-    _version_cache = (time.monotonic(), response.status_code, bytes(response.body))
-    return response
+    return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
 @app.api_route(
