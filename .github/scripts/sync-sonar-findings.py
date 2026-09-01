@@ -141,6 +141,12 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _mapping(value: object, name: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"SonarQube returned invalid {name}")
+    return value
+
+
 def _report_value(report: Path, key: str) -> str:
     prefix = f"{key}="
     for line in report.read_text(encoding="utf-8").splitlines():
@@ -261,7 +267,10 @@ def tracked_findings(
 ) -> list[TrackedFinding]:
     findings = [issue_finding(issue, project_key) for issue in issues]
     findings.extend(hotspot_finding(hotspot, project_key) for hotspot in hotspots)
-    conditions = gate.get("projectStatus", {}).get("conditions", [])
+    project_status = _mapping(gate.get("projectStatus"), "projectStatus")
+    conditions = project_status.get("conditions")
+    if not isinstance(conditions, list):
+        raise RuntimeError("SonarQube returned invalid quality-gate conditions")
     failed = [
         condition
         for condition in conditions
@@ -282,7 +291,8 @@ def main() -> int:
     report = Path(sys.argv[1] if len(sys.argv) > 1 else ".scannerwork/report-task.txt")
     client = SonarClient(_required_env("SONAR_HOST_URL"), _required_env("SONAR_TOKEN"))
     task = client.get("/api/ce/task", id=_report_value(report, "ceTaskId"))
-    analysis_id = str(task.get("task", {}).get("analysisId", ""))
+    task_details = _mapping(task.get("task"), "compute task")
+    analysis_id = str(task_details.get("analysisId", ""))
     if not analysis_id:
         raise RuntimeError("SonarQube compute task has no analysisId")
     project_key = _report_value(report, "projectKey")
