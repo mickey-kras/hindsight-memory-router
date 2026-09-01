@@ -1,10 +1,10 @@
 # Repository workflow
 
-- `main` and `architecture-pages` are the only permanent branches.
-- Protect both permanent branches from deletion and force pushes; `architecture-pages` is updated only by the Pages publishing workflow with fast-forward pushes.
+- `main` is the only permanent branch.
+- Protect `main` from deletion and force pushes.
 - Same-repository work branches must match `^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$`.
 - Allowed forms: `feat/<short-description>`, `fix/<short-description>`, `refactor/<short-description>`, `docs/<short-description>`, `ci/<short-description>`, or `security/<short-description>`, with `<short-description>` required to be lowercase kebab-case.
-- Native ruleset `Enforce work branch names` targets all branches, excludes `main`, `architecture-pages`, `dependabot/*`, and the six allowed work prefixes, and enables `Restrict creations`. This rejects unsupported prefixes before the branch is created.
+- Native ruleset `Enforce work branch names` targets all branches, excludes `main`, `dependabot/*`, and the six allowed work prefixes, and enables `Restrict creations`. This rejects unsupported prefixes before the branch is created.
 - The `branch-policy` PR check enforces the full regex because native `fnmatch` prefix exclusions do not validate lowercase kebab-case suffixes.
 - `dependabot/*` is the only automated exception; the native ruleset bypass is limited to Dependabot and the PR check accepts that prefix only for PRs authored by `dependabot[bot]`.
 - External fork branch names are not restricted.

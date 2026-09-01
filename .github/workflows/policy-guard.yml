@@ -258,6 +258,12 @@ jobs:
                 if (!publish.includes('python .github/scripts/sync-sonar-findings.py')) {
                   fail('publish.yml: SonarQube failures must synchronize actionable findings');
                 }
+                if (!/^  pages:\s*$/m.test(publish)) {
+                  fail('publish.yml: architecture Pages deployment job must stay present');
+                }
+                if (!publish.includes('actions/deploy-pages@')) {
+                  fail('publish.yml: architecture site must deploy through GitHub Pages Actions');
+                }
               }
             }
 
