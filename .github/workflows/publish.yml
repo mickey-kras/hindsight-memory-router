@@ -414,89 +414,24 @@ jobs:
           failed_step="${failed_step:-Unknown publish step}"
           failure_slug="$(tr '[:upper:]' '[:lower:]' <<<"$failed_step" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
 
-          sonar_details=''
           report=.scannerwork/report-task.txt
-          if [ "$failed_step" = 'SonarQube quality gate' ] && [ -s "$report" ]; then
-            ce_task_id="$(sed -n 's/^ceTaskId=//p' "$report")"
-            project_key="$(sed -n 's/^projectKey=//p' "$report")"
-            if [ -n "$ce_task_id" ]; then
-              ce_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-                --get --data-urlencode "id=${ce_task_id}" \
-                "${SONAR_HOST_URL%/}/api/ce/task" || true)"
-              analysis_id="$(jq -r '.task.analysisId // empty' <<<"$ce_payload" 2>/dev/null || true)"
-              if [ -n "$analysis_id" ]; then
-                gate_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-                  --get --data-urlencode "analysisId=${analysis_id}" \
-                  "${SONAR_HOST_URL%/}/api/qualitygates/project_status" || true)"
-                gate_status="$(jq -r '.projectStatus.status // empty' <<<"$gate_payload" 2>/dev/null || true)"
-                failed_conditions="$(jq -r '
-                  .projectStatus.conditions
-                  | map(select(.status != "OK"))
-                  | if length == 0 then
-                      "- No failed conditions returned by SonarQube."
-                    else
-                      .[]
-                      | "- \(.metricKey): actual=\(.actualValue // "n/a"), comparator=\(.comparator // "n/a"), threshold=\(.errorThreshold // "n/a")"
-                    end
-                ' <<<"$gate_payload" 2>/dev/null || true)"
-                if [ -n "$gate_status" ]; then
-                  new_code_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-                    --get --data-urlencode "project=${project_key}" \
-                    "${SONAR_HOST_URL%/}/api/new_code_periods/show" || true)"
-                  new_code_definition="$(jq -r '
-                    if (.type // "") == "" then
-                      "- New code definition: unavailable"
-                    elif (.value // "") == "" then
-                      "- New code definition: `\(.type)`"
-                    else
-                      "- New code definition: `\(.type)` (`\(.value)`)"
-                    end
-                  ' <<<"$new_code_payload" 2>/dev/null || echo '- New code definition: unavailable')"
-
-                  issues_payload="$(curl --fail --silent --show-error --header "Authorization: Bearer ${SONAR_TOKEN}" \
-                    --get \
-                    --data-urlencode "componentKeys=${project_key}" \
-                    --data-urlencode "inNewCodePeriod=true" \
-                    --data-urlencode "resolved=false" \
-                    --data-urlencode "ps=500" \
-                    "${SONAR_HOST_URL%/}/api/issues/search" || true)"
-                  issue_total="$(jq -r '.paging.total // .total // empty' <<<"$issues_payload" 2>/dev/null || true)"
-                  issue_summary="$(jq -r '
-                    [.issues[]?.rule]
-                    | group_by(.)
-                    | map("- `\(.[0])`: \(length)")
-                    | .[]
-                  ' <<<"$issues_payload" 2>/dev/null || true)"
-                  issue_details="$(jq -r --arg project "${project_key}:" '
-                    .issues[]?
-                    | (.component // "unknown" | sub(("^" + $project); "")) as $path
-                    | (.line // "?") as $line
-                    | (.message // "No message" | gsub("`"; "\u2019") | gsub("[\\r\\n]+"; " ")) as $message
-                    | (.severity // .impacts[0].severity // "UNKNOWN") as $severity
-                    | "- `\($path):\($line)` — `\(.rule // "unknown")` / `\($severity)` — \($message)"
-                  ' <<<"$issues_payload" 2>/dev/null || true)"
-
-                  sonar_details="$(cat <<EOF
-
-          ### SonarQube
-
-          - Quality Gate: \`${gate_status}\`
-          ${failed_conditions}
-          ${new_code_definition}
-          - Open issues on new code: ${issue_total:-unavailable}
-
-          #### Rules
-
-          ${issue_summary:-Issue details unavailable from the SonarQube API.}
-
-          #### Findings
-
-          ${issue_details:-Issue details unavailable from the SonarQube API.}
-          EOF
-                  )"
-                fi
-              fi
+          sonar_details=''
+          if [ "$failed_step" = 'SonarQube quality gate' ]; then
+            if python .github/scripts/sync-sonar-findings.py "$report" > sonar-sync.txt 2>&1; then
+              {
+                echo "## SonarQube findings"
+                echo
+                cat sonar-sync.txt
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
+            sonar_details="$(cat <<EOF
+
+          ### SonarQube finding sync
+
+          \`$(tr '\n' ' ' < sonar-sync.txt)\`
+          EOF
+            )"
           fi
 
           cat > main-failure.md <<EOF

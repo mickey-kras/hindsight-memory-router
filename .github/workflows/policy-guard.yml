@@ -28,6 +28,7 @@ jobs:
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
             const failureReporterPath = ['.github', 'scripts', 'upsert-main-failure-issue.sh'].join('/');
+            const sonarReporterPath = ['.github', 'scripts', 'sync-sonar-findings.py'].join('/');
             const packagePath = 'package.json';
             const checkoutAction = ['actions', 'checkout'].join('/');
             const privilegedWriteKeys = [
@@ -254,6 +255,9 @@ jobs:
                 if (!publish.includes('bash .github/scripts/upsert-main-failure-issue.sh')) {
                   fail('publish.yml: failure issues must use the deduplicating reporter');
                 }
+                if (!publish.includes('python .github/scripts/sync-sonar-findings.py')) {
+                  fail('publish.yml: SonarQube failures must synchronize actionable findings');
+                }
               }
             }
 
@@ -270,6 +274,26 @@ jobs:
                 }
                 if (!reporter.includes('main-failure:${FAILURE_KEY}')) {
                   fail('upsert-main-failure-issue.sh: reporter must preserve stable failure keys');
+                }
+              }
+            }
+
+            if (changed.has(sonarReporterPath)) {
+              if (removedOrRenamed.has(sonarReporterPath)) {
+                fail('sync-sonar-findings.py: protected reporter must not be removed or renamed');
+              } else {
+                const reporter = await readFileAtHead(sonarReporterPath);
+                if (!reporter.includes('ISSUE_MARKER_PREFIX = "sonar-finding"')) {
+                  fail('sync-sonar-findings.py: stable finding markers must be preserved');
+                }
+                if (!/self\._run\(\s*"gh",\s*"issue",\s*"list",[\s\S]*?"--state",\s*"all"/m.test(reporter)) {
+                  fail('sync-sonar-findings.py: reporter must search open and closed issues');
+                }
+                if (!/self\._run\(\s*"gh",\s*"issue",\s*"reopen"/m.test(reporter)) {
+                  fail('sync-sonar-findings.py: reporter must reopen matching closed issues');
+                }
+                if (!reporter.includes('sinceLeakPeriod=True')) {
+                  fail('sync-sonar-findings.py: hotspots must stay scoped to new code');
                 }
               }
             }

@@ -93,8 +93,8 @@ jobs:
           python scripts/generate_confusables_ascii.py
           diff -u /tmp/confusables_ascii.expected.json memory_router/confusables_ascii.json
 
-      - run: ruff format --diff memory_router tests
-      - run: ruff check memory_router tests
+      - run: ruff format --diff memory_router tests .github/scripts/sync-sonar-findings.py
+      - run: ruff check memory_router tests .github/scripts/sync-sonar-findings.py
       - run: mypy memory_router
 
       - name: OpenAPI contract

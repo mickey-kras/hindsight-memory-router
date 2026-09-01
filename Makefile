@@ -9,10 +9,10 @@ install:
 	npm ci
 
 format:
-	python -m ruff format --check memory_router tests
+	python -m ruff format --check memory_router tests .github/scripts/sync-sonar-findings.py
 
 lint:
-	python -m ruff check memory_router tests
+	python -m ruff check memory_router tests .github/scripts/sync-sonar-findings.py
 
 mypy:
 	python -m mypy memory_router
