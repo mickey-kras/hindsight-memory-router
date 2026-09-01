@@ -8,7 +8,7 @@ version = "0.0.0"
 license-files = ["LICENSE", "licenses/*.txt"]
 requires-python = ">=3.12"
 dependencies = [
-  "agent-memory-guard==0.3.0",
+  "agent-memory-guard==0.3.1",
   "aiosqlite==0.22.1",
   "Pebble==5.2.1",
   "cryptography==50.0.0",
