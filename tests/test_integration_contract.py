@@ -76,6 +76,9 @@ DISPATCH_BRANCH_COVERAGE = {
     frozenset(
         {"method=='GET'", "pathname=='/version'"}
     ): "authentication and network boundaries hold",
+    frozenset(
+        {"method=='GET'", "pathname=='/v1/default/banks'"}
+    ): "per-agent principal grants are enforced",
     frozenset({BANK_MEMORY_REGEX, "method=='POST'"}): "known writer retain succeeds",
     frozenset(
         {BANK_MEMORY_REGEX, "method=='POST'", "action=='recall'"}

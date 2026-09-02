@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from .facade_routes import FACADE_ROUTES
+from .principals import SCOPE_VOCABULARY
 
 SAFE_FIELDS = frozenset(
     {
@@ -23,6 +24,9 @@ SAFE_FIELDS = frozenset(
         "operation_duration_ms",
         "route_class",
         "writer_id",
+        "principal",
+        "key_id",
+        "scope",
         "reason",
         "timeout_ms",
         "suppressed",
@@ -37,6 +41,7 @@ EVENTS = frozenset(
         "application_started",
         "authentication_failed",
         "authentication_audit_failed",
+        "authorization_denied",
         "bank_unavailable",
         "configuration_warning",
         "facade_scan_failed",
@@ -105,6 +110,7 @@ REASONS = frozenset(
         "admin-cleanup-token-missing",
         "admin-read-token-missing",
         "admin-review-token-missing",
+        "agent-claim-mismatch",
         "anonymous-mode",
         "application-shutdown",
         "application-startup",
@@ -118,6 +124,7 @@ REASONS = frozenset(
         "reserved-field",
         "router-token-missing",
         "runtime-other",
+        "scope-not-granted",
         "server-finished",
         "server-started",
         "server-running",
@@ -141,6 +148,9 @@ TEXT_LIMITS = {
     "upstream_method": 16,
     "request_method": 16,
     "writer_id": 128,
+    "principal": 128,
+    "key_id": 64,
+    "scope": 64,
     "logger": 128,
     "level": 16,
     "timestamp": 64,
@@ -151,6 +161,7 @@ DURATION_FIELDS = frozenset({"request_duration_ms", "operation_duration_ms"})
 FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 WRITER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 LOGGER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 
 
@@ -226,6 +237,25 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
             if WRITER_ID_PATTERN.fullmatch(writer_id)
             else _opaque_text(safe_fields["writer_id"], "writer")
         )
+    if "principal" in safe_fields:
+        principal = safe_text(safe_fields["principal"], fallback="", limit=129)
+        safe_fields["principal"] = (
+            principal
+            if WRITER_ID_PATTERN.fullmatch(principal)
+            else _opaque_text(safe_fields["principal"], "principal")
+        )
+    if "key_id" in safe_fields:
+        key_id = safe_text(safe_fields["key_id"], fallback="", limit=65)
+        if KEY_ID_PATTERN.fullmatch(key_id):
+            safe_fields["key_id"] = key_id
+        else:
+            safe_fields.pop("key_id")
+    if "scope" in safe_fields:
+        scope = safe_text(safe_fields["scope"], fallback="", limit=65)
+        if scope in SCOPE_VOCABULARY:
+            safe_fields["scope"] = scope
+        else:
+            safe_fields.pop("scope")
     if "logger" in safe_fields:
         logger_name = safe_text(safe_fields["logger"], fallback="", limit=129)
         safe_fields["logger"] = (

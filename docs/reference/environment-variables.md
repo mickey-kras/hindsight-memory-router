@@ -18,6 +18,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS` |                       `60000` | Admin rate-limit window                                         |
 | `MEMORY_ROUTER_MAX_BODY_BYTES`             |                     `1048576` | Maximum JSON request body                                       |
 | `MEMORY_ROUTER_REGISTRY`                   |     `main` -> `main` registry | Optional registry JSON path                                     |
+| `MEMORY_ROUTER_PRINCIPALS`                 |                          none | Principal registry JSON path; enables per-agent mode            |
 | `HINDSIGHT_BASE_URL`                       |       `http://hindsight:8888` | Hindsight endpoint                                              |
 | `HINDSIGHT_API_KEY`                        |                          none | Optional Hindsight API key                                      |
 | `HINDSIGHT_TIMEOUT_MS`                     |                       `10000` | Hindsight request timeout                                       |

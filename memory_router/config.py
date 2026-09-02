@@ -110,6 +110,7 @@ class RouterSettings(BaseSettings):
         60_000, validation_alias="MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_WINDOW_MS"
     )
     memory_router_registry: str | None = Field(None, validation_alias="MEMORY_ROUTER_REGISTRY")
+    memory_router_principals: str | None = Field(None, validation_alias="MEMORY_ROUTER_PRINCIPALS")
     memory_router_deployment_mode: Literal["single", "cluster"] = Field(
         "single", validation_alias="MEMORY_ROUTER_DEPLOYMENT_MODE"
     )
@@ -279,7 +280,17 @@ def assert_no_private_key_environment() -> None:
 
 
 def assert_auth_environment(settings: RouterSettings) -> None:
-    if not secret_value(settings.memory_router_token):
+    if settings.memory_router_principals:
+        if secret_value(settings.memory_router_token):
+            raise RuntimeError(
+                "MEMORY_ROUTER_TOKEN must be unset when MEMORY_ROUTER_PRINCIPALS is configured"
+            )
+        if settings.memory_router_allow_anonymous:
+            raise RuntimeError(
+                "MEMORY_ROUTER_ALLOW_ANONYMOUS must be false "
+                "when MEMORY_ROUTER_PRINCIPALS is configured"
+            )
+    if not settings.memory_router_principals and not secret_value(settings.memory_router_token):
         if settings.memory_router_allow_anonymous:
             log_event(
                 logger,

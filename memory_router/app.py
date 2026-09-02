@@ -48,6 +48,14 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
+from .principals import (
+    CLAIMED_AGENT_HEADER,
+    SCOPE_BANKS_LIST,
+    PrincipalResolver,
+    PrincipalSession,
+    facade_scope,
+    load_principal_registry,
+)
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
@@ -320,6 +328,7 @@ class Runtime:
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
+        self.principal_resolver: PrincipalResolver | None = None
         if settings is None:
             self._apply_request_settings(RouterSettings.model_construct())
         else:
@@ -335,6 +344,11 @@ class Runtime:
         self.max_body_bytes = settings.memory_router_max_body_bytes
         self.router_token = secret_value(settings.memory_router_token)
         self.allow_anonymous = settings.memory_router_allow_anonymous
+        self.principal_resolver = (
+            PrincipalResolver(load_principal_registry(settings.memory_router_principals))
+            if settings.memory_router_principals
+            else None
+        )
         self.admin_tokens = {
             "legacy": secret_value(settings.memory_router_admin_token),
             "read": secret_value(settings.memory_router_admin_read_token),
@@ -622,6 +636,54 @@ async def _router_auth(request: Request) -> bool:
     return False
 
 
+def _log_authorization_denied(
+    request: Request, session: PrincipalSession, scope: str | None, reason: str
+) -> None:
+    log_event(
+        logger,
+        "warning",
+        "authorization_denied",
+        request_id=current_request_id(),
+        operation="authenticate",
+        http_status=403,
+        outcome="failed",
+        route_class=_route_class(request),
+        principal=session.principal_id,
+        key_id=session.key_id,
+        scope=scope,
+        reason=reason,
+    )
+
+
+async def _principal_auth(request: Request) -> PrincipalSession | None:
+    resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
+    session = resolver.authenticate(request.headers.get("authorization"))
+    if session is not None:
+        claimed = request.headers.get(CLAIMED_AGENT_HEADER)
+        if claimed is not None and claimed != session.principal_id:
+            _log_authorization_denied(request, session, None, "agent-claim-mismatch")
+            raise HttpError(
+                403,
+                "agent_claim_mismatch",
+                "claimed agent does not match the authenticated principal",
+            )
+        return session
+    auditor = _require_runtime(runtime.auditor, "auth auditor")
+    route_class = _route_class(request)
+    auditor.log_failure(route_class)
+    await _auth_failure_rate("router")
+    await auditor.persist("router", route_class)
+    return None
+
+
+def _require_grant(request: Request, session: PrincipalSession, scope: str, bank: str) -> None:
+    resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
+    if resolver.authorize(session, scope, bank):
+        return
+    _log_authorization_denied(request, session, scope, "scope-not-granted")
+    raise HttpError(403, "authorization_denied", "principal lacks the required grant")
+
+
 async def _admin_auth(request: Request, scope: str) -> bool:
     authorization = request.headers.get("authorization")
     if admin_authorized(authorization, scope, runtime.admin_tokens):
@@ -825,15 +887,41 @@ async def dispatch(path: str, request: Request) -> Response:
 
     if method == "GET" and pathname == "/version":
         return await _version_response()
-    if not await _router_auth(request):
+    principal: PrincipalSession | None = None
+    if runtime.principal_resolver is not None:
+        principal = await _principal_auth(request)
+        if principal is None:
+            return JSONResponse(
+                {"error": "unauthorized", "message": "authentication required"}, status_code=401
+            )
+    elif not await _router_auth(request):
         return JSONResponse(
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
         )
     policy = _require_runtime(runtime.policy, "router policy")
 
+    if principal is not None and method == "GET" and pathname == "/v1/default/banks":
+        resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
+        if not any(SCOPE_BANKS_LIST in grant.scopes for grant in principal.grants):
+            _log_authorization_denied(request, principal, SCOPE_BANKS_LIST, "scope-not-granted")
+            raise HttpError(403, "authorization_denied", "principal lacks the required grant")
+        return JSONResponse({"banks": resolver.list_banks(principal)})
+
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
     if method == "POST" and match:
         writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
+        if principal is not None:
+            scope = "memories:recall" if action == "recall" else "memories:retain"
+            _require_grant(request, principal, scope, writer_id)
+            if action == "recall":
+                body = parse_recall_body(await _json_body(request))
+                policy.limits.assert_recall_bounds(body)
+                return JSONResponse(
+                    await policy.recall_bank(principal.principal_id, writer_id, body)
+                )
+            body = parse_retain_body(await _json_body(request))
+            policy.limits.assert_retain_bounds(body)
+            return JSONResponse(await policy.retain_bank(principal.principal_id, writer_id, body))
         if action == "recall":
             body = parse_recall_body(await _json_body(request))
             policy.limits.assert_recall_bounds(body)
@@ -860,6 +948,8 @@ async def dispatch(path: str, request: Request) -> Response:
     if matched is not None:
         route, route_match = matched
         writer_id = route_match.group("bank")
+        if principal is not None:
+            _require_grant(request, principal, facade_scope(route), writer_id)
         route_params = {name: route_match.group(name) for name in route.params}
         facade_body: dict[str, Any] | None = None
         if route.body != "none":
@@ -883,10 +973,11 @@ async def dispatch(path: str, request: Request) -> Response:
         return JSONResponse(
             await facade.forward(
                 route=route,
-                writer_id=writer_id,
+                writer_id=principal.principal_id if principal is not None else writer_id,
                 params=route_params,
                 body=facade_body,
                 query=list(request.query_params.multi_items()) or None,
+                bank_override=writer_id if principal is not None else None,
             ),
             status_code=route.success_status,
         )
@@ -902,9 +993,12 @@ async def dispatch(path: str, request: Request) -> Response:
             getattr(policy, "registry", None), "writers", {}
         ):
             denied_writer_id = candidate
-    denied = (
-        await policy.deny_endpoint(method, pathname)
-        if denied_writer_id is None
-        else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
-    )
+    if principal is not None:
+        denied = await policy.deny_endpoint(method, pathname, writer_id=principal.principal_id)
+    else:
+        denied = (
+            await policy.deny_endpoint(method, pathname)
+            if denied_writer_id is None
+            else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
+        )
     return JSONResponse(denied, status_code=404)
