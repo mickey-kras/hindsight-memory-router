@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from fastapi import Request, Response
@@ -51,27 +52,28 @@ class ConcurrencyRunner(Protocol):
 PrincipalRate = Callable[[PrincipalSession, str, str], Awaitable[None]]
 
 
+@dataclass(frozen=True, slots=True)
+class DispatchDependencies:
+    policy: RouterPolicy
+    resolver: PrincipalResolver | None
+    hindsight: HindsightGateway | None
+    json_body: JsonBodyReader
+    principal_rate: PrincipalRate
+    concurrency: ConcurrencyRunner
+    decode_path_segment: Callable[[str], str]
+    facade_factory: Callable[[RouterPolicy], OpenClawFacade]
+
+
 class AuthenticatedRequestDispatcher:
-    def __init__(
-        self,
-        *,
-        policy: RouterPolicy,
-        resolver: PrincipalResolver | None,
-        hindsight: HindsightGateway | None,
-        json_body: JsonBodyReader,
-        principal_rate: PrincipalRate,
-        concurrency: ConcurrencyRunner,
-        decode_path_segment: Callable[[str], str],
-        facade_factory: Callable[[RouterPolicy], OpenClawFacade],
-    ) -> None:
-        self.policy = policy
-        self.resolver = resolver
-        self.hindsight = hindsight
-        self.json_body = json_body
-        self.principal_rate = principal_rate
-        self.concurrency = concurrency
-        self.decode_path_segment = decode_path_segment
-        self.facade_factory = facade_factory
+    def __init__(self, dependencies: DispatchDependencies) -> None:
+        self.policy = dependencies.policy
+        self.resolver = dependencies.resolver
+        self.hindsight = dependencies.hindsight
+        self.json_body = dependencies.json_body
+        self.principal_rate = dependencies.principal_rate
+        self.concurrency = dependencies.concurrency
+        self.decode_path_segment = dependencies.decode_path_segment
+        self.facade_factory = dependencies.facade_factory
 
     async def dispatch(
         self,

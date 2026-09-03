@@ -66,7 +66,11 @@ from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
-from .request_dispatch import EMPTY_BODY, AuthenticatedRequestDispatcher
+from .request_dispatch import (
+    EMPTY_BODY,
+    AuthenticatedRequestDispatcher,
+    DispatchDependencies,
+)
 from .review_repository import REVIEW_STALE_SECONDS, recover_interrupted
 from .timestamps import iso_format, iso_now
 
@@ -827,13 +831,15 @@ async def dispatch(path: str, request: Request) -> Response:
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
         )
     dispatcher = AuthenticatedRequestDispatcher(
-        policy=_require_runtime(runtime.policy, "router policy"),
-        resolver=runtime.principal_resolver,
-        hindsight=runtime.hindsight,
-        json_body=_json_body,
-        principal_rate=_principal_rate,
-        concurrency=_with_principal_concurrency,
-        decode_path_segment=_decode_path_segment,
-        facade_factory=OpenClawFacade,
+        DispatchDependencies(
+            policy=_require_runtime(runtime.policy, "router policy"),
+            resolver=runtime.principal_resolver,
+            hindsight=runtime.hindsight,
+            json_body=_json_body,
+            principal_rate=_principal_rate,
+            concurrency=_with_principal_concurrency,
+            decode_path_segment=_decode_path_segment,
+            facade_factory=OpenClawFacade,
+        )
     )
     return await dispatcher.dispatch(request, pathname, method, principal, route_class)
