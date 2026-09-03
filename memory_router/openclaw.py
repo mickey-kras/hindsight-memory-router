@@ -259,16 +259,20 @@ class OpenClawFacade:
         params: dict[str, str],
         body: dict[str, Any] | None = None,
         query: list[tuple[str, str]] | None = None,
+        bank_override: str | None = None,
     ) -> Any:
-        writer = self.policy.registry.writers.get(writer_id)
-        if writer is None:
-            await self._audit(
-                writer_id,
-                "openclaw_unknown_writer",
-                {"method": route.method, "resource": route.resource},
-                None,
-            )
-            raise HttpError(404, "unknown_writer", "writer is not registered")
+        target_bank = bank_override
+        if target_bank is None:
+            writer = self.policy.registry.writers.get(writer_id)
+            if writer is None:
+                await self._audit(
+                    writer_id,
+                    "openclaw_unknown_writer",
+                    {"method": route.method, "resource": route.resource},
+                    None,
+                )
+                raise HttpError(404, "unknown_writer", "writer is not registered")
+            target_bank = writer.write_bank
 
         forwarded_query = [
             (key, value) for key, value in (query or []) if key in route.query_params
@@ -320,7 +324,7 @@ class OpenClawFacade:
             await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
             raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
-        bank = quote(writer.write_bank, safe="")
+        bank = quote(target_bank, safe="")
         suffix = route.template
         for name in route.params:
             suffix = suffix.replace("{" + name + "}", quote(params[name], safe=""))

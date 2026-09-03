@@ -4,7 +4,7 @@ import asyncio
 import json
 import math
 from typing import Any, Literal, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationErr
 from .canonical import assert_json_depth, canonical_json
 from .errors import HttpError
 from .models import RecallResponse
-from .observability import current_request_id
+from .observability import current_duration_ms, current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -187,6 +187,69 @@ class HindsightGateway:
             ) from exc
         return cast(dict[str, Any], value)
 
+    async def list_banks(
+        self,
+        allowed_banks: list[str],
+        *,
+        q: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        allowed = set(allowed_banks)
+        visible: list[dict[str, Any]] = []
+        upstream_offset = 0
+        page_size = 500
+        try:
+            async with asyncio.timeout(self.timeout_ms / 1000.0):
+                for _ in range(1_000):
+                    query: dict[str, str | int] = {
+                        "limit": page_size,
+                        "offset": upstream_offset,
+                    }
+                    if q is not None:
+                        query["q"] = q
+                    value = await self._request(
+                        "list_banks",
+                        "GET",
+                        f"/v1/default/banks?{urlencode(query)}",
+                    )
+                    try:
+                        banks = value["banks"]
+                        total = value["total"]
+                        if not isinstance(banks, list) or not isinstance(total, int) or total < 0:
+                            raise ValueError("invalid bank list")
+                        for bank in banks:
+                            if not isinstance(bank, dict) or not isinstance(
+                                bank.get("bank_id"), str
+                            ):
+                                raise ValueError("invalid bank entry")
+                            if bank["bank_id"] in allowed:
+                                visible.append(bank)
+                    except (KeyError, TypeError, ValueError) as exc:
+                        raise HindsightGatewayError(
+                            "invalid-response", operation="list_banks", method="GET"
+                        ) from exc
+                    upstream_offset += len(banks)
+                    if not banks or upstream_offset >= total or len(visible) == len(allowed):
+                        break
+                else:
+                    raise HindsightGatewayError(
+                        "invalid-response", operation="list_banks", method="GET"
+                    )
+        except TimeoutError as exc:
+            raise HindsightGatewayError(
+                "timeout",
+                operation="list_banks",
+                method="GET",
+                timeout_ms=self.timeout_ms,
+            ) from exc
+        return {
+            "banks": visible[offset : offset + limit],
+            "total": len(visible),
+            "limit": limit,
+            "offset": offset,
+        }
+
     async def openclaw_request(
         self,
         operation: str,
@@ -325,3 +388,16 @@ class HindsightGateway:
         finally:
             if response is not None:
                 await response.aclose()
+
+
+def hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
+    return {
+        "request_id": current_request_id(),
+        "operation": error.context.get("operation"),
+        "upstream_method": error.context.get("method"),
+        "error_kind": error.kind,
+        "upstream_status": error.upstream_status,
+        "timeout_ms": error.context.get("timeout_ms"),
+        "http_status": error.status,
+        "request_duration_ms": current_duration_ms(),
+    }

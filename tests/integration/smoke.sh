@@ -31,6 +31,8 @@ tmp_dir="tests/integration/tmp/${mode}-${router_db}"
 state_file="${tmp_dir}/state/hindsight.jsonl"
 router_port="8890"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && router_port="8891"
+principals_port="8892"
+[[ "$mode" == "fake" && "$router_db" == "postgres" ]] && principals_port="8893"
 router_url="http://127.0.0.1:${router_port}"
 router_token="test-router-token"
 admin_read_token="test-admin-read-token"
@@ -328,6 +330,33 @@ grep -q 'endpoint denied by memory-router policy' "$denied_output" || fail_check
 admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
+
+if [[ "$mode" == "fake" ]]; then
+  begin_check "per-agent principal grants are enforced"
+  principals_url="http://127.0.0.1:${principals_port}"
+  # Synthetic integration credentials matching tests/integration/principal-registry.json.
+  alpha_auth="Authorization: Bearer mr_alpha-1_a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90"
+  reader_auth="Authorization: Bearer mr_reader-1_b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1"
+  banks_response="$(curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks")"
+  printf '%s' "$banks_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert [bank["bank_id"] for bank in data["banks"]] == ["alpha-only", "shared"]; assert data["total"] == 2' || fail_check "principal bank listing was not filtered to granted banks"
+  reader_list_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" "${principals_url}/v1/default/banks")"
+  [[ "$reader_list_status" == "403" ]] || fail_check "principal without bank.list could list banks: ${reader_list_status}"
+  principal_retain="$(curl --max-time 5 -fsS -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories" -d '{"items":[{"content":"principal smoke retain","context":"integration smoke","document_id":"ci-principal"}],"async":true}')"
+  printf '%s' "$principal_retain" | grep -Eq 'success|ok' || fail_check "granted principal retain failed: ${principal_retain}"
+  cross_bank_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/physical-main/memories" -d '{"items":[{"content":"cross-bank retain"}]}')"
+  [[ "$cross_bank_status" == "403" ]] || fail_check "principal retained into an ungranted bank: ${cross_bank_status}"
+  reader_retain_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories" -d '{"items":[{"content":"read-only retain"}]}')"
+  [[ "$reader_retain_status" == "403" ]] || fail_check "read-only principal retained memories: ${reader_retain_status}"
+  reader_recall="$(curl --max-time 5 -fsS -H "$reader_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories/recall" -d '{"query":"principal smoke retain"}')"
+  printf '%s' "$reader_recall" | python3 -c 'import json,sys; assert isinstance(json.load(sys.stdin).get("results"), list)' || fail_check "granted principal recall failed"
+  claim_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" -H "x-memory-router-agent: agent-reader" "${principals_url}/v1/default/banks")"
+  [[ "$claim_status" == "403" ]] || fail_check "mismatched claimed agent was not rejected: ${claim_status}"
+  legacy_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${principals_url}/v1/default/banks")"
+  [[ "$legacy_status" == "401" ]] || fail_check "legacy router token authenticated in principal mode: ${legacy_status}"
+  wrong_secret_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer mr_alpha-1_0000000000000000000000000000000000000000000000000000000000000000" "${principals_url}/v1/default/banks")"
+  [[ "$wrong_secret_status" == "401" ]] || fail_check "wrong principal secret authenticated: ${wrong_secret_status}"
+  pass_check
+fi
 
 if [[ "$mode" == "fake" ]]; then
   # Fake Hindsight covers the full facade matrix. Real smoke covers core

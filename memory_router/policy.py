@@ -88,14 +88,24 @@ class RouterPolicy:
         writer = self.registry.writers.get(writer_id)
         if writer is None:
             return await self._quarantine_retain(writer_id, source, "unknown_writer", body)
-        await self.limits.consume_retain(writer_id)
+        return await self._retain_to_bank(writer_id, writer.write_bank, body, source)
+
+    async def retain_bank(
+        self, principal_id: str, bank: str, body: dict[str, Any], source: str = "openclaw"
+    ) -> Any:
+        return await self._retain_to_bank(principal_id, bank, body, source)
+
+    async def _retain_to_bank(
+        self, identity: str, target_bank: str, body: dict[str, Any], source: str
+    ) -> Any:
+        await self.limits.consume_retain(identity)
         scan = scan_retain_body(body)
         if not scan.safe:
             return await self._quarantine_retain(
-                writer_id, source, "suspicious_content", body, writer.write_bank, scan
+                identity, source, "suspicious_content", body, target_bank, scan
             )
-        rewritten = prepare_retain_body(body, writer_id, source, writer.write_bank)
-        return await self.hindsight.retain(writer.write_bank, rewritten)
+        rewritten = prepare_retain_body(body, identity, source, target_bank)
+        return await self.hindsight.retain(target_bank, rewritten)
 
     async def recall(
         self, writer_id: str, body: dict[str, Any], source: str = "openclaw"
@@ -104,14 +114,24 @@ class RouterPolicy:
         if writer is None:
             await self._quarantine_recall_or_degrade(writer_id, source, "unknown_writer", body)
             return {"results": []}
+        return await self._recall_from_read_banks(writer_id, list(writer.read_banks), body, source)
+
+    async def recall_bank(
+        self, principal_id: str, bank: str, body: dict[str, Any], source: str = "openclaw"
+    ) -> dict[str, Any]:
+        return await self._recall_from_read_banks(principal_id, [bank], body, source)
+
+    async def _recall_from_read_banks(
+        self, writer_id: str, read_banks: list[str], body: dict[str, Any], source: str
+    ) -> dict[str, Any]:
         await self.limits.consume_recall(writer_id)
         scan = scan_recall_body(body)
         if not scan.safe:
             await self._quarantine_recall_or_degrade(
-                writer_id, source, "suspicious_query", body, list(writer.read_banks), scan
+                writer_id, source, "suspicious_query", body, read_banks, scan
             )
             return {"results": []}
-        responses = await self._recall_from_banks(writer_id, list(writer.read_banks), body)
+        responses = await self._recall_from_banks(writer_id, read_banks, body)
         results: list[dict[str, Any]] = []
         for bank_id, response in responses:
             for result in response.get("results", []):

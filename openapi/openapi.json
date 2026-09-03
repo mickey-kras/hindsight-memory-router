@@ -30,162 +30,17 @@
     }
   ],
   "paths": {
-    "/health": {
-      "get": {
-        "operationId": "getHealth",
-        "summary": "Check router readiness",
-        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
-        "tags": ["Service"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "503": {
-            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthUnavailableResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the health handler."
-          }
-        }
-      }
-    },
-    "/health/live": {
-      "get": {
-        "operationId": "getLiveness",
-        "summary": "Check router liveness",
-        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight. Uses Hindsight's liveness response contract.",
-        "tags": ["Service"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Router process is serving requests.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LivenessResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the liveness handler."
-          }
-        }
-      }
-    },
-    "/health/ready": {
-      "get": {
-        "operationId": "getHealthReadiness",
-        "summary": "Check router readiness",
-        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
-        "tags": ["Service"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            }
-          },
-          "503": {
-            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HealthUnavailableResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the readiness handler."
-          }
-        }
-      }
-    },
-    "/version": {
-      "get": {
-        "operationId": "getVersion",
-        "summary": "Get Hindsight API version and features",
-        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
-        "tags": ["Service"],
-        "security": [],
-        "responses": {
-          "200": {
-            "description": "Hindsight API version and facade-exposed capabilities.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/VersionResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "The router has no initialized Hindsight gateway or a cold concurrent probe failed fast.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "504": {
-            "description": "Hindsight timed out.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the version handler."
-          }
-        }
-      }
-    },
-    "/v1/default/banks/{writer_id}/memories": {
+    "/admin/quarantine/cleanup": {
       "post": {
-        "operationId": "retainMemory",
-        "summary": "Retain memory through writer policy",
-        "description": "Routes a clean request to the writer's configured Hindsight bank. Unknown writers or suspicious fields are encrypted into quarantine and are not written to Hindsight.",
-        "tags": ["Memory"],
+        "operationId": "cleanupQuarantine",
+        "summary": "Preview or execute bulk quarantine cleanup",
+        "description": "Cleanup defaults to a dry run. Execution requires the exact count returned by a prior preview; a changed selection returns 409.",
+        "tags": [
+          "Quarantine administration"
+        ],
         "security": [
           {
-            "RouterToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/WriterId"
+            "AdminToken": []
           }
         ],
         "requestBody": {
@@ -193,25 +48,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/RetainRequest"
+                "$ref": "#/components/schemas/CleanupRequest"
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Hindsight retain response, or a quarantine reference when policy blocks the request.",
+            "description": "Cleanup preview or execution result.",
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
-                    {
-                      "$ref": "#/components/schemas/QuarantinedResponse"
-                    },
-                    {
-                      "$ref": "#/components/schemas/UpstreamResponse"
-                    }
-                  ]
+                  "$ref": "#/components/schemas/CleanupResponse"
                 }
               }
             }
@@ -220,53 +68,42 @@
             "$ref": "#/components/responses/BadRequest"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "429": {
-            "$ref": "#/components/responses/MemoryRateLimited"
-          },
-          "507": {
-            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
     },
-    "/v1/default/banks/{writer_id}/memories/recall": {
-      "post": {
-        "operationId": "recallMemory",
-        "summary": "Recall memory through writer policy",
-        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed.",
-        "tags": ["Memory"],
+    "/admin/quarantine/items/{quarantine_id}": {
+      "get": {
+        "operationId": "getQuarantineItem",
+        "summary": "Fetch an encrypted quarantine item",
+        "description": "Returns current metadata and an encrypted envelope for local decryption. It never returns plaintext.",
+        "tags": [
+          "Quarantine administration"
+        ],
         "security": [
           {
-            "RouterToken": []
+            "AdminToken": []
           }
         ],
         "parameters": [
           {
-            "$ref": "#/components/parameters/WriterId"
+            "$ref": "#/components/parameters/QuarantineId"
           }
         ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RecallRequest"
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
-            "description": "Hindsight-compatible recall response with ACL- and safety-filtered results plus supported top-level recall metadata.",
+            "description": "Encrypted item and review metadata.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RecallResponse"
+                  "$ref": "#/components/schemas/QuarantineItemResponse"
                 }
               }
             }
@@ -275,16 +112,166 @@
             "$ref": "#/components/responses/BadRequest"
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "$ref": "#/components/responses/AdminUnauthorized"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "429": {
-            "$ref": "#/components/responses/MemoryRateLimited"
+            "$ref": "#/components/responses/AdminRateLimited"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/approve": {
+      "post": {
+        "operationId": "approveQuarantineItem",
+        "summary": "Approve the exact original quarantined object",
+        "description": "The caller decrypts locally and submits the complete object unchanged. The router canonicalizes it and compares its SHA-256 with the original digest. A changed field is rejected. Retain requests are written to the writer's current configured bank; recalled memories are marked reviewed and allowed only for their unchanged digest.",
+        "tags": [
+          "Quarantine administration"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Retain approval or recalled-memory allow decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApproveResponse"
+                }
+              }
+            }
           },
-          "507": {
-            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/postpone": {
+      "post": {
+        "operationId": "postponeQuarantineItem",
+        "summary": "Postpone a quarantine review",
+        "tags": [
+          "Quarantine administration"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated postpone count.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostponeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/reject": {
+      "post": {
+        "operationId": "rejectQuarantineItem",
+        "summary": "Reject a quarantine item",
+        "description": "Removes an unapproved request from current quarantine state. For a recalled memory, invalidates the Hindsight memory and stores a reviewed-blocked audit state.",
+        "tags": [
+          "Quarantine administration"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Request rejection or recalled-memory block decision.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RejectResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -294,7 +281,9 @@
         "operationId": "listQuarantineQueue",
         "summary": "List items awaiting review",
         "description": "Returns metadata only. Encrypted payloads are fetched one item at a time.",
-        "tags": ["Quarantine administration"],
+        "tags": [
+          "Quarantine administration"
+        ],
         "security": [
           {
             "AdminToken": []
@@ -350,7 +339,9 @@
       "get": {
         "operationId": "getQuarantineStats",
         "summary": "Get quarantine storage statistics",
-        "tags": ["Quarantine administration"],
+        "tags": [
+          "Quarantine administration"
+        ],
         "security": [
           {
             "AdminToken": []
@@ -376,249 +367,74 @@
         }
       }
     },
-    "/admin/quarantine/cleanup": {
-      "post": {
-        "operationId": "cleanupQuarantine",
-        "summary": "Preview or execute bulk quarantine cleanup",
-        "description": "Cleanup defaults to a dry run. Execution requires the exact count returned by a prior preview; a changed selection returns 409.",
-        "tags": ["Quarantine administration"],
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CleanupRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Cleanup preview or execution result.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CleanupResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          }
-        }
-      }
-    },
-    "/admin/quarantine/items/{quarantine_id}": {
+    "/health": {
       "get": {
-        "operationId": "getQuarantineItem",
-        "summary": "Fetch an encrypted quarantine item",
-        "description": "Returns current metadata and an encrypted envelope for local decryption. It never returns plaintext.",
-        "tags": ["Quarantine administration"],
-        "security": [
-          {
-            "AdminToken": []
-          }
+        "operationId": "getHealth",
+        "summary": "Check router readiness",
+        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
+        "tags": [
+          "Service"
         ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/QuarantineId"
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
-            "description": "Encrypted item and review metadata.",
+            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QuarantineItemResponse"
+                  "$ref": "#/components/schemas/HealthUnavailableResponse"
                 }
               }
             }
           },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the health handler."
           }
         }
       }
     },
-    "/admin/quarantine/items/{quarantine_id}/approve": {
-      "post": {
-        "operationId": "approveQuarantineItem",
-        "summary": "Approve the exact original quarantined object",
-        "description": "The caller decrypts locally and submits the complete object unchanged. The router canonicalizes it and compares its SHA-256 with the original digest. A changed field is rejected. Retain requests are written to the writer's current configured bank; recalled memories are marked reviewed and allowed only for their unchanged digest.",
-        "tags": ["Quarantine administration"],
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/QuarantineId"
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ApproveRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Retain approval or recalled-memory allow decision.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApproveResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          }
-        }
-      }
-    },
-    "/admin/quarantine/items/{quarantine_id}/reject": {
-      "post": {
-        "operationId": "rejectQuarantineItem",
-        "summary": "Reject a quarantine item",
-        "description": "Removes an unapproved request from current quarantine state. For a recalled memory, invalidates the Hindsight memory and stores a reviewed-blocked audit state.",
-        "tags": ["Quarantine administration"],
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/QuarantineId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Request rejection or recalled-memory block decision.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RejectResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          }
-        }
-      }
-    },
-    "/admin/quarantine/items/{quarantine_id}/postpone": {
-      "post": {
-        "operationId": "postponeQuarantineItem",
-        "summary": "Postpone a quarantine review",
-        "tags": ["Quarantine administration"],
-        "security": [
-          {
-            "AdminToken": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/QuarantineId"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Updated postpone count.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PostponeResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/AdminUnauthorized"
-          },
-          "404": {
-            "$ref": "#/components/responses/NotFound"
-          },
-          "409": {
-            "$ref": "#/components/responses/Conflict"
-          },
-          "429": {
-            "$ref": "#/components/responses/AdminRateLimited"
-          }
-        }
-      }
-    },
-    "/ready": {
+    "/health/live": {
       "get": {
-        "operationId": "getLegacyReadiness",
-        "summary": "Check router readiness (deprecated)",
-        "description": "Deprecated compatibility alias for /health/ready.",
-        "deprecated": true,
-        "tags": ["Service"],
+        "operationId": "getLiveness",
+        "summary": "Check router liveness",
+        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight. Uses Hindsight's liveness response contract.",
+        "tags": [
+          "Service"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Router process is serving requests.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the liveness handler."
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "getHealthReadiness",
+        "summary": "Check router readiness",
+        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
+        "tags": [
+          "Service"
+        ],
         "security": [],
         "responses": {
           "200": {
@@ -644,6 +460,283 @@
           }
         }
       }
+    },
+    "/ready": {
+      "get": {
+        "operationId": "getLegacyReadiness",
+        "summary": "Check router readiness (deprecated)",
+        "description": "Deprecated compatibility alias for /health/ready.",
+        "deprecated": true,
+        "tags": [
+          "Service"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "503": {
+            "description": "Router quarantine storage or Hindsight is unhealthy or unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthUnavailableResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the readiness handler."
+          }
+        }
+      }
+    },
+    "/v1/default/banks": {
+      "get": {
+        "operationId": "listBanks",
+        "summary": "List banks visible to the authenticated principal",
+        "description": "Principal mode only. Preserves the Hindsight bank-list response and removes banks without bank.list.",
+        "tags": [
+          "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0, "maximum": 500, "default": 100 }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          }
+        ],
+        "security": [
+          {
+            "PrincipalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Banks the authenticated principal may enumerate.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BankListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/MemoryRateLimited"
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{writer_id}/memories": {
+      "post": {
+        "operationId": "retainMemory",
+        "summary": "Retain memory through writer policy",
+        "description": "Routes a clean request to the writer's configured Hindsight bank. Unknown writers or suspicious fields are encrypted into quarantine and are not written to Hindsight. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WriterId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetainRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Hindsight retain response, or a quarantine reference when policy blocks the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/QuarantinedResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/UpstreamResponse"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/MemoryRateLimited"
+          },
+          "507": {
+            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/default/banks/{writer_id}/memories/recall": {
+      "post": {
+        "operationId": "recallMemory",
+        "summary": "Recall memory through writer policy",
+        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
+        "tags": [
+          "Memory"
+        ],
+        "security": [
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WriterId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecallRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Hindsight-compatible recall response with ACL- and safety-filtered results plus supported top-level recall metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecallResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/MemoryRateLimited"
+          },
+          "507": {
+            "$ref": "#/components/responses/QuarantineCapacityExceeded"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/version": {
+      "get": {
+        "operationId": "getVersion",
+        "summary": "Get Hindsight API version and features",
+        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
+        "tags": [
+          "Service"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Hindsight API version and facade-exposed capabilities.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The router has no initialized Hindsight gateway or a cold concurrent probe failed fast.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Hindsight timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "The HTTP server rejected a malformed client request before invoking the version handler."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -659,6 +752,12 @@
         "scheme": "bearer",
         "bearerFormat": "API key",
         "description": "Bearer credential authorized for the requested admin capability: read or review for admin reads, review for approve/reject/postpone, cleanup for cleanup, or the legacy migration superuser."
+      },
+      "PrincipalToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "mr_<key-id>_<256-bit-secret-hex>",
+        "description": "Per-agent principal token from MEMORY_ROUTER_PRINCIPALS. The registry stores SHA-256 digests only."
       }
     },
     "parameters": {
@@ -782,13 +881,27 @@
             }
           }
         }
+      },
+      "Forbidden": {
+        "description": "The authenticated principal lacks the required grant for this bank or scope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
       }
     },
     "schemas": {
       "LivenessResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status", "version", "uptime_seconds"],
+        "required": [
+          "status",
+          "version",
+          "uptime_seconds"
+        ],
         "properties": {
           "status": {
             "type": "string",
@@ -806,7 +919,9 @@
       "HealthUnavailableResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
           "status": {
             "type": "string",
@@ -817,7 +932,10 @@
       "VersionResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["api_version", "features"],
+        "required": [
+          "api_version",
+          "features"
+        ],
         "properties": {
           "api_version": {
             "type": "string"
@@ -878,37 +996,61 @@
       },
       "MemoryItem": {
         "type": "object",
-        "required": ["content"],
+        "required": [
+          "content"
+        ],
         "properties": {
           "content": {
             "type": "string",
             "minLength": 1
           },
           "context": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "document_id": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "metadata": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": {
               "type": "string"
             }
           },
           "tags": {
-            "type": ["array", "null"],
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
             }
           },
           "timestamp": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "update_mode": {
-            "type": ["string", "null"],
-            "enum": ["replace", "append", null]
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "replace",
+              "append",
+              null
+            ]
           }
         },
         "additionalProperties": true
@@ -916,7 +1058,9 @@
       "RetainRequest": {
         "type": "object",
         "description": "Retain requests allow at most 100 items and 524288 aggregate UTF-8 bytes across all string values forwarded downstream.",
-        "required": ["items"],
+        "required": [
+          "items"
+        ],
         "properties": {
           "items": {
             "type": "array",
@@ -940,7 +1084,9 @@
       },
       "RecallRequest": {
         "type": "object",
-        "required": ["query"],
+        "required": [
+          "query"
+        ],
         "properties": {
           "query": {
             "type": "string",
@@ -954,16 +1100,26 @@
           },
           "budget": {
             "type": "string",
-            "enum": ["low", "mid", "high"]
+            "enum": [
+              "low",
+              "mid",
+              "high"
+            ]
           },
           "types": {
-            "type": ["array", "null"],
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
             }
           },
           "tags": {
-            "type": ["array", "null"],
+            "type": [
+              "array",
+              "null"
+            ],
             "items": {
               "type": "string"
             }
@@ -979,7 +1135,10 @@
       },
       "RecallResult": {
         "type": "object",
-        "required": ["id", "text"],
+        "required": [
+          "id",
+          "text"
+        ],
         "properties": {
           "id": {
             "type": "string"
@@ -992,7 +1151,9 @@
       },
       "RecallResponse": {
         "type": "object",
-        "required": ["results"],
+        "required": [
+          "results"
+        ],
         "properties": {
           "results": {
             "type": "array",
@@ -1001,19 +1162,31 @@
             }
           },
           "chunks": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": true
           },
           "entities": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": true
           },
           "source_facts": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": true
           },
           "trace": {
-            "type": ["object", "null"],
+            "type": [
+              "object",
+              "null"
+            ],
             "additionalProperties": true
           }
         },
@@ -1022,7 +1195,11 @@
       "QuarantinedResponse": {
         "type": "object",
         "additionalProperties": true,
-        "required": ["queued", "reason", "quarantine_id"],
+        "required": [
+          "queued",
+          "reason",
+          "quarantine_id"
+        ],
         "properties": {
           "queued": {
             "type": "boolean",
@@ -1074,7 +1251,12 @@
       },
       "QuarantineStatus": {
         "type": "string",
-        "enum": ["pending", "postponed", "reviewed_allowed", "reviewed_blocked"]
+        "enum": [
+          "pending",
+          "postponed",
+          "reviewed_allowed",
+          "reviewed_blocked"
+        ]
       },
       "QuarantineItemSummary": {
         "type": "object",
@@ -1157,7 +1339,10 @@
       "QuarantineQueueResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["items", "total"],
+        "required": [
+          "items",
+          "total"
+        ],
         "properties": {
           "items": {
             "type": "array",
@@ -1259,7 +1444,10 @@
       "QuarantineItemResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["record", "encrypted"],
+        "required": [
+          "record",
+          "encrypted"
+        ],
         "properties": {
           "record": {
             "$ref": "#/components/schemas/QuarantineItemSummary"
@@ -1272,7 +1460,12 @@
       "DecryptedQuarantineObject": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["quarantine_id", "created_at", "reason", "payload"],
+        "required": [
+          "quarantine_id",
+          "created_at",
+          "reason",
+          "payload"
+        ],
         "properties": {
           "quarantine_id": {
             "$ref": "#/components/schemas/QuarantineId"
@@ -1298,7 +1491,9 @@
       "ApproveRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["decrypted"],
+        "required": [
+          "decrypted"
+        ],
         "properties": {
           "decrypted": {
             "$ref": "#/components/schemas/DecryptedQuarantineObject"
@@ -1310,7 +1505,11 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["approved", "quarantine_id", "target_bank"],
+            "required": [
+              "approved",
+              "quarantine_id",
+              "target_bank"
+            ],
             "properties": {
               "approved": {
                 "type": "boolean",
@@ -1334,7 +1533,10 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["rejected", "quarantine_id"],
+            "required": [
+              "rejected",
+              "quarantine_id"
+            ],
             "properties": {
               "rejected": {
                 "type": "boolean",
@@ -1382,7 +1584,11 @@
       "PostponeResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["postponed", "quarantine_id", "count"],
+        "required": [
+          "postponed",
+          "quarantine_id",
+          "count"
+        ],
         "properties": {
           "postponed": {
             "type": "boolean",
@@ -1446,7 +1652,10 @@
         "properties": {
           "scope": {
             "type": "string",
-            "enum": ["pending", "all"],
+            "enum": [
+              "pending",
+              "all"
+            ],
             "default": "pending"
           },
           "reasons": {
@@ -1474,7 +1683,11 @@
       "CleanupResponse": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["dry_run", "count", "encrypted_bytes"],
+        "required": [
+          "dry_run",
+          "count",
+          "encrypted_bytes"
+        ],
         "properties": {
           "dry_run": {
             "type": "boolean"
@@ -1491,13 +1704,50 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "string"
           },
           "message": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BankListResponse": {
+        "type": "object",
+        "required": [
+          "banks",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "properties": {
+          "banks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["bank_id"],
+              "properties": {
+                "bank_id": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "additionalProperties": false
