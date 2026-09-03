@@ -54,25 +54,25 @@ ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|pos
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
-        {ADMIN_PREFIX, "method=='GET'", "pathname=='/admin/quarantine/queue'"}
+        {"method=='GET'", "pathname=='/admin/quarantine/queue'"}
     ): "admin queue and item expose metadata plus ciphertext only",
     frozenset(
-        {ADMIN_PREFIX, "method=='GET'", "pathname=='/admin/quarantine/stats'"}
+        {"method=='GET'", "pathname=='/admin/quarantine/stats'"}
     ): "unknown writer is encrypted only in quarantine database",
     frozenset(
-        {ADMIN_PREFIX, "method=='POST'", "pathname=='/admin/quarantine/cleanup'"}
+        {"method=='POST'", "pathname=='/admin/quarantine/cleanup'"}
     ): "bulk cleanup uses dry-run count confirmation",
     frozenset(
-        {ADMIN_PREFIX, ADMIN_ITEM_REGEX, "method=='GET'", "action is None"}
+        {"method=='GET'", "action is None"}
     ): "admin queue and item expose metadata plus ciphertext only",
     frozenset(
-        {ADMIN_PREFIX, ADMIN_ITEM_REGEX, "method=='POST'", "action=='approve'"}
+        {"method=='POST'", "action=='approve'"}
     ): "exact unchanged suspicious retain can be approved",
     frozenset(
-        {ADMIN_PREFIX, ADMIN_ITEM_REGEX, "method=='POST'", "action=='reject'"}
+        {"method=='POST'", "action=='reject'"}
     ): "unknown item can be rejected without a Hindsight write",
     frozenset(
-        {ADMIN_PREFIX, ADMIN_ITEM_REGEX, "method=='POST'", "action=='postpone'"}
+        {"method=='POST'", "action=='postpone'"}
     ): "unknown-writer recall degrades to empty results and can be postponed",
     frozenset(
         {"method=='GET'", "pathname=='/version'"}
@@ -201,6 +201,8 @@ def _literal_string_set(value: ast.expr) -> set[str] | None:
 
 
 def _condition_parts(node: ast.expr, patterns: dict[str, str]) -> set[str]:
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+        return _condition_parts(node.operand, patterns)
     if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
         parts: set[str] = set()
         for value in node.values:
@@ -247,7 +249,14 @@ def _condition_parts(node: ast.expr, patterns: dict[str, str]) -> set[str]:
 
 
 def _dispatch_functions(trees: list[ast.AST]) -> list[ast.AsyncFunctionDef]:
-    names = {"dispatch", "_dispatch_admin", "_dispatch_bank_list", "_dispatch_memory"}
+    names = {
+        "dispatch",
+        "_dispatch_admin",
+        "_authorized_admin_response",
+        "_admin_item_response",
+        "_dispatch_bank_list",
+        "_dispatch_memory",
+    }
     functions = [
         node
         for tree in trees
@@ -322,6 +331,30 @@ def test_dispatch_method_action_surface_is_bound_to_integration_coverage() -> No
         branches |= _dispatch_branches(dispatch_function)
 
     assert branches == set(DISPATCH_BRANCH_COVERAGE)
+
+
+def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
+    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    functions = {
+        node.name: node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
+    }
+    admin = functions["_dispatch_admin"]
+    selectors = {
+        part
+        for node in ast.walk(admin)
+        if isinstance(node, ast.If)
+        for part in _condition_parts(node.test, {})
+    }
+    authorized = functions["_authorized_admin_response"]
+    patterns = {
+        name: pattern
+        for statement in authorized.body
+        if (assignment := _regex_assignment(statement)) is not None
+        for name, pattern in [assignment]
+    }
+
+    assert ADMIN_PREFIX in selectors
+    assert f"regex:{patterns['match']}" == ADMIN_ITEM_REGEX
 
 
 def test_behavior_changes_require_integration_smoke_update() -> None:

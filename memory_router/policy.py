@@ -132,38 +132,69 @@ class RouterPolicy:
             )
             return {"results": []}
         responses = await self._recall_from_banks(writer_id, read_banks, body)
+        combined: dict[str, Any] = {
+            "results": await self._allowed_recall_results(writer_id, source, responses)
+        }
+        for field in _RECALL_RESPONSE_MAP_FIELDS:
+            present, value = await self._merged_recall_field(writer_id, source, responses, field)
+            if present:
+                combined[field] = value
+        return combined
+
+    async def _allowed_recall_results(
+        self,
+        writer_id: str,
+        source: str,
+        responses: list[tuple[str, dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for bank_id, response in responses:
             for result in response.get("results", []):
                 if await self._allow_recalled_or_degrade(writer_id, source, bank_id, result):
                     results.append(result)
-        combined: dict[str, Any] = {"results": results}
-        for field in _RECALL_RESPONSE_MAP_FIELDS:
-            merged: dict[str, Any] = {}
-            present = False
-            map_present = False
-            for bank_id, response in responses:
-                if field not in response:
-                    continue
-                present = True
-                value = response[field]
-                if not isinstance(value, dict):
-                    continue
-                map_present = True
-                if field == "trace":
-                    if await self._allow_recall_supplemental_or_degrade(
-                        writer_id, source, bank_id, field, None, value
-                    ):
-                        merged.update(value)
-                    continue
-                for key, entry in value.items():
-                    if await self._allow_recall_supplemental_or_degrade(
-                        writer_id, source, bank_id, field, str(key), entry
-                    ):
-                        merged[key] = entry
-            if present:
-                combined[field] = merged if map_present else None
-        return combined
+        return results
+
+    async def _merged_recall_field(
+        self,
+        writer_id: str,
+        source: str,
+        responses: list[tuple[str, dict[str, Any]]],
+        field: str,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        merged: dict[str, Any] = {}
+        present = False
+        map_present = False
+        for bank_id, response in responses:
+            if field not in response:
+                continue
+            present = True
+            value = response[field]
+            if not isinstance(value, dict):
+                continue
+            map_present = True
+            await self._merge_recall_map(writer_id, source, bank_id, field, value, merged)
+        return present, merged if map_present else None
+
+    async def _merge_recall_map(
+        self,
+        writer_id: str,
+        source: str,
+        bank_id: str,
+        field: str,
+        value: dict[str, Any],
+        merged: dict[str, Any],
+    ) -> None:
+        if field == "trace":
+            if await self._allow_recall_supplemental_or_degrade(
+                writer_id, source, bank_id, field, None, value
+            ):
+                merged.update(value)
+            return
+        for key, entry in value.items():
+            if await self._allow_recall_supplemental_or_degrade(
+                writer_id, source, bank_id, field, str(key), entry
+            ):
+                merged[key] = entry
 
     async def deny_endpoint(
         self, method: str, path: str, writer_id: str | None = None
