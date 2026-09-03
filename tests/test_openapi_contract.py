@@ -60,7 +60,10 @@ def test_openapi_paths_and_methods_match_composed_router_surface() -> None:
 
 
 def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
-    source = pathlib.Path("memory_router/app.py").read_text()
+    source = "\n".join(
+        pathlib.Path(path).read_text()
+        for path in ("memory_router/app.py", "memory_router/request_dispatch.py")
+    )
     markers = {
         "/health": '@app.get("/health")',
         "/health/live": '@app.get("/health/live")',

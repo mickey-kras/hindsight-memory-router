@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 
 APP_PATH = Path("memory_router/app.py")
+REQUEST_DISPATCH_PATH = Path("memory_router/request_dispatch.py")
 POLICY_PATH = Path("memory_router/policy.py")
 ADMIN_PATH = Path("memory_router/admin.py")
 AUTH_PATH = Path("memory_router/auth.py")
@@ -245,14 +246,15 @@ def _condition_parts(node: ast.expr, patterns: dict[str, str]) -> set[str]:
     return set()
 
 
-def _dispatch_function(tree: ast.AST) -> list[ast.AsyncFunctionDef]:
-    # The dispatch surface spans dispatch and its extracted admin sub-handler.
+def _dispatch_functions(trees: list[ast.AST]) -> list[ast.AsyncFunctionDef]:
+    names = {"dispatch", "_dispatch_admin", "_dispatch_bank_list", "_dispatch_memory"}
     functions = [
         node
+        for tree in trees
         for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name in {"dispatch", "_dispatch_admin"}
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in names
     ]
-    if len(functions) != 2:
+    if {function.name for function in functions} != names:
         raise AssertionError("dispatch functions not found")
     return functions
 
@@ -312,9 +314,11 @@ def test_direct_http_routes_are_bound_to_integration_coverage() -> None:
 
 
 def test_dispatch_method_action_surface_is_bound_to_integration_coverage() -> None:
-    tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
+    trees = [
+        ast.parse(path.read_text(encoding="utf-8")) for path in (APP_PATH, REQUEST_DISPATCH_PATH)
+    ]
     branches: set[frozenset[str]] = set()
-    for dispatch_function in _dispatch_function(tree):
+    for dispatch_function in _dispatch_functions(trees):
         branches |= _dispatch_branches(dispatch_function)
 
     assert branches == set(DISPATCH_BRANCH_COVERAGE)

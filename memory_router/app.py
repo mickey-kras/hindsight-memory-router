@@ -35,7 +35,6 @@ from .db import (
     validate_storage,
 )
 from .errors import HttpError, rate_limit_error
-from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
@@ -47,15 +46,10 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
-from .principal_gate import authenticate_principal, log_authorization_decision, require_grant
+from .principal_gate import authenticate_principal
 from .principals import (
-    SCOPE_BANK_ADMIN,
-    SCOPE_BANK_LIST,
-    SCOPE_MEMORY_RECALL,
-    SCOPE_MEMORY_RETAIN,
     PrincipalResolver,
     PrincipalSession,
-    facade_scope,
     load_principal_registry,
     scope_limit_operation,
 )
@@ -72,9 +66,9 @@ from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
+from .request_dispatch import EMPTY_BODY, AuthenticatedRequestDispatcher
 from .review_repository import REVIEW_STALE_SECONDS, recover_interrupted
 from .timestamps import iso_format, iso_now
-from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
 configure_logging()
@@ -84,7 +78,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
-_EMPTY_BODY = object()
+_EMPTY_BODY = EMPTY_BODY
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -497,23 +491,6 @@ async def _json_body(
     return value
 
 
-def _bank_list_query(request: Request) -> tuple[str | None, int, int]:
-    pairs = list(request.query_params.multi_items())
-    if any(key not in {"q", "limit", "offset"} for key, _ in pairs):
-        raise HttpError(400, "invalid_query", "unsupported bank-list query parameter")
-    if any(sum(1 for key, _ in pairs if key == name) > 1 for name in {"q", "limit", "offset"}):
-        raise HttpError(400, "invalid_query", "duplicate bank-list query parameter")
-    q = request.query_params.get("q")
-    try:
-        limit = int(request.query_params.get("limit", "100"), 10)
-        offset = int(request.query_params.get("offset", "0"), 10)
-    except ValueError as exc:
-        raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
-    if not 0 <= limit <= 500 or offset < 0:
-        raise HttpError(400, "invalid_query", "integer query parameter out of range")
-    return q, limit, offset
-
-
 async def _auth_failure_rate(route_group: str) -> None:
     try:
         await runtime.auth_limiter.consume_many(
@@ -831,9 +808,9 @@ async def dispatch(path: str, request: Request) -> Response:
 
     if method == "GET" and pathname == "/version":
         return await _version_response()
+    route_class = _route_class(request)
     principal: PrincipalSession | None = None
     if runtime.principal_resolver is not None:
-        route_class = _route_class(request)
         principal = await authenticate_principal(
             request,
             resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
@@ -849,182 +826,14 @@ async def dispatch(path: str, request: Request) -> Response:
         return JSONResponse(
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
         )
-    policy = _require_runtime(runtime.policy, "router policy")
-
-    if principal is not None and method == "GET" and pathname == "/v1/default/banks":
-        resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
-        await _principal_rate(principal, SCOPE_BANK_LIST, route_class)
-        banks = resolver.list_banks(principal)
-        if not banks:
-            log_authorization_decision(
-                route_class=route_class,
-                session=principal,
-                bank="-",
-                scope=SCOPE_BANK_LIST,
-                allowed=False,
-                latency_ms=0.0,
-            )
-            raise HttpError(403, "authorization_denied", "principal lacks the required grant")
-        for bank in banks:
-            log_authorization_decision(
-                route_class=route_class,
-                session=principal,
-                bank=bank,
-                scope=SCOPE_BANK_LIST,
-                allowed=True,
-                latency_ms=0.0,
-            )
-        q, limit, offset = _bank_list_query(request)
-        hindsight = _require_runtime(runtime.hindsight, "hindsight gateway")
-        return JSONResponse(
-            await _with_principal_concurrency(
-                request,
-                principal,
-                SCOPE_BANK_LIST,
-                lambda: hindsight.list_banks(banks, q=q, limit=limit, offset=offset),
-            )
-        )
-
-    match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
-    if method == "POST" and match:
-        writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
-        if principal is not None:
-            scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
-            await _principal_rate(principal, scope, route_class)
-            require_grant(
-                session=principal,
-                scope=scope,
-                bank=writer_id,
-                route_class=route_class,
-            )
-            body_limit = principal.limits[scope_limit_operation(scope)].max_body_bytes
-            if action == "recall":
-                body = parse_recall_body(await _json_body(request, max_bytes=body_limit))
-                policy.limits.assert_recall_bounds(body)
-                return JSONResponse(
-                    await _with_principal_concurrency(
-                        request,
-                        principal,
-                        scope,
-                        lambda: policy.recall_bank(principal.principal_id, writer_id, body),
-                    )
-                )
-            body = parse_retain_body(await _json_body(request, max_bytes=body_limit))
-            policy.limits.assert_retain_bounds(body)
-            return JSONResponse(
-                await _with_principal_concurrency(
-                    request,
-                    principal,
-                    scope,
-                    lambda: policy.retain_bank(principal.principal_id, writer_id, body),
-                )
-            )
-        if action == "recall":
-            body = parse_recall_body(await _json_body(request))
-            policy.limits.assert_recall_bounds(body)
-            return JSONResponse(await policy.recall(writer_id, body))
-        body = parse_retain_body(await _json_body(request))
-        policy.limits.assert_retain_bounds(body)
-        return JSONResponse(await policy.retain(writer_id, body))
-
-    facade = OpenClawFacade(policy)
-    matched = None
-    if pathname.startswith("/v1/default/banks/"):
-        try:
-            facade_pathname = "/".join(_decode_path_segment(part) for part in pathname.split("/"))
-        except HttpError as exc:
-            if exc.code == "invalid_path_segment":
-                raise
-            matched = match_facade_route(method, pathname)
-            if matched is not None:
-                raise
-        else:
-            matched = match_facade_route(method, facade_pathname)
-    else:
-        matched = match_facade_route(method, pathname)
-    if matched is not None:
-        route, route_match = matched
-        writer_id = route_match.group("bank")
-        scope = facade_scope(route)
-        if principal is not None:
-            await _principal_rate(principal, scope, route_class)
-            require_grant(
-                session=principal,
-                scope=scope,
-                bank=writer_id,
-                route_class=route_class,
-            )
-        route_params = {name: route_match.group(name) for name in route.params}
-        facade_body: dict[str, Any] | None = None
-        if route.body != "none":
-            max_bytes = (
-                principal.limits[scope_limit_operation(scope)].max_body_bytes
-                if principal is not None
-                else None
-            )
-            raw_body = await _json_body(request, empty_as_none=True, max_bytes=max_bytes)
-            if raw_body is _EMPTY_BODY:
-                if route.body == "required":
-                    raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
-            elif raw_body is None:
-                if route.body != "optional":
-                    raise HttpError(
-                        400, "invalid_request", f"{route.body_label} body must be an object"
-                    )
-            elif not isinstance(raw_body, dict):
-                raise HttpError(
-                    400, "invalid_request", f"{route.body_label} body must be an object"
-                )
-            else:
-                facade_body = raw_body
-        if route.template == "reflect" and facade_body is not None:
-            facade_body = parse_reflect_body(facade_body)
-        if principal is not None:
-            forwarded = await _with_principal_concurrency(
-                request,
-                principal,
-                scope,
-                lambda: facade.forward(
-                    route=route,
-                    writer_id=principal.principal_id,
-                    params=route_params,
-                    body=facade_body,
-                    query=list(request.query_params.multi_items()) or None,
-                    bank_override=writer_id,
-                ),
-            )
-        else:
-            forwarded = await facade.forward(
-                route=route,
-                writer_id=writer_id,
-                params=route_params,
-                body=facade_body,
-                query=list(request.query_params.multi_items()) or None,
-                bank_override=None,
-            )
-        return JSONResponse(
-            forwarded,
-            status_code=route.success_status,
-        )
-
-    denied_writer_id = None
-    denied_bank_match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
-    if denied_bank_match is not None:
-        try:
-            candidate = _decode_path_segment(denied_bank_match.group(1))
-        except HttpError:
-            candidate = None
-        if candidate is not None and candidate in getattr(
-            getattr(policy, "registry", None), "writers", {}
-        ):
-            denied_writer_id = candidate
-    if principal is not None:
-        await _principal_rate(principal, SCOPE_BANK_ADMIN, route_class)
-        denied = await policy.deny_endpoint(method, pathname, writer_id=principal.principal_id)
-    else:
-        denied = (
-            await policy.deny_endpoint(method, pathname)
-            if denied_writer_id is None
-            else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
-        )
-    return JSONResponse(denied, status_code=404)
+    dispatcher = AuthenticatedRequestDispatcher(
+        policy=_require_runtime(runtime.policy, "router policy"),
+        resolver=runtime.principal_resolver,
+        hindsight=runtime.hindsight,
+        json_body=_json_body,
+        principal_rate=_principal_rate,
+        concurrency=_with_principal_concurrency,
+        decode_path_segment=_decode_path_segment,
+        facade_factory=OpenClawFacade,
+    )
+    return await dispatcher.dispatch(request, pathname, method, principal, route_class)
