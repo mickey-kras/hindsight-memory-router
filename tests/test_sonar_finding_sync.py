@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from types import ModuleType
 
@@ -119,6 +120,25 @@ def test_failed_condition_is_fallback_when_no_findings_are_returned(
 
     assert len(findings) == 1
     assert findings[0].key == "condition-new_reliability_rating"
+
+
+def test_optional_paged_falls_back_only_for_forbidden(sync_module: ModuleType) -> None:
+    class Client:
+        @staticmethod
+        def paged(*_: object, **__: object) -> list[dict[str, object]]:
+            raise urllib.error.HTTPError("https://sonar.example", 403, "", {}, None)
+
+    assert sync_module.optional_paged(Client(), "/api/issues/search", "issues") == []
+
+
+def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> None:
+    class Client:
+        @staticmethod
+        def paged(*_: object, **__: object) -> list[dict[str, object]]:
+            raise urllib.error.HTTPError("https://sonar.example", 500, "", {}, None)
+
+    with pytest.raises(urllib.error.HTTPError):
+        sync_module.optional_paged(Client(), "/api/issues/search", "issues")
 
 
 def test_existing_closed_finding_is_reopened_not_duplicated(sync_module: ModuleType) -> None:
