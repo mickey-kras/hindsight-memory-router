@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationErr
 from .canonical import assert_json_depth, canonical_json
 from .errors import HttpError
 from .models import RecallResponse
-from .observability import current_request_id
+from .observability import current_duration_ms, current_request_id
 
 DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
@@ -325,3 +325,16 @@ class HindsightGateway:
         finally:
             if response is not None:
                 await response.aclose()
+
+
+def hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
+    return {
+        "request_id": current_request_id(),
+        "operation": error.context.get("operation"),
+        "upstream_method": error.context.get("method"),
+        "error_kind": error.kind,
+        "upstream_status": error.upstream_status,
+        "timeout_ms": error.context.get("timeout_ms"),
+        "http_status": error.status,
+        "request_duration_ms": current_duration_ms(),
+    }

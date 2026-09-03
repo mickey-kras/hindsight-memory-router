@@ -5,9 +5,8 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -37,7 +36,7 @@ from .db import (
 )
 from .errors import HttpError, rate_limit_error
 from .facade_routes import match_facade_route
-from .hindsight import HindsightGateway, HindsightGatewayError
+from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
@@ -48,14 +47,24 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
+from .principal_gate import authenticate_principal, log_authorization_denied, require_grant
 from .principals import (
-    CLAIMED_AGENT_HEADER,
     SCOPE_BANKS_LIST,
     PrincipalResolver,
     PrincipalSession,
     facade_scope,
     load_principal_registry,
 )
+from .probes import _CACHE_MAX_STALENESS_SECONDS as _CACHE_MAX_STALENESS_SECONDS
+from .probes import _READINESS_CACHE_SECONDS as _READINESS_CACHE_SECONDS
+from .probes import _cached_probe_response as _cached_probe_response
+from .probes import _CachedProbe as _CachedProbe
+from .probes import _ProbeCache as _ProbeCache
+from .probes import _readiness as _readiness
+from .probes import _readiness_log_state as _readiness_log_state
+from .probes import _ReadinessLogState as _ReadinessLogState
+from .probes import _storage_readiness_log_state as _storage_readiness_log_state
+from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
@@ -107,141 +116,8 @@ def _route_class(request: Request) -> str:
     return "unmatched"
 
 
-def _hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
-    return {
-        "request_id": current_request_id(),
-        "operation": error.context.get("operation"),
-        "upstream_method": error.context.get("method"),
-        "error_kind": error.kind,
-        "upstream_status": error.upstream_status,
-        "timeout_ms": error.context.get("timeout_ms"),
-        "http_status": error.status,
-        "request_duration_ms": current_duration_ms(),
-    }
-
-
-class _ReadinessLogState:
-    def __init__(
-        self,
-        failure_event: str = "hindsight_readiness_failed",
-        recovery_event: str = "hindsight_readiness_recovered",
-        operation: str = "health",
-    ) -> None:
-        self.failure_event = failure_event
-        self.recovery_event = recovery_event
-        self.operation = operation
-        self.healthy: bool | None = None
-        self.last_failure_log: dict[str, float] = {}
-        self.candidate: bool | None = None
-        self.consecutive = 0
-
-    def record(self, error: Exception | None, duration_ms: float) -> None:
-        now = time.monotonic()
-        next_healthy = error is None
-        if self.candidate == next_healthy:
-            self.consecutive += 1
-        else:
-            self.candidate = next_healthy
-            self.consecutive = 1
-        if self.consecutive < 2:
-            return
-        if error is None:
-            if self.healthy is False:
-                log_event(
-                    logger,
-                    "info",
-                    self.recovery_event,
-                    operation=self.operation,
-                    upstream_method="GET" if self.operation == "health" else None,
-                    outcome="healthy",
-                    operation_duration_ms=duration_ms,
-                    route_class="readiness",
-                )
-            self.healthy = True
-            return
-
-        error_kind = (
-            error.kind
-            if isinstance(error, HindsightGatewayError)
-            else "timeout"
-            if isinstance(error, TimeoutError)
-            else "storage"
-            if self.operation == "storage_health"
-            else "unexpected"
-        )
-        last_failure_log = self.last_failure_log.get(error_kind)
-        if (
-            self.healthy is not False
-            or last_failure_log is None
-            or now - last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS
-        ):
-            fields: dict[str, Any] = {
-                "operation": self.operation,
-                "upstream_method": "GET" if self.operation == "health" else None,
-                "error_kind": error_kind,
-                "outcome": "unhealthy",
-                "operation_duration_ms": duration_ms,
-                "route_class": "readiness",
-            }
-            if isinstance(error, HindsightGatewayError):
-                fields["upstream_status"] = error.upstream_status
-            log_event(logger, "warning", self.failure_event, error=error, **fields)
-            self.last_failure_log[error_kind] = now
-        self.healthy = False
-
-
-_readiness_log_state = _ReadinessLogState()
-_storage_readiness_log_state = _ReadinessLogState(
-    "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
-)
-_READINESS_CACHE_SECONDS = 1.0
-_CACHE_MAX_STALENESS_SECONDS = 5.0
 _REFRESH_TIMEOUT_SECONDS = 15.0
 _DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
-
-
-@dataclass(frozen=True, slots=True)
-class _CachedProbe:
-    created_at: float
-    status_code: int
-    body: bytes
-
-
-class _ProbeCache:
-    def __init__(self, fallback: dict[str, Any]) -> None:
-        self.cache: _CachedProbe | None = None
-        self.lock: asyncio.Lock | None = None
-        self.fallback = fallback
-
-    async def get(self, refresh: Callable[[], Awaitable[Response]]) -> Response:
-        now = time.monotonic()
-        if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-            return _cached_probe_response(self.cache)
-        if self.lock is None:
-            self.lock = asyncio.Lock()
-        if self.lock.locked():
-            if (
-                self.cache is not None
-                and now - self.cache.created_at <= _CACHE_MAX_STALENESS_SECONDS
-            ):
-                return _cached_probe_response(self.cache)
-            return JSONResponse(self.fallback, status_code=503)
-        async with self.lock:
-            now = time.monotonic()
-            if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-                return _cached_probe_response(self.cache)
-            response = await refresh()
-            self.cache = _CachedProbe(time.monotonic(), response.status_code, bytes(response.body))
-            return response
-
-
-_readiness = _ProbeCache(fallback={"status": "unhealthy"})
-_version = _ProbeCache(
-    fallback={
-        "error": "hindsight_unavailable",
-        "message": "Upstream memory service is unavailable",
-    }
-)
 
 
 def _require_runtime[T](value: T | None, component: str) -> T:
@@ -562,7 +438,7 @@ async def http_error_handler(request: Request, exc: HttpError) -> JSONResponse:
             logger,
             "warning",
             "hindsight_request_failed",
-            **_hindsight_log_fields(exc),
+            **hindsight_log_fields(exc),
             error=exc,
             outcome="failed",
             route_class=route_class,
@@ -634,54 +510,6 @@ async def _router_auth(request: Request) -> bool:
     await _auth_failure_rate("router")
     await auditor.persist("router", route_class)
     return False
-
-
-def _log_authorization_denied(
-    request: Request, session: PrincipalSession, scope: str | None, reason: str
-) -> None:
-    log_event(
-        logger,
-        "warning",
-        "authorization_denied",
-        request_id=current_request_id(),
-        operation="authenticate",
-        http_status=403,
-        outcome="failed",
-        route_class=_route_class(request),
-        principal=session.principal_id,
-        key_id=session.key_id,
-        scope=scope,
-        reason=reason,
-    )
-
-
-async def _principal_auth(request: Request) -> PrincipalSession | None:
-    resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
-    session = resolver.authenticate(request.headers.get("authorization"))
-    if session is not None:
-        claimed = request.headers.get(CLAIMED_AGENT_HEADER)
-        if claimed is not None and claimed != session.principal_id:
-            _log_authorization_denied(request, session, None, "agent-claim-mismatch")
-            raise HttpError(
-                403,
-                "agent_claim_mismatch",
-                "claimed agent does not match the authenticated principal",
-            )
-        return session
-    auditor = _require_runtime(runtime.auditor, "auth auditor")
-    route_class = _route_class(request)
-    auditor.log_failure(route_class)
-    await _auth_failure_rate("router")
-    await auditor.persist("router", route_class)
-    return None
-
-
-def _require_grant(request: Request, session: PrincipalSession, scope: str, bank: str) -> None:
-    resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
-    if resolver.authorize(session, scope, bank):
-        return
-    _log_authorization_denied(request, session, scope, "scope-not-granted")
-    raise HttpError(403, "authorization_denied", "principal lacks the required grant")
 
 
 async def _admin_auth(request: Request, scope: str) -> bool:
@@ -756,12 +584,6 @@ async def _hindsight_health(
     return True, response, None, duration_ms
 
 
-def _cached_probe_response(cached: _CachedProbe) -> Response:
-    return Response(
-        content=cached.body, status_code=cached.status_code, media_type="application/json"
-    )
-
-
 async def _health_ready_response() -> Response:
     async def refresh() -> Response:
         status_code = 200
@@ -824,7 +646,7 @@ def _version_failure(error: HindsightGatewayError) -> Response:
         logger,
         "warning",
         "hindsight_request_failed",
-        **_hindsight_log_fields(error),
+        **hindsight_log_fields(error),
         error=error,
         outcome="failed",
         route_class="version",
@@ -832,14 +654,7 @@ def _version_failure(error: HindsightGatewayError) -> Response:
     return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
-@app.api_route(
-    "/{path:path}",
-    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
-)
-async def dispatch(path: str, request: Request) -> Response:
-    del path
-    pathname = _raw_pathname(request)
-    method = request.method
+async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
             return JSONResponse(
@@ -884,12 +699,33 @@ async def dispatch(path: str, request: Request) -> Response:
             if method == "POST" and action == "postpone":
                 return JSONResponse(await admin.postpone(item_id))
         return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
+    return None
+
+
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
+)
+async def dispatch(path: str, request: Request) -> Response:
+    del path
+    pathname = _raw_pathname(request)
+    method = request.method
+    admin_response = await _dispatch_admin(request, pathname, method)
+    if admin_response is not None:
+        return admin_response
 
     if method == "GET" and pathname == "/version":
         return await _version_response()
     principal: PrincipalSession | None = None
     if runtime.principal_resolver is not None:
-        principal = await _principal_auth(request)
+        route_class = _route_class(request)
+        principal = await authenticate_principal(
+            request,
+            resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+            auditor=_require_runtime(runtime.auditor, "auth auditor"),
+            route_class=route_class,
+            on_failure=lambda: _auth_failure_rate("router"),
+        )
         if principal is None:
             return JSONResponse(
                 {"error": "unauthorized", "message": "authentication required"}, status_code=401
@@ -903,7 +739,12 @@ async def dispatch(path: str, request: Request) -> Response:
     if principal is not None and method == "GET" and pathname == "/v1/default/banks":
         resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
         if not any(SCOPE_BANKS_LIST in grant.scopes for grant in principal.grants):
-            _log_authorization_denied(request, principal, SCOPE_BANKS_LIST, "scope-not-granted")
+            log_authorization_denied(
+                route_class=route_class,
+                session=principal,
+                scope=SCOPE_BANKS_LIST,
+                reason="scope-not-granted",
+            )
             raise HttpError(403, "authorization_denied", "principal lacks the required grant")
         return JSONResponse({"banks": resolver.list_banks(principal)})
 
@@ -912,7 +753,13 @@ async def dispatch(path: str, request: Request) -> Response:
         writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
         if principal is not None:
             scope = "memories:recall" if action == "recall" else "memories:retain"
-            _require_grant(request, principal, scope, writer_id)
+            require_grant(
+                resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+                session=principal,
+                scope=scope,
+                bank=writer_id,
+                route_class=route_class,
+            )
             if action == "recall":
                 body = parse_recall_body(await _json_body(request))
                 policy.limits.assert_recall_bounds(body)
@@ -949,7 +796,13 @@ async def dispatch(path: str, request: Request) -> Response:
         route, route_match = matched
         writer_id = route_match.group("bank")
         if principal is not None:
-            _require_grant(request, principal, facade_scope(route), writer_id)
+            require_grant(
+                resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+                session=principal,
+                scope=facade_scope(route),
+                bank=writer_id,
+                route_class=route_class,
+            )
         route_params = {name: route_match.group(name) for name in route.params}
         facade_body: dict[str, Any] | None = None
         if route.body != "none":

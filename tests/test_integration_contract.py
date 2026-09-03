@@ -245,11 +245,16 @@ def _condition_parts(node: ast.expr, patterns: dict[str, str]) -> set[str]:
     return set()
 
 
-def _dispatch_function(tree: ast.AST) -> ast.AsyncFunctionDef:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "dispatch":
-            return node
-    raise AssertionError("dispatch function not found")
+def _dispatch_function(tree: ast.AST) -> list[ast.AsyncFunctionDef]:
+    # The dispatch surface spans dispatch and its extracted admin sub-handler.
+    functions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name in {"dispatch", "_dispatch_admin"}
+    ]
+    if len(functions) != 2:
+        raise AssertionError("dispatch functions not found")
+    return functions
 
 
 def _dispatch_branches(dispatch: ast.AsyncFunctionDef) -> set[frozenset[str]]:
@@ -308,7 +313,9 @@ def test_direct_http_routes_are_bound_to_integration_coverage() -> None:
 
 def test_dispatch_method_action_surface_is_bound_to_integration_coverage() -> None:
     tree = ast.parse(APP_PATH.read_text(encoding="utf-8"))
-    branches = _dispatch_branches(_dispatch_function(tree))
+    branches: set[frozenset[str]] = set()
+    for dispatch_function in _dispatch_function(tree):
+        branches |= _dispatch_branches(dispatch_function)
 
     assert branches == set(DISPATCH_BRANCH_COVERAGE)
 
