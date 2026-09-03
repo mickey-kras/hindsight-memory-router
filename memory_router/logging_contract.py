@@ -172,7 +172,7 @@ TEXT_LIMITS = {
     "request_method": 16,
     "writer_id": 128,
     "principal": 128,
-    "token_key_id": 64,
+    "token_key_id": 64,  # nosec B105 - audit field name, not a credential
     "bank": 128,
     "scope": 64,
     "decision": 16,
