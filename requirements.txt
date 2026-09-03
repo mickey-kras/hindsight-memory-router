@@ -253,7 +253,7 @@ pycparser==3.0 \
 pydantic==2.13.5 \
     --hash=sha256:346a034f080da3755d8e9cb5e00e8b07de1d39e4f6e2c87d8ab7cafa0b269a73 \
     --hash=sha256:51a9c5f7b2f8e636f04c6cada605d9b6a3bf1348fdf945a3d8869b19bba0ee08
-pydantic-core==2.48.0 \
+pydantic-core==2.46.5 \
     --hash=sha256:024f06afbc680c6eb6edb6db02754e7bfa453e7fd943da05a77cceaf24a408ad \
     --hash=sha256:062289bfd4f99f40bab32f725fdcdad9244119c06d41d62da019a3f4827cdc2d \
     --hash=sha256:0692d545312b1849111d7a801515dba648cc1d40f4d1a8c3c7355c92736b0af3 \
