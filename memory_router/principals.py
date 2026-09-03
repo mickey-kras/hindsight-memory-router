@@ -188,6 +188,41 @@ class Authentication:
     session: PrincipalSession | None = None
 
 
+def _validate_principal_id(principal_id: str) -> None:
+    if principal_id in {".", ".."} or not PRINCIPAL_ID_PATTERN.fullmatch(principal_id):
+        raise RuntimeError("principal id must match [A-Za-z0-9._:-]{1,128} and cannot be . or ..")
+
+
+def _validate_key(key: PrincipalKey, seen_key_ids: set[str]) -> None:
+    if not KEY_ID_PATTERN.fullmatch(key.id):
+        raise RuntimeError("key id must match [A-Za-z0-9._-]{1,64}")
+    if key.id in seen_key_ids:
+        raise RuntimeError("key ids must be unique across principals")
+    seen_key_ids.add(key.id)
+    if not DIGEST_PATTERN.fullmatch(key.sha256):
+        raise RuntimeError("key sha256 must be 64 lowercase hex characters")
+
+
+def _validate_grant(grant: PrincipalGrant) -> None:
+    if grant.bank in {".", ".."} or not PRINCIPAL_ID_PATTERN.fullmatch(grant.bank):
+        raise RuntimeError("grant bank must match [A-Za-z0-9._:-]{1,128} and cannot be . or ..")
+    unknown = sorted(set(grant.scopes) - SCOPE_VOCABULARY)
+    if unknown:
+        raise RuntimeError(f"unknown grant scope: {unknown[0]}")
+    if len(grant.scopes) != len(set(grant.scopes)):
+        raise RuntimeError("grant scopes must be unique")
+
+
+def _validate_principal(principal: Principal, seen_key_ids: set[str]) -> None:
+    for key in principal.keys:
+        _validate_key(key, seen_key_ids)
+    for grant in principal.grants:
+        _validate_grant(grant)
+    grant_banks = [grant.bank for grant in principal.grants]
+    if len(grant_banks) != len(set(grant_banks)):
+        raise RuntimeError("grant banks must be unique per principal")
+
+
 def load_principal_registry(path: str) -> PrincipalRegistry:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -199,31 +234,8 @@ def load_principal_registry(path: str) -> PrincipalRegistry:
         raise RuntimeError("invalid principal registry") from exc
     seen_key_ids: set[str] = set()
     for principal_id, principal in registry.principals.items():
-        if principal_id in {".", ".."} or not PRINCIPAL_ID_PATTERN.fullmatch(principal_id):
-            raise RuntimeError(
-                "principal id must match [A-Za-z0-9._:-]{1,128} and cannot be . or .."
-            )
-        for key in principal.keys:
-            if not KEY_ID_PATTERN.fullmatch(key.id):
-                raise RuntimeError("key id must match [A-Za-z0-9._-]{1,64}")
-            if key.id in seen_key_ids:
-                raise RuntimeError("key ids must be unique across principals")
-            seen_key_ids.add(key.id)
-            if not DIGEST_PATTERN.fullmatch(key.sha256):
-                raise RuntimeError("key sha256 must be 64 lowercase hex characters")
-        for grant in principal.grants:
-            if grant.bank in {".", ".."} or not PRINCIPAL_ID_PATTERN.fullmatch(grant.bank):
-                raise RuntimeError(
-                    "grant bank must match [A-Za-z0-9._:-]{1,128} and cannot be . or .."
-                )
-            unknown = sorted(set(grant.scopes) - SCOPE_VOCABULARY)
-            if unknown:
-                raise RuntimeError(f"unknown grant scope: {unknown[0]}")
-            if len(grant.scopes) != len(set(grant.scopes)):
-                raise RuntimeError("grant scopes must be unique")
-        grant_banks = [grant.bank for grant in principal.grants]
-        if len(grant_banks) != len(set(grant_banks)):
-            raise RuntimeError("grant banks must be unique per principal")
+        _validate_principal_id(principal_id)
+        _validate_principal(principal, seen_key_ids)
     return registry
 
 

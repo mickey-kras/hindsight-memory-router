@@ -32,40 +32,43 @@ class _ReadinessLogState:
         self.candidate: bool | None = None
         self.consecutive = 0
 
-    def record(self, error: Exception | None, duration_ms: float) -> None:
-        now = time.monotonic()
-        next_healthy = error is None
+    def _stable_candidate(self, next_healthy: bool) -> bool:
         if self.candidate == next_healthy:
             self.consecutive += 1
         else:
             self.candidate = next_healthy
             self.consecutive = 1
-        if self.consecutive < 2:
-            return
-        if error is None:
-            if self.healthy is False:
-                log_event(
-                    logger,
-                    "info",
-                    self.recovery_event,
-                    operation=self.operation,
-                    upstream_method="GET" if self.operation == "health" else None,
-                    outcome="healthy",
-                    operation_duration_ms=duration_ms,
-                    route_class="readiness",
-                )
-            self.healthy = True
-            return
+        return self.consecutive >= 2
 
-        error_kind = (
-            error.kind
-            if isinstance(error, HindsightGatewayError)
-            else "timeout"
-            if isinstance(error, TimeoutError)
-            else "storage"
-            if self.operation == "storage_health"
-            else "unexpected"
-        )
+    def _upstream_method(self) -> str | None:
+        return "GET" if self.operation == "health" else None
+
+    def _record_recovery(self, duration_ms: float) -> None:
+        if self.healthy is False:
+            log_event(
+                logger,
+                "info",
+                self.recovery_event,
+                operation=self.operation,
+                upstream_method=self._upstream_method(),
+                outcome="healthy",
+                operation_duration_ms=duration_ms,
+                route_class="readiness",
+            )
+        self.healthy = True
+
+    def _error_kind(self, error: Exception) -> str:
+        if isinstance(error, HindsightGatewayError):
+            return error.kind
+        if isinstance(error, TimeoutError):
+            return "timeout"
+        if self.operation == "storage_health":
+            return "storage"
+        return "unexpected"
+
+    def _record_failure(self, error: Exception, duration_ms: float) -> None:
+        now = time.monotonic()
+        error_kind = self._error_kind(error)
         last_failure_log = self.last_failure_log.get(error_kind)
         if (
             self.healthy is not False
@@ -74,7 +77,7 @@ class _ReadinessLogState:
         ):
             fields: dict[str, Any] = {
                 "operation": self.operation,
-                "upstream_method": "GET" if self.operation == "health" else None,
+                "upstream_method": self._upstream_method(),
                 "error_kind": error_kind,
                 "outcome": "unhealthy",
                 "operation_duration_ms": duration_ms,
@@ -85,6 +88,14 @@ class _ReadinessLogState:
             log_event(logger, "warning", self.failure_event, error=error, **fields)
             self.last_failure_log[error_kind] = now
         self.healthy = False
+
+    def record(self, error: Exception | None, duration_ms: float) -> None:
+        if not self._stable_candidate(error is None):
+            return
+        if error is None:
+            self._record_recovery(duration_ms)
+            return
+        self._record_failure(error, duration_ms)
 
 
 _readiness_log_state = _ReadinessLogState()

@@ -83,6 +83,11 @@ _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 _EMPTY_BODY = EMPTY_BODY
+_AUTH_AUDITOR_COMPONENT = "auth auditor"
+_AUTHENTICATION_REQUIRED = {
+    "error": "unauthorized",
+    "message": "authentication required",
+}
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -600,7 +605,7 @@ async def _router_auth(request: Request) -> bool:
         request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
     ):
         return True
-    auditor = _require_runtime(runtime.auditor, "auth auditor")
+    auditor = _require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT)
     route_class = _route_class(request)
     auditor.log_failure(route_class)
     await _auth_failure_rate("router")
@@ -612,7 +617,7 @@ async def _admin_auth(request: Request, scope: str) -> bool:
     authorization = request.headers.get("authorization")
     if admin_authorized(authorization, scope, runtime.admin_tokens):
         return True
-    auditor = _require_runtime(runtime.auditor, "auth auditor")
+    auditor = _require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT)
     route_class = _route_class(request)
     if admin_token_recognized(authorization, runtime.admin_tokens):
         auditor.log_failure(route_class)
@@ -750,52 +755,78 @@ def _version_failure(error: HindsightGatewayError) -> Response:
     return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
-async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
-    if pathname.startswith("/admin/"):
-        if not await _admin_auth(request, _scope(method, pathname)):
-            return JSONResponse(
-                {"error": "unauthorized", "message": "authentication required"},
-                status_code=401,
-            )
-        await _admin_rate(method)
-        admin = _require_runtime(runtime.admin, "admin service")
-        if method == "GET" and pathname == "/admin/quarantine/queue":
-            params = request.query_params
-            if len(params.getlist("limit")) > 1 or len(params.getlist("offset")) > 1:
-                raise HttpError(400, "invalid_query", "limit or offset is invalid")
-            try:
-                limit = int(params.get("limit", "100"))
-                offset = int(params.get("offset", "0"))
-            except ValueError as exc:
-                raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
-            if not 1 <= limit <= 500 or offset < 0:
-                raise HttpError(400, "invalid_query", "integer query parameter out of range")
-            return JSONResponse(await admin.list_queue(limit, offset))
-        if method == "GET" and pathname == "/admin/quarantine/stats":
-            return JSONResponse(await admin.stats())
-        if method == "POST" and pathname == "/admin/quarantine/cleanup":
-            body = await _json_body(request)
-            if not isinstance(body, dict):
-                raise HttpError(400, "invalid_request", "cleanup body must be an object")
-            return JSONResponse(await admin.cleanup(body))
-        match = re.fullmatch(
-            r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
-        )
-        if match:
-            item_id, action = _decode_path_segment(match.group(1)), match.group(2)
-            if method == "GET" and action is None:
-                return JSONResponse(await admin.read_item(item_id))
-            if method == "POST" and action == "approve":
-                body = await _json_body(request)
-                if not isinstance(body, dict):
-                    raise HttpError(400, "invalid_request", "approve body must be an object")
-                return JSONResponse(await admin.approve(item_id, body))
-            if method == "POST" and action == "reject":
-                return JSONResponse(await admin.reject(item_id))
-            if method == "POST" and action == "postpone":
-                return JSONResponse(await admin.postpone(item_id))
-        return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
+async def _admin_queue_response(request: Request, admin: QuarantineAdminService) -> Response:
+    params = request.query_params
+    if len(params.getlist("limit")) > 1 or len(params.getlist("offset")) > 1:
+        raise HttpError(400, "invalid_query", "limit or offset is invalid")
+    try:
+        limit = int(params.get("limit", "100"))
+        offset = int(params.get("offset", "0"))
+    except ValueError as exc:
+        raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
+    if not 1 <= limit <= 500 or offset < 0:
+        raise HttpError(400, "invalid_query", "integer query parameter out of range")
+    return JSONResponse(await admin.list_queue(limit, offset))
+
+
+async def _admin_body(request: Request, action: str) -> dict[str, Any]:
+    body = await _json_body(request)
+    if not isinstance(body, dict):
+        raise HttpError(400, "invalid_request", f"{action} body must be an object")
+    return body
+
+
+async def _admin_item_response(
+    request: Request,
+    admin: QuarantineAdminService,
+    method: str,
+    match: re.Match[str],
+) -> Response | None:
+    item_id = _decode_path_segment(match.group(1))
+    action = match.group(2)
+    if method == "GET" and action is None:
+        return JSONResponse(await admin.read_item(item_id))
+    if method == "POST":
+        if action == "approve":
+            body = await _admin_body(request, "approve")
+            return JSONResponse(await admin.approve(item_id, body))
+        if action == "reject":
+            return JSONResponse(await admin.reject(item_id))
+        if action == "postpone":
+            return JSONResponse(await admin.postpone(item_id))
     return None
+
+
+async def _authorized_admin_response(
+    request: Request,
+    admin: QuarantineAdminService,
+    pathname: str,
+    method: str,
+) -> Response:
+    if method == "GET" and pathname == "/admin/quarantine/queue":
+        return await _admin_queue_response(request, admin)
+    if method == "GET" and pathname == "/admin/quarantine/stats":
+        return JSONResponse(await admin.stats())
+    if method == "POST" and pathname == "/admin/quarantine/cleanup":
+        return JSONResponse(await admin.cleanup(await _admin_body(request, "cleanup")))
+    match = re.fullmatch(
+        r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
+    )
+    if match is not None:
+        response = await _admin_item_response(request, admin, method, match)
+        if response is not None:
+            return response
+    return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
+
+
+async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
+    if not pathname.startswith("/admin/"):
+        return None
+    if not await _admin_auth(request, _scope(method, pathname)):
+        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    await _admin_rate(method)
+    admin = _require_runtime(runtime.admin, "admin service")
+    return await _authorized_admin_response(request, admin, pathname, method)
 
 
 @app.api_route(
@@ -818,18 +849,14 @@ async def dispatch(path: str, request: Request) -> Response:
         principal = await authenticate_principal(
             request,
             resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
-            auditor=_require_runtime(runtime.auditor, "auth auditor"),
+            auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
             route_class=route_class,
             on_failure=lambda: _auth_failure_rate("router"),
         )
         if principal is None:
-            return JSONResponse(
-                {"error": "unauthorized", "message": "authentication required"}, status_code=401
-            )
+            return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     elif not await _router_auth(request):
-        return JSONResponse(
-            {"error": "unauthorized", "message": "authentication required"}, status_code=401
-        )
+        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     dispatcher = AuthenticatedRequestDispatcher(
         DispatchDependencies(
             policy=_require_runtime(runtime.policy, "router policy"),

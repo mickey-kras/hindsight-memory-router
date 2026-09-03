@@ -123,6 +123,20 @@ def _reject_non_finite(value: str) -> None:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
+def _validated_bank_page(value: Any) -> tuple[list[dict[str, Any]], int]:
+    try:
+        banks = value["banks"]
+        total = value["total"]
+    except (KeyError, TypeError) as exc:
+        raise ValueError("invalid bank list") from exc
+    if not isinstance(banks, list) or not isinstance(total, int) or total < 0:
+        raise ValueError("invalid bank list")
+    for bank in banks:
+        if not isinstance(bank, dict) or not isinstance(bank.get("bank_id"), str):
+            raise ValueError("invalid bank entry")
+    return banks, total
+
+
 class HindsightGateway:
     def __init__(
         self,
@@ -196,46 +210,9 @@ class HindsightGateway:
         offset: int = 0,
     ) -> dict[str, Any]:
         allowed = set(allowed_banks)
-        visible: list[dict[str, Any]] = []
-        upstream_offset = 0
-        page_size = 500
         try:
             async with asyncio.timeout(self.timeout_ms / 1000.0):
-                for _ in range(1_000):
-                    query: dict[str, str | int] = {
-                        "limit": page_size,
-                        "offset": upstream_offset,
-                    }
-                    if q is not None:
-                        query["q"] = q
-                    value = await self._request(
-                        "list_banks",
-                        "GET",
-                        f"/v1/default/banks?{urlencode(query)}",
-                    )
-                    try:
-                        banks = value["banks"]
-                        total = value["total"]
-                        if not isinstance(banks, list) or not isinstance(total, int) or total < 0:
-                            raise ValueError("invalid bank list")
-                        for bank in banks:
-                            if not isinstance(bank, dict) or not isinstance(
-                                bank.get("bank_id"), str
-                            ):
-                                raise ValueError("invalid bank entry")
-                            if bank["bank_id"] in allowed:
-                                visible.append(bank)
-                    except (KeyError, TypeError, ValueError) as exc:
-                        raise HindsightGatewayError(
-                            "invalid-response", operation="list_banks", method="GET"
-                        ) from exc
-                    upstream_offset += len(banks)
-                    if not banks or upstream_offset >= total or len(visible) == len(allowed):
-                        break
-                else:
-                    raise HindsightGatewayError(
-                        "invalid-response", operation="list_banks", method="GET"
-                    )
+                visible = await self._list_visible_banks(allowed, q)
         except TimeoutError as exc:
             raise HindsightGatewayError(
                 "timeout",
@@ -249,6 +226,28 @@ class HindsightGateway:
             "limit": limit,
             "offset": offset,
         }
+
+    async def _list_visible_banks(self, allowed: set[str], q: str | None) -> list[dict[str, Any]]:
+        visible: list[dict[str, Any]] = []
+        upstream_offset = 0
+        for _ in range(1_000):
+            query: dict[str, str | int] = {"limit": 500, "offset": upstream_offset}
+            if q is not None:
+                query["q"] = q
+            value = await self._request(
+                "list_banks", "GET", f"/v1/default/banks?{urlencode(query)}"
+            )
+            try:
+                banks, total = _validated_bank_page(value)
+            except ValueError as exc:
+                raise HindsightGatewayError(
+                    "invalid-response", operation="list_banks", method="GET"
+                ) from exc
+            visible.extend(bank for bank in banks if bank["bank_id"] in allowed)
+            upstream_offset += len(banks)
+            if not banks or upstream_offset >= total or len(visible) == len(allowed):
+                return visible
+        raise HindsightGatewayError("invalid-response", operation="list_banks", method="GET")
 
     async def openclaw_request(
         self,
