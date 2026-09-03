@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -111,17 +111,65 @@ class PrincipalGrant(BaseModel):
     scopes: list[str] = Field(min_length=1)
 
 
+LIMIT_OPERATIONS = ("recall", "retain", "reflect", "config", "admin")
+LimitOperation = Literal["recall", "retain", "reflect", "config", "admin"]
+
+
+class PrincipalOperationLimit(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    rate_limit_max: int | None = Field(None, ge=1)
+    rate_limit_window_ms: int | None = Field(None, ge=1)
+    concurrency_max: int | None = Field(None, ge=1)
+    max_body_bytes: int | None = Field(None, ge=1)
+
+
+class PrincipalLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    recall: PrincipalOperationLimit | None = None
+    retain: PrincipalOperationLimit | None = None
+    reflect: PrincipalOperationLimit | None = None
+    config: PrincipalOperationLimit | None = None
+    admin: PrincipalOperationLimit | None = None
+
+
+class PrincipalRegistryDefaults(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    limits: PrincipalLimits = Field(default_factory=PrincipalLimits)
+
+
 class Principal(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     keys: list[PrincipalKey] = Field(min_length=1)
-    grants: list[PrincipalGrant] = []
+    grants: list[PrincipalGrant] = Field(default_factory=list)
+    limits: PrincipalLimits = Field(default_factory=PrincipalLimits)
 
 
 class PrincipalRegistry(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     principals: dict[str, Principal] = Field(min_length=1)
+    defaults: PrincipalRegistryDefaults = Field(default_factory=PrincipalRegistryDefaults)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedPrincipalLimit:
+    rate_limit_max: int
+    rate_limit_window_ms: int
+    concurrency_max: int
+    max_body_bytes: int
+
+
+_BUILTIN_LIMITS: dict[LimitOperation, ResolvedPrincipalLimit] = {
+    "recall": ResolvedPrincipalLimit(120, 60_000, 4, 32_768),
+    "retain": ResolvedPrincipalLimit(30, 60_000, 2, 524_288),
+    "reflect": ResolvedPrincipalLimit(30, 60_000, 2, 32_768),
+    "config": ResolvedPrincipalLimit(60, 60_000, 2, 131_072),
+    "admin": ResolvedPrincipalLimit(10, 60_000, 1, 131_072),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,6 +177,7 @@ class PrincipalSession:
     principal_id: str
     key_id: str
     grants: tuple[PrincipalGrant, ...]
+    limits: dict[LimitOperation, ResolvedPrincipalLimit]
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,6 +219,11 @@ def load_principal_registry(path: str) -> PrincipalRegistry:
             unknown = sorted(set(grant.scopes) - SCOPE_VOCABULARY)
             if unknown:
                 raise RuntimeError(f"unknown grant scope: {unknown[0]}")
+            if len(grant.scopes) != len(set(grant.scopes)):
+                raise RuntimeError("grant scopes must be unique")
+        grant_banks = [grant.bank for grant in principal.grants]
+        if len(grant_banks) != len(set(grant_banks)):
+            raise RuntimeError("grant banks must be unique per principal")
     return registry
 
 
@@ -213,6 +267,32 @@ class PrincipalResolver:
             for key in principal.keys
         }
 
+    @staticmethod
+    def _merge_limit(
+        base: ResolvedPrincipalLimit, override: PrincipalOperationLimit | None
+    ) -> ResolvedPrincipalLimit:
+        if override is None:
+            return base
+        return ResolvedPrincipalLimit(
+            rate_limit_max=override.rate_limit_max or base.rate_limit_max,
+            rate_limit_window_ms=override.rate_limit_window_ms or base.rate_limit_window_ms,
+            concurrency_max=override.concurrency_max or base.concurrency_max,
+            max_body_bytes=override.max_body_bytes or base.max_body_bytes,
+        )
+
+    def _limits_for(self, principal: Principal) -> dict[LimitOperation, ResolvedPrincipalLimit]:
+        resolved: dict[LimitOperation, ResolvedPrincipalLimit] = {}
+        defaults = self.registry.defaults.limits
+        for operation in LIMIT_OPERATIONS:
+            typed_operation = cast(LimitOperation, operation)
+            value = self._merge_limit(
+                _BUILTIN_LIMITS[typed_operation], getattr(defaults, operation)
+            )
+            resolved[typed_operation] = self._merge_limit(
+                value, getattr(principal.limits, operation)
+            )
+        return resolved
+
     def authenticate(
         self, authorization: str | None, *, now: datetime | None = None
     ) -> Authentication:
@@ -234,7 +314,15 @@ class PrincipalResolver:
         if key.expires_at is not None and moment >= key.expires_at:
             return Authentication("expired")
         principal = self.registry.principals[principal_id]
-        return Authentication("ok", PrincipalSession(principal_id, key_id, tuple(principal.grants)))
+        return Authentication(
+            "ok",
+            PrincipalSession(
+                principal_id,
+                key_id,
+                tuple(principal.grants),
+                self._limits_for(principal),
+            ),
+        )
 
     @staticmethod
     def authorize(session: PrincipalSession, scope: str, bank: str) -> bool:
@@ -243,6 +331,18 @@ class PrincipalResolver:
     @staticmethod
     def list_banks(session: PrincipalSession) -> list[str]:
         return sorted({grant.bank for grant in session.grants if SCOPE_BANK_LIST in grant.scopes})
+
+
+def scope_limit_operation(scope: str) -> LimitOperation:
+    if scope == SCOPE_MEMORY_RECALL:
+        return "recall"
+    if scope == SCOPE_MEMORY_RETAIN:
+        return "retain"
+    if scope == SCOPE_MEMORY_REFLECT:
+        return "reflect"
+    if scope == SCOPE_BANK_ADMIN:
+        return "admin"
+    return "config"
 
 
 def facade_scope(route: FacadeRoute) -> str:

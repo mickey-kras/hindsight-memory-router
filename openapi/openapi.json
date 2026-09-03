@@ -500,9 +500,26 @@
       "get": {
         "operationId": "listBanks",
         "summary": "List banks visible to the authenticated principal",
-        "description": "Principal mode only (MEMORY_ROUTER_PRINCIPALS). Returns the granted bank IDs holding the bank.list scope. In legacy token mode this endpoint is denied.",
+        "description": "Principal mode only. Preserves the Hindsight bank-list response and removes banks without bank.list.",
         "tags": [
           "Memory"
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "schema": { "type": "string" }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0, "maximum": 500, "default": 100 }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+          }
         ],
         "security": [
           {
@@ -1703,15 +1720,34 @@
       "BankListResponse": {
         "type": "object",
         "required": [
-          "banks"
+          "banks",
+          "total",
+          "limit",
+          "offset"
         ],
         "properties": {
           "banks": {
             "type": "array",
             "items": {
-              "type": "string"
-            },
-            "description": "Granted bank IDs, sorted. Only banks where the principal holds the bank.list scope are included."
+              "type": "object",
+              "required": ["bank_id"],
+              "properties": {
+                "bank_id": { "type": "string" }
+              },
+              "additionalProperties": true
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "offset": {
+            "type": "integer",
+            "minimum": 0
           }
         },
         "additionalProperties": false

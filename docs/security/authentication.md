@@ -1,68 +1,74 @@
 # Authentication
 
-Memory Router separates router access from quarantine administration.
+Router and quarantine credentials are separate.
 
-## Principal mode (per-agent)
+## Principal mode
 
-Set `MEMORY_ROUTER_PRINCIPALS` to a principal registry JSON file (see
-`principal_registry.example.json`) to give every agent its own credential and
-per-bank grants. Principal mode replaces the shared router token:
-`MEMORY_ROUTER_TOKEN` and `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` are rejected at
-startup when a registry is configured.
+Set `MEMORY_ROUTER_PRINCIPALS=/path/principals.json`. This disables the shared router token. Startup rejects:
 
-Tokens have the format `mr_<key-id>_<256-bit-secret-hex>`. The registry stores
-SHA-256 digests of the secret only, plus `created_at` and optional
-`expires_at` / `revoked_at` ISO 8601 timestamps per key. Verification hashes
-the presented secret and compares digests in constant time with an O(1) key-id
-lookup; unknown key ids still run the digest comparison against a dummy value.
-Expired and revoked keys are rejected and audited with the distinct reasons
-`expired-token` and `revoked-token` (alongside `invalid-token-format`,
-`unknown-key-id`, and `wrong-secret`). A principal can hold several keys at
-once so rotation overlaps: add the new key, restart, move clients, set
-`revoked_at` on the old key, remove it later.
+- `MEMORY_ROUTER_TOKEN`
+- `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`
 
-Grants pair a bank with scopes from a fixed vocabulary: `bank.list`,
-`memory.recall`, `memory.retain`, `memory.reflect`, `bank.config.read`,
-`bank.config.write`, `quarantine.review`, `quarantine.decide`, `bank.admin`.
-The authorizer supports all nine generically; `quarantine.review` and
-`quarantine.decide` are grantable but not wired to endpoints (quarantine
-administration keeps its separate admin tokens below). Evaluation is default
-deny; `GET /v1/default/banks` returns only banks where the principal holds
-`bank.list`. The optional `x-memory-router-agent` header must name the
-authenticated principal when present; a mismatch is rejected.
+Token: `mr_<key-id>_<64-lowercase-hex-secret>`.
 
-Every grant check emits an `authorization_decision` audit event carrying
-`request_id`, `principal`, `token_key_id`, `bank`, `operation`, `decision`
-(`allow`/`deny`), `status`, `latency_ms`, and `source`; recall responses may
-add `partial`. Raw tokens, digests, and authorization headers are never
-logged.
+Registry: SHA-256 secret digest only. Keys support `created_at`, `expires_at`, `revoked_at`. Key IDs are globally unique.
 
-## Legacy shared token
+Scopes:
 
-Router retain/recall access uses `MEMORY_ROUTER_TOKEN`. If no router token is configured, those endpoints fail closed unless the development-only `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` override is enabled. `/version` is unauthenticated for Hindsight compatibility.
+- `bank.list`
+- `memory.recall`
+- `memory.retain`
+- `memory.reflect`
+- `bank.config.read`
+- `bank.config.write`
+- `bank.admin`
+- `quarantine.review` and `quarantine.decide`: reserved; no endpoints
 
-Admin capabilities use separate scoped tokens:
+Authorization is default-deny per principal, bank, and scope. `GET /v1/default/banks` keeps the upstream response shape and removes ungranted banks.
 
-- `MEMORY_ROUTER_ADMIN_READ_TOKEN`: queue/statistics/encrypted-item reads;
-- `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`: read plus approve/reject/postpone;
-- `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`: cleanup only.
+Optional `x-memory-router-agent`: must equal the token principal.
 
-`MEMORY_ROUTER_ADMIN_TOKEN` remains a legacy migration superuser for every admin route and should be unset after clients move to scoped tokens.
+### Limits
 
-Token comparison is constant-time. Token values are never logged or stored. Failed authentication is logged and passes through a process-local failure gate. Admitted invalid-token attempts create one deduplicated `auth_failed` item per route group; gate-rejected and valid-but-mis-scoped attempts are not persisted. Mis-scoped attempts consume the failure budget. Admin reads and writes have separate process-local limits.
+| Class | Requests/min | Concurrency | Body |
+| --- | ---: | ---: | ---: |
+| recall | 120 | 4 | 32 KiB |
+| retain | 30 | 2 | 512 KiB |
+| reflect | 30 | 2 | 32 KiB |
+| config/list | 60 | 2 | 128 KiB |
+| admin | 10 | 1 | 128 KiB |
 
-## Scope boundaries
+Override under registry `defaults.limits.<class>` or `principals.<id>.limits.<class>`:
 
-A leaked read token cannot mutate quarantine state. A leaked cleanup token cannot inspect encrypted envelopes or make review decisions. A leaked review token can read encrypted envelopes and run review actions, but cannot execute bulk cleanup. No admin token can decrypt envelopes or approve modified content.
+- `rate_limit_max`
+- `rate_limit_window_ms`
+- `concurrency_max`
+- `max_body_bytes`
 
-## Migration from the legacy admin token
+Principal body limits cannot exceed `MEMORY_ROUTER_MAX_BODY_BYTES`.
 
-1. Generate independent read, review, and cleanup tokens.
-2. Configure the scoped tokens while temporarily retaining `MEMORY_ROUTER_ADMIN_TOKEN`, then restart the router.
-3. Update each admin client to use only the token matching its responsibilities.
-4. Verify every scoped client works and confirm the startup warning still reports the legacy migration superuser as active.
-5. Unset `MEMORY_ROUTER_ADMIN_TOKEN` and restart the router again.
-6. Rotate any individual scoped token without changing the others.
-7. Review quarantine events if compromise is suspected.
+### Audit
 
-Keep tokens out of prompts, logs, shell history, and committed configuration.
+`authorization_decision`: request ID, principal, key ID, bank, scope, decision, status, latency, source. No token, digest, or Authorization header.
+
+### Rotation
+
+1. Add new key digest.
+2. Restart router.
+3. Update client token.
+4. Set old `revoked_at`; restart.
+
+## Legacy router token
+
+`MEMORY_ROUTER_TOKEN` protects router endpoints when principal mode is off. Missing token fails closed unless `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`.
+
+`/version` and health endpoints are unauthenticated.
+
+## Quarantine admin
+
+- `MEMORY_ROUTER_ADMIN_READ_TOKEN`: read
+- `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`: read and decide
+- `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`: cleanup
+- `MEMORY_ROUTER_ADMIN_TOKEN`: legacy superuser; remove after migration
+
+Keep tokens out of Git, files, logs, prompts, and shell history.

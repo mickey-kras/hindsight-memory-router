@@ -20,7 +20,7 @@ and each request is authorized against the principal's per-bank grants (see
 [authentication](../security/authentication.md)); `GET /v1/default/banks`
 returns only banks where the principal holds the `bank.list` scope.
 
-All health endpoints are unauthenticated. `/health/live` is router-only liveness. `/health/ready` is the canonical readiness probe; `/health` is an exact readiness alias and `/ready` is deprecated. `/version`, retain, and recall use router authentication unless development-only anonymous access is explicitly enabled.
+Health and `/version` are unauthenticated. `/health/live` is liveness. `/health/ready` is readiness; `/health` is its alias. `/ready` is deprecated. Other router endpoints require authentication unless development-only anonymous access is enabled.
 
 Facade contract: `openapi/openclaw.json`.
 

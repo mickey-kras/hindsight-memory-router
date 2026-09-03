@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
@@ -49,6 +49,7 @@ from .openclaw import (
 from .policy import RouterPolicy
 from .principal_gate import authenticate_principal, log_authorization_decision, require_grant
 from .principals import (
+    SCOPE_BANK_ADMIN,
     SCOPE_BANK_LIST,
     SCOPE_MEMORY_RECALL,
     SCOPE_MEMORY_RETAIN,
@@ -56,6 +57,7 @@ from .principals import (
     PrincipalSession,
     facade_scope,
     load_principal_registry,
+    scope_limit_operation,
 )
 from .probes import _CACHE_MAX_STALENESS_SECONDS as _CACHE_MAX_STALENESS_SECONDS
 from .probes import _READINESS_CACHE_SECONDS as _READINESS_CACHE_SECONDS
@@ -205,7 +207,7 @@ class Runtime:
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.principal_limiter: Any = InMemoryRateLimiter()
-        self.principal_concurrency: dict[str, int] = {}
+        self.principal_concurrency: dict[tuple[str, str], int] = {}
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
         self.principal_resolver: PrincipalResolver | None = None
@@ -240,9 +242,6 @@ class Runtime:
         self.admin_window = settings.memory_router_admin_rate_limit_window_ms
         self.auth_failure_max = settings.memory_router_auth_failure_rate_limit_max
         self.auth_failure_window = settings.memory_router_auth_failure_rate_limit_window_ms
-        self.principal_rate_max = settings.memory_router_principal_rate_limit_max
-        self.principal_rate_window = settings.memory_router_principal_rate_limit_window_ms
-        self.principal_concurrency_max = settings.memory_router_principal_concurrency_max
 
     async def start(self) -> None:
         settings = self.settings or load_settings()
@@ -472,14 +471,19 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
-async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
+async def _json_body(
+    request: Request, *, empty_as_none: bool = False, max_bytes: int | None = None
+) -> Any:
+    body_limit = (
+        runtime.max_body_bytes if max_bytes is None else min(runtime.max_body_bytes, max_bytes)
+    )
     content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
+    if content_length and content_length.isdigit() and int(content_length) > body_limit:
         raise HttpError(413, "payload_too_large", "payload too large")
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
-        if len(body) > runtime.max_body_bytes:
+        if len(body) > body_limit:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
         return _EMPTY_BODY if empty_as_none else {}
@@ -491,6 +495,23 @@ async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
         raise HttpError(400, "invalid_json", "invalid JSON body") from exc
     _assert_json_depth(value)
     return value
+
+
+def _bank_list_query(request: Request) -> tuple[str | None, int, int]:
+    pairs = list(request.query_params.multi_items())
+    if any(key not in {"q", "limit", "offset"} for key, _ in pairs):
+        raise HttpError(400, "invalid_query", "unsupported bank-list query parameter")
+    if any(sum(1 for key, _ in pairs if key == name) > 1 for name in {"q", "limit", "offset"}):
+        raise HttpError(400, "invalid_query", "duplicate bank-list query parameter")
+    q = request.query_params.get("q")
+    try:
+        limit = int(request.query_params.get("limit", "100"), 10)
+        offset = int(request.query_params.get("offset", "0"), 10)
+    except ValueError as exc:
+        raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
+    if not 0 <= limit <= 500 or offset < 0:
+        raise HttpError(400, "invalid_query", "integer query parameter out of range")
+    return q, limit, offset
 
 
 async def _auth_failure_rate(route_group: str) -> None:
@@ -506,15 +527,23 @@ async def _auth_failure_rate(route_group: str) -> None:
         ) from exc
 
 
-async def _principal_rate(principal: str, route_class: str) -> None:
+async def _principal_rate(session: PrincipalSession, scope: str, route_class: str) -> None:
+    operation = scope_limit_operation(scope)
+    limit = session.limits[operation]
     try:
         await runtime.principal_limiter.consume_many(
-            [(f"principal:{principal}", runtime.principal_rate_max, runtime.principal_rate_window)]
+            [
+                (
+                    f"principal:{session.principal_id}:{operation}",
+                    limit.rate_limit_max,
+                    limit.rate_limit_window_ms,
+                )
+            ]
         )
     except HttpError as exc:
         if exc.status != 429:
             raise
-        retry_after = max(1, (runtime.principal_rate_window + 999) // 1000)
+        retry_after = max(1, (limit.rate_limit_window_ms + 999) // 1000)
         log_event(
             logger,
             "warning",
@@ -525,7 +554,8 @@ async def _principal_rate(principal: str, route_class: str) -> None:
             http_status=429,
             outcome="degraded",
             route_class=route_class,
-            principal=principal,
+            principal=session.principal_id,
+            scope=scope,
         )
         raise rate_limit_error(
             code="principal_rate_limited",
@@ -534,9 +564,13 @@ async def _principal_rate(principal: str, route_class: str) -> None:
         ) from exc
 
 
-def _principal_concurrency_acquire(principal: str, route_class: str) -> None:
-    active = runtime.principal_concurrency.get(principal, 0)
-    if active >= runtime.principal_concurrency_max:
+def _principal_concurrency_acquire(
+    session: PrincipalSession, scope: str, route_class: str
+) -> tuple[str, str]:
+    operation = scope_limit_operation(scope)
+    key = (session.principal_id, operation)
+    active = runtime.principal_concurrency.get(key, 0)
+    if active >= session.limits[operation].concurrency_max:
         log_event(
             logger,
             "warning",
@@ -547,32 +581,37 @@ def _principal_concurrency_acquire(principal: str, route_class: str) -> None:
             http_status=429,
             outcome="degraded",
             route_class=route_class,
-            principal=principal,
+            principal=session.principal_id,
+            scope=scope,
         )
         raise rate_limit_error(
             code="principal_concurrency_limited",
             message="too many concurrent requests for principal",
             headers={"retry-after": "1"},
         )
-    runtime.principal_concurrency[principal] = active + 1
+    runtime.principal_concurrency[key] = active + 1
+    return key
 
 
-def _principal_concurrency_release(principal: str) -> None:
-    active = runtime.principal_concurrency.get(principal, 0) - 1
+def _principal_concurrency_release(key: tuple[str, str]) -> None:
+    active = runtime.principal_concurrency.get(key, 0) - 1
     if active > 0:
-        runtime.principal_concurrency[principal] = active
+        runtime.principal_concurrency[key] = active
     else:
-        runtime.principal_concurrency.pop(principal, None)
+        runtime.principal_concurrency.pop(key, None)
 
 
 async def _with_principal_concurrency(
-    request: Request, principal: str, operation: Awaitable[Any]
+    request: Request,
+    session: PrincipalSession,
+    scope: str,
+    operation: Callable[[], Awaitable[Any]],
 ) -> Any:
-    _principal_concurrency_acquire(principal, _route_class(request))
+    key = _principal_concurrency_acquire(session, scope, _route_class(request))
     try:
-        return await operation
+        return await operation()
     finally:
-        _principal_concurrency_release(principal)
+        _principal_concurrency_release(key)
 
 
 async def _router_auth(request: Request) -> bool:
@@ -806,7 +845,6 @@ async def dispatch(path: str, request: Request) -> Response:
             return JSONResponse(
                 {"error": "unauthorized", "message": "authentication required"}, status_code=401
             )
-        await _principal_rate(principal.principal_id, route_class)
     elif not await _router_auth(request):
         return JSONResponse(
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
@@ -815,47 +853,70 @@ async def dispatch(path: str, request: Request) -> Response:
 
     if principal is not None and method == "GET" and pathname == "/v1/default/banks":
         resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
+        await _principal_rate(principal, SCOPE_BANK_LIST, route_class)
         banks = resolver.list_banks(principal)
-        log_authorization_decision(
-            route_class=route_class,
-            session=principal,
-            bank="-",
-            scope=SCOPE_BANK_LIST,
-            allowed=bool(banks),
-            latency_ms=0.0,
-        )
         if not banks:
+            log_authorization_decision(
+                route_class=route_class,
+                session=principal,
+                bank="-",
+                scope=SCOPE_BANK_LIST,
+                allowed=False,
+                latency_ms=0.0,
+            )
             raise HttpError(403, "authorization_denied", "principal lacks the required grant")
-        return JSONResponse({"banks": banks})
+        for bank in banks:
+            log_authorization_decision(
+                route_class=route_class,
+                session=principal,
+                bank=bank,
+                scope=SCOPE_BANK_LIST,
+                allowed=True,
+                latency_ms=0.0,
+            )
+        q, limit, offset = _bank_list_query(request)
+        hindsight = _require_runtime(runtime.hindsight, "hindsight gateway")
+        return JSONResponse(
+            await _with_principal_concurrency(
+                request,
+                principal,
+                SCOPE_BANK_LIST,
+                lambda: hindsight.list_banks(banks, q=q, limit=limit, offset=offset),
+            )
+        )
 
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
     if method == "POST" and match:
         writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
         if principal is not None:
             scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
+            await _principal_rate(principal, scope, route_class)
             require_grant(
                 session=principal,
                 scope=scope,
                 bank=writer_id,
                 route_class=route_class,
             )
+            body_limit = principal.limits[scope_limit_operation(scope)].max_body_bytes
             if action == "recall":
-                body = parse_recall_body(await _json_body(request))
+                body = parse_recall_body(await _json_body(request, max_bytes=body_limit))
                 policy.limits.assert_recall_bounds(body)
                 return JSONResponse(
                     await _with_principal_concurrency(
                         request,
-                        principal.principal_id,
-                        policy.recall_bank(principal.principal_id, writer_id, body),
+                        principal,
+                        scope,
+                        lambda: policy.recall_bank(principal.principal_id, writer_id, body),
                     )
                 )
-            body = parse_retain_body(await _json_body(request))
+            body = parse_retain_body(await _json_body(request, max_bytes=body_limit))
             policy.limits.assert_retain_bounds(body)
             return JSONResponse(
                 await _with_principal_concurrency(
                     request,
-                    principal.principal_id,
-                    policy.retain_bank(principal.principal_id, writer_id, body),
+                    principal,
+                    scope,
+                    lambda: policy.retain_bank(principal.principal_id, writer_id, body),
                 )
             )
         if action == "recall":
@@ -884,17 +945,24 @@ async def dispatch(path: str, request: Request) -> Response:
     if matched is not None:
         route, route_match = matched
         writer_id = route_match.group("bank")
+        scope = facade_scope(route)
         if principal is not None:
+            await _principal_rate(principal, scope, route_class)
             require_grant(
                 session=principal,
-                scope=facade_scope(route),
+                scope=scope,
                 bank=writer_id,
                 route_class=route_class,
             )
         route_params = {name: route_match.group(name) for name in route.params}
         facade_body: dict[str, Any] | None = None
         if route.body != "none":
-            raw_body = await _json_body(request, empty_as_none=True)
+            max_bytes = (
+                principal.limits[scope_limit_operation(scope)].max_body_bytes
+                if principal is not None
+                else None
+            )
+            raw_body = await _json_body(request, empty_as_none=True, max_bytes=max_bytes)
             if raw_body is _EMPTY_BODY:
                 if route.body == "required":
                     raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
@@ -911,18 +979,31 @@ async def dispatch(path: str, request: Request) -> Response:
                 facade_body = raw_body
         if route.template == "reflect" and facade_body is not None:
             facade_body = parse_reflect_body(facade_body)
-        forward = facade.forward(
-            route=route,
-            writer_id=principal.principal_id if principal is not None else writer_id,
-            params=route_params,
-            body=facade_body,
-            query=list(request.query_params.multi_items()) or None,
-            bank_override=writer_id if principal is not None else None,
-        )
         if principal is not None:
-            forward = _with_principal_concurrency(request, principal.principal_id, forward)
+            forwarded = await _with_principal_concurrency(
+                request,
+                principal,
+                scope,
+                lambda: facade.forward(
+                    route=route,
+                    writer_id=principal.principal_id,
+                    params=route_params,
+                    body=facade_body,
+                    query=list(request.query_params.multi_items()) or None,
+                    bank_override=writer_id,
+                ),
+            )
+        else:
+            forwarded = await facade.forward(
+                route=route,
+                writer_id=writer_id,
+                params=route_params,
+                body=facade_body,
+                query=list(request.query_params.multi_items()) or None,
+                bank_override=None,
+            )
         return JSONResponse(
-            await forward,
+            forwarded,
             status_code=route.success_status,
         )
 
@@ -938,6 +1019,7 @@ async def dispatch(path: str, request: Request) -> Response:
         ):
             denied_writer_id = candidate
     if principal is not None:
+        await _principal_rate(principal, SCOPE_BANK_ADMIN, route_class)
         denied = await policy.deny_endpoint(method, pathname, writer_id=principal.principal_id)
     else:
         denied = (

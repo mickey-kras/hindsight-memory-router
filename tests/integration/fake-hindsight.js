@@ -90,6 +90,27 @@ createServer(async (req, res) => {
       });
     }
 
+    if (method === "GET" && url.pathname === "/v1/default/banks") {
+      const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      const limit = Number(url.searchParams.get("limit") ?? "100");
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const banks = ["alpha-only", "private", "shared"]
+        .filter((bankId) => bankId.includes(q))
+        .map((bankId) => ({
+          bank_id: bankId,
+          name: bankId,
+          disposition: { skepticism: 3, literalism: 3, empathy: 3 },
+          mission: "",
+          stats: { fact_count: 0 },
+        }));
+      return send(res, 200, {
+        banks: banks.slice(offset, offset + limit),
+        total: banks.length,
+        limit,
+        offset,
+      });
+    }
+
     const bank = url.pathname.match(/^\/v1\/default\/banks\/([^/]+)$/);
     if (method === "PUT" && bank) {
       const body = await readJson(req);

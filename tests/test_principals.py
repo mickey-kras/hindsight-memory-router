@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -85,7 +86,19 @@ def principal_runtime_state(tmp_path: Path) -> None:
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.principal_concurrency = {}
-    app_module.runtime.principal_concurrency_max = 8
+    app_module.runtime.hindsight = SimpleNamespace(
+        list_banks=AsyncMock(
+            return_value={
+                "banks": [
+                    {"bank_id": "alpha-only", "name": "Alpha"},
+                    {"bank_id": "shared", "name": "Shared"},
+                ],
+                "total": 2,
+                "limit": 100,
+                "offset": 0,
+            }
+        )
+    )
     app_module.runtime.policy = SimpleNamespace(
         registry=SimpleNamespace(writers={}),
         limits=SimpleNamespace(
@@ -125,18 +138,16 @@ def test_scope_vocabulary_matches_specification() -> None:
 
 def test_example_registry_loads_and_authenticates() -> None:
     resolver = PrincipalResolver(load_principal_registry("principal_registry.example.json"))
-    result = resolver.authenticate(
-        "Bearer mr_main-2026-09_9a4f2c71e83b4d05a6c98f12b3e47d05c1a8f3e69b204d7a91c5e8f0a3b6d924"
-    )
+    result = resolver.authenticate(f"Bearer mr_writer-1_{ALPHA_SECRET}")
     assert result.status == "ok"
     session = result.session
     assert session is not None
-    assert session.principal_id == "main"
-    assert resolver.list_banks(session) == ["creative", "dev", "main"]
-    assert resolver.authorize(session, "memory.retain", "main")
-    assert not resolver.authorize(session, "memory.retain", "dev")
-    assert not resolver.authorize(session, "bank.admin", "main")
-    assert resolver.authorize(session, "bank.config.read", "main")
+    assert session.principal_id == "service-writer"
+    assert resolver.list_banks(session) == ["project"]
+    assert resolver.authorize(session, "memory.retain", "project")
+    assert not resolver.authorize(session, "bank.admin", "project")
+    assert resolver.authorize(session, "bank.config.read", "project")
+    assert session.limits["retain"].rate_limit_max == 20
 
 
 @pytest.mark.parametrize(
@@ -239,6 +250,22 @@ def test_registry_rejects_unreadable_and_malformed_files(tmp_path: Path) -> None
     path.write_text("{not json")
     with pytest.raises(RuntimeError):
         load_principal_registry(str(path))
+
+
+@pytest.mark.parametrize(
+    "grants",
+    [
+        [
+            {"bank": "shared", "scopes": ["memory.recall"]},
+            {"bank": "shared", "scopes": ["memory.retain"]},
+        ],
+        [{"bank": "shared", "scopes": ["memory.recall", "memory.recall"]}],
+    ],
+)
+def test_registry_rejects_duplicate_grants(tmp_path: Path, grants: list[dict[str, object]]) -> None:
+    value = {"principals": {"agent": {"keys": [_key("key", ALPHA_SECRET)], "grants": grants}}}
+    with pytest.raises(RuntimeError):
+        load_principal_registry(_write_registry(tmp_path, value))
 
 
 @pytest.mark.parametrize(
@@ -493,15 +520,39 @@ async def test_allowed_decisions_are_audited_with_spec_fields(
 
 
 @pytest.mark.asyncio
-async def test_bank_listing_is_filtered_and_requires_list_scope() -> None:
-    listed = await app_module.dispatch(
-        "x",
-        request(
-            "GET", "/v1/default/banks", headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)}
-        ),
-    )
+async def test_bank_listing_is_filtered_and_requires_list_scope(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.INFO):
+        listed = await app_module.dispatch(
+            "x",
+            request(
+                "GET",
+                "/v1/default/banks",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            ),
+        )
     assert listed.status_code == 200
-    assert _payload(listed) == {"banks": ["alpha-only", "shared"]}
+    assert _payload(listed) == {
+        "banks": [
+            {"bank_id": "alpha-only", "name": "Alpha"},
+            {"bank_id": "shared", "name": "Shared"},
+        ],
+        "total": 2,
+        "limit": 100,
+        "offset": 0,
+    }
+    app_module.runtime.hindsight.list_banks.assert_awaited_once_with(
+        ["alpha-only", "shared"], q=None, limit=100, offset=0
+    )
+    listed_banks = {
+        record.bank
+        for record in caplog.records
+        if record.msg == "authorization_decision"
+        and getattr(record, "operation", None) == "bank.list"
+        and getattr(record, "decision", None) == "allow"
+    }
+    assert listed_banks == {"alpha-only", "shared"}
     with pytest.raises(HttpError) as denial:
         await app_module.dispatch(
             "x",
@@ -566,9 +617,15 @@ async def test_principal_rate_limit_returns_429() -> None:
 
 
 @pytest.mark.asyncio
-async def test_principal_concurrency_limit_returns_429() -> None:
-    app_module.runtime.principal_concurrency_max = 1
-    app_module.runtime.principal_concurrency = {"agent-alpha": 1}
+async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["principals"]["agent-alpha"]["limits"] = {  # type: ignore[index]
+        "retain": {"concurrency_max": 1}
+    }
+    app_module.runtime.principal_resolver = PrincipalResolver(
+        load_principal_registry(_write_registry(tmp_path, value))
+    )
+    app_module.runtime.principal_concurrency = {("agent-alpha", "retain"): 1}
     with pytest.raises(HttpError) as throttled:
         await app_module.dispatch(
             "x",
@@ -581,6 +638,54 @@ async def test_principal_concurrency_limit_returns_429() -> None:
         )
     assert throttled.value.status == 429
     assert throttled.value.code == "principal_concurrency_limited"
+    app_module.runtime.policy.retain_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_principal_operation_limits_and_overrides(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["defaults"] = {"limits": {"recall": {"rate_limit_max": 77}}}
+    value["principals"]["agent-reader"]["limits"] = {  # type: ignore[index]
+        "recall": {"rate_limit_max": 3, "rate_limit_window_ms": 2_000}
+    }
+    app_module.runtime.principal_resolver = PrincipalResolver(
+        load_principal_registry(_write_registry(tmp_path, value))
+    )
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "POST",
+            "/v1/default/banks/shared/memories/recall",
+            headers={"authorization": _bearer("reader-1", READER_SECRET)},
+            body={"query": "hello"},
+        ),
+    )
+    assert response.status_code == 200
+    app_module.runtime.principal_limiter.consume_many.assert_awaited_once_with(
+        [("principal:agent-reader:recall", 3, 2_000)]
+    )
+
+
+@pytest.mark.asyncio
+async def test_principal_body_limit_is_enforced_before_policy(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["principals"]["agent-alpha"]["limits"] = {  # type: ignore[index]
+        "retain": {"max_body_bytes": 8}
+    }
+    app_module.runtime.principal_resolver = PrincipalResolver(
+        load_principal_registry(_write_registry(tmp_path, value))
+    )
+    with pytest.raises(HttpError) as too_large:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+                body={"items": [{"content": "large"}]},
+            ),
+        )
+    assert too_large.value.status == 413
     app_module.runtime.policy.retain_bank.assert_not_awaited()
 
 

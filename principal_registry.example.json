@@ -1,21 +1,23 @@
 {
+  "defaults": {
+    "limits": {
+      "admin": {
+        "rate_limit_max": 10
+      }
+    }
+  },
   "principals": {
-    "main": {
+    "service-writer": {
       "keys": [
         {
-          "id": "main-2026-09",
-          "sha256": "6397cf809cb6c3bc6c5136f09e551f7dc7023153a54232c93c41819d603bc509",
+          "id": "writer-1",
+          "sha256": "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
           "created_at": "2026-09-01T00:00:00Z"
-        },
-        {
-          "id": "main-2026-10",
-          "sha256": "c678b8f07863868e059b3ba069a266d7c75b6faa210c3606df2a9b86e442d7cb",
-          "created_at": "2026-10-01T00:00:00Z"
         }
       ],
       "grants": [
         {
-          "bank": "main",
+          "bank": "project",
           "scopes": [
             "bank.list",
             "memory.recall",
@@ -23,65 +25,48 @@
             "memory.reflect",
             "bank.config.read"
           ]
-        },
-        {
-          "bank": "dev",
-          "scopes": ["bank.list", "memory.recall"]
-        },
-        {
-          "bank": "creative",
-          "scopes": ["bank.list", "memory.recall"]
         }
-      ]
+      ],
+      "limits": {
+        "retain": {
+          "rate_limit_max": 20
+        }
+      }
     },
-    "backend": {
+    "service-reader": {
       "keys": [
         {
-          "id": "backend-2026-09",
-          "sha256": "6ade49edd70655e15efeaa7c1b69eae1fe3452448aed303f41c82e72ea245eca",
+          "id": "reader-1",
+          "sha256": "a0fab1377f49a759b57f63318262ebe89fabfc990e8e93ceac2984561482b9d4",
           "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
-          "bank": "dev",
-          "scopes": [
-            "bank.list",
-            "memory.recall",
-            "memory.retain",
-            "memory.reflect",
-            "bank.config.read"
-          ]
+          "bank": "project",
+          "scopes": ["bank.list", "memory.recall"]
         },
         {
-          "bank": "dev-best-practices",
+          "bank": "shared",
           "scopes": ["bank.list", "memory.recall"]
         }
       ]
     },
-    "control-plane": {
+    "operator": {
       "keys": [
         {
-          "id": "control-plane-2026-09",
-          "sha256": "91d8aded4d87dbc5fc1952a7dbf49b7f9fc8cbdc6a02231daf8012d7bec07177",
+          "id": "operator-1",
+          "sha256": "52b6419d27bd7f547cee3b92f8c17a908b8a49601ecbec161e5030de1dfe9e0a",
           "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
-          "bank": "main",
+          "bank": "project",
           "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         },
         {
-          "bank": "dev",
-          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
-        },
-        {
-          "bank": "creative",
-          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
-        },
-        {
-          "bank": "dev-best-practices",
+          "bank": "shared",
           "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         }
       ]
