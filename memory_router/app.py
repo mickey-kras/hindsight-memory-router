@@ -7,7 +7,6 @@ import re
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
@@ -36,8 +35,7 @@ from .db import (
     validate_storage,
 )
 from .errors import HttpError, rate_limit_error
-from .facade_routes import match_facade_route
-from .hindsight import HindsightGateway, HindsightGatewayError
+from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
@@ -48,12 +46,33 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
+from .principal_gate import authenticate_principal
+from .principals import (
+    PrincipalResolver,
+    PrincipalSession,
+    load_principal_registry,
+    scope_limit_operation,
+)
+from .probes import _CACHE_MAX_STALENESS_SECONDS as _CACHE_MAX_STALENESS_SECONDS
+from .probes import _READINESS_CACHE_SECONDS as _READINESS_CACHE_SECONDS
+from .probes import _cached_probe_response as _cached_probe_response
+from .probes import _CachedProbe as _CachedProbe
+from .probes import _ProbeCache as _ProbeCache
+from .probes import _readiness as _readiness
+from .probes import _readiness_log_state as _readiness_log_state
+from .probes import _ReadinessLogState as _ReadinessLogState
+from .probes import _storage_readiness_log_state as _storage_readiness_log_state
+from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
+from .request_dispatch import (
+    EMPTY_BODY,
+    AuthenticatedRequestDispatcher,
+    DispatchDependencies,
+)
 from .review_repository import REVIEW_STALE_SECONDS, recover_interrupted
 from .timestamps import iso_format, iso_now
-from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 logger = logging.getLogger(__name__)
 configure_logging()
@@ -63,7 +82,7 @@ _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
-_EMPTY_BODY = object()
+_EMPTY_BODY = EMPTY_BODY
 try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
@@ -99,141 +118,8 @@ def _route_class(request: Request) -> str:
     return "unmatched"
 
 
-def _hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:
-    return {
-        "request_id": current_request_id(),
-        "operation": error.context.get("operation"),
-        "upstream_method": error.context.get("method"),
-        "error_kind": error.kind,
-        "upstream_status": error.upstream_status,
-        "timeout_ms": error.context.get("timeout_ms"),
-        "http_status": error.status,
-        "request_duration_ms": current_duration_ms(),
-    }
-
-
-class _ReadinessLogState:
-    def __init__(
-        self,
-        failure_event: str = "hindsight_readiness_failed",
-        recovery_event: str = "hindsight_readiness_recovered",
-        operation: str = "health",
-    ) -> None:
-        self.failure_event = failure_event
-        self.recovery_event = recovery_event
-        self.operation = operation
-        self.healthy: bool | None = None
-        self.last_failure_log: dict[str, float] = {}
-        self.candidate: bool | None = None
-        self.consecutive = 0
-
-    def record(self, error: Exception | None, duration_ms: float) -> None:
-        now = time.monotonic()
-        next_healthy = error is None
-        if self.candidate == next_healthy:
-            self.consecutive += 1
-        else:
-            self.candidate = next_healthy
-            self.consecutive = 1
-        if self.consecutive < 2:
-            return
-        if error is None:
-            if self.healthy is False:
-                log_event(
-                    logger,
-                    "info",
-                    self.recovery_event,
-                    operation=self.operation,
-                    upstream_method="GET" if self.operation == "health" else None,
-                    outcome="healthy",
-                    operation_duration_ms=duration_ms,
-                    route_class="readiness",
-                )
-            self.healthy = True
-            return
-
-        error_kind = (
-            error.kind
-            if isinstance(error, HindsightGatewayError)
-            else "timeout"
-            if isinstance(error, TimeoutError)
-            else "storage"
-            if self.operation == "storage_health"
-            else "unexpected"
-        )
-        last_failure_log = self.last_failure_log.get(error_kind)
-        if (
-            self.healthy is not False
-            or last_failure_log is None
-            or now - last_failure_log >= _READINESS_FAILURE_LOG_INTERVAL_SECONDS
-        ):
-            fields: dict[str, Any] = {
-                "operation": self.operation,
-                "upstream_method": "GET" if self.operation == "health" else None,
-                "error_kind": error_kind,
-                "outcome": "unhealthy",
-                "operation_duration_ms": duration_ms,
-                "route_class": "readiness",
-            }
-            if isinstance(error, HindsightGatewayError):
-                fields["upstream_status"] = error.upstream_status
-            log_event(logger, "warning", self.failure_event, error=error, **fields)
-            self.last_failure_log[error_kind] = now
-        self.healthy = False
-
-
-_readiness_log_state = _ReadinessLogState()
-_storage_readiness_log_state = _ReadinessLogState(
-    "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
-)
-_READINESS_CACHE_SECONDS = 1.0
-_CACHE_MAX_STALENESS_SECONDS = 5.0
 _REFRESH_TIMEOUT_SECONDS = 15.0
 _DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
-
-
-@dataclass(frozen=True, slots=True)
-class _CachedProbe:
-    created_at: float
-    status_code: int
-    body: bytes
-
-
-class _ProbeCache:
-    def __init__(self, fallback: dict[str, Any]) -> None:
-        self.cache: _CachedProbe | None = None
-        self.lock: asyncio.Lock | None = None
-        self.fallback = fallback
-
-    async def get(self, refresh: Callable[[], Awaitable[Response]]) -> Response:
-        now = time.monotonic()
-        if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-            return _cached_probe_response(self.cache)
-        if self.lock is None:
-            self.lock = asyncio.Lock()
-        if self.lock.locked():
-            if (
-                self.cache is not None
-                and now - self.cache.created_at <= _CACHE_MAX_STALENESS_SECONDS
-            ):
-                return _cached_probe_response(self.cache)
-            return JSONResponse(self.fallback, status_code=503)
-        async with self.lock:
-            now = time.monotonic()
-            if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-                return _cached_probe_response(self.cache)
-            response = await refresh()
-            self.cache = _CachedProbe(time.monotonic(), response.status_code, bytes(response.body))
-            return response
-
-
-_readiness = _ProbeCache(fallback={"status": "unhealthy"})
-_version = _ProbeCache(
-    fallback={
-        "error": "hindsight_unavailable",
-        "message": "Upstream memory service is unavailable",
-    }
-)
 
 
 def _require_runtime[T](value: T | None, component: str) -> T:
@@ -318,8 +204,11 @@ class Runtime:
         self.quarantine_limiter: Any = None
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
+        self.principal_limiter: Any = InMemoryRateLimiter()
+        self.principal_concurrency: dict[tuple[str, str], int] = {}
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
+        self.principal_resolver: PrincipalResolver | None = None
         if settings is None:
             self._apply_request_settings(RouterSettings.model_construct())
         else:
@@ -335,6 +224,11 @@ class Runtime:
         self.max_body_bytes = settings.memory_router_max_body_bytes
         self.router_token = secret_value(settings.memory_router_token)
         self.allow_anonymous = settings.memory_router_allow_anonymous
+        self.principal_resolver = (
+            PrincipalResolver(load_principal_registry(settings.memory_router_principals))
+            if settings.memory_router_principals
+            else None
+        )
         self.admin_tokens = {
             "legacy": secret_value(settings.memory_router_admin_token),
             "read": secret_value(settings.memory_router_admin_read_token),
@@ -548,7 +442,7 @@ async def http_error_handler(request: Request, exc: HttpError) -> JSONResponse:
             logger,
             "warning",
             "hindsight_request_failed",
-            **_hindsight_log_fields(exc),
+            **hindsight_log_fields(exc),
             error=exc,
             outcome="failed",
             route_class=route_class,
@@ -575,14 +469,19 @@ async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:
     return JSONResponse({"error": "internal error"}, status_code=500)
 
 
-async def _json_body(request: Request, *, empty_as_none: bool = False) -> Any:
+async def _json_body(
+    request: Request, *, empty_as_none: bool = False, max_bytes: int | None = None
+) -> Any:
+    body_limit = (
+        runtime.max_body_bytes if max_bytes is None else min(runtime.max_body_bytes, max_bytes)
+    )
     content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > runtime.max_body_bytes:
+    if content_length and content_length.isdigit() and int(content_length) > body_limit:
         raise HttpError(413, "payload_too_large", "payload too large")
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
-        if len(body) > runtime.max_body_bytes:
+        if len(body) > body_limit:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
         return _EMPTY_BODY if empty_as_none else {}
@@ -607,6 +506,93 @@ async def _auth_failure_rate(route_group: str) -> None:
         raise rate_limit_error(
             code="auth_rate_limited", message="too many authentication failures"
         ) from exc
+
+
+async def _principal_rate(session: PrincipalSession, scope: str, route_class: str) -> None:
+    operation = scope_limit_operation(scope)
+    limit = session.limits[operation]
+    try:
+        await runtime.principal_limiter.consume_many(
+            [
+                (
+                    f"principal:{session.principal_id}:{operation}",
+                    limit.rate_limit_max,
+                    limit.rate_limit_window_ms,
+                )
+            ]
+        )
+    except HttpError as exc:
+        if exc.status != 429:
+            raise
+        retry_after = max(1, (limit.rate_limit_window_ms + 999) // 1000)
+        log_event(
+            logger,
+            "warning",
+            "principal_throttled",
+            request_id=current_request_id(),
+            operation="authorize",
+            error_kind="rate-limit",
+            http_status=429,
+            outcome="degraded",
+            route_class=route_class,
+            principal=session.principal_id,
+            scope=scope,
+        )
+        raise rate_limit_error(
+            code="principal_rate_limited",
+            message="too many requests for principal",
+            headers={"retry-after": str(retry_after)},
+        ) from exc
+
+
+def _principal_concurrency_acquire(
+    session: PrincipalSession, scope: str, route_class: str
+) -> tuple[str, str]:
+    operation = scope_limit_operation(scope)
+    key = (session.principal_id, operation)
+    active = runtime.principal_concurrency.get(key, 0)
+    if active >= session.limits[operation].concurrency_max:
+        log_event(
+            logger,
+            "warning",
+            "principal_throttled",
+            request_id=current_request_id(),
+            operation="authorize",
+            error_kind="rate-limit",
+            http_status=429,
+            outcome="degraded",
+            route_class=route_class,
+            principal=session.principal_id,
+            scope=scope,
+        )
+        raise rate_limit_error(
+            code="principal_concurrency_limited",
+            message="too many concurrent requests for principal",
+            headers={"retry-after": "1"},
+        )
+    runtime.principal_concurrency[key] = active + 1
+    return key
+
+
+def _principal_concurrency_release(key: tuple[str, str]) -> None:
+    active = runtime.principal_concurrency.get(key, 0) - 1
+    if active > 0:
+        runtime.principal_concurrency[key] = active
+    else:
+        runtime.principal_concurrency.pop(key, None)
+
+
+async def _with_principal_concurrency(
+    request: Request,
+    session: PrincipalSession,
+    scope: str,
+    operation: Callable[[], Awaitable[Any]],
+) -> Any:
+    key = _principal_concurrency_acquire(session, scope, _route_class(request))
+    try:
+        return await operation()
+    finally:
+        _principal_concurrency_release(key)
 
 
 async def _router_auth(request: Request) -> bool:
@@ -694,12 +680,6 @@ async def _hindsight_health(
     return True, response, None, duration_ms
 
 
-def _cached_probe_response(cached: _CachedProbe) -> Response:
-    return Response(
-        content=cached.body, status_code=cached.status_code, media_type="application/json"
-    )
-
-
 async def _health_ready_response() -> Response:
     async def refresh() -> Response:
         status_code = 200
@@ -762,7 +742,7 @@ def _version_failure(error: HindsightGatewayError) -> Response:
         logger,
         "warning",
         "hindsight_request_failed",
-        **_hindsight_log_fields(error),
+        **hindsight_log_fields(error),
         error=error,
         outcome="failed",
         route_class="version",
@@ -770,14 +750,7 @@ def _version_failure(error: HindsightGatewayError) -> Response:
     return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
-@app.api_route(
-    "/{path:path}",
-    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
-)
-async def dispatch(path: str, request: Request) -> Response:
-    del path
-    pathname = _raw_pathname(request)
-    method = request.method
+async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
     if pathname.startswith("/admin/"):
         if not await _admin_auth(request, _scope(method, pathname)):
             return JSONResponse(
@@ -822,89 +795,51 @@ async def dispatch(path: str, request: Request) -> Response:
             if method == "POST" and action == "postpone":
                 return JSONResponse(await admin.postpone(item_id))
         return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
+    return None
+
+
+@app.api_route(
+    "/{path:path}",
+    methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
+)
+async def dispatch(path: str, request: Request) -> Response:
+    del path
+    pathname = _raw_pathname(request)
+    method = request.method
+    admin_response = await _dispatch_admin(request, pathname, method)
+    if admin_response is not None:
+        return admin_response
 
     if method == "GET" and pathname == "/version":
         return await _version_response()
-    if not await _router_auth(request):
+    route_class = _route_class(request)
+    principal: PrincipalSession | None = None
+    if runtime.principal_resolver is not None:
+        principal = await authenticate_principal(
+            request,
+            resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+            auditor=_require_runtime(runtime.auditor, "auth auditor"),
+            route_class=route_class,
+            on_failure=lambda: _auth_failure_rate("router"),
+        )
+        if principal is None:
+            return JSONResponse(
+                {"error": "unauthorized", "message": "authentication required"}, status_code=401
+            )
+    elif not await _router_auth(request):
         return JSONResponse(
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
         )
-    policy = _require_runtime(runtime.policy, "router policy")
-
-    match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
-    if method == "POST" and match:
-        writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
-        if action == "recall":
-            body = parse_recall_body(await _json_body(request))
-            policy.limits.assert_recall_bounds(body)
-            return JSONResponse(await policy.recall(writer_id, body))
-        body = parse_retain_body(await _json_body(request))
-        policy.limits.assert_retain_bounds(body)
-        return JSONResponse(await policy.retain(writer_id, body))
-
-    facade = OpenClawFacade(policy)
-    matched = None
-    if pathname.startswith("/v1/default/banks/"):
-        try:
-            facade_pathname = "/".join(_decode_path_segment(part) for part in pathname.split("/"))
-        except HttpError as exc:
-            if exc.code == "invalid_path_segment":
-                raise
-            matched = match_facade_route(method, pathname)
-            if matched is not None:
-                raise
-        else:
-            matched = match_facade_route(method, facade_pathname)
-    else:
-        matched = match_facade_route(method, pathname)
-    if matched is not None:
-        route, route_match = matched
-        writer_id = route_match.group("bank")
-        route_params = {name: route_match.group(name) for name in route.params}
-        facade_body: dict[str, Any] | None = None
-        if route.body != "none":
-            raw_body = await _json_body(request, empty_as_none=True)
-            if raw_body is _EMPTY_BODY:
-                if route.body == "required":
-                    raise HttpError(400, "invalid_request", f"{route.body_label} body is required")
-            elif raw_body is None:
-                if route.body != "optional":
-                    raise HttpError(
-                        400, "invalid_request", f"{route.body_label} body must be an object"
-                    )
-            elif not isinstance(raw_body, dict):
-                raise HttpError(
-                    400, "invalid_request", f"{route.body_label} body must be an object"
-                )
-            else:
-                facade_body = raw_body
-        if route.template == "reflect" and facade_body is not None:
-            facade_body = parse_reflect_body(facade_body)
-        return JSONResponse(
-            await facade.forward(
-                route=route,
-                writer_id=writer_id,
-                params=route_params,
-                body=facade_body,
-                query=list(request.query_params.multi_items()) or None,
-            ),
-            status_code=route.success_status,
+    dispatcher = AuthenticatedRequestDispatcher(
+        DispatchDependencies(
+            policy=_require_runtime(runtime.policy, "router policy"),
+            resolver=runtime.principal_resolver,
+            hindsight=runtime.hindsight,
+            json_body=_json_body,
+            principal_rate=_principal_rate,
+            concurrency=_with_principal_concurrency,
+            decode_path_segment=_decode_path_segment,
+            facade_factory=OpenClawFacade,
         )
-
-    denied_writer_id = None
-    denied_bank_match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
-    if denied_bank_match is not None:
-        try:
-            candidate = _decode_path_segment(denied_bank_match.group(1))
-        except HttpError:
-            candidate = None
-        if candidate is not None and candidate in getattr(
-            getattr(policy, "registry", None), "writers", {}
-        ):
-            denied_writer_id = candidate
-    denied = (
-        await policy.deny_endpoint(method, pathname)
-        if denied_writer_id is None
-        else await policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
     )
-    return JSONResponse(denied, status_code=404)
+    return await dispatcher.dispatch(request, pathname, method, principal, route_class)

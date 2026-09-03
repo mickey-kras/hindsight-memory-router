@@ -10,6 +10,7 @@ EXPECTED_ROUTES = {
     "/health/ready": {"get"},
     "/ready": {"get"},
     "/version": {"get"},
+    "/v1/default/banks": {"get"},
     "/v1/default/banks/{writer_id}/memories": {"post"},
     "/v1/default/banks/{writer_id}/memories/recall": {"post"},
     "/admin/quarantine/queue": {"get"},
@@ -59,13 +60,17 @@ def test_openapi_paths_and_methods_match_composed_router_surface() -> None:
 
 
 def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
-    source = pathlib.Path("memory_router/app.py").read_text()
+    source = "\n".join(
+        pathlib.Path(path).read_text()
+        for path in ("memory_router/app.py", "memory_router/request_dispatch.py")
+    )
     markers = {
         "/health": '@app.get("/health")',
         "/health/live": '@app.get("/health/live")',
         "/health/ready": '@app.get("/health/ready")',
         "/ready": '@app.get("/ready")',
         "/version": 'pathname == "/version"',
+        "/v1/default/banks": 'pathname == "/v1/default/banks"',
         "/v1/default/banks/{writer_id}/memories": r"/v1/default/banks/([^/]+)/memories(?:/(recall))?",
         "/v1/default/banks/{writer_id}/memories/recall": 'action == "recall"',
         "/admin/quarantine/queue": 'pathname == "/admin/quarantine/queue"',

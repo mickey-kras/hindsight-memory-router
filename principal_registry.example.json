@@ -1,0 +1,75 @@
+{
+  "defaults": {
+    "limits": {
+      "admin": {
+        "rate_limit_max": 10
+      }
+    }
+  },
+  "principals": {
+    "service-writer": {
+      "keys": [
+        {
+          "id": "writer-1",
+          "sha256": "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+          "created_at": "2026-09-01T00:00:00Z"
+        }
+      ],
+      "grants": [
+        {
+          "bank": "project",
+          "scopes": [
+            "bank.list",
+            "memory.recall",
+            "memory.retain",
+            "memory.reflect",
+            "bank.config.read"
+          ]
+        }
+      ],
+      "limits": {
+        "retain": {
+          "rate_limit_max": 20
+        }
+      }
+    },
+    "service-reader": {
+      "keys": [
+        {
+          "id": "reader-1",
+          "sha256": "a0fab1377f49a759b57f63318262ebe89fabfc990e8e93ceac2984561482b9d4",
+          "created_at": "2026-09-01T00:00:00Z"
+        }
+      ],
+      "grants": [
+        {
+          "bank": "project",
+          "scopes": ["bank.list", "memory.recall"]
+        },
+        {
+          "bank": "shared",
+          "scopes": ["bank.list", "memory.recall"]
+        }
+      ]
+    },
+    "operator": {
+      "keys": [
+        {
+          "id": "operator-1",
+          "sha256": "52b6419d27bd7f547cee3b92f8c17a908b8a49601ecbec161e5030de1dfe9e0a",
+          "created_at": "2026-09-01T00:00:00Z"
+        }
+      ],
+      "grants": [
+        {
+          "bank": "project",
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
+        },
+        {
+          "bank": "shared",
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
+        }
+      ]
+    }
+  }
+}

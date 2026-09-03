@@ -165,6 +165,61 @@ async def test_version_rejects_non_hindsight_success_response(response: object) 
 
 
 @pytest.mark.asyncio
+async def test_bank_list_preserves_upstream_shape_and_filters_grants() -> None:
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(  # type: ignore[method-assign]
+        return_value={
+            "banks": [
+                {"bank_id": "private", "name": "Private", "stats": {"fact_count": 1}},
+                {"bank_id": "shared", "name": "Shared", "stats": {"fact_count": 2}},
+            ],
+            "total": 2,
+            "limit": 500,
+            "offset": 0,
+        }
+    )
+    try:
+        response = await gateway.list_banks(["shared"], q="sha", limit=10, offset=0)
+    finally:
+        await gateway.close()
+    assert response == {
+        "banks": [{"bank_id": "shared", "name": "Shared", "stats": {"fact_count": 2}}],
+        "total": 1,
+        "limit": 10,
+        "offset": 0,
+    }
+    assert gateway._request.await_args.args[2].endswith("q=sha")
+
+
+@pytest.mark.asyncio
+async def test_bank_list_rejects_invalid_upstream_shape() -> None:
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value={"banks": ["shared"], "total": 1})  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HindsightGatewayError, match="invalid response"):
+            await gateway.list_banks(["shared"])
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_bank_list_uses_one_deadline_across_pages() -> None:
+    gateway = HindsightGateway("http://hindsight", None, timeout_ms=1)
+
+    async def slow_page(*args: object, **kwargs: object) -> dict[str, object]:
+        await asyncio.sleep(0.01)
+        return {"banks": [], "total": 0}
+
+    gateway._request = slow_page  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HindsightGatewayError) as timed_out:
+            await gateway.list_banks(["shared"])
+    finally:
+        await gateway.close()
+    assert timed_out.value.kind == "timeout"
+
+
+@pytest.mark.asyncio
 async def test_recall_rejects_deep_upstream_json_before_recursive_scanning() -> None:
     nested: object = "leaf"
     for _ in range(MAX_HINDSIGHT_JSON_DEPTH + 1):
