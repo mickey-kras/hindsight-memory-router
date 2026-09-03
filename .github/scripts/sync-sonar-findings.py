@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -132,6 +133,24 @@ class GitHubTracker:
                 body_file.name,
             )
             return f"#{number}"
+
+
+def optional_paged(
+    client: SonarClient,
+    path: str,
+    collection: str,
+    **params: str | int | bool,
+) -> list[dict[str, Any]]:
+    try:
+        return client.paged(path, collection, **params)
+    except urllib.error.HTTPError as exc:
+        if exc.code != 403:
+            raise
+        print(
+            f"SonarQube denied {path}; using quality-gate conditions.",
+            file=sys.stderr,
+        )
+        return []
 
 
 def _required_env(name: str) -> str:
@@ -297,14 +316,16 @@ def main() -> int:
         raise RuntimeError("SonarQube compute task has no analysisId")
     project_key = _report_value(report, "projectKey")
     gate = client.get("/api/qualitygates/project_status", analysisId=analysis_id)
-    issues = client.paged(
+    issues = optional_paged(
+        client,
         "/api/issues/search",
         "issues",
         componentKeys=project_key,
         inNewCodePeriod=True,
         resolved=False,
     )
-    hotspots = client.paged(
+    hotspots = optional_paged(
+        client,
         "/api/hotspots/search",
         "hotspots",
         projectKey=project_key,
