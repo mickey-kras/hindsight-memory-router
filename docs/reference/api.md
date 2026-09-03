@@ -18,7 +18,7 @@ POST /v1/default/banks/{writer}/memories/recall
 With `MEMORY_ROUTER_PRINCIPALS` set, `{writer}` path segments are target banks
 and each request is authorized against the principal's per-bank grants (see
 [authentication](../security/authentication.md)); `GET /v1/default/banks`
-returns only banks where the principal holds the `banks:list` scope.
+returns only banks where the principal holds the `bank.list` scope.
 
 All health endpoints are unauthenticated. `/health/live` is router-only liveness. `/health/ready` is the canonical readiness probe; `/health` is an exact readiness alias and `/ready` is deprecated. `/version`, retain, and recall use router authentication unless development-only anonymous access is explicitly enabled.
 
@@ -31,7 +31,7 @@ Facade contract: `openapi/openclaw.json`.
 - An empty upstream success body returns JSON `null` only when the route permits it. Otherwise validation returns a typed 502.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 
-Denied: webhooks, file upload/transfer, import/export, `/metrics`, provider-credential probes (`POST /v1/default/banks/{bank_id}/health/llm`), deprecated upstream routes, and cross-writer endpoints (`/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`). `GET /v1/default/banks` is denied in legacy token mode and filtered by grant in principal mode.
+Denied: webhooks, file upload/transfer, import/export, `/metrics`, provider-credential probes (`POST /v1/default/banks/{bank_id}/health/llm`), deprecated upstream routes, and cross-writer endpoints (`/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`). `GET /v1/default/banks` is denied in legacy token mode and filtered by the `bank.list` grant in principal mode.
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 

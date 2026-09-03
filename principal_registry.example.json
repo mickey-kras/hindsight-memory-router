@@ -4,32 +4,33 @@
       "keys": [
         {
           "id": "main-2026-09",
-          "sha256": "6397cf809cb6c3bc6c5136f09e551f7dc7023153a54232c93c41819d603bc509"
+          "sha256": "6397cf809cb6c3bc6c5136f09e551f7dc7023153a54232c93c41819d603bc509",
+          "created_at": "2026-09-01T00:00:00Z"
         },
         {
           "id": "main-2026-10",
-          "sha256": "c678b8f07863868e059b3ba069a266d7c75b6faa210c3606df2a9b86e442d7cb"
+          "sha256": "c678b8f07863868e059b3ba069a266d7c75b6faa210c3606df2a9b86e442d7cb",
+          "created_at": "2026-10-01T00:00:00Z"
         }
       ],
       "grants": [
         {
           "bank": "main",
           "scopes": [
-            "banks:list",
-            "banks:read",
-            "memories:retain",
-            "memories:recall",
-            "memories:read",
-            "reflect:run"
+            "bank.list",
+            "memory.recall",
+            "memory.retain",
+            "memory.reflect",
+            "bank.config.read"
           ]
         },
         {
           "bank": "dev",
-          "scopes": ["banks:list", "memories:recall", "memories:read"]
+          "scopes": ["bank.list", "memory.recall"]
         },
         {
           "bank": "creative",
-          "scopes": ["banks:list", "memories:recall", "memories:read"]
+          "scopes": ["bank.list", "memory.recall"]
         }
       ]
     },
@@ -37,24 +38,24 @@
       "keys": [
         {
           "id": "backend-2026-09",
-          "sha256": "6ade49edd70655e15efeaa7c1b69eae1fe3452448aed303f41c82e72ea245eca"
+          "sha256": "6ade49edd70655e15efeaa7c1b69eae1fe3452448aed303f41c82e72ea245eca",
+          "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
           "bank": "dev",
           "scopes": [
-            "banks:list",
-            "banks:read",
-            "memories:retain",
-            "memories:recall",
-            "memories:read",
-            "reflect:run"
+            "bank.list",
+            "memory.recall",
+            "memory.retain",
+            "memory.reflect",
+            "bank.config.read"
           ]
         },
         {
           "bank": "dev-best-practices",
-          "scopes": ["banks:list", "memories:recall", "memories:read"]
+          "scopes": ["bank.list", "memory.recall"]
         }
       ]
     },
@@ -62,25 +63,26 @@
       "keys": [
         {
           "id": "control-plane-2026-09",
-          "sha256": "91d8aded4d87dbc5fc1952a7dbf49b7f9fc8cbdc6a02231daf8012d7bec07177"
+          "sha256": "91d8aded4d87dbc5fc1952a7dbf49b7f9fc8cbdc6a02231daf8012d7bec07177",
+          "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
           "bank": "main",
-          "scopes": ["banks:list", "banks:read", "banks:manage", "operations:manage"]
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         },
         {
           "bank": "dev",
-          "scopes": ["banks:list", "banks:read", "banks:manage", "operations:manage"]
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         },
         {
           "bank": "creative",
-          "scopes": ["banks:list", "banks:read", "banks:manage", "operations:manage"]
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         },
         {
           "bank": "dev-best-practices",
-          "scopes": ["banks:list", "banks:read", "banks:manage", "operations:manage"]
+          "scopes": ["bank.list", "bank.config.read", "bank.config.write", "bank.admin"]
         }
       ]
     }

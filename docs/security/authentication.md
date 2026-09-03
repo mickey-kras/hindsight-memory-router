@@ -11,20 +11,31 @@ per-bank grants. Principal mode replaces the shared router token:
 startup when a registry is configured.
 
 Tokens have the format `mr_<key-id>_<256-bit-secret-hex>`. The registry stores
-SHA-256 digests of the secret only; verification hashes the presented secret
-and compares digests in constant time with an O(1) key-id lookup. A principal
-can hold several keys at once so rotation overlaps: add the new key, restart,
-move clients, remove the old key, restart.
+SHA-256 digests of the secret only, plus `created_at` and optional
+`expires_at` / `revoked_at` ISO 8601 timestamps per key. Verification hashes
+the presented secret and compares digests in constant time with an O(1) key-id
+lookup; unknown key ids still run the digest comparison against a dummy value.
+Expired and revoked keys are rejected and audited with the distinct reasons
+`expired-token` and `revoked-token` (alongside `invalid-token-format`,
+`unknown-key-id`, and `wrong-secret`). A principal can hold several keys at
+once so rotation overlaps: add the new key, restart, move clients, set
+`revoked_at` on the old key, remove it later.
 
-Grants pair a bank with scopes from a fixed vocabulary: `banks:list`,
-`banks:read`, `banks:manage`, `memories:retain`, `memories:recall`,
-`memories:read`, `memories:write`, `reflect:run`, `operations:manage`.
-Evaluation is default deny; `GET /v1/default/banks` returns only banks where
-the principal holds `banks:list`. The optional `x-memory-router-agent` header
-must name the authenticated principal when present; a mismatch is rejected.
+Grants pair a bank with scopes from a fixed vocabulary: `bank.list`,
+`memory.recall`, `memory.retain`, `memory.reflect`, `bank.config.read`,
+`bank.config.write`, `quarantine.review`, `quarantine.decide`, `bank.admin`.
+The authorizer supports all nine generically; `quarantine.review` and
+`quarantine.decide` are grantable but not wired to endpoints (quarantine
+administration keeps its separate admin tokens below). Evaluation is default
+deny; `GET /v1/default/banks` returns only banks where the principal holds
+`bank.list`. The optional `x-memory-router-agent` header must name the
+authenticated principal when present; a mismatch is rejected.
 
-Denials and failures are audited with principal and key-id fields. Raw tokens,
-digests, and authorization headers are never logged.
+Every grant check emits an `authorization_decision` audit event carrying
+`request_id`, `principal`, `token_key_id`, `bank`, `operation`, `decision`
+(`allow`/`deny`), `status`, `latency_ms`, and `source`; recall responses may
+add `partial`. Raw tokens, digests, and authorization headers are never
+logged.
 
 ## Legacy shared token
 

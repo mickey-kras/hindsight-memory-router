@@ -5,34 +5,39 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from .facade_routes import FacadeRoute
 
 # Authorization scope vocabulary. Every authenticated surface maps to exactly
 # one scope; grants are per (principal, bank) and evaluation is default deny.
-SCOPE_BANKS_LIST = "banks:list"
-SCOPE_BANKS_READ = "banks:read"
-SCOPE_BANKS_MANAGE = "banks:manage"
-SCOPE_MEMORIES_RETAIN = "memories:retain"
-SCOPE_MEMORIES_RECALL = "memories:recall"
-SCOPE_MEMORIES_READ = "memories:read"
-SCOPE_MEMORIES_WRITE = "memories:write"
-SCOPE_REFLECT_RUN = "reflect:run"
-SCOPE_OPERATIONS_MANAGE = "operations:manage"
+# The authorizer supports all nine scopes generically; quarantine scopes are
+# grantable but not wired to endpoints (quarantine administration keeps its
+# separate admin tokens).
+SCOPE_BANK_LIST = "bank.list"
+SCOPE_MEMORY_RECALL = "memory.recall"
+SCOPE_MEMORY_RETAIN = "memory.retain"
+SCOPE_MEMORY_REFLECT = "memory.reflect"
+SCOPE_BANK_CONFIG_READ = "bank.config.read"
+SCOPE_BANK_CONFIG_WRITE = "bank.config.write"
+SCOPE_QUARANTINE_REVIEW = "quarantine.review"
+SCOPE_QUARANTINE_DECIDE = "quarantine.decide"
+SCOPE_BANK_ADMIN = "bank.admin"
 SCOPE_VOCABULARY = frozenset(
     {
-        SCOPE_BANKS_LIST,
-        SCOPE_BANKS_READ,
-        SCOPE_BANKS_MANAGE,
-        SCOPE_MEMORIES_RETAIN,
-        SCOPE_MEMORIES_RECALL,
-        SCOPE_MEMORIES_READ,
-        SCOPE_MEMORIES_WRITE,
-        SCOPE_REFLECT_RUN,
-        SCOPE_OPERATIONS_MANAGE,
+        SCOPE_BANK_LIST,
+        SCOPE_MEMORY_RECALL,
+        SCOPE_MEMORY_RETAIN,
+        SCOPE_MEMORY_REFLECT,
+        SCOPE_BANK_CONFIG_READ,
+        SCOPE_BANK_CONFIG_WRITE,
+        SCOPE_QUARANTINE_REVIEW,
+        SCOPE_QUARANTINE_DECIDE,
+        SCOPE_BANK_ADMIN,
     }
 )
 
@@ -46,6 +51,10 @@ KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 SECRET_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _BEARER_PREFIX = "Bearer "
+
+# Compared against tokens with an unknown key ID so the verification path does
+# not short-circuit before the digest comparison.
+_DUMMY_DIGEST = hashlib.sha256(b"memory-router:unknown-key").digest()
 
 _BANK_LEVEL_READ_RESOURCES = frozenset(
     {
@@ -67,6 +76,32 @@ class PrincipalKey(BaseModel):
 
     id: str = Field(min_length=1)
     sha256: str
+    created_at: datetime
+    expires_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+    @field_validator("created_at", "expires_at", "revoked_at", mode="before")
+    @classmethod
+    def parse_timestamp(cls, value: object) -> object:
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError as exc:
+                raise ValueError("key timestamps must be ISO 8601") from exc
+        return value
+
+    @field_validator("created_at", "expires_at", "revoked_at")
+    @classmethod
+    def timezone_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("key timestamps must include a timezone")
+        return value
+
+    @model_validator(mode="after")
+    def expiry_after_creation(self) -> PrincipalKey:
+        if self.expires_at is not None and self.expires_at <= self.created_at:
+            raise ValueError("expires_at must be after created_at")
+        return self
 
 
 class PrincipalGrant(BaseModel):
@@ -94,6 +129,14 @@ class PrincipalSession:
     principal_id: str
     key_id: str
     grants: tuple[PrincipalGrant, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Authentication:
+    """Token verification outcome; distinct statuses feed audit and metrics."""
+
+    status: Literal["ok", "invalid-format", "unknown-key", "wrong-secret", "expired", "revoked"]
+    session: PrincipalSession | None = None
 
 
 def load_principal_registry(path: str) -> PrincipalRegistry:
@@ -156,31 +199,42 @@ class PrincipalResolver:
     """Authenticates mr_<key-id>_<secret> tokens and evaluates grants.
 
     The registry stores SHA-256 digests only; presented secrets are hashed and
-    compared in constant time. Key-id lookup is O(1); overlapping keys per
-    principal support rotation without downtime.
+    compared in constant time, including tokens with an unknown key ID (a dummy
+    digest keeps the comparison path identical). Key-id lookup is O(1);
+    overlapping keys per principal support rotation without downtime, and
+    expires_at/revoked_at retire keys without deleting their audit history.
     """
 
     def __init__(self, registry: PrincipalRegistry) -> None:
         self.registry = registry
-        self._index: dict[str, tuple[str, bytes]] = {
-            key.id: (principal_id, bytes.fromhex(key.sha256))
+        self._index: dict[str, tuple[str, PrincipalKey]] = {
+            key.id: (principal_id, key)
             for principal_id, principal in registry.principals.items()
             for key in principal.keys
         }
 
-    def authenticate(self, authorization: str | None) -> PrincipalSession | None:
+    def authenticate(
+        self, authorization: str | None, *, now: datetime | None = None
+    ) -> Authentication:
         parsed = _parse_token(_bearer_token(authorization) or "")
         if parsed is None:
-            return None
+            return Authentication("invalid-format")
         key_id, secret = parsed
         entry = self._index.get(key_id)
+        stored = bytes.fromhex(entry[1].sha256) if entry is not None else _DUMMY_DIGEST
+        matched = hmac.compare_digest(token_digest(secret), stored)
         if entry is None:
-            return None
-        principal_id, digest = entry
-        if not hmac.compare_digest(token_digest(secret), digest):
-            return None
+            return Authentication("unknown-key")
+        principal_id, key = entry
+        if not matched:
+            return Authentication("wrong-secret")
+        if key.revoked_at is not None:
+            return Authentication("revoked")
+        moment = now if now is not None else datetime.now(UTC)
+        if key.expires_at is not None and moment >= key.expires_at:
+            return Authentication("expired")
         principal = self.registry.principals[principal_id]
-        return PrincipalSession(principal_id, key_id, tuple(principal.grants))
+        return Authentication("ok", PrincipalSession(principal_id, key_id, tuple(principal.grants)))
 
     @staticmethod
     def authorize(session: PrincipalSession, scope: str, bank: str) -> bool:
@@ -188,21 +242,21 @@ class PrincipalResolver:
 
     @staticmethod
     def list_banks(session: PrincipalSession) -> list[str]:
-        return sorted({grant.bank for grant in session.grants if SCOPE_BANKS_LIST in grant.scopes})
+        return sorted({grant.bank for grant in session.grants if SCOPE_BANK_LIST in grant.scopes})
 
 
 def facade_scope(route: FacadeRoute) -> str:
     resource = route.resource
     if route.template == "reflect":
-        return SCOPE_REFLECT_RUN
+        return SCOPE_MEMORY_REFLECT
     if route.template == "memories/dry-run-extract":
-        return SCOPE_MEMORIES_RETAIN
+        return SCOPE_MEMORY_RETAIN
     if not resource or resource in _BANK_MANAGE_RESOURCES:
-        return SCOPE_BANKS_MANAGE
+        return SCOPE_BANK_ADMIN
     if resource == "config":
-        return SCOPE_BANKS_READ if route.read else SCOPE_BANKS_MANAGE
+        return SCOPE_BANK_CONFIG_READ if route.read else SCOPE_BANK_CONFIG_WRITE
     if resource in _BANK_LEVEL_READ_RESOURCES:
-        return SCOPE_BANKS_READ
+        return SCOPE_BANK_CONFIG_READ
     if resource == "operations" or resource.startswith("operations/"):
-        return SCOPE_BANKS_READ if route.read else SCOPE_OPERATIONS_MANAGE
-    return SCOPE_MEMORIES_READ if route.read else SCOPE_MEMORIES_WRITE
+        return SCOPE_BANK_CONFIG_READ if route.read else SCOPE_BANK_ADMIN
+    return SCOPE_MEMORY_RECALL if route.read else SCOPE_MEMORY_RETAIN

@@ -4,17 +4,18 @@
       "keys": [
         {
           "id": "alpha-1",
-          "sha256": "79175e70eb2236876b0c003be58294690c0e36b44c0947ae80f599ea9d039833"
+          "sha256": "79175e70eb2236876b0c003be58294690c0e36b44c0947ae80f599ea9d039833",
+          "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
           "bank": "shared",
-          "scopes": ["banks:list", "memories:retain", "memories:recall"]
+          "scopes": ["bank.list", "memory.retain", "memory.recall"]
         },
         {
           "bank": "alpha-only",
-          "scopes": ["banks:list"]
+          "scopes": ["bank.list"]
         }
       ]
     },
@@ -22,13 +23,14 @@
       "keys": [
         {
           "id": "reader-1",
-          "sha256": "c78724025f8be8e631f6c8f287f4a14ef480627808b7dd257f6735f05d475470"
+          "sha256": "c78724025f8be8e631f6c8f287f4a14ef480627808b7dd257f6735f05d475470",
+          "created_at": "2026-09-01T00:00:00Z"
         }
       ],
       "grants": [
         {
           "bank": "shared",
-          "scopes": ["memories:recall"]
+          "scopes": ["memory.recall"]
         }
       ]
     }

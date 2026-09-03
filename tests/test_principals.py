@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -24,10 +26,15 @@ from tests.request_helpers import request
 ALPHA_SECRET = "a" * 64
 READER_SECRET = "b" * 64
 OLD_ALPHA_SECRET = "c" * 64
+CREATED = "2026-09-01T00:00:00Z"
 
 
 def _digest(secret: str) -> str:
     return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def _key(key_id: str, secret: str, **lifecycle: str) -> dict[str, str]:
+    return {"id": key_id, "sha256": _digest(secret), "created_at": CREATED, **lifecycle}
 
 
 def _registry_value() -> dict[str, object]:
@@ -35,20 +42,20 @@ def _registry_value() -> dict[str, object]:
         "principals": {
             "agent-alpha": {
                 "keys": [
-                    {"id": "alpha-old", "sha256": _digest(OLD_ALPHA_SECRET)},
-                    {"id": "alpha-1", "sha256": _digest(ALPHA_SECRET)},
+                    _key("alpha-old", OLD_ALPHA_SECRET),
+                    _key("alpha-1", ALPHA_SECRET),
                 ],
                 "grants": [
                     {
                         "bank": "shared",
-                        "scopes": ["banks:list", "memories:retain", "memories:recall"],
+                        "scopes": ["bank.list", "memory.retain", "memory.recall"],
                     },
-                    {"bank": "alpha-only", "scopes": ["banks:list"]},
+                    {"bank": "alpha-only", "scopes": ["bank.list"]},
                 ],
             },
             "agent-reader": {
-                "keys": [{"id": "reader-1", "sha256": _digest(READER_SECRET)}],
-                "grants": [{"bank": "shared", "scopes": ["memories:recall", "memories:read"]}],
+                "keys": [_key("reader-1", READER_SECRET)],
+                "grants": [{"bank": "shared", "scopes": ["memory.recall"]}],
             },
         }
     }
@@ -76,6 +83,9 @@ def principal_runtime_state(tmp_path: Path) -> None:
     app_module.runtime.max_body_bytes = 1024 * 1024
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.principal_concurrency = {}
+    app_module.runtime.principal_concurrency_max = 8
     app_module.runtime.policy = SimpleNamespace(
         registry=SimpleNamespace(writers={}),
         limits=SimpleNamespace(
@@ -94,17 +104,39 @@ def _payload(response: object) -> object:
     return json.loads(response.body)  # type: ignore[attr-defined]
 
 
+def test_scope_vocabulary_matches_specification() -> None:
+    assert (
+        frozenset(
+            {
+                "bank.list",
+                "memory.recall",
+                "memory.retain",
+                "memory.reflect",
+                "bank.config.read",
+                "bank.config.write",
+                "quarantine.review",
+                "quarantine.decide",
+                "bank.admin",
+            }
+        )
+        == SCOPE_VOCABULARY
+    )
+
+
 def test_example_registry_loads_and_authenticates() -> None:
     resolver = PrincipalResolver(load_principal_registry("principal_registry.example.json"))
-    session = resolver.authenticate(
+    result = resolver.authenticate(
         "Bearer mr_main-2026-09_9a4f2c71e83b4d05a6c98f12b3e47d05c1a8f3e69b204d7a91c5e8f0a3b6d924"
     )
+    assert result.status == "ok"
+    session = result.session
     assert session is not None
     assert session.principal_id == "main"
     assert resolver.list_banks(session) == ["creative", "dev", "main"]
-    assert resolver.authorize(session, "memories:retain", "main")
-    assert not resolver.authorize(session, "memories:retain", "dev")
-    assert not resolver.authorize(session, "banks:manage", "main")
+    assert resolver.authorize(session, "memory.retain", "main")
+    assert not resolver.authorize(session, "memory.retain", "dev")
+    assert not resolver.authorize(session, "bank.admin", "main")
+    assert resolver.authorize(session, "bank.config.read", "main")
 
 
 @pytest.mark.parametrize(
@@ -114,18 +146,63 @@ def test_example_registry_loads_and_authenticates() -> None:
         {"principals": {"bad id": {"keys": [], "grants": []}}},
         {"principals": {"..": {"keys": [], "grants": []}}},
         {"principals": {"a": {"keys": [{"id": "k", "sha256": "z" * 64}], "grants": []}}},
-        {"principals": {"a": {"keys": [{"id": "k", "sha256": "A" * 64}], "grants": []}}},
-        {"principals": {"a": {"keys": [{"id": "k?bad", "sha256": "a" * 64}], "grants": []}}},
         {
             "principals": {
-                "a": {"keys": [{"id": "k", "sha256": "a" * 64}], "grants": []},
-                "b": {"keys": [{"id": "k", "sha256": "b" * 64}], "grants": []},
+                "a": {
+                    "keys": [{"id": "k", "sha256": "A" * 64, "created_at": CREATED}],
+                    "grants": [],
+                }
             }
         },
         {
             "principals": {
                 "a": {
-                    "keys": [{"id": "k", "sha256": "a" * 64}],
+                    "keys": [{"id": "k?bad", "sha256": "a" * 64, "created_at": CREATED}],
+                    "grants": [],
+                }
+            }
+        },
+        {
+            "principals": {
+                "a": {
+                    "keys": [{"id": "k", "sha256": "a" * 64, "created_at": "not-a-date"}],
+                    "grants": [],
+                }
+            }
+        },
+        {
+            "principals": {
+                "a": {
+                    "keys": [{"id": "k", "sha256": "a" * 64, "created_at": "2026-09-01T00:00:00"}],
+                    "grants": [],
+                }
+            }
+        },
+        {
+            "principals": {
+                "a": {
+                    "keys": [
+                        {
+                            "id": "k",
+                            "sha256": "a" * 64,
+                            "created_at": CREATED,
+                            "expires_at": CREATED,
+                        }
+                    ],
+                    "grants": [],
+                }
+            }
+        },
+        {
+            "principals": {
+                "a": {"keys": [_key("k", "a" * 64)], "grants": []},
+                "b": {"keys": [_key("k", "b" * 64)], "grants": []},
+            }
+        },
+        {
+            "principals": {
+                "a": {
+                    "keys": [_key("k", "a" * 64)],
                     "grants": [{"bank": "x", "scopes": ["memories:fly"]}],
                 }
             }
@@ -133,7 +210,7 @@ def test_example_registry_loads_and_authenticates() -> None:
         {
             "principals": {
                 "a": {
-                    "keys": [{"id": "k", "sha256": "a" * 64}],
+                    "keys": [_key("k", "a" * 64)],
                     "grants": [{"bank": "x", "scopes": []}],
                 }
             }
@@ -141,8 +218,8 @@ def test_example_registry_loads_and_authenticates() -> None:
         {
             "principals": {
                 "a": {
-                    "keys": [{"id": "k", "sha256": "a" * 64}],
-                    "grants": [{"bank": "bad bank", "scopes": ["banks:list"]}],
+                    "keys": [_key("k", "a" * 64)],
+                    "grants": [{"bank": "bad bank", "scopes": ["bank.list"]}],
                 }
             }
         },
@@ -179,43 +256,77 @@ def test_registry_rejects_unreadable_and_malformed_files(tmp_path: Path) -> None
     ],
 )
 def test_malformed_tokens_never_authenticate(tmp_path: Path, header: str | None) -> None:
-    assert _resolver(tmp_path).authenticate(header) is None
+    assert _resolver(tmp_path).authenticate(header).status == "invalid-format"
+    assert _resolver(tmp_path).authenticate(header).session is None
 
 
 def test_authentication_rotation_lookup_and_denials(tmp_path: Path) -> None:
     resolver = _resolver(tmp_path)
     current = resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET))
     rotated = resolver.authenticate(_bearer("alpha-old", OLD_ALPHA_SECRET))
-    assert current is not None and rotated is not None
-    assert current.principal_id == rotated.principal_id == "agent-alpha"
-    assert {current.key_id, rotated.key_id} == {"alpha-1", "alpha-old"}
-    assert resolver.authenticate(_bearer("alpha-1", "0" * 64)) is None
-    assert resolver.authenticate(_bearer("unknown-key", ALPHA_SECRET)) is None
+    assert current.status == rotated.status == "ok"
+    assert current.session is not None and rotated.session is not None
+    assert current.session.principal_id == rotated.session.principal_id == "agent-alpha"
+    assert {current.session.key_id, rotated.session.key_id} == {"alpha-1", "alpha-old"}
+    assert resolver.authenticate(_bearer("alpha-1", "0" * 64)).status == "wrong-secret"
+    assert resolver.authenticate(_bearer("unknown-key", ALPHA_SECRET)).status == "unknown-key"
+
+
+def test_expired_and_revoked_keys_are_rejected_with_distinct_statuses(tmp_path: Path) -> None:
+    value = _registry_value()
+    alpha = value["principals"]["agent-alpha"]  # type: ignore[index]
+    alpha["keys"][0]["revoked_at"] = "2026-01-15T00:00:00Z"
+    alpha["keys"][1]["created_at"] = "2026-01-01T00:00:00Z"
+    alpha["keys"][1]["expires_at"] = "2026-02-01T00:00:00Z"
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    assert resolver.authenticate(_bearer("alpha-old", OLD_ALPHA_SECRET)).status == "revoked"
+    assert resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET)).status == "expired"
+    before_expiry = datetime(2026, 1, 15, tzinfo=UTC)
+    assert resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET), now=before_expiry).status == "ok"
+
+
+def test_unknown_key_id_still_runs_the_digest_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compared: list[bytes] = []
+    real_compare = hmac.compare_digest
+
+    def recording_compare(a: bytes, b: bytes) -> bool:
+        compared.append(b)
+        return real_compare(a, b)
+
+    monkeypatch.setattr("memory_router.principals.hmac.compare_digest", recording_compare)
+    resolver = _resolver(tmp_path)
+    assert resolver.authenticate(_bearer("missing-key", ALPHA_SECRET)).status == "unknown-key"
+    assert compared == [hashlib.sha256(b"memory-router:unknown-key").digest()]
 
 
 def test_authorize_is_default_deny(tmp_path: Path) -> None:
     resolver = _resolver(tmp_path)
-    session = resolver.authenticate(_bearer("reader-1", READER_SECRET))
+    result = resolver.authenticate(_bearer("reader-1", READER_SECRET))
+    session = result.session
     assert session is not None
-    assert resolver.authorize(session, "memories:recall", "shared")
-    assert not resolver.authorize(session, "memories:retain", "shared")
-    assert not resolver.authorize(session, "memories:recall", "alpha-only")
+    assert resolver.authorize(session, "memory.recall", "shared")
+    assert not resolver.authorize(session, "memory.retain", "shared")
+    assert not resolver.authorize(session, "memory.recall", "alpha-only")
     assert resolver.list_banks(session) == []
 
 
 def test_facade_scope_covers_every_route_within_vocabulary() -> None:
     mapped = {facade_scope(route) for route in FACADE_ROUTES}
-    assert mapped == SCOPE_VOCABULARY - {"banks:list", "memories:recall"}
+    assert mapped == SCOPE_VOCABULARY - {"bank.list", "quarantine.review", "quarantine.decide"}
     by_template = {(route.method, route.template): facade_scope(route) for route in FACADE_ROUTES}
-    assert by_template[("POST", "reflect")] == "reflect:run"
-    assert by_template[("POST", "memories/dry-run-extract")] == "memories:retain"
-    assert by_template[("PUT", "")] == "banks:manage"
-    assert by_template[("GET", "config")] == "banks:read"
-    assert by_template[("PATCH", "config")] == "banks:manage"
-    assert by_template[("GET", "operations")] == "banks:read"
-    assert by_template[("POST", "operations/{operation_id}/retry")] == "operations:manage"
-    assert by_template[("GET", "memories/list")] == "memories:read"
-    assert by_template[("PATCH", "documents/{document_id}")] == "memories:write"
+    assert by_template[("POST", "reflect")] == "memory.reflect"
+    assert by_template[("POST", "memories/dry-run-extract")] == "memory.retain"
+    assert by_template[("PUT", "")] == "bank.admin"
+    assert by_template[("GET", "config")] == "bank.config.read"
+    assert by_template[("PATCH", "config")] == "bank.config.write"
+    assert by_template[("GET", "operations")] == "bank.config.read"
+    assert by_template[("POST", "operations/{operation_id}/retry")] == "bank.admin"
+    assert by_template[("GET", "memories/list")] == "memory.recall"
+    assert by_template[("PATCH", "documents/{document_id}")] == "memory.retain"
+    assert by_template[("GET", "stats")] == "bank.config.read"
+    assert by_template[("POST", "consolidate")] == "bank.admin"
 
 
 def test_principal_mode_rejects_legacy_token_and_anonymous_at_startup() -> None:
@@ -244,6 +355,47 @@ async def test_unauthenticated_requests_fail_closed_and_are_audited() -> None:
     )
     assert response.status_code == 401
     app_module.runtime.auditor.persist.assert_awaited_once()
+    assert app_module.runtime.auditor.log_failure.call_args.kwargs["reason"] == "unknown-key-id"
+
+
+@pytest.mark.asyncio
+async def test_expired_token_is_rejected_and_audited(tmp_path: Path) -> None:
+    value = _registry_value()
+    alpha_keys = value["principals"]["agent-alpha"]["keys"]  # type: ignore[index]
+    alpha_keys[1]["created_at"] = "2026-01-01T00:00:00Z"
+    alpha_keys[1]["expires_at"] = "2026-02-01T00:00:00Z"
+    app_module.runtime.principal_resolver = PrincipalResolver(
+        load_principal_registry(_write_registry(tmp_path, value))
+    )
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "GET",
+            "/v1/default/banks",
+            headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+        ),
+    )
+    assert response.status_code == 401
+    assert app_module.runtime.auditor.log_failure.call_args.kwargs["reason"] == "expired-token"
+
+
+@pytest.mark.asyncio
+async def test_revoked_token_is_rejected_and_audited(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["principals"]["agent-alpha"]["keys"][0]["revoked_at"] = "2026-01-15T00:00:00Z"  # type: ignore[index]
+    app_module.runtime.principal_resolver = PrincipalResolver(
+        load_principal_registry(_write_registry(tmp_path, value))
+    )
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "GET",
+            "/v1/default/banks",
+            headers={"authorization": _bearer("alpha-old", OLD_ALPHA_SECRET)},
+        ),
+    )
+    assert response.status_code == 401
+    assert app_module.runtime.auditor.log_failure.call_args.kwargs["reason"] == "revoked-token"
 
 
 @pytest.mark.asyncio
@@ -298,8 +450,46 @@ async def test_ungranted_bank_or_scope_is_denied_before_policy(
         assert denial.value.status == 403
         assert denial.value.code == "authorization_denied"
     app_module.runtime.policy.retain_bank.assert_not_awaited()
-    denials = [record for record in caplog.records if "authorization_denied" in str(record.msg)]
-    assert denials
+    denials = [
+        record
+        for record in caplog.records
+        if record.msg == "authorization_decision" and getattr(record, "decision", None) == "deny"
+    ]
+    assert len(denials) == 2
+    assert {record.bank for record in denials} == {"alpha-only", "shared"}
+
+
+@pytest.mark.asyncio
+async def test_allowed_decisions_are_audited_with_spec_fields(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    with caplog.at_level(logging.INFO):
+        response = await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories/recall",
+                headers={"authorization": _bearer("reader-1", READER_SECRET)},
+                body={"query": "hello"},
+            ),
+        )
+    assert response.status_code == 200
+    allows = [
+        record
+        for record in caplog.records
+        if record.msg == "authorization_decision" and getattr(record, "decision", None) == "allow"
+    ]
+    assert allows
+    record = allows[0]
+    assert record.principal == "agent-reader"
+    assert record.token_key_id == "reader-1"  # noqa: S105 - field name, not a secret
+    assert record.bank == "shared"
+    assert record.operation == "memory.recall"
+    assert record.status == 200
+    assert record.source == "http"
+    assert isinstance(record.latency_ms, (int, float))
 
 
 @pytest.mark.asyncio
@@ -340,6 +530,9 @@ async def test_claimed_agent_header_must_match_principal() -> None:
         )
     assert mismatch.value.status == 403
     assert mismatch.value.code == "agent_claim_mismatch"
+    assert app_module.runtime.auditor.log_failure.call_args.kwargs["reason"] == (
+        "agent-claim-mismatch"
+    )
     matched = await app_module.dispatch(
         "x",
         request(
@@ -352,6 +545,43 @@ async def test_claimed_agent_header_must_match_principal() -> None:
         ),
     )
     assert matched.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_principal_rate_limit_returns_429() -> None:
+    app_module.runtime.principal_limiter = SimpleNamespace(
+        consume_many=AsyncMock(side_effect=HttpError(429, "rate_limited", "limited"))
+    )
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "GET",
+                "/v1/default/banks",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            ),
+        )
+    assert throttled.value.status == 429
+    assert throttled.value.code == "principal_rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_principal_concurrency_limit_returns_429() -> None:
+    app_module.runtime.principal_concurrency_max = 1
+    app_module.runtime.principal_concurrency = {"agent-alpha": 1}
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+                body={"items": [{"content": "x"}]},
+            ),
+        )
+    assert throttled.value.status == 429
+    assert throttled.value.code == "principal_concurrency_limited"
+    app_module.runtime.policy.retain_bank.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -395,9 +625,9 @@ async def test_facade_write_scope_is_enforced() -> None:
             "x",
             request(
                 "PATCH",
-                "/v1/default/banks/shared/documents/doc-1",
+                "/v1/default/banks/shared/config",
                 headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
-                body={"name": "x"},
+                body={"retain_mission": "x"},
             ),
         )
     assert denial.value.status == 403
@@ -447,22 +677,38 @@ def test_audit_fields_are_sanitized_and_never_carry_secrets() -> None:
     fields = sanitize_fields(
         {
             "principal": "agent-alpha",
-            "key_id": "alpha-1",
-            "scope": "memories:recall",
-            "reason": "scope-not-granted",
-            "event": "authorization_denied",
+            "token_key_id": "reader-1",
+            "bank": "shared",
+            "scope": "memory.recall",
+            "decision": "allow",
+            "status": 200,
+            "latency_ms": 0.25,
+            "source": "http",
+            "partial": False,
+            "event": "authorization_decision",
         }
     )
     assert fields["principal"] == "agent-alpha"
-    assert fields["key_id"] == "alpha-1"
-    assert fields["scope"] == "memories:recall"
+    assert fields["token_key_id"] == "reader-1"  # noqa: S105 - field name, not a secret
+    assert fields["bank"] == "shared"
+    assert fields["scope"] == "memory.recall"
+    assert fields["decision"] == "allow"
+    assert fields["status"] == 200
+    assert fields["latency_ms"] == 0.25
+    assert fields["source"] == "http"
+    assert fields["partial"] is False
     dropped = sanitize_fields(
         {
             "principal": "bad principal",
-            "key_id": "not a key",
+            "token_key_id": "not a key",
+            "bank": "bad bank",
             "scope": "memories:fly",
+            "decision": "maybe",
+            "partial": "yes",
         }
     )
-    assert "key_id" not in dropped and "scope" not in dropped
+    assert "scope" not in dropped and "decision" not in dropped and "partial" not in dropped
     assert dropped["principal"].startswith("principal:")
+    assert dropped["bank"].startswith("bank:")
+    assert dropped["token_key_id"].startswith("token_key_id:")
     assert ALPHA_SECRET not in json.dumps(fields)

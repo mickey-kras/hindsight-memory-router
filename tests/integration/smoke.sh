@@ -340,7 +340,7 @@ if [[ "$mode" == "fake" ]]; then
   banks_response="$(curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks")"
   printf '%s' "$banks_response" | python3 -c 'import json,sys; assert json.load(sys.stdin)["banks"] == ["alpha-only", "shared"]' || fail_check "principal bank listing was not filtered to granted banks"
   reader_list_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" "${principals_url}/v1/default/banks")"
-  [[ "$reader_list_status" == "403" ]] || fail_check "principal without banks:list could list banks: ${reader_list_status}"
+  [[ "$reader_list_status" == "403" ]] || fail_check "principal without bank.list could list banks: ${reader_list_status}"
   principal_retain="$(curl --max-time 5 -fsS -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories" -d '{"items":[{"content":"principal smoke retain","context":"integration smoke","document_id":"ci-principal"}],"async":true}')"
   printf '%s' "$principal_retain" | grep -Eq 'success|ok' || fail_check "granted principal retain failed: ${principal_retain}"
   cross_bank_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/physical-main/memories" -d '{"items":[{"content":"cross-bank retain"}]}')"

@@ -45,7 +45,7 @@ class AuthFailureAuditor:
     def __init__(self, store: Any) -> None:
         self.store = store
 
-    def log_failure(self, route_class: str | None = None) -> None:
+    def log_failure(self, route_class: str | None = None, *, reason: str | None = None) -> None:
         log_event(
             logger,
             "warning",
@@ -56,6 +56,7 @@ class AuthFailureAuditor:
             http_status=401,
             outcome="failed",
             route_class=route_class or "unmatched",
+            reason=reason,
         )
 
     async def persist(self, route_group: str, route_class: str | None = None) -> None:

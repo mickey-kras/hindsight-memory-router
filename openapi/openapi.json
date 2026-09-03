@@ -500,7 +500,7 @@
       "get": {
         "operationId": "listBanks",
         "summary": "List banks visible to the authenticated principal",
-        "description": "Principal mode only (MEMORY_ROUTER_PRINCIPALS). Returns the granted bank IDs holding the banks:list scope. In legacy token mode this endpoint is denied.",
+        "description": "Principal mode only (MEMORY_ROUTER_PRINCIPALS). Returns the granted bank IDs holding the bank.list scope. In legacy token mode this endpoint is denied.",
         "tags": [
           "Memory"
         ],
@@ -1711,7 +1711,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Granted bank IDs, sorted. Only banks where the principal holds the banks:list scope are included."
+            "description": "Granted bank IDs, sorted. Only banks where the principal holds the bank.list scope are included."
           }
         },
         "additionalProperties": false

@@ -47,9 +47,11 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
-from .principal_gate import authenticate_principal, log_authorization_denied, require_grant
+from .principal_gate import authenticate_principal, log_authorization_decision, require_grant
 from .principals import (
-    SCOPE_BANKS_LIST,
+    SCOPE_BANK_LIST,
+    SCOPE_MEMORY_RECALL,
+    SCOPE_MEMORY_RETAIN,
     PrincipalResolver,
     PrincipalSession,
     facade_scope,
@@ -202,6 +204,8 @@ class Runtime:
         self.quarantine_limiter: Any = None
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
+        self.principal_limiter: Any = InMemoryRateLimiter()
+        self.principal_concurrency: dict[str, int] = {}
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
         self.principal_resolver: PrincipalResolver | None = None
@@ -236,6 +240,9 @@ class Runtime:
         self.admin_window = settings.memory_router_admin_rate_limit_window_ms
         self.auth_failure_max = settings.memory_router_auth_failure_rate_limit_max
         self.auth_failure_window = settings.memory_router_auth_failure_rate_limit_window_ms
+        self.principal_rate_max = settings.memory_router_principal_rate_limit_max
+        self.principal_rate_window = settings.memory_router_principal_rate_limit_window_ms
+        self.principal_concurrency_max = settings.memory_router_principal_concurrency_max
 
     async def start(self) -> None:
         settings = self.settings or load_settings()
@@ -499,6 +506,75 @@ async def _auth_failure_rate(route_group: str) -> None:
         ) from exc
 
 
+async def _principal_rate(principal: str, route_class: str) -> None:
+    try:
+        await runtime.principal_limiter.consume_many(
+            [(f"principal:{principal}", runtime.principal_rate_max, runtime.principal_rate_window)]
+        )
+    except HttpError as exc:
+        if exc.status != 429:
+            raise
+        retry_after = max(1, (runtime.principal_rate_window + 999) // 1000)
+        log_event(
+            logger,
+            "warning",
+            "principal_throttled",
+            request_id=current_request_id(),
+            operation="authorize",
+            error_kind="rate-limit",
+            http_status=429,
+            outcome="degraded",
+            route_class=route_class,
+            principal=principal,
+        )
+        raise rate_limit_error(
+            code="principal_rate_limited",
+            message="too many requests for principal",
+            headers={"retry-after": str(retry_after)},
+        ) from exc
+
+
+def _principal_concurrency_acquire(principal: str, route_class: str) -> None:
+    active = runtime.principal_concurrency.get(principal, 0)
+    if active >= runtime.principal_concurrency_max:
+        log_event(
+            logger,
+            "warning",
+            "principal_throttled",
+            request_id=current_request_id(),
+            operation="authorize",
+            error_kind="rate-limit",
+            http_status=429,
+            outcome="degraded",
+            route_class=route_class,
+            principal=principal,
+        )
+        raise rate_limit_error(
+            code="principal_concurrency_limited",
+            message="too many concurrent requests for principal",
+            headers={"retry-after": "1"},
+        )
+    runtime.principal_concurrency[principal] = active + 1
+
+
+def _principal_concurrency_release(principal: str) -> None:
+    active = runtime.principal_concurrency.get(principal, 0) - 1
+    if active > 0:
+        runtime.principal_concurrency[principal] = active
+    else:
+        runtime.principal_concurrency.pop(principal, None)
+
+
+async def _with_principal_concurrency(
+    request: Request, principal: str, operation: Awaitable[Any]
+) -> Any:
+    _principal_concurrency_acquire(principal, _route_class(request))
+    try:
+        return await operation
+    finally:
+        _principal_concurrency_release(principal)
+
+
 async def _router_auth(request: Request) -> bool:
     if router_authorized(
         request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
@@ -730,6 +806,7 @@ async def dispatch(path: str, request: Request) -> Response:
             return JSONResponse(
                 {"error": "unauthorized", "message": "authentication required"}, status_code=401
             )
+        await _principal_rate(principal.principal_id, route_class)
     elif not await _router_auth(request):
         return JSONResponse(
             {"error": "unauthorized", "message": "authentication required"}, status_code=401
@@ -738,23 +815,25 @@ async def dispatch(path: str, request: Request) -> Response:
 
     if principal is not None and method == "GET" and pathname == "/v1/default/banks":
         resolver = _require_runtime(runtime.principal_resolver, "principal resolver")
-        if not any(SCOPE_BANKS_LIST in grant.scopes for grant in principal.grants):
-            log_authorization_denied(
-                route_class=route_class,
-                session=principal,
-                scope=SCOPE_BANKS_LIST,
-                reason="scope-not-granted",
-            )
+        banks = resolver.list_banks(principal)
+        log_authorization_decision(
+            route_class=route_class,
+            session=principal,
+            bank="-",
+            scope=SCOPE_BANK_LIST,
+            allowed=bool(banks),
+            latency_ms=0.0,
+        )
+        if not banks:
             raise HttpError(403, "authorization_denied", "principal lacks the required grant")
-        return JSONResponse({"banks": resolver.list_banks(principal)})
+        return JSONResponse({"banks": banks})
 
     match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
     if method == "POST" and match:
         writer_id, action = _decode_path_segment(match.group(1)), match.group(2)
         if principal is not None:
-            scope = "memories:recall" if action == "recall" else "memories:retain"
+            scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
             require_grant(
-                resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
                 session=principal,
                 scope=scope,
                 bank=writer_id,
@@ -764,11 +843,21 @@ async def dispatch(path: str, request: Request) -> Response:
                 body = parse_recall_body(await _json_body(request))
                 policy.limits.assert_recall_bounds(body)
                 return JSONResponse(
-                    await policy.recall_bank(principal.principal_id, writer_id, body)
+                    await _with_principal_concurrency(
+                        request,
+                        principal.principal_id,
+                        policy.recall_bank(principal.principal_id, writer_id, body),
+                    )
                 )
             body = parse_retain_body(await _json_body(request))
             policy.limits.assert_retain_bounds(body)
-            return JSONResponse(await policy.retain_bank(principal.principal_id, writer_id, body))
+            return JSONResponse(
+                await _with_principal_concurrency(
+                    request,
+                    principal.principal_id,
+                    policy.retain_bank(principal.principal_id, writer_id, body),
+                )
+            )
         if action == "recall":
             body = parse_recall_body(await _json_body(request))
             policy.limits.assert_recall_bounds(body)
@@ -797,7 +886,6 @@ async def dispatch(path: str, request: Request) -> Response:
         writer_id = route_match.group("bank")
         if principal is not None:
             require_grant(
-                resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
                 session=principal,
                 scope=facade_scope(route),
                 bank=writer_id,
@@ -823,15 +911,18 @@ async def dispatch(path: str, request: Request) -> Response:
                 facade_body = raw_body
         if route.template == "reflect" and facade_body is not None:
             facade_body = parse_reflect_body(facade_body)
+        forward = facade.forward(
+            route=route,
+            writer_id=principal.principal_id if principal is not None else writer_id,
+            params=route_params,
+            body=facade_body,
+            query=list(request.query_params.multi_items()) or None,
+            bank_override=writer_id if principal is not None else None,
+        )
+        if principal is not None:
+            forward = _with_principal_concurrency(request, principal.principal_id, forward)
         return JSONResponse(
-            await facade.forward(
-                route=route,
-                writer_id=principal.principal_id if principal is not None else writer_id,
-                params=route_params,
-                body=facade_body,
-                query=list(request.query_params.multi_items()) or None,
-                bank_override=writer_id if principal is not None else None,
-            ),
+            await forward,
             status_code=route.success_status,
         )
 

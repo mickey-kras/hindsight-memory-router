@@ -111,6 +111,15 @@ class RouterSettings(BaseSettings):
     )
     memory_router_registry: str | None = Field(None, validation_alias="MEMORY_ROUTER_REGISTRY")
     memory_router_principals: str | None = Field(None, validation_alias="MEMORY_ROUTER_PRINCIPALS")
+    memory_router_principal_rate_limit_max: PositiveInt = Field(
+        240, validation_alias="MEMORY_ROUTER_PRINCIPAL_RATE_LIMIT_MAX"
+    )
+    memory_router_principal_rate_limit_window_ms: PositiveInt = Field(
+        60_000, validation_alias="MEMORY_ROUTER_PRINCIPAL_RATE_LIMIT_WINDOW_MS"
+    )
+    memory_router_principal_concurrency_max: PositiveInt = Field(
+        8, validation_alias="MEMORY_ROUTER_PRINCIPAL_CONCURRENCY_MAX"
+    )
     memory_router_deployment_mode: Literal["single", "cluster"] = Field(
         "single", validation_alias="MEMORY_ROUTER_DEPLOYMENT_MODE"
     )
