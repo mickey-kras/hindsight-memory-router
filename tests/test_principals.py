@@ -85,6 +85,7 @@ def principal_runtime_state(tmp_path: Path) -> None:
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.principal_concurrency_limiter = None
     app_module.runtime.principal_concurrency = {}
     app_module.runtime.hindsight = SimpleNamespace(
         list_banks=AsyncMock(
@@ -639,6 +640,50 @@ async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
     assert throttled.value.status == 429
     assert throttled.value.code == "principal_concurrency_limited"
     app_module.runtime.policy.retain_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distributed_principal_concurrency_limit_returns_429() -> None:
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
+        run=AsyncMock(side_effect=HttpError(429, "rate_limited", "limited"))
+    )
+
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+                body={"items": [{"content": "x"}]},
+            ),
+        )
+
+    assert throttled.value.code == "principal_concurrency_limited"
+    app_module.runtime.policy.retain_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distributed_principal_concurrency_wraps_operation() -> None:
+    async def run(bucket: str, maximum: int, operation: object) -> object:
+        assert bucket == "agent-alpha:retain"
+        assert maximum == 2
+        return await operation()  # type: ignore[operator]
+
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(run=run)
+
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "POST",
+            "/v1/default/banks/shared/memories",
+            headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            body={"items": [{"content": "x"}]},
+        ),
+    )
+
+    assert response.status_code == 200
+    app_module.runtime.policy.retain_bank.assert_awaited_once()
 
 
 @pytest.mark.asyncio

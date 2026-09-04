@@ -17,6 +17,7 @@ from typing import Any
 PAGE_SIZE = 500
 ISSUE_MARKER_PREFIX = "sonar-finding"
 AGGREGATE_METRICS = ("coverage", "duplicated")
+HOTSPOT_METRICS = ("security_hotspots",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +25,12 @@ class TrackedFinding:
     key: str
     title: str
     body: str
+
+
+@dataclass(frozen=True, slots=True)
+class PagedFindings:
+    values: list[dict[str, Any]]
+    forbidden: bool = False
 
 
 class SonarClient:
@@ -140,17 +147,18 @@ def optional_paged(
     path: str,
     collection: str,
     **params: str | int | bool,
-) -> list[dict[str, Any]]:
+) -> PagedFindings:
     try:
-        return client.paged(path, collection, **params)
+        return PagedFindings(client.paged(path, collection, **params))
     except urllib.error.HTTPError as exc:
         if exc.code != 403:
             raise
         print(
-            f"SonarQube denied {path}; using quality-gate conditions.",
+            f"SonarQube denied {path} with HTTP {exc.code} ({exc.reason or 'Forbidden'}); "
+            "using quality-gate conditions.",
             file=sys.stderr,
         )
-        return []
+        return PagedFindings([], forbidden=True)
 
 
 def _required_env(name: str) -> str:
@@ -283,6 +291,9 @@ def tracked_findings(
     issues: list[dict[str, Any]],
     hotspots: list[dict[str, Any]],
     project_key: str,
+    *,
+    issues_forbidden: bool = False,
+    hotspots_forbidden: bool = False,
 ) -> list[TrackedFinding]:
     findings = [issue_finding(issue, project_key) for issue in issues]
     findings.extend(hotspot_finding(hotspot, project_key) for hotspot in hotspots)
@@ -295,14 +306,13 @@ def tracked_findings(
         for condition in conditions
         if isinstance(condition, dict) and condition.get("status") != "OK"
     ]
-    if not findings:
-        findings.extend(condition_finding(condition, project_key) for condition in failed)
-    else:
-        findings.extend(
-            condition_finding(condition, project_key)
-            for condition in failed
-            if any(token in str(condition.get("metricKey", "")) for token in AGGREGATE_METRICS)
-        )
+    for condition in failed:
+        metric = str(condition.get("metricKey", ""))
+        aggregate = any(token in metric for token in AGGREGATE_METRICS)
+        hotspot = any(token in metric for token in HOTSPOT_METRICS)
+        inaccessible = hotspots_forbidden if hotspot else issues_forbidden
+        if not findings or aggregate or inaccessible:
+            findings.append(condition_finding(condition, project_key))
     return findings
 
 
@@ -332,7 +342,14 @@ def main() -> int:
         status="TO_REVIEW",
         sinceLeakPeriod=True,
     )
-    findings = tracked_findings(gate, issues, hotspots, project_key)
+    findings = tracked_findings(
+        gate,
+        issues.values,
+        hotspots.values,
+        project_key,
+        issues_forbidden=issues.forbidden,
+        hotspots_forbidden=hotspots.forbidden,
+    )
     if not findings:
         raise RuntimeError("quality gate failed but SonarQube returned no actionable findings")
     tracker = GitHubTracker(_required_env("GITHUB_REPOSITORY_OWNER"))

@@ -128,7 +128,9 @@ def test_optional_paged_falls_back_only_for_forbidden(sync_module: ModuleType) -
         def paged(*_: object, **__: object) -> list[dict[str, object]]:
             raise urllib.error.HTTPError("https://sonar.example", 403, "", {}, None)
 
-    assert sync_module.optional_paged(Client(), "/api/issues/search", "issues") == []
+    result = sync_module.optional_paged(Client(), "/api/issues/search", "issues")
+    assert result.values == []
+    assert result.forbidden is True
 
 
 def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> None:
@@ -139,6 +141,62 @@ def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> 
 
     with pytest.raises(urllib.error.HTTPError):
         sync_module.optional_paged(Client(), "/api/issues/search", "issues")
+
+
+@pytest.mark.parametrize(
+    ("issues_forbidden", "hotspots_forbidden", "expected"),
+    [
+        (False, True, ["issue-issue-1", "condition-new_security_hotspots_reviewed"]),
+        (True, False, ["hotspot-hotspot-1", "condition-new_reliability_rating"]),
+    ],
+)
+def test_partial_api_denial_preserves_failed_category(
+    sync_module: ModuleType,
+    issues_forbidden: bool,
+    hotspots_forbidden: bool,
+    expected: list[str],
+) -> None:
+    gate = {
+        "projectStatus": {
+            "conditions": [
+                {"status": "ERROR", "metricKey": "new_security_hotspots_reviewed"},
+                {"status": "ERROR", "metricKey": "new_reliability_rating"},
+            ]
+        }
+    }
+    issues = (
+        [
+            {
+                "key": "issue-1",
+                "component": "router:memory_router/app.py",
+                "message": "Fix reliability issue",
+            }
+        ]
+        if not issues_forbidden
+        else []
+    )
+    hotspots = (
+        [
+            {
+                "key": "hotspot-1",
+                "component": "router:memory_router/app.py",
+                "message": "Review security hotspot",
+            }
+        ]
+        if not hotspots_forbidden
+        else []
+    )
+
+    findings = sync_module.tracked_findings(
+        gate,
+        issues,
+        hotspots,
+        "router",
+        issues_forbidden=issues_forbidden,
+        hotspots_forbidden=hotspots_forbidden,
+    )
+
+    assert [finding.key for finding in findings] == expected
 
 
 def test_existing_closed_finding_is_reopened_not_duplicated(sync_module: ModuleType) -> None:

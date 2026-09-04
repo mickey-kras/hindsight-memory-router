@@ -64,7 +64,7 @@ from .probes import _ReadinessLogState as _ReadinessLogState
 from .probes import _storage_readiness_log_state as _storage_readiness_log_state
 from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
-from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
+from .rate_limit import InMemoryRateLimiter, PostgresConcurrencyLimiter, PostgresRateLimiter
 from .repository import QuarantineRepository
 from .request_dispatch import (
     EMPTY_BODY,
@@ -210,6 +210,7 @@ class Runtime:
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.principal_limiter: Any = InMemoryRateLimiter()
+        self.principal_concurrency_limiter: PostgresConcurrencyLimiter | None = None
         self.principal_concurrency: dict[tuple[str, str], int] = {}
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
@@ -265,8 +266,15 @@ class Runtime:
             await self.rate_limit_database.initialize()
             self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
+            self.principal_limiter = self.quarantine_limiter
+            self.principal_concurrency_limiter = PostgresConcurrencyLimiter(
+                self.rate_limit_database
+            )
+            await self.principal_concurrency_limiter.initialize()
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
+            self.principal_limiter = InMemoryRateLimiter()
+            self.principal_concurrency_limiter = None
         self.auth_limiter = InMemoryRateLimiter()
         limits = QuarantineLimits(
             max_item_bytes=settings.quarantine_max_item_bytes,
@@ -593,6 +601,35 @@ async def _with_principal_concurrency(
     scope: str,
     operation: Callable[[], Awaitable[Any]],
 ) -> Any:
+    distributed = runtime.principal_concurrency_limiter
+    if distributed is not None:
+        operation_name = scope_limit_operation(scope)
+        bucket = f"{session.principal_id}:{operation_name}"
+        try:
+            return await distributed.run(
+                bucket, session.limits[operation_name].concurrency_max, operation
+            )
+        except HttpError as exc:
+            if exc.status != 429:
+                raise
+            log_event(
+                logger,
+                "warning",
+                "principal_throttled",
+                request_id=current_request_id(),
+                operation="authorize",
+                error_kind="rate-limit",
+                http_status=429,
+                outcome="degraded",
+                route_class=_route_class(request),
+                principal=session.principal_id,
+                scope=scope,
+            )
+            raise rate_limit_error(
+                code="principal_concurrency_limited",
+                message="too many concurrent requests for principal",
+                headers={"retry-after": "1"},
+            ) from exc
     key = _principal_concurrency_acquire(session, scope, _route_class(request))
     try:
         return await operation()

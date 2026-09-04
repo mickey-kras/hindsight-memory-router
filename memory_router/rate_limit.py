@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
@@ -336,3 +337,93 @@ class PostgresRateLimiter:
             result = await operation(session)
         self._commit_session(session)
         return result
+
+
+class PostgresConcurrencyLimiter:
+    def __init__(self, database: Any, *, lease_ms: int = 30_000) -> None:
+        self.database = database
+        self.lease_ms = lease_ms
+
+    async def initialize(self) -> None:
+        async with self.database.transaction() as tx:
+            await tx.execute(
+                "CREATE TABLE IF NOT EXISTS principal_concurrency_leases "
+                "(bucket TEXT NOT NULL, lease_id TEXT NOT NULL, expires_at_ms BIGINT NOT NULL, "
+                "PRIMARY KEY(bucket, lease_id))"
+            )
+            await tx.execute(
+                "CREATE INDEX IF NOT EXISTS idx_principal_concurrency_leases_expiry "
+                "ON principal_concurrency_leases(expires_at_ms)"
+            )
+
+    async def run(self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
+        lease_id = str(uuid.uuid4())
+        await self._acquire(bucket, lease_id, maximum)
+        operation_task: asyncio.Future[T] = asyncio.ensure_future(operation())
+        heartbeat = asyncio.create_task(self._heartbeat(bucket, lease_id))
+        try:
+            tasks: set[asyncio.Future[Any]] = {operation_task, heartbeat}
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            if heartbeat in done:
+                await heartbeat
+                raise RuntimeError("principal concurrency heartbeat stopped unexpectedly")
+            return await operation_task
+        finally:
+            operation_task.cancel()
+            heartbeat.cancel()
+            await asyncio.gather(operation_task, heartbeat, return_exceptions=True)
+            await asyncio.shield(self._release(bucket, lease_id))
+
+    async def _acquire(self, bucket: str, lease_id: str, maximum: int) -> None:
+        async with self.database.transaction() as tx:
+            await tx.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                (f"principal-concurrency:{bucket}",),
+            )
+            now = await self._database_now_ms(tx)
+            await tx.execute(
+                "DELETE FROM principal_concurrency_leases WHERE bucket=? AND expires_at_ms<=?",
+                (bucket, now),
+            )
+            row = (
+                await tx.fetchone(
+                    "SELECT COUNT(*) count FROM principal_concurrency_leases WHERE bucket=?",
+                    (bucket,),
+                )
+                or {}
+            )
+            if int(row.get("count") or 0) >= maximum:
+                raise rate_limited()
+            await tx.execute(
+                "INSERT INTO principal_concurrency_leases(bucket,lease_id,expires_at_ms) "
+                "VALUES(?,?,?)",
+                (bucket, lease_id, now + self.lease_ms),
+            )
+
+    async def _heartbeat(self, bucket: str, lease_id: str) -> None:
+        while True:
+            await asyncio.sleep(self.lease_ms / 3000)
+            async with self.database.transaction() as tx:
+                now = await self._database_now_ms(tx)
+                await tx.execute(
+                    "UPDATE principal_concurrency_leases SET expires_at_ms=? "
+                    "WHERE bucket=? AND lease_id=?",
+                    (now + self.lease_ms, bucket, lease_id),
+                )
+
+    async def _release(self, bucket: str, lease_id: str) -> None:
+        async with self.database.transaction() as tx:
+            await tx.execute(
+                "DELETE FROM principal_concurrency_leases WHERE bucket=? AND lease_id=?",
+                (bucket, lease_id),
+            )
+
+    @staticmethod
+    async def _database_now_ms(tx: Any) -> int:
+        row = (
+            await tx.fetchone(
+                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
+            )
+            or {}
+        )
+        return int(row["now_ms"])
