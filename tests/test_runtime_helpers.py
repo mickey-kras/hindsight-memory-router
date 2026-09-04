@@ -383,7 +383,7 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     create_database.assert_awaited_once_with("postgresql://db")
     validate_storage.assert_awaited_once_with(primary_db, "postgresql://db")
     recover_interrupted.assert_awaited_once()
-    assert postgres_database_calls == [("postgresql://db", 2)]
+    assert postgres_database_calls == [("postgresql://db", 5)]
     rate_db.initialize.assert_awaited_once()
     rate_limiter.initialize.assert_awaited_once()
     concurrency_limiter.initialize.assert_awaited_once()

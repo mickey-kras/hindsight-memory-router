@@ -33,6 +33,7 @@ router_port="8890"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && router_port="8891"
 principals_port="8892"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && principals_port="8893"
+principals_peer_port="8894"
 router_url="http://127.0.0.1:${router_port}"
 router_token="test-router-token"
 admin_read_token="test-admin-read-token"
@@ -355,6 +356,13 @@ if [[ "$mode" == "fake" ]]; then
   [[ "$legacy_status" == "401" ]] || fail_check "legacy router token authenticated in principal mode: ${legacy_status}"
   wrong_secret_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer mr_alpha-1_0000000000000000000000000000000000000000000000000000000000000000" "${principals_url}/v1/default/banks")"
   [[ "$wrong_secret_status" == "401" ]] || fail_check "wrong principal secret authenticated: ${wrong_secret_status}"
+  if [[ "$router_db" == "postgres" ]]; then
+    peer_principals_url="http://127.0.0.1:${principals_peer_port}"
+    peer_banks_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${peer_principals_url}/v1/default/banks")"
+    [[ "$peer_banks_status" == "200" ]] || fail_check "peer principal request failed: ${peer_banks_status}"
+    shared_limit_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${principals_url}/v1/default/banks")"
+    [[ "$shared_limit_status" == "429" ]] || fail_check "principal rate limit was not shared across replicas: ${shared_limit_status}"
+  fi
   pass_check
 fi
 

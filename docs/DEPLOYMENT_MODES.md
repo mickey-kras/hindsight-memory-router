@@ -19,7 +19,7 @@ QUARANTINE_DATABASE_URL=postgresql://...
 
 Required:
 
-- PostgreSQL quarantine database; Hindsight and quarantine rate limits are shared across replicas.
+- PostgreSQL quarantine database; Hindsight, quarantine, and principal limits are shared across replicas.
 - Shared admin limiter before all replicas.
 
 Minimum shared admin limits:

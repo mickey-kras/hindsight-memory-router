@@ -382,11 +382,13 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
     ]
     assert len(item_guards) == 1
     item_calls = [
-        node
-        for node in ast.walk(item_guards[0])
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_admin_item_response"
+        node.value
+        for statement in item_guards[0].body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_admin_item_response"
     ]
     assert len(item_calls) == 1
     assert [ast.unparse(argument) for argument in item_calls[0].args] == [
@@ -394,6 +396,22 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         "admin",
         "method",
         "match",
+    ]
+
+    dispatch = functions["dispatch"]
+    admin_dispatch_calls = [
+        node.value
+        for node in ast.walk(dispatch)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_dispatch_admin"
+    ]
+    assert len(admin_dispatch_calls) == 1
+    assert [ast.unparse(argument) for argument in admin_dispatch_calls[0].args] == [
+        "request",
+        "pathname",
+        "method",
     ]
 
 

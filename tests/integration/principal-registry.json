@@ -1,4 +1,11 @@
 {
+  "defaults": {
+    "limits": {
+      "config": {
+        "rate_limit_max": 2
+      }
+    }
+  },
   "principals": {
     "agent-alpha": {
       "keys": [

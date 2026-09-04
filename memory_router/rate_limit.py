@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from collections import defaultdict, deque
@@ -8,11 +9,17 @@ from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
 from .errors import HttpError
+from .logging import log_event
 
 T = TypeVar("T")
 Bucket = tuple[str, int, int]
 Distinct = tuple[str, str, int, int]
 _SWEEP_EVERY = 128
+logger = logging.getLogger(__name__)
+
+
+class ConcurrencyLeaseLost(RuntimeError):
+    pass
 
 
 def rate_limited() -> HttpError:
@@ -281,6 +288,10 @@ class PostgresRateLimiter:
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
             await tx.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ("rate-limit-schema",),
+            )
+            await tx.execute(
                 "CREATE TABLE IF NOT EXISTS quarantine_rate_limit_events "
                 "(bucket TEXT NOT NULL, occurred_at_ms BIGINT NOT NULL)"
             )
@@ -340,39 +351,69 @@ class PostgresRateLimiter:
 
 
 class PostgresConcurrencyLimiter:
-    def __init__(self, database: Any, *, lease_ms: int = 30_000) -> None:
+    def __init__(
+        self,
+        database: Any,
+        *,
+        lease_ms: int = 30_000,
+        cleanup_timeout_seconds: float = 2.0,
+    ) -> None:
+        if lease_ms < 3_000:
+            raise ValueError("lease_ms must be at least 3000")
         self.database = database
         self.lease_ms = lease_ms
+        self.cleanup_timeout_seconds = cleanup_timeout_seconds
 
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
+            await tx.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ("rate-limit-schema",),
+            )
             await tx.execute(
                 "CREATE TABLE IF NOT EXISTS principal_concurrency_leases "
                 "(bucket TEXT NOT NULL, lease_id TEXT NOT NULL, expires_at_ms BIGINT NOT NULL, "
                 "PRIMARY KEY(bucket, lease_id))"
             )
             await tx.execute(
-                "CREATE INDEX IF NOT EXISTS idx_principal_concurrency_leases_expiry "
-                "ON principal_concurrency_leases(expires_at_ms)"
+                "CREATE INDEX IF NOT EXISTS idx_principal_concurrency_leases_bucket_expiry "
+                "ON principal_concurrency_leases(bucket, expires_at_ms)"
             )
 
     async def run(self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
         lease_id = str(uuid.uuid4())
         await self._acquire(bucket, lease_id, maximum)
-        operation_task: asyncio.Future[T] = asyncio.ensure_future(operation())
-        heartbeat = asyncio.create_task(self._heartbeat(bucket, lease_id))
+        operation_task: asyncio.Future[T] | None = None
+        heartbeat: asyncio.Task[None] | None = None
         try:
+            operation_task = asyncio.ensure_future(operation())
+            heartbeat = asyncio.create_task(self._heartbeat(bucket, lease_id))
             tasks: set[asyncio.Future[Any]] = {operation_task, heartbeat}
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            if heartbeat in done:
-                await heartbeat
-                raise RuntimeError("principal concurrency heartbeat stopped unexpectedly")
-            return await operation_task
+            if operation_task in done:
+                return await operation_task
+            await heartbeat
+            raise AssertionError("unreachable")
         finally:
-            operation_task.cancel()
-            heartbeat.cancel()
-            await asyncio.gather(operation_task, heartbeat, return_exceptions=True)
-            await asyncio.shield(self._release(bucket, lease_id))
+            tasks_to_stop = [task for task in (operation_task, heartbeat) if task is not None]
+            for task in tasks_to_stop:
+                task.cancel()
+            await asyncio.gather(*tasks_to_stop, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._release(bucket, lease_id)),
+                    timeout=self.cleanup_timeout_seconds,
+                )
+            except Exception as exc:
+                log_event(
+                    logger,
+                    "error",
+                    "principal_concurrency_release_failed",
+                    operation="release-concurrency-lease",
+                    error_kind="dependency",
+                    error=exc,
+                    outcome="degraded",
+                )
 
     async def _acquire(self, bucket: str, lease_id: str, maximum: int) -> None:
         async with self.database.transaction() as tx:
@@ -393,7 +434,12 @@ class PostgresConcurrencyLimiter:
                 or {}
             )
             if int(row.get("count") or 0) >= maximum:
-                raise rate_limited()
+                raise HttpError(
+                    429,
+                    "principal_concurrency_limited",
+                    "too many concurrent requests for principal",
+                    headers={"retry-after": str(max(1, (self.lease_ms + 999) // 1000))},
+                )
             await tx.execute(
                 "INSERT INTO principal_concurrency_leases(bucket,lease_id,expires_at_ms) "
                 "VALUES(?,?,?)",
@@ -401,15 +447,38 @@ class PostgresConcurrencyLimiter:
             )
 
     async def _heartbeat(self, bucket: str, lease_id: str) -> None:
+        interval = self.lease_ms / 3000
+        deadline = time.monotonic() + self.lease_ms / 1000
+        next_delay = interval
         while True:
-            await asyncio.sleep(self.lease_ms / 3000)
-            async with self.database.transaction() as tx:
-                now = await self._database_now_ms(tx)
-                await tx.execute(
-                    "UPDATE principal_concurrency_leases SET expires_at_ms=? "
-                    "WHERE bucket=? AND lease_id=?",
-                    (now + self.lease_ms, bucket, lease_id),
-                )
+            await asyncio.sleep(next_delay)
+            try:
+                await self._refresh(bucket, lease_id)
+            except ConcurrencyLeaseLost:
+                raise
+            except Exception:
+                remaining = deadline - time.monotonic()
+                if remaining <= interval:
+                    raise
+                next_delay = min(1.0, remaining - interval)
+                continue
+            deadline = time.monotonic() + self.lease_ms / 1000
+            next_delay = interval
+
+    async def _refresh(self, bucket: str, lease_id: str) -> None:
+        async with self.database.transaction() as tx:
+            await tx.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                (f"principal-concurrency:{bucket}",),
+            )
+            now = await self._database_now_ms(tx)
+            row = await tx.fetchone(
+                "UPDATE principal_concurrency_leases SET expires_at_ms=? "
+                "WHERE bucket=? AND lease_id=? AND expires_at_ms>? RETURNING lease_id",
+                (now + self.lease_ms, bucket, lease_id, now),
+            )
+            if row is None:
+                raise ConcurrencyLeaseLost("principal concurrency lease was lost")
 
     async def _release(self, bucket: str, lease_id: str) -> None:
         async with self.database.transaction() as tx:

@@ -262,7 +262,7 @@ class Runtime:
         await validate_storage(self.database, database_url)
         await recover_interrupted(self.repository, _now(), self.review_stale_seconds)
         if is_postgres(database_url):
-            self.rate_limit_database = PostgresDatabase(database_url, max_size=2)
+            self.rate_limit_database = PostgresDatabase(database_url, max_size=5)
             await self.rate_limit_database.initialize()
             self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
@@ -610,7 +610,7 @@ async def _with_principal_concurrency(
                 bucket, session.limits[operation_name].concurrency_max, operation
             )
         except HttpError as exc:
-            if exc.status != 429:
+            if exc.code != "principal_concurrency_limited":
                 raise
             log_event(
                 logger,
@@ -628,7 +628,7 @@ async def _with_principal_concurrency(
             raise rate_limit_error(
                 code="principal_concurrency_limited",
                 message="too many concurrent requests for principal",
-                headers={"retry-after": "1"},
+                headers=exc.headers,
             ) from exc
     key = _principal_concurrency_acquire(session, scope, _route_class(request))
     try:

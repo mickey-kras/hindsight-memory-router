@@ -4,9 +4,11 @@ import hashlib
 import hmac
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -112,6 +114,8 @@ def principal_runtime_state(tmp_path: Path) -> None:
     )
     yield
     app_module.runtime.principal_resolver = None
+    app_module.runtime.principal_concurrency_limiter = None
+    app_module.runtime.principal_concurrency = {}
 
 
 def _payload(response: object) -> object:
@@ -645,7 +649,14 @@ async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_distributed_principal_concurrency_limit_returns_429() -> None:
     app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
-        run=AsyncMock(side_effect=HttpError(429, "rate_limited", "limited"))
+        run=AsyncMock(
+            side_effect=HttpError(
+                429,
+                "principal_concurrency_limited",
+                "too many concurrent requests for principal",
+                {"retry-after": "30"},
+            )
+        )
     )
 
     with pytest.raises(HttpError) as throttled:
@@ -660,15 +671,40 @@ async def test_distributed_principal_concurrency_limit_returns_429() -> None:
         )
 
     assert throttled.value.code == "principal_concurrency_limited"
+    assert throttled.value.headers == {"retry-after": "30"}
     app_module.runtime.policy.retain_bank.assert_not_awaited()
 
 
 @pytest.mark.asyncio
+async def test_distributed_concurrency_preserves_operation_429() -> None:
+    upstream = HttpError(429, "hindsight_rate_limited", "too many recalls", {"retry-after": "9"})
+    app_module.runtime.policy.recall_bank.side_effect = upstream
+
+    async def run(_: str, __: int, operation: Callable[[], Awaitable[Any]]) -> object:
+        return await operation()
+
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(run=run)
+
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories/recall",
+                headers={"authorization": _bearer("reader-1", READER_SECRET)},
+                body={"query": "x"},
+            ),
+        )
+
+    assert throttled.value is upstream
+
+
+@pytest.mark.asyncio
 async def test_distributed_principal_concurrency_wraps_operation() -> None:
-    async def run(bucket: str, maximum: int, operation: object) -> object:
+    async def run(bucket: str, maximum: int, operation: Callable[[], Awaitable[Any]]) -> object:
         assert bucket == "agent-alpha:retain"
         assert maximum == 2
-        return await operation()  # type: ignore[operator]
+        return await operation()
 
     app_module.runtime.principal_concurrency_limiter = SimpleNamespace(run=run)
 

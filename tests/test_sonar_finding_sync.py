@@ -122,6 +122,26 @@ def test_failed_condition_is_fallback_when_no_findings_are_returned(
     assert findings[0].key == "condition-new_reliability_rating"
 
 
+def test_all_failed_conditions_are_fallback_when_no_findings_are_returned(
+    sync_module: ModuleType,
+) -> None:
+    gate = {
+        "projectStatus": {
+            "conditions": [
+                {"status": "ERROR", "metricKey": "new_reliability_rating"},
+                {"status": "ERROR", "metricKey": "new_security_rating"},
+            ]
+        }
+    }
+
+    findings = sync_module.tracked_findings(gate, [], [], "router")
+
+    assert [finding.key for finding in findings] == [
+        "condition-new_reliability_rating",
+        "condition-new_security_rating",
+    ]
+
+
 def test_optional_paged_falls_back_only_for_forbidden(sync_module: ModuleType) -> None:
     class Client:
         @staticmethod
@@ -143,11 +163,37 @@ def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> 
         sync_module.optional_paged(Client(), "/api/issues/search", "issues")
 
 
+def test_optional_paged_preserves_pages_before_forbidden(
+    sync_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = sync_module.SonarClient("https://sonar.example", "token")
+    calls = 0
+
+    def get(*_: object, **__: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"issues": [{"key": "issue-1"}], "paging": {"total": 501}}
+        raise urllib.error.HTTPError("https://sonar.example", 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(client, "get", get)
+
+    result = sync_module.optional_paged(client, "/api/issues/search", "issues")
+
+    assert result.values == [{"key": "issue-1"}]
+    assert result.forbidden is True
+
+
 @pytest.mark.parametrize(
     ("issues_forbidden", "hotspots_forbidden", "expected"),
     [
         (False, True, ["issue-issue-1", "condition-new_security_hotspots_reviewed"]),
         (True, False, ["hotspot-hotspot-1", "condition-new_reliability_rating"]),
+        (
+            True,
+            True,
+            ["condition-new_security_hotspots_reviewed", "condition-new_reliability_rating"],
+        ),
     ],
 )
 def test_partial_api_denial_preserves_failed_category(

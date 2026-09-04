@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from memory_router.errors import HttpError
 from memory_router.rate_limit import (
+    ConcurrencyLeaseLost,
     PostgresConcurrencyLimiter,
     PostgresRateLimiter,
     _PostgresSession,
@@ -40,6 +42,7 @@ class FakePostgresTx:
         self.executed.append((sql, params))
 
     async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
+        self.executed.append((sql, params))
         if "clock_timestamp" in sql:
             return {"now_ms": 100}
         if "SELECT max_window_ms" in sql:
@@ -108,6 +111,9 @@ async def test_postgres_concurrency_limiter_acquires_and_releases() -> None:
     assert any(
         "DELETE FROM principal_concurrency_leases WHERE bucket=? AND lease_id=?" in s for s in sql
     )
+    assert sql.index(
+        "DELETE FROM principal_concurrency_leases WHERE bucket=? AND expires_at_ms<=?"
+    ) < next(index for index, value in enumerate(sql) if "COUNT(*)" in value)
 
 
 @pytest.mark.asyncio
@@ -120,7 +126,75 @@ async def test_postgres_concurrency_limiter_rejects_full_bucket() -> None:
                 return {"count": 1}
             return None
 
-    with pytest.raises(HttpError):
-        await PostgresConcurrencyLimiter(FakeDatabase(FullTx())).run(
-            "agent:retain", 1, lambda: _result("never")
-        )
+    operation = AsyncMock(return_value="never")
+    with pytest.raises(HttpError) as throttled:
+        await PostgresConcurrencyLimiter(FakeDatabase(FullTx())).run("agent:retain", 1, operation)
+    assert throttled.value.code == "principal_concurrency_limited"
+    assert throttled.value.headers == {"retry-after": "30"}
+    operation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrency_refresh_requires_live_owned_lease() -> None:
+    class RefreshTx(FakePostgresTx):
+        async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
+            self.executed.append((sql, params))
+            if "clock_timestamp" in sql:
+                return {"now_ms": 100}
+            if "UPDATE principal_concurrency_leases" in sql:
+                return {"lease_id": 1}
+            return None
+
+    tx = RefreshTx()
+    limiter = PostgresConcurrencyLimiter(FakeDatabase(tx))
+    await limiter._refresh("agent:retain", "lease-1")
+
+    assert any(
+        "expires_at_ms>? RETURNING lease_id" in sql
+        and params == (30_100, "agent:retain", "lease-1", 100)
+        for sql, params in tx.executed
+    )
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrency_refresh_rejects_lost_lease() -> None:
+    class LostTx(FakePostgresTx):
+        async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
+            if "clock_timestamp" in sql:
+                return {"now_ms": 100}
+            return None
+
+    with pytest.raises(ConcurrencyLeaseLost):
+        await PostgresConcurrencyLimiter(FakeDatabase(LostTx()))._refresh("agent:retain", "lease-1")
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrency_heartbeat_retries_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limiter = PostgresConcurrencyLimiter(SimpleNamespace())
+    refresh = AsyncMock(side_effect=[OSError("temporary"), None, ConcurrencyLeaseLost("lost")])
+    monkeypatch.setattr(limiter, "_refresh", refresh)
+    monkeypatch.setattr("memory_router.rate_limit.asyncio.sleep", AsyncMock())
+
+    with pytest.raises(ConcurrencyLeaseLost):
+        await limiter._heartbeat("agent:retain", "lease-1")
+
+    assert refresh.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrency_release_failure_does_not_mask_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    limiter = PostgresConcurrencyLimiter(FakeDatabase(FakePostgresTx()))
+    release = AsyncMock(side_effect=OSError("database down"))
+    monkeypatch.setattr(limiter, "_release", release)
+
+    assert await limiter.run("agent:retain", 2, lambda: _result("ok")) == "ok"
+    release.assert_awaited_once()
+
+
+def test_postgres_concurrency_rejects_unsafe_lease_duration() -> None:
+    with pytest.raises(ValueError, match="at least 3000"):
+        PostgresConcurrencyLimiter(SimpleNamespace(), lease_ms=0)

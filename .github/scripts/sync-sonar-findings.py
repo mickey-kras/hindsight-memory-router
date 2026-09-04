@@ -33,6 +33,13 @@ class PagedFindings:
     forbidden: bool = False
 
 
+class PartialPageError(Exception):
+    def __init__(self, cause: urllib.error.HTTPError, values: list[dict[str, Any]]) -> None:
+        super().__init__(str(cause))
+        self.cause = cause
+        self.values = values
+
+
 class SonarClient:
     def __init__(self, base_url: str, token: str) -> None:
         self.base_url = base_url.rstrip("/")
@@ -61,7 +68,10 @@ class SonarClient:
         results: list[dict[str, Any]] = []
         page = 1
         while True:
-            payload = self.get(path, p=page, ps=PAGE_SIZE, **params)
+            try:
+                payload = self.get(path, p=page, ps=PAGE_SIZE, **params)
+            except urllib.error.HTTPError as exc:
+                raise PartialPageError(exc, results) from exc
             values = payload.get(collection, [])
             if not isinstance(values, list):
                 raise RuntimeError(f"SonarQube returned invalid {collection} for {path}")
@@ -150,15 +160,19 @@ def optional_paged(
 ) -> PagedFindings:
     try:
         return PagedFindings(client.paged(path, collection, **params))
-    except urllib.error.HTTPError as exc:
+    except (PartialPageError, urllib.error.HTTPError) as error:
+        partial_values = error.values if isinstance(error, PartialPageError) else []
+        exc = error.cause if isinstance(error, PartialPageError) else error
         if exc.code != 403:
+            if isinstance(error, PartialPageError):
+                raise exc from None
             raise
         print(
             f"SonarQube denied {path} with HTTP {exc.code} ({exc.reason or 'Forbidden'}); "
             "using quality-gate conditions.",
             file=sys.stderr,
         )
-        return PagedFindings([], forbidden=True)
+        return PagedFindings(partial_values, forbidden=True)
 
 
 def _required_env(name: str) -> str:
@@ -306,12 +320,13 @@ def tracked_findings(
         for condition in conditions
         if isinstance(condition, dict) and condition.get("status") != "OK"
     ]
+    had_findings = bool(findings)
     for condition in failed:
         metric = str(condition.get("metricKey", ""))
         aggregate = any(token in metric for token in AGGREGATE_METRICS)
         hotspot = any(token in metric for token in HOTSPOT_METRICS)
         inaccessible = hotspots_forbidden if hotspot else issues_forbidden
-        if not findings or aggregate or inaccessible:
+        if not had_findings or aggregate or inaccessible:
             findings.append(condition_finding(condition, project_key))
     return findings
 
