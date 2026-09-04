@@ -19,6 +19,8 @@ With `MEMORY_ROUTER_PRINCIPALS` set, `{writer}` path segments are target banks
 and each request is authorized against the principal's per-bank grants (see
 [authentication](../security/authentication.md)); `GET /v1/default/banks`
 returns only banks where the principal holds the `bank.list` scope.
+PostgreSQL-backed principal limit failures return `503 principal_rate_unavailable`
+or `503 principal_concurrency_unavailable` with `Retry-After: 1`.
 
 Health and `/version` are unauthenticated. `/health/live` is liveness. `/health/ready` is readiness; `/health` is its alias. `/ready` is deprecated. Other router endpoints require authentication unless development-only anonymous access is enabled.
 

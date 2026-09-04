@@ -545,6 +545,9 @@
           },
           "429": {
             "$ref": "#/components/responses/MemoryRateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/PrincipalLimitUnavailable"
           }
         }
       }
@@ -610,6 +613,9 @@
           "429": {
             "$ref": "#/components/responses/MemoryRateLimited"
           },
+          "503": {
+            "$ref": "#/components/responses/PrincipalLimitUnavailable"
+          },
           "507": {
             "$ref": "#/components/responses/QuarantineCapacityExceeded"
           },
@@ -672,6 +678,9 @@
           },
           "429": {
             "$ref": "#/components/responses/MemoryRateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/PrincipalLimitUnavailable"
           },
           "507": {
             "$ref": "#/components/responses/QuarantineCapacityExceeded"
@@ -844,10 +853,29 @@
         }
       },
       "MemoryRateLimited": {
-        "description": "Hindsight request quota or quarantine rate limit exceeded. Hindsight quota responses include Retry-After.",
+        "description": "Hindsight, quarantine, or principal request/concurrency limit exceeded. Principal and Hindsight quota responses include Retry-After.",
         "headers": {
           "Retry-After": {
             "description": "Seconds before retrying a Hindsight-quota-limited request.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "PrincipalLimitUnavailable": {
+        "description": "PostgreSQL-backed principal rate or concurrency control is temporarily unavailable.",
+        "headers": {
+          "Retry-After": {
+            "description": "Seconds before retrying the principal request.",
             "schema": {
               "type": "integer",
               "minimum": 1

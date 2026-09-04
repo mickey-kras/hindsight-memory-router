@@ -7,7 +7,7 @@ MEMORY_ROUTER_DEPLOYMENT_MODE=single
 MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=false
 ```
 
-Use one router process. SQLite or PostgreSQL is supported. SQLite keeps Hindsight and quarantine rate limits process-local.
+Use one router process. SQLite or PostgreSQL is supported. SQLite keeps Hindsight, quarantine, and principal limits process-local. PostgreSQL enables shared limit state and becomes a runtime dependency even in single mode.
 
 ## Cluster
 
@@ -21,6 +21,8 @@ Required:
 
 - PostgreSQL quarantine database; Hindsight, quarantine, and principal limits are shared across replicas.
 - Shared admin limiter before all replicas.
+
+Authentication-failure throttling remains process-local and scales with replica count.
 
 Minimum shared admin limits:
 

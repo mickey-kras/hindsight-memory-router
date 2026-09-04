@@ -561,6 +561,27 @@ async def _principal_rate(session: PrincipalSession, scope: str, route_class: st
             message="too many requests for principal",
             headers={"retry-after": str(retry_after)},
         ) from exc
+    except Exception as exc:
+        log_event(
+            logger,
+            "error",
+            "principal_rate_unavailable",
+            request_id=current_request_id(),
+            operation="consume-principal-rate",
+            error_kind="storage",
+            error=exc,
+            http_status=503,
+            outcome="degraded",
+            route_class=route_class,
+            principal=session.principal_id,
+            scope=scope,
+        )
+        raise HttpError(
+            503,
+            "principal_rate_unavailable",
+            "principal rate control is temporarily unavailable",
+            headers={"retry-after": "1"},
+        ) from exc
 
 
 def _principal_concurrency_acquire(

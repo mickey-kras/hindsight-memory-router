@@ -314,6 +314,12 @@ jobs:
                 if (!ci.includes('Gitleaks')) fail('ci.yml: Gitleaks step must stay present');
                 if (!ci.includes('Semgrep')) fail('ci.yml: Semgrep step must stay present');
                 if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
+                if (!ci.includes('pip-audit -r requirements.txt')) {
+                  fail('ci.yml: Python dependency audit must stay present');
+                }
+                if (!ci.includes('npm audit "$@" --audit-level=moderate')) {
+                  fail('ci.yml: Node dependency audit must stay present');
+                }
                 if (!/^  container:\s*$/m.test(ci)) {
                   fail('ci.yml: required container PR job must stay present');
                 }

@@ -19,8 +19,8 @@ Unknown fields and invalid numbers are dropped. Invalid enums use their safe fal
 ## Events
 
 - info: `application_started`, `hindsight_readiness_recovered`, `storage_readiness_recovered`
-- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `facade_scan_failed`, `hindsight_readiness_failed`, `hindsight_request_failed`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `storage_readiness_failed`
-- error: `application_start_failed`, `application_stop_failed`, `authentication_audit_failed`, `logging_contract_violation`, `openclaw_security_audit_failed`, `quarantine_sweeper_failed`, `recall_supplemental_audit_unavailable`, `request_failed`
+- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `facade_scan_failed`, `hindsight_readiness_failed`, `hindsight_request_failed`, `principal_throttled`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `storage_readiness_failed`
+- error: `application_start_failed`, `application_stop_failed`, `authentication_audit_failed`, `logging_contract_violation`, `openclaw_security_audit_failed`, `principal_concurrency_release_failed`, `principal_concurrency_unavailable`, `principal_rate_unavailable`, `quarantine_sweeper_failed`, `recall_supplemental_audit_unavailable`, `request_failed`
 - Uvicorn: `runtime_message` with a bounded `reason`; original text is dropped
 
 ## Safety

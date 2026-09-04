@@ -623,6 +623,37 @@ async def test_principal_rate_limit_returns_429() -> None:
 
 
 @pytest.mark.asyncio
+async def test_principal_rate_storage_failure_returns_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_module.runtime.principal_limiter = SimpleNamespace(
+        consume_many=AsyncMock(side_effect=OSError("database unavailable"))
+    )
+
+    with pytest.raises(HttpError) as unavailable:
+        await app_module.dispatch(
+            "x",
+            request(
+                "GET",
+                "/v1/default/banks",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            ),
+        )
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "principal_rate_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
+    app_module.runtime.hindsight.list_banks.assert_not_awaited()
+    record = next(record for record in caplog.records if record.msg == "principal_rate_unavailable")
+    assert record.operation == "consume-principal-rate"
+    assert record.error_kind == "storage"
+    assert record.http_status == 503
+    assert record.outcome == "degraded"
+    assert record.error_fingerprint
+    assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
     value = _registry_value()
     value["principals"]["agent-alpha"]["limits"] = {  # type: ignore[index]
