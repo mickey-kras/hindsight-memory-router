@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 
@@ -182,6 +182,7 @@ async def test_postgres_concurrency_heartbeat_retries_transient_failure(
 
     assert refresh.await_count == 3
     assert sleep.await_count == 3
+    assert sleep.await_args_list == [call(10.0), call(1.0), call(10.0)]
 
 
 @pytest.mark.asyncio
@@ -214,6 +215,8 @@ async def test_postgres_concurrency_release_failure_does_not_mask_result(
     )
     assert record.operation == "release-concurrency-lease"
     assert record.error_kind == "storage"
+    assert record.outcome == "degraded"
+    assert record.error_fingerprint
     assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
 
 

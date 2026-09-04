@@ -32,6 +32,9 @@ jobs:
 
       - run: npm ci
 
+      - name: Dependency audit
+        run: timeout 300s npm audit --audit-level=moderate
+
       - name: Aislop quality gate
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -60,7 +63,10 @@ jobs:
           import { readFileSync } from 'node:fs';
 
           const sarif = JSON.parse(readFileSync('aislop.sarif', 'utf8'));
-          const findings = sarif.runs.flatMap((run) => run.results ?? []);
+          const findings = sarif.runs
+            .flatMap((run) => run.results ?? [])
+            // Dependency audit is enforced separately without Aislop's 25-second timeout.
+            .filter((finding) => finding.ruleId !== 'security/dependency-audit-skipped');
           if (findings.length > 0) {
             const rules = [...new Set(findings.map((finding) => finding.ruleId ?? 'unknown'))];
             console.error(`Aislop reported ${findings.length} finding(s): ${rules.join(', ')}`);

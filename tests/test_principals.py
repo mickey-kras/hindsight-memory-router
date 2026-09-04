@@ -701,7 +701,9 @@ async def test_distributed_concurrency_preserves_operation_429() -> None:
 
 
 @pytest.mark.asyncio
-async def test_distributed_concurrency_maps_lost_lease_to_503() -> None:
+async def test_distributed_concurrency_maps_lost_lease_to_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
         run=AsyncMock(side_effect=ConcurrencyLeaseLost("lost"))
     )
@@ -720,6 +722,16 @@ async def test_distributed_concurrency_maps_lost_lease_to_503() -> None:
     assert unavailable.value.status == 503
     assert unavailable.value.code == "principal_concurrency_unavailable"
     assert unavailable.value.headers == {"retry-after": "1"}
+    app_module.runtime.policy.recall_bank.assert_not_awaited()
+    record = next(
+        record for record in caplog.records if record.msg == "principal_concurrency_unavailable"
+    )
+    assert record.operation == "manage-concurrency-lease"
+    assert record.error_kind == "storage"
+    assert record.http_status == 503
+    assert record.outcome == "degraded"
+    assert record.error_fingerprint
+    assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
 
 
 @pytest.mark.asyncio

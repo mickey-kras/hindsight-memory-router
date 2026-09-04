@@ -32,7 +32,7 @@ state_file="${tmp_dir}/state/hindsight.jsonl"
 router_port="8890"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && router_port="8891"
 principals_port="8892"
-[[ "$mode" == "fake" && "$router_db" == "postgres" ]] && principals_port="8893"
+[[ "$mode" == "fake" && "$router_db" == "postgres" ]] && principals_port="${MEMORY_ROUTER_TEST_PRINCIPALS_PORT:-8893}"
 principals_peer_port="${MEMORY_ROUTER_TEST_PRINCIPALS_PEER_PORT:-8894}"
 router_url="http://127.0.0.1:${router_port}"
 router_token="test-router-token"
@@ -378,7 +378,7 @@ if [[ "$mode" == "fake" ]]; then
     shared_limit_body="${root}/${tmp_dir}/principal-rate-limit-response.json"
     shared_limit_status="$(curl --max-time 5 -sS -o "$shared_limit_body" -w '%{http_code}' -H "$alpha_auth" "${principals_url}/v1/default/banks")"
     [[ "$shared_limit_status" == "429" ]] || fail_check "principal rate limit was not shared across replicas: ${shared_limit_status}"
-    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["code"] == "principal_rate_limited"' "$shared_limit_body" || fail_check "shared principal limit returned the wrong error"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["error"] == "principal_rate_limited"' "$shared_limit_body" || fail_check "shared principal limit returned the wrong error"
   fi
   pass_check
 fi

@@ -6,7 +6,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any, NoReturn, TypeVar
 
 from .errors import HttpError
 from .logging import log_event
@@ -412,7 +412,6 @@ class PostgresConcurrencyLimiter:
             if operation_task in done:
                 return await operation_task
             await heartbeat
-            return await operation_task
         finally:
             tasks_to_stop = [task for task in (operation_task, heartbeat) if task is not None]
             for task in tasks_to_stop:
@@ -464,7 +463,7 @@ class PostgresConcurrencyLimiter:
                 (bucket, lease_id, now + self.lease_ms),
             )
 
-    async def _heartbeat(self, bucket: str, lease_id: str) -> None:
+    async def _heartbeat(self, bucket: str, lease_id: str) -> NoReturn:
         interval = self.lease_ms / 3000
         deadline = self.clock() + self.lease_ms / 1000
         next_delay = interval

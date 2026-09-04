@@ -641,7 +641,7 @@ async def _with_principal_concurrency(
                 "error",
                 "principal_concurrency_unavailable",
                 request_id=current_request_id(),
-                operation="refresh-concurrency-lease",
+                operation="manage-concurrency-lease",
                 error_kind="storage",
                 error=exc,
                 http_status=503,

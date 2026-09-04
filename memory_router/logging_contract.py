@@ -99,6 +99,7 @@ OPERATIONS = frozenset(
         "facade_scan",
         "health",
         "invalidate_memory",
+        "manage-concurrency-lease",
         "openclaw_bank",
         "openclaw_config",
         "openclaw_mental-models",
