@@ -24,6 +24,7 @@ from memory_router.principals import (
     facade_scope,
     load_principal_registry,
 )
+from memory_router.rate_limit import ConcurrencyLeaseLost
 from tests.request_helpers import request
 
 ALPHA_SECRET = "a" * 64
@@ -654,7 +655,7 @@ async def test_distributed_principal_concurrency_limit_returns_429() -> None:
                 429,
                 "principal_concurrency_limited",
                 "too many concurrent requests for principal",
-                {"retry-after": "30"},
+                {"retry-after": "1"},
             )
         )
     )
@@ -671,7 +672,7 @@ async def test_distributed_principal_concurrency_limit_returns_429() -> None:
         )
 
     assert throttled.value.code == "principal_concurrency_limited"
-    assert throttled.value.headers == {"retry-after": "30"}
+    assert throttled.value.headers == {"retry-after": "1"}
     app_module.runtime.policy.retain_bank.assert_not_awaited()
 
 
@@ -697,6 +698,28 @@ async def test_distributed_concurrency_preserves_operation_429() -> None:
         )
 
     assert throttled.value is upstream
+
+
+@pytest.mark.asyncio
+async def test_distributed_concurrency_maps_lost_lease_to_503() -> None:
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
+        run=AsyncMock(side_effect=ConcurrencyLeaseLost("lost"))
+    )
+
+    with pytest.raises(HttpError) as unavailable:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories/recall",
+                headers={"authorization": _bearer("reader-1", READER_SECRET)},
+                body={"query": "x"},
+            ),
+        )
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "principal_concurrency_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
 
 
 @pytest.mark.asyncio

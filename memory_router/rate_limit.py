@@ -18,7 +18,15 @@ _SWEEP_EVERY = 128
 logger = logging.getLogger(__name__)
 
 
-class ConcurrencyLeaseLost(RuntimeError):
+class ConcurrencyLeaseUnavailable(RuntimeError):
+    pass
+
+
+class ConcurrencyLeaseLost(ConcurrencyLeaseUnavailable):
+    pass
+
+
+class ConcurrencyLeaseRefreshFailed(ConcurrencyLeaseUnavailable):
     pass
 
 
@@ -357,12 +365,16 @@ class PostgresConcurrencyLimiter:
         *,
         lease_ms: int = 30_000,
         cleanup_timeout_seconds: float = 2.0,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         if lease_ms < 3_000:
             raise ValueError("lease_ms must be at least 3000")
         self.database = database
         self.lease_ms = lease_ms
         self.cleanup_timeout_seconds = cleanup_timeout_seconds
+        self.clock = clock
+        self.sleep = sleep
 
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
@@ -382,7 +394,14 @@ class PostgresConcurrencyLimiter:
 
     async def run(self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
         lease_id = str(uuid.uuid4())
-        await self._acquire(bucket, lease_id, maximum)
+        try:
+            await self._acquire(bucket, lease_id, maximum)
+        except HttpError:
+            raise
+        except Exception as exc:
+            raise ConcurrencyLeaseUnavailable(
+                "principal concurrency lease acquisition failed"
+            ) from exc
         operation_task: asyncio.Future[T] | None = None
         heartbeat: asyncio.Task[None] | None = None
         try:
@@ -393,7 +412,7 @@ class PostgresConcurrencyLimiter:
             if operation_task in done:
                 return await operation_task
             await heartbeat
-            raise AssertionError("unreachable")
+            return await operation_task
         finally:
             tasks_to_stop = [task for task in (operation_task, heartbeat) if task is not None]
             for task in tasks_to_stop:
@@ -401,8 +420,7 @@ class PostgresConcurrencyLimiter:
             await asyncio.gather(*tasks_to_stop, return_exceptions=True)
             try:
                 await asyncio.wait_for(
-                    asyncio.shield(self._release(bucket, lease_id)),
-                    timeout=self.cleanup_timeout_seconds,
+                    self._release(bucket, lease_id), timeout=self.cleanup_timeout_seconds
                 )
             except Exception as exc:
                 log_event(
@@ -410,7 +428,7 @@ class PostgresConcurrencyLimiter:
                     "error",
                     "principal_concurrency_release_failed",
                     operation="release-concurrency-lease",
-                    error_kind="dependency",
+                    error_kind="storage",
                     error=exc,
                     outcome="degraded",
                 )
@@ -438,7 +456,7 @@ class PostgresConcurrencyLimiter:
                     429,
                     "principal_concurrency_limited",
                     "too many concurrent requests for principal",
-                    headers={"retry-after": str(max(1, (self.lease_ms + 999) // 1000))},
+                    headers={"retry-after": "1"},
                 )
             await tx.execute(
                 "INSERT INTO principal_concurrency_leases(bucket,lease_id,expires_at_ms) "
@@ -448,21 +466,24 @@ class PostgresConcurrencyLimiter:
 
     async def _heartbeat(self, bucket: str, lease_id: str) -> None:
         interval = self.lease_ms / 3000
-        deadline = time.monotonic() + self.lease_ms / 1000
+        deadline = self.clock() + self.lease_ms / 1000
         next_delay = interval
         while True:
-            await asyncio.sleep(next_delay)
+            await self.sleep(next_delay)
             try:
-                await self._refresh(bucket, lease_id)
+                await asyncio.wait_for(self._refresh(bucket, lease_id), timeout=interval / 2)
             except ConcurrencyLeaseLost:
                 raise
-            except Exception:
-                remaining = deadline - time.monotonic()
+            except Exception as exc:
+                remaining = deadline - self.clock()
                 if remaining <= interval:
-                    raise
+                    raise ConcurrencyLeaseRefreshFailed(
+                        "principal concurrency lease refresh failed"
+                    ) from exc
                 next_delay = min(1.0, remaining - interval)
                 continue
-            deadline = time.monotonic() + self.lease_ms / 1000
+            # PostgreSQL expiry is authoritative; monotonic time only bounds local retries.
+            deadline = self.clock() + self.lease_ms / 1000
             next_delay = interval
 
     async def _refresh(self, bucket: str, lease_id: str) -> None:

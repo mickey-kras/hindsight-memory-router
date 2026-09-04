@@ -33,7 +33,7 @@ router_port="8890"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && router_port="8891"
 principals_port="8892"
 [[ "$mode" == "fake" && "$router_db" == "postgres" ]] && principals_port="8893"
-principals_peer_port="8894"
+principals_peer_port="${MEMORY_ROUTER_TEST_PRINCIPALS_PEER_PORT:-8894}"
 router_url="http://127.0.0.1:${router_port}"
 router_token="test-router-token"
 admin_read_token="test-admin-read-token"
@@ -362,7 +362,7 @@ if [[ "$mode" == "fake" ]]; then
     curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks?q=integration-delay" > "$slow_output" &
     slow_pid=$!
     delay_started=false
-    for _ in $(seq 1 50); do
+    for _ in $(seq 1 100); do
       if grep -q '"kind":"integration_delay_started"' "$state_file"; then
         delay_started=true
         break
@@ -375,8 +375,10 @@ if [[ "$mode" == "fake" ]]; then
     wait "$slow_pid" || fail_check "delayed principal request failed"
     peer_banks_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${peer_principals_url}/v1/default/banks")"
     [[ "$peer_banks_status" == "200" ]] || fail_check "peer principal request failed: ${peer_banks_status}"
-    shared_limit_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${principals_url}/v1/default/banks")"
+    shared_limit_body="${root}/${tmp_dir}/principal-rate-limit-response.json"
+    shared_limit_status="$(curl --max-time 5 -sS -o "$shared_limit_body" -w '%{http_code}' -H "$alpha_auth" "${principals_url}/v1/default/banks")"
     [[ "$shared_limit_status" == "429" ]] || fail_check "principal rate limit was not shared across replicas: ${shared_limit_status}"
+    python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["code"] == "principal_rate_limited"' "$shared_limit_body" || fail_check "shared principal limit returned the wrong error"
   fi
   pass_check
 fi

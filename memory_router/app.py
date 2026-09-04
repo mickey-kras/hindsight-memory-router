@@ -64,7 +64,12 @@ from .probes import _ReadinessLogState as _ReadinessLogState
 from .probes import _storage_readiness_log_state as _storage_readiness_log_state
 from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
-from .rate_limit import InMemoryRateLimiter, PostgresConcurrencyLimiter, PostgresRateLimiter
+from .rate_limit import (
+    ConcurrencyLeaseUnavailable,
+    InMemoryRateLimiter,
+    PostgresConcurrencyLimiter,
+    PostgresRateLimiter,
+)
 from .repository import QuarantineRepository
 from .request_dispatch import (
     EMPTY_BODY,
@@ -629,6 +634,27 @@ async def _with_principal_concurrency(
                 code="principal_concurrency_limited",
                 message="too many concurrent requests for principal",
                 headers=exc.headers,
+            ) from exc
+        except ConcurrencyLeaseUnavailable as exc:
+            log_event(
+                logger,
+                "error",
+                "principal_concurrency_unavailable",
+                request_id=current_request_id(),
+                operation="refresh-concurrency-lease",
+                error_kind="storage",
+                error=exc,
+                http_status=503,
+                outcome="degraded",
+                route_class=_route_class(request),
+                principal=session.principal_id,
+                scope=scope,
+            )
+            raise HttpError(
+                503,
+                "principal_concurrency_unavailable",
+                "principal concurrency control is temporarily unavailable",
+                headers={"retry-after": "1"},
             ) from exc
     key = _principal_concurrency_acquire(session, scope, _route_class(request))
     try:

@@ -381,22 +381,35 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         if isinstance(node, ast.If) and ast.unparse(node.test) == "match is not None"
     ]
     assert len(item_guards) == 1
-    item_calls = [
-        node.value
+    item_assignments = [
+        statement
         for statement in item_guards[0].body
-        for node in ast.walk(statement)
-        if isinstance(node, ast.Await)
-        and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-        and node.value.func.id == "_admin_item_response"
+        if isinstance(statement, ast.Assign)
+        and [ast.unparse(target) for target in statement.targets] == ["response"]
+        and isinstance(statement.value, ast.Await)
+        and isinstance(statement.value.value, ast.Call)
+        and isinstance(statement.value.value.func, ast.Name)
+        and statement.value.value.func.id == "_admin_item_response"
     ]
-    assert len(item_calls) == 1
-    assert [ast.unparse(argument) for argument in item_calls[0].args] == [
+    assert len(item_assignments) == 1
+    item_call = item_assignments[0].value.value
+    assert isinstance(item_call, ast.Call)
+    assert [ast.unparse(argument) for argument in item_call.args] == [
         "request",
         "admin",
         "method",
         "match",
     ]
+    response_guards = [
+        statement
+        for statement in item_guards[0].body
+        if isinstance(statement, ast.If) and ast.unparse(statement.test) == "response is not None"
+    ]
+    assert len(response_guards) == 1
+    assert any(
+        isinstance(statement, ast.Return) and ast.unparse(statement.value) == "response"
+        for statement in response_guards[0].body
+    )
 
     dispatch = functions["dispatch"]
     admin_dispatch_calls = [

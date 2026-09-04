@@ -8,6 +8,7 @@ import pytest
 from memory_router.errors import HttpError
 from memory_router.rate_limit import (
     ConcurrencyLeaseLost,
+    ConcurrencyLeaseRefreshFailed,
     PostgresConcurrencyLimiter,
     PostgresRateLimiter,
     _PostgresSession,
@@ -130,7 +131,7 @@ async def test_postgres_concurrency_limiter_rejects_full_bucket() -> None:
     with pytest.raises(HttpError) as throttled:
         await PostgresConcurrencyLimiter(FakeDatabase(FullTx())).run("agent:retain", 1, operation)
     assert throttled.value.code == "principal_concurrency_limited"
-    assert throttled.value.headers == {"retry-after": "30"}
+    assert throttled.value.headers == {"retry-after": "1"}
     operation.assert_not_awaited()
 
 
@@ -172,20 +173,35 @@ async def test_postgres_concurrency_refresh_rejects_lost_lease() -> None:
 async def test_postgres_concurrency_heartbeat_retries_transient_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    limiter = PostgresConcurrencyLimiter(SimpleNamespace())
+    sleep = AsyncMock()
+    limiter = PostgresConcurrencyLimiter(SimpleNamespace(), sleep=sleep)
     refresh = AsyncMock(side_effect=[OSError("temporary"), None, ConcurrencyLeaseLost("lost")])
     monkeypatch.setattr(limiter, "_refresh", refresh)
-    monkeypatch.setattr("memory_router.rate_limit.asyncio.sleep", AsyncMock())
-
     with pytest.raises(ConcurrencyLeaseLost):
         await limiter._heartbeat("agent:retain", "lease-1")
 
     assert refresh.await_count == 3
+    assert sleep.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrency_heartbeat_fails_before_expiry_margin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    times = iter((0.0, 21.0))
+    limiter = PostgresConcurrencyLimiter(
+        SimpleNamespace(), clock=lambda: next(times), sleep=AsyncMock()
+    )
+    refresh = AsyncMock(side_effect=OSError("database down"))
+    monkeypatch.setattr(limiter, "_refresh", refresh)
+
+    with pytest.raises(ConcurrencyLeaseRefreshFailed):
+        await limiter._heartbeat("agent:retain", "lease-1")
 
 
 @pytest.mark.asyncio
 async def test_postgres_concurrency_release_failure_does_not_mask_result(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     limiter = PostgresConcurrencyLimiter(FakeDatabase(FakePostgresTx()))
     release = AsyncMock(side_effect=OSError("database down"))
@@ -193,6 +209,12 @@ async def test_postgres_concurrency_release_failure_does_not_mask_result(
 
     assert await limiter.run("agent:retain", 2, lambda: _result("ok")) == "ok"
     release.assert_awaited_once()
+    record = next(
+        record for record in caplog.records if record.msg == "principal_concurrency_release_failed"
+    )
+    assert record.operation == "release-concurrency-lease"
+    assert record.error_kind == "storage"
+    assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
 
 
 def test_postgres_concurrency_rejects_unsafe_lease_duration() -> None:
