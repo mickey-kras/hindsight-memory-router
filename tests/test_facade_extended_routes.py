@@ -256,6 +256,29 @@ async def test_extended_facade_routes_forward_to_resolved_bank(
     assert call.args[2] == upstream
 
 
+@pytest.mark.asyncio
+async def test_observation_scopes_preserves_pagination_and_resolved_bank() -> None:
+    page = {
+        "scopes": [{"tags": ["project:router"], "count": 2}],
+        "total": 12,
+        "limit": 1,
+        "offset": 5,
+    }
+    policy = _policy(page)
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/observations/scopes?limit=1&offset=5&bank_id=other"
+
+    response = await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert response.status_code == 200
+    assert _payload(response) == page
+    call = policy.hindsight.openclaw_request.await_args
+    assert call.args[1:3] == (
+        "GET",
+        "/v1/default/banks/resolved-main/observations/scopes?limit=1&offset=5",
+    )
+
+
 @pytest.mark.parametrize("resource", ["folders", "pages"])
 @pytest.mark.asyncio
 async def test_knowledge_base_create_preserves_created_status(resource: str) -> None:
