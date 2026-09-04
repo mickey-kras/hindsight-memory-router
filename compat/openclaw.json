@@ -11,8 +11,8 @@
     "plugin": "6e253cd3a70047e75797f5448f1099006ba9c15e",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
-    "client": "33af9b55f61ad93381738b7045adacaef5066682",
-    "facade_spec": "ed55f3baf4289037e8eec9b04ec34034ffceca0c"
+    "client": "3e3e08f46c3a2439533e8cc7036c97a2f0f3f017",
+    "facade_spec": "7fe43c8ac85e9e98310daf43093b396afe87eab1"
   },
   "plugin_client_methods": ["createBank", "recall", "retain"],
   "agent_sdk_methods": [

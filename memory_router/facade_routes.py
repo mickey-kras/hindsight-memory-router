@@ -218,7 +218,13 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     _route("PATCH", _DIRECTIVE_PATH, read=False, body="required"),
     _route("DELETE", _DIRECTIVE_PATH, read=False, body="none"),
     # Observations.
-    _route("GET", "observations/scopes", read=True, body="none"),
+    _route(
+        "GET",
+        "observations/scopes",
+        read=True,
+        body="none",
+        query=("limit", "offset"),
+    ),
     _route("DELETE", "observations", read=False, body="none"),
     # Background operations.
     _route(
