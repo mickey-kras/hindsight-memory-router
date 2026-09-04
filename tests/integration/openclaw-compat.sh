@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 73032f7df527fc2c84cc93025ab972497218889548416b45ea531f7bef826857
+# integration-behavior-sha256: c0c781a77f934993ce3906dec626fb09318f674b37f601709022e2c67867c552
 
 openclaw_request() {
   local method="$1"
@@ -130,7 +130,7 @@ page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer
 openclaw_request PATCH "/v1/default/banks/main/knowledge-base/nodes/node-1" '{"title":"Runbook"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests/stats" >/dev/null
-openclaw_request GET "/v1/default/banks/main/observations/scopes" >/dev/null
+openclaw_request GET "/v1/default/banks/main/observations/scopes?limit=1&offset=5" >/dev/null
 openclaw_request DELETE "/v1/default/banks/main/observations" >/dev/null
 python3 - "$state_file" <<'PY' || fail_check "facade events did not resolve through physical-main"
 import json
@@ -162,7 +162,7 @@ expected = {
     ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
     ("GET", "audit-logs"): ("", None),
     ("GET", "llm-requests/stats"): ("", None),
-    ("GET", "observations/scopes"): ("", None),
+    ("GET", "observations/scopes"): ("?limit=1&offset=5", None),
     ("DELETE", "observations"): ("", None),
 }
 for route, (query, body) in expected.items():
