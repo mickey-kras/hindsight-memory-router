@@ -358,6 +358,21 @@ if [[ "$mode" == "fake" ]]; then
   [[ "$wrong_secret_status" == "401" ]] || fail_check "wrong principal secret authenticated: ${wrong_secret_status}"
   if [[ "$router_db" == "postgres" ]]; then
     peer_principals_url="http://127.0.0.1:${principals_peer_port}"
+    slow_output="${root}/${tmp_dir}/principal-slow-response.json"
+    curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks?q=integration-delay" > "$slow_output" &
+    slow_pid=$!
+    delay_started=false
+    for _ in $(seq 1 50); do
+      if grep -q '"kind":"integration_delay_started"' "$state_file"; then
+        delay_started=true
+        break
+      fi
+      sleep 0.05
+    done
+    [[ "$delay_started" == "true" ]] || fail_check "delayed principal request did not reach Hindsight"
+    shared_concurrency_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${peer_principals_url}/v1/default/banks")"
+    [[ "$shared_concurrency_status" == "429" ]] || fail_check "principal concurrency limit was not shared across replicas: ${shared_concurrency_status}"
+    wait "$slow_pid" || fail_check "delayed principal request failed"
     peer_banks_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${peer_principals_url}/v1/default/banks")"
     [[ "$peer_banks_status" == "200" ]] || fail_check "peer principal request failed: ${peer_banks_status}"
     shared_limit_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$alpha_auth" "${principals_url}/v1/default/banks")"
