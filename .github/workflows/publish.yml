@@ -409,70 +409,17 @@ jobs:
           path: image-digests.txt
           if-no-files-found: error
 
-      - name: Create or update main failure issue
-        if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+      - name: Synchronize SonarQube findings
+        if: failure() && steps.sonar-quality-gate.outcome == 'failure' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-          SONAR_GATE_OUTCOME: ${{ steps.sonar-quality-gate.outcome }}
-        run: |
-          set -euo pipefail
-
-          failed_step=''
-          if [ "$SONAR_GATE_OUTCOME" = failure ]; then
-            failed_step='SonarQube quality gate'
-          else
-            failed_step="$(gh api \
-              "/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?filter=latest&per_page=100" \
-              --jq '.jobs[] | select(.name == "publish") | .steps[] | select(.conclusion == "failure") | .name' \
-              | head -n 1)"
-          fi
-          failed_step="${failed_step:-Unknown publish step}"
-          failure_slug="$(tr '[:upper:]' '[:lower:]' <<<"$failed_step" | sed -E 's/[^a-z0-9]+/-/g; s/^-|-$//g')"
-
-          report=.scannerwork/report-task.txt
-          sonar_details=''
-          if [ "$failed_step" = 'SonarQube quality gate' ]; then
-            if python .github/scripts/sync-sonar-findings.py "$report" > sonar-sync.txt 2>&1; then
-              {
-                echo "## SonarQube findings"
-                echo
-                cat sonar-sync.txt
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            sonar_details="$(cat <<EOF
-
-          ### SonarQube finding sync
-
-          \`$(tr '\n' ' ' < sonar-sync.txt)\`
-          EOF
-            )"
-          fi
-
-          cat > main-failure.md <<EOF
-          Main publish pipeline failed.
-
-          - Failure point: \`publish / ${failed_step}\`
-          - Commit: ${GITHUB_SHA}
-          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          ${sonar_details}
-          EOF
-          {
-            echo "## Main publish failure"
-            echo
-            cat main-failure.md
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          FAILURE_KEY="publish-${failure_slug}" \
-          FAILURE_TITLE="[tech debt] Main publish failed: ${failed_step}" \
-          LEGACY_TITLE='[tech debt] Main publish pipeline blocked' \
-            bash .github/scripts/upsert-main-failure-issue.sh main-failure.md
+        run: python .github/scripts/sync-sonar-findings.py .scannerwork/report-task.txt
 
   report-validation-failure:
-    name: report validation failure
-    needs: [quality, aislop, codeql, architecture]
+    name: report main failure
+    needs: [quality, aislop, codeql, architecture, publish, pages, update-pr-branches]
     if: >-
       ${{
         always() &&
@@ -482,49 +429,28 @@ jobs:
           needs.quality.result != 'success' ||
           needs.aislop.result != 'success' ||
           needs.codeql.result != 'success' ||
-          needs.architecture.result != 'success'
+          needs.architecture.result != 'success' ||
+          needs.publish.result != 'success' ||
+          needs.pages.result != 'success' ||
+          needs.update-pr-branches.result != 'success'
         )
       }}
     runs-on: ubuntu-latest
+    concurrency:
+      group: main-failure-issues-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       issues: write
     steps:
       - uses: step-security/harden-runner@05e31511f85b41b11d1cf0ef85d0992719546e2c # v2.21.0
         with:
           egress-policy: audit
-
-      - name: Create or update main failure issue
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Report each distinct failure
         env:
           GH_TOKEN: ${{ github.token }}
-          QUALITY_RESULT: ${{ needs.quality.result }}
-          AISLOP_RESULT: ${{ needs.aislop.result }}
-          CODEQL_RESULT: ${{ needs.codeql.result }}
-          ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
-        run: |
-          set -euo pipefail
-
-          failed_gates=()
-          [ "$QUALITY_RESULT" = success ] || failed_gates+=(quality)
-          [ "$AISLOP_RESULT" = success ] || failed_gates+=(aislop)
-          [ "$CODEQL_RESULT" = success ] || failed_gates+=(codeql)
-          [ "$ARCHITECTURE_RESULT" = success ] || failed_gates+=(architecture)
-          failed_csv="$(IFS=,; echo "${failed_gates[*]}")"
-          failure_slug="$(IFS=-; echo "${failed_gates[*]}")"
-
-          cat > main-failure.md <<EOF
-          Main validation failed before publishing.
-
-          - Failure point: \`validation / ${failed_csv}\`
-          - Commit: ${GITHUB_SHA}
-          - Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - Quality: ${QUALITY_RESULT}
-          - Aislop: ${AISLOP_RESULT}
-          - CodeQL: ${CODEQL_RESULT}
-          - Architecture: ${ARCHITECTURE_RESULT}
-          EOF
-
-          FAILURE_KEY="validation-${failure_slug}" \
-          FAILURE_TITLE="[tech debt] Main validation failed: ${failed_csv}" \
-            bash .github/scripts/upsert-main-failure-issue.sh main-failure.md
-
+        run: bash .github/scripts/upsert-main-failure-issue.sh
