@@ -6,12 +6,12 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn, TypeVar
+from typing import Any, NoReturn
 
 from .errors import HttpError
 from .logging import log_event
 
-T = TypeVar("T")
+ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(?,0))"
 Bucket = tuple[str, int, int]
 Distinct = tuple[str, str, int, int]
 _SWEEP_EVERY = 128
@@ -117,7 +117,7 @@ class InMemoryRateLimiter:
                 self.distinct.pop(scope, None)
                 self.distinct_windows.pop(scope, None)
 
-    async def with_identity_lock(
+    async def with_identity_lock[T](
         self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
     ) -> T:
         async with self.guard:
@@ -176,7 +176,7 @@ class _PostgresSession:
             {f"rate-limit:{key}" for key, _, _ in normalized_buckets}
             | {f"rate-limit-distinct:{scope}" for scope, _, _, _ in normalized_identities}
         ):
-            await self.tx.execute("SELECT pg_advisory_xact_lock(hashtextextended(?,0))", (key,))
+            await self.tx.execute(ADVISORY_LOCK_SQL, (key,))
         now = at_ms if at_ms is not None else await self._database_now_ms()
         windows = [window for _, _, window in normalized_buckets] + [
             window for _, _, _, window in normalized_identities
@@ -296,7 +296,7 @@ class PostgresRateLimiter:
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
             await tx.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ADVISORY_LOCK_SQL,
                 ("rate-limit-schema",),
             )
             await tx.execute(
@@ -344,12 +344,12 @@ class PostgresRateLimiter:
             await session.consume_many_distinct(buckets, identities, at_ms)
         self._commit_session(session)
 
-    async def with_identity_lock(
+    async def with_identity_lock[T](
         self, identity: str, operation: Callable[[Any], Awaitable[T]]
     ) -> T:
         async with self.database.transaction() as tx:
             await tx.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ADVISORY_LOCK_SQL,
                 (f"quarantine-identity:{identity}",),
             )
             session = self._next_session(tx)
@@ -379,7 +379,7 @@ class PostgresConcurrencyLimiter:
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:
             await tx.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ADVISORY_LOCK_SQL,
                 ("rate-limit-schema",),
             )
             await tx.execute(
@@ -392,7 +392,7 @@ class PostgresConcurrencyLimiter:
                 "ON principal_concurrency_leases(bucket, expires_at_ms)"
             )
 
-    async def run(self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
+    async def run[T](self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
         lease_id = str(uuid.uuid4())
         try:
             await self._acquire(bucket, lease_id, maximum)
@@ -435,7 +435,7 @@ class PostgresConcurrencyLimiter:
     async def _acquire(self, bucket: str, lease_id: str, maximum: int) -> None:
         async with self.database.transaction() as tx:
             await tx.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
             now = await self._database_now_ms(tx)
@@ -488,7 +488,7 @@ class PostgresConcurrencyLimiter:
     async def _refresh(self, bucket: str, lease_id: str) -> None:
         async with self.database.transaction() as tx:
             await tx.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(?,0))",
+                ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
             now = await self._database_now_ms(tx)
