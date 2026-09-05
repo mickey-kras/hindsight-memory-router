@@ -49,6 +49,9 @@ jobs:
             --output-file requirements.txt pyproject.toml
           diff -u requirements.expected.txt requirements.txt
 
+      - name: Failure reporter tests
+        run: node --test .github/scripts/report-main-failures.test.cjs
+
       - run: npm ci
       - run: npm ci --prefix ui
 
