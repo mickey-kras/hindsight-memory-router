@@ -13,7 +13,7 @@ import pytest
 
 @pytest.fixture(scope="module")
 def sync_module() -> ModuleType:
-    path = Path(".github/scripts/sync-sonar-findings.py")
+    path = Path(__file__).parents[1] / ".github/scripts/sync-sonar-findings.py"
     spec = importlib.util.spec_from_file_location("sync_sonar_findings", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -122,13 +122,35 @@ def test_failed_condition_is_fallback_when_no_findings_are_returned(
     assert findings[0].key == "condition-new_reliability_rating"
 
 
+def test_all_failed_conditions_are_fallback_when_no_findings_are_returned(
+    sync_module: ModuleType,
+) -> None:
+    gate = {
+        "projectStatus": {
+            "conditions": [
+                {"status": "ERROR", "metricKey": "new_reliability_rating"},
+                {"status": "ERROR", "metricKey": "new_security_rating"},
+            ]
+        }
+    }
+
+    findings = sync_module.tracked_findings(gate, [], [], "router")
+
+    assert [finding.key for finding in findings] == [
+        "condition-new_reliability_rating",
+        "condition-new_security_rating",
+    ]
+
+
 def test_optional_paged_falls_back_only_for_forbidden(sync_module: ModuleType) -> None:
     class Client:
         @staticmethod
         def paged(*_: object, **__: object) -> list[dict[str, object]]:
             raise urllib.error.HTTPError("https://sonar.example", 403, "", {}, None)
 
-    assert sync_module.optional_paged(Client(), "/api/issues/search", "issues") == []
+    result = sync_module.optional_paged(Client(), "/api/issues/search", "issues")
+    assert result.values == []
+    assert result.forbidden is True
 
 
 def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> None:
@@ -139,6 +161,133 @@ def test_optional_paged_preserves_other_http_errors(sync_module: ModuleType) -> 
 
     with pytest.raises(urllib.error.HTTPError):
         sync_module.optional_paged(Client(), "/api/issues/search", "issues")
+
+
+def test_optional_paged_preserves_pages_before_forbidden(
+    sync_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = sync_module.SonarClient("https://sonar.example", "token")
+    calls = 0
+
+    def get(*_: object, **__: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"issues": [{"key": "issue-1"}], "paging": {"total": 501}}
+        raise urllib.error.HTTPError("https://sonar.example", 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(client, "get", get)
+
+    result = sync_module.optional_paged(client, "/api/issues/search", "issues")
+
+    assert result.values == [{"key": "issue-1"}]
+    assert result.forbidden is True
+
+
+def test_optional_paged_preserves_non_forbidden_partial_page_error(
+    sync_module: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = sync_module.SonarClient("https://sonar.example", "token")
+    calls = 0
+
+    def get(*_: object, **__: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return {"issues": [{"key": "issue-1"}], "paging": {"total": 501}}
+        raise urllib.error.HTTPError("https://sonar.example", 500, "Failure", {}, None)
+
+    monkeypatch.setattr(client, "get", get)
+
+    with pytest.raises(urllib.error.HTTPError) as failed:
+        sync_module.optional_paged(client, "/api/issues/search", "issues")
+
+    assert failed.value.code == 500
+
+
+@pytest.mark.parametrize(
+    ("issues_forbidden", "hotspots_forbidden", "expected"),
+    [
+        (False, True, ["issue-issue-1", "condition-new_security_hotspots_reviewed"]),
+        (True, False, ["hotspot-hotspot-1", "condition-new_reliability_rating"]),
+        (
+            True,
+            True,
+            ["condition-new_security_hotspots_reviewed", "condition-new_reliability_rating"],
+        ),
+    ],
+)
+def test_partial_api_denial_preserves_failed_category(
+    sync_module: ModuleType,
+    issues_forbidden: bool,
+    hotspots_forbidden: bool,
+    expected: list[str],
+) -> None:
+    gate = {
+        "projectStatus": {
+            "conditions": [
+                {"status": "ERROR", "metricKey": "new_security_hotspots_reviewed"},
+                {"status": "ERROR", "metricKey": "new_reliability_rating"},
+            ]
+        }
+    }
+    issues = (
+        [
+            {
+                "key": "issue-1",
+                "component": "router:memory_router/app.py",
+                "message": "Fix reliability issue",
+            }
+        ]
+        if not issues_forbidden
+        else []
+    )
+    hotspots = (
+        [
+            {
+                "key": "hotspot-1",
+                "component": "router:memory_router/app.py",
+                "message": "Review security hotspot",
+            }
+        ]
+        if not hotspots_forbidden
+        else []
+    )
+
+    findings = sync_module.tracked_findings(
+        gate,
+        issues,
+        hotspots,
+        "router",
+        issues_forbidden=issues_forbidden,
+        hotspots_forbidden=hotspots_forbidden,
+    )
+
+    assert [finding.key for finding in findings] == expected
+
+
+def test_partial_values_and_forbidden_category_are_both_tracked(
+    sync_module: ModuleType,
+) -> None:
+    gate = {
+        "projectStatus": {
+            "conditions": [{"status": "ERROR", "metricKey": "new_reliability_rating"}]
+        }
+    }
+    issues = [
+        {
+            "key": "issue-1",
+            "component": "router:memory_router/app.py",
+            "message": "Fix reliability issue",
+        }
+    ]
+
+    findings = sync_module.tracked_findings(gate, issues, [], "router", issues_forbidden=True)
+
+    assert [finding.key for finding in findings] == [
+        "issue-issue-1",
+        "condition-new_reliability_rating",
+    ]
 
 
 def test_existing_closed_finding_is_reopened_not_duplicated(sync_module: ModuleType) -> None:

@@ -4,9 +4,11 @@ import hashlib
 import hmac
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
@@ -22,6 +24,7 @@ from memory_router.principals import (
     facade_scope,
     load_principal_registry,
 )
+from memory_router.rate_limit import ConcurrencyLeaseLost
 from tests.request_helpers import request
 
 ALPHA_SECRET = "a" * 64
@@ -85,6 +88,7 @@ def principal_runtime_state(tmp_path: Path) -> None:
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.principal_concurrency_limiter = None
     app_module.runtime.principal_concurrency = {}
     app_module.runtime.hindsight = SimpleNamespace(
         list_banks=AsyncMock(
@@ -111,6 +115,8 @@ def principal_runtime_state(tmp_path: Path) -> None:
     )
     yield
     app_module.runtime.principal_resolver = None
+    app_module.runtime.principal_concurrency_limiter = None
+    app_module.runtime.principal_concurrency = {}
 
 
 def _payload(response: object) -> object:
@@ -617,6 +623,37 @@ async def test_principal_rate_limit_returns_429() -> None:
 
 
 @pytest.mark.asyncio
+async def test_principal_rate_storage_failure_returns_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_module.runtime.principal_limiter = SimpleNamespace(
+        consume_many=AsyncMock(side_effect=OSError("database unavailable"))
+    )
+
+    with pytest.raises(HttpError) as unavailable:
+        await app_module.dispatch(
+            "x",
+            request(
+                "GET",
+                "/v1/default/banks",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            ),
+        )
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "principal_rate_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
+    app_module.runtime.hindsight.list_banks.assert_not_awaited()
+    record = next(record for record in caplog.records if record.msg == "principal_rate_unavailable")
+    assert record.operation == "consume-principal-rate"
+    assert record.error_kind == "storage"
+    assert record.http_status == 503
+    assert record.outcome == "degraded"
+    assert record.error_fingerprint
+    assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
     value = _registry_value()
     value["principals"]["agent-alpha"]["limits"] = {  # type: ignore[index]
@@ -639,6 +676,116 @@ async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
     assert throttled.value.status == 429
     assert throttled.value.code == "principal_concurrency_limited"
     app_module.runtime.policy.retain_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distributed_principal_concurrency_limit_returns_429() -> None:
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
+        run=AsyncMock(
+            side_effect=HttpError(
+                429,
+                "principal_concurrency_limited",
+                "too many concurrent requests for principal",
+                {"retry-after": "1"},
+            )
+        )
+    )
+
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories",
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+                body={"items": [{"content": "x"}]},
+            ),
+        )
+
+    assert throttled.value.code == "principal_concurrency_limited"
+    assert throttled.value.headers == {"retry-after": "1"}
+    app_module.runtime.policy.retain_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_distributed_concurrency_preserves_operation_429() -> None:
+    upstream = HttpError(429, "hindsight_rate_limited", "too many recalls", {"retry-after": "9"})
+    app_module.runtime.policy.recall_bank.side_effect = upstream
+
+    async def run(_: str, __: int, operation: Callable[[], Awaitable[Any]]) -> object:
+        return await operation()
+
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(run=run)
+
+    with pytest.raises(HttpError) as throttled:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories/recall",
+                headers={"authorization": _bearer("reader-1", READER_SECRET)},
+                body={"query": "x"},
+            ),
+        )
+
+    assert throttled.value is upstream
+
+
+@pytest.mark.asyncio
+async def test_distributed_concurrency_maps_lost_lease_to_503(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(
+        run=AsyncMock(side_effect=ConcurrencyLeaseLost("lost"))
+    )
+
+    with pytest.raises(HttpError) as unavailable:
+        await app_module.dispatch(
+            "x",
+            request(
+                "POST",
+                "/v1/default/banks/shared/memories/recall",
+                headers={"authorization": _bearer("reader-1", READER_SECRET)},
+                body={"query": "x"},
+            ),
+        )
+
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == "principal_concurrency_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
+    app_module.runtime.policy.recall_bank.assert_not_awaited()
+    record = next(
+        record for record in caplog.records if record.msg == "principal_concurrency_unavailable"
+    )
+    assert record.operation == "manage-concurrency-lease"
+    assert record.error_kind == "storage"
+    assert record.http_status == 503
+    assert record.outcome == "degraded"
+    assert record.error_fingerprint
+    assert not any(record.msg == "logging_contract_violation" for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_distributed_principal_concurrency_wraps_operation() -> None:
+    async def run(bucket: str, maximum: int, operation: Callable[[], Awaitable[Any]]) -> object:
+        assert bucket == "agent-alpha:retain"
+        assert maximum == 2
+        return await operation()
+
+    app_module.runtime.principal_concurrency_limiter = SimpleNamespace(run=run)
+
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "POST",
+            "/v1/default/banks/shared/memories",
+            headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+            body={"items": [{"content": "x"}]},
+        ),
+    )
+
+    assert response.status_code == 200
+    app_module.runtime.policy.retain_bank.assert_awaited_once()
 
 
 @pytest.mark.asyncio

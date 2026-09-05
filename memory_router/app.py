@@ -64,7 +64,12 @@ from .probes import _ReadinessLogState as _ReadinessLogState
 from .probes import _storage_readiness_log_state as _storage_readiness_log_state
 from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
-from .rate_limit import InMemoryRateLimiter, PostgresRateLimiter
+from .rate_limit import (
+    ConcurrencyLeaseUnavailable,
+    InMemoryRateLimiter,
+    PostgresConcurrencyLimiter,
+    PostgresRateLimiter,
+)
 from .repository import QuarantineRepository
 from .request_dispatch import (
     EMPTY_BODY,
@@ -210,6 +215,7 @@ class Runtime:
         self.admin_limiter = InMemoryRateLimiter()
         self.auth_limiter: Any = InMemoryRateLimiter()
         self.principal_limiter: Any = InMemoryRateLimiter()
+        self.principal_concurrency_limiter: PostgresConcurrencyLimiter | None = None
         self.principal_concurrency: dict[tuple[str, str], int] = {}
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
@@ -261,12 +267,19 @@ class Runtime:
         await validate_storage(self.database, database_url)
         await recover_interrupted(self.repository, _now(), self.review_stale_seconds)
         if is_postgres(database_url):
-            self.rate_limit_database = PostgresDatabase(database_url, max_size=2)
+            self.rate_limit_database = PostgresDatabase(database_url, max_size=5)
             await self.rate_limit_database.initialize()
             self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
+            self.principal_limiter = self.quarantine_limiter
+            self.principal_concurrency_limiter = PostgresConcurrencyLimiter(
+                self.rate_limit_database
+            )
+            await self.principal_concurrency_limiter.initialize()
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
+            self.principal_limiter = InMemoryRateLimiter()
+            self.principal_concurrency_limiter = None
         self.auth_limiter = InMemoryRateLimiter()
         limits = QuarantineLimits(
             max_item_bytes=settings.quarantine_max_item_bytes,
@@ -548,6 +561,27 @@ async def _principal_rate(session: PrincipalSession, scope: str, route_class: st
             message="too many requests for principal",
             headers={"retry-after": str(retry_after)},
         ) from exc
+    except Exception as exc:
+        log_event(
+            logger,
+            "error",
+            "principal_rate_unavailable",
+            request_id=current_request_id(),
+            operation="consume-principal-rate",
+            error_kind="storage",
+            error=exc,
+            http_status=503,
+            outcome="degraded",
+            route_class=route_class,
+            principal=session.principal_id,
+            scope=scope,
+        )
+        raise HttpError(
+            503,
+            "principal_rate_unavailable",
+            "principal rate control is temporarily unavailable",
+            headers={"retry-after": "1"},
+        ) from exc
 
 
 def _principal_concurrency_acquire(
@@ -593,6 +627,56 @@ async def _with_principal_concurrency(
     scope: str,
     operation: Callable[[], Awaitable[Any]],
 ) -> Any:
+    distributed = runtime.principal_concurrency_limiter
+    if distributed is not None:
+        operation_name = scope_limit_operation(scope)
+        bucket = f"{session.principal_id}:{operation_name}"
+        try:
+            return await distributed.run(
+                bucket, session.limits[operation_name].concurrency_max, operation
+            )
+        except HttpError as exc:
+            if exc.code != "principal_concurrency_limited":
+                raise
+            log_event(
+                logger,
+                "warning",
+                "principal_throttled",
+                request_id=current_request_id(),
+                operation="authorize",
+                error_kind="rate-limit",
+                http_status=429,
+                outcome="degraded",
+                route_class=_route_class(request),
+                principal=session.principal_id,
+                scope=scope,
+            )
+            raise rate_limit_error(
+                code="principal_concurrency_limited",
+                message="too many concurrent requests for principal",
+                headers=exc.headers,
+            ) from exc
+        except ConcurrencyLeaseUnavailable as exc:
+            log_event(
+                logger,
+                "error",
+                "principal_concurrency_unavailable",
+                request_id=current_request_id(),
+                operation="manage-concurrency-lease",
+                error_kind="storage",
+                error=exc,
+                http_status=503,
+                outcome="degraded",
+                route_class=_route_class(request),
+                principal=session.principal_id,
+                scope=scope,
+            )
+            raise HttpError(
+                503,
+                "principal_concurrency_unavailable",
+                "principal concurrency control is temporarily unavailable",
+                headers={"retry-after": "1"},
+            ) from exc
     key = _principal_concurrency_acquire(session, scope, _route_class(request))
     try:
         return await operation()

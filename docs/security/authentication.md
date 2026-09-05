@@ -47,6 +47,9 @@ Override under registry `defaults.limits.<class>` or `principals.<id>.limits.<cl
 
 Principal body limits cannot exceed `MEMORY_ROUTER_MAX_BODY_BYTES`.
 
+Cluster mode stores principal rate counters and concurrency leases in PostgreSQL. PostgreSQL
+availability is required for authenticated principal requests.
+
 ### Audit
 
 `authorization_decision`: request ID, principal, key ID, bank, scope, decision, status, latency, source. No token, digest, or Authorization header.

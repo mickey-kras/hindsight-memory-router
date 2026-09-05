@@ -113,6 +113,22 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     }
 
 
+def test_principal_endpoints_document_shared_limit_failures() -> None:
+    spec = _spec()
+    paths = spec["paths"]
+    principal_operations = (
+        paths["/v1/default/banks"]["get"],
+        paths["/v1/default/banks/{writer_id}/memories"]["post"],
+        paths["/v1/default/banks/{writer_id}/memories/recall"]["post"],
+    )
+    expected = {"$ref": "#/components/responses/PrincipalLimitUnavailable"}
+    for operation in principal_operations:
+        assert operation["responses"]["503"] == expected
+
+    unavailable = spec["components"]["responses"]["PrincipalLimitUnavailable"]
+    assert "Retry-After" in unavailable["headers"]
+
+
 def test_openclaw_openapi_success_statuses_match_dispatch() -> None:
     from memory_router.facade_routes import FACADE_ROUTES
 

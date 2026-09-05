@@ -339,12 +339,33 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         node.name: node for node in ast.walk(tree) if isinstance(node, ast.AsyncFunctionDef)
     }
     admin = functions["_dispatch_admin"]
-    selectors = {
-        part
+    prefix_guards = [
+        node
         for node in ast.walk(admin)
-        if isinstance(node, ast.If)
-        for part in _condition_parts(node.test, {})
-    }
+        if isinstance(node, ast.If) and ast.unparse(node.test) == f"not {ADMIN_PREFIX}"
+    ]
+    assert len(prefix_guards) == 1
+    assert any(
+        isinstance(statement, ast.Return)
+        and isinstance(statement.value, ast.Constant)
+        and statement.value.value is None
+        for statement in prefix_guards[0].body
+    )
+    authorized_calls = [
+        node
+        for node in ast.walk(admin)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_authorized_admin_response"
+    ]
+    assert len(authorized_calls) == 1
+    assert [ast.unparse(argument) for argument in authorized_calls[0].args] == [
+        "request",
+        "admin",
+        "pathname",
+        "method",
+    ]
+
     authorized = functions["_authorized_admin_response"]
     patterns = {
         name: pattern
@@ -353,8 +374,58 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         for name, pattern in [assignment]
     }
 
-    assert ADMIN_PREFIX in selectors
     assert f"regex:{patterns['match']}" == ADMIN_ITEM_REGEX
+    item_guards = [
+        node
+        for node in ast.walk(authorized)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == "match is not None"
+    ]
+    assert len(item_guards) == 1
+    item_assignments = [
+        statement
+        for statement in item_guards[0].body
+        if isinstance(statement, ast.Assign)
+        and [ast.unparse(target) for target in statement.targets] == ["response"]
+        and isinstance(statement.value, ast.Await)
+        and isinstance(statement.value.value, ast.Call)
+        and isinstance(statement.value.value.func, ast.Name)
+        and statement.value.value.func.id == "_admin_item_response"
+    ]
+    assert len(item_assignments) == 1
+    item_call = item_assignments[0].value.value
+    assert isinstance(item_call, ast.Call)
+    assert [ast.unparse(argument) for argument in item_call.args] == [
+        "request",
+        "admin",
+        "method",
+        "match",
+    ]
+    response_guards = [
+        statement
+        for statement in item_guards[0].body
+        if isinstance(statement, ast.If) and ast.unparse(statement.test) == "response is not None"
+    ]
+    assert len(response_guards) == 1
+    assert any(
+        isinstance(statement, ast.Return) and ast.unparse(statement.value) == "response"
+        for statement in response_guards[0].body
+    )
+
+    dispatch = functions["dispatch"]
+    admin_dispatch_calls = [
+        node.value
+        for node in ast.walk(dispatch)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "_dispatch_admin"
+    ]
+    assert len(admin_dispatch_calls) == 1
+    assert [ast.unparse(argument) for argument in admin_dispatch_calls[0].args] == [
+        "request",
+        "pathname",
+        "method",
+    ]
 
 
 def test_behavior_changes_require_integration_smoke_update() -> None:

@@ -92,6 +92,10 @@ createServer(async (req, res) => {
 
     if (method === "GET" && url.pathname === "/v1/default/banks") {
       const q = (url.searchParams.get("q") ?? "").toLowerCase();
+      if (q === "integration-delay") {
+        record({ kind: "integration_delay_started" });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
       const limit = Number(url.searchParams.get("limit") ?? "100");
       const offset = Number(url.searchParams.get("offset") ?? "0");
       const banks = ["alpha-only", "private", "shared"]

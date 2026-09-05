@@ -60,7 +60,16 @@ jobs:
           import { readFileSync } from 'node:fs';
 
           const sarif = JSON.parse(readFileSync('aislop.sarif', 'utf8'));
-          const findings = sarif.runs.flatMap((run) => run.results ?? []);
+          const allFindings = sarif.runs.flatMap((run) => run.results ?? []);
+          const ignored = allFindings.filter(
+            (finding) => finding.ruleId === 'security/dependency-audit-skipped',
+          );
+          if (ignored.length > 0) {
+            console.warn('Aislop dependency audit timed out; required CI audit remains authoritative.');
+          }
+          const findings = allFindings
+            // Dependency audit is enforced by the required CI checks job.
+            .filter((finding) => finding.ruleId !== 'security/dependency-audit-skipped');
           if (findings.length > 0) {
             const rules = [...new Set(findings.map((finding) => finding.ruleId ?? 'unknown'))];
             console.error(`Aislop reported ${findings.length} finding(s): ${rules.join(', ')}`);

@@ -350,6 +350,10 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     rate_limiter = SimpleNamespace(initialize=AsyncMock())
     monkeypatch.setattr(app_module, "PostgresDatabase", postgres_database)
     monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda database: rate_limiter)
+    concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(
+        app_module, "PostgresConcurrencyLimiter", lambda database: concurrency_limiter
+    )
 
     store = object()
     hindsight = SimpleNamespace(close=AsyncMock())
@@ -379,12 +383,15 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     create_database.assert_awaited_once_with("postgresql://db")
     validate_storage.assert_awaited_once_with(primary_db, "postgresql://db")
     recover_interrupted.assert_awaited_once()
-    assert postgres_database_calls == [("postgresql://db", 2)]
+    assert postgres_database_calls == [("postgresql://db", 5)]
     rate_db.initialize.assert_awaited_once()
     rate_limiter.initialize.assert_awaited_once()
+    concurrency_limiter.initialize.assert_awaited_once()
     assert runtime.database is primary_db
     assert runtime.rate_limit_database is rate_db
     assert runtime.quarantine_limiter is rate_limiter
+    assert runtime.principal_limiter is rate_limiter
+    assert runtime.principal_concurrency_limiter is concurrency_limiter
     assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
     assert runtime.auth_limiter is not rate_limiter
     assert hindsight_limiter_calls == [rate_limiter]

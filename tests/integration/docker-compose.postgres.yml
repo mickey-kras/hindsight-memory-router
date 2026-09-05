@@ -77,8 +77,9 @@ services:
         condition: service_started
     environment:
       MEMORY_ROUTER_PORT: "8890"
-      MEMORY_ROUTER_DEPLOYMENT_MODE: single
-      MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "false"
+      MEMORY_ROUTER_DEPLOYMENT_MODE: cluster
+      # No admin tokens are configured on this principal-only test service.
+      MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true"
       MEMORY_ROUTER_PRINCIPALS: /app/integration-principal-registry.json
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
@@ -86,6 +87,40 @@ services:
       QUARANTINE_DATABASE_URL: postgresql://quarantine:quarantine@postgres:5432/quarantine
     ports:
       - "127.0.0.1:${MEMORY_ROUTER_TEST_PRINCIPALS_PORT:-8893}:8890"
+    volumes:
+      - ./principal-registry.json:/app/integration-principal-registry.json:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); response=opener.open('http://127.0.0.1:8890/health/ready', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - internal
+
+  memory-router-principals-peer:
+    image: hindsight-memory-router:ci
+    depends_on:
+      postgres:
+        condition: service_healthy
+      hindsight:
+        condition: service_started
+    environment:
+      MEMORY_ROUTER_PORT: "8890"
+      MEMORY_ROUTER_DEPLOYMENT_MODE: cluster
+      MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true"
+      MEMORY_ROUTER_PRINCIPALS: /app/integration-principal-registry.json
+      HINDSIGHT_BASE_URL: http://hindsight:8888
+      HINDSIGHT_API_KEY: test-hindsight-key
+      QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
+      QUARANTINE_DATABASE_URL: postgresql://quarantine:quarantine@postgres:5432/quarantine
+    ports:
+      - "127.0.0.1:${MEMORY_ROUTER_TEST_PRINCIPALS_PEER_PORT:-8894}:8890"
     volumes:
       - ./principal-registry.json:/app/integration-principal-registry.json:ro
     healthcheck:

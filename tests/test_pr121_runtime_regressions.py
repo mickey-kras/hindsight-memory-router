@@ -30,6 +30,8 @@ async def test_postgres_runtime_keeps_auth_failure_limiter_in_memory(
     monkeypatch.setattr(app_module, "PostgresDatabase", lambda *args, **kwargs: rate_db)
     shared_limiter = SimpleNamespace(initialize=AsyncMock())
     monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda _: shared_limiter)
+    concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(app_module, "PostgresConcurrencyLimiter", lambda _: concurrency_limiter)
 
     store = object()
     hindsight = SimpleNamespace(close=AsyncMock())
@@ -46,4 +48,6 @@ async def test_postgres_runtime_keeps_auth_failure_limiter_in_memory(
     await runtime.start()
     assert runtime.quarantine_limiter is shared_limiter
     assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
+    assert runtime.principal_limiter is shared_limiter
+    assert runtime.principal_concurrency_limiter is concurrency_limiter
     await runtime.stop()
