@@ -45,6 +45,7 @@ unknown_recall_writer="unknown-recall-${mode}-${router_db}"
 checks_total=0
 checks_passed=0
 current_check="startup"
+failure_message=""
 
 export MEMORY_ROUTER_TEST_PORT="$router_port"
 export FAKE_HINDSIGHT_STATE_DIR="./tmp/${mode}-${router_db}/state"
@@ -83,6 +84,7 @@ run_check() {
 
 fail_check() {
   local message="$1"
+  failure_message="$message"
   echo "failed" >&2
   echo "${mode}/${router_db} integration smoke failed at check ${checks_total}: ${current_check}" >&2
   echo "$message" >&2
@@ -98,7 +100,9 @@ cleanup() {
 }
 
 dump_debug() {
-  local exit_code="$?"
+  local exit_code="$1"
+  HMR_MODE="$mode" HMR_STORAGE="$router_db" HMR_CHECK="$current_check" \
+    HMR_MESSAGE="$failure_message" HMR_EXIT="$exit_code" python3 -c 'import json,os; print("HMR_FAILURE_JSON=" + json.dumps({key.lower(): os.environ["HMR_"+key] for key in ("MODE", "STORAGE", "CHECK", "MESSAGE", "EXIT")}))' >&2
   echo ""
   echo "${mode}/${router_db} integration smoke failed after ${checks_passed}/${checks_total} checks" >&2
   if [[ -n "$current_check" ]]; then
@@ -106,11 +110,19 @@ dump_debug() {
   fi
   docker compose -p "$project" -f "$compose_file" ps >&2 || true
   docker compose -p "$project" -f "$compose_file" logs --no-color --tail=250 >&2 || true
+}
+
+finish_smoke() {
+  local exit_code="$?"
+  trap - EXIT
+  if [[ "$exit_code" -ne 0 ]]; then
+    dump_debug "$exit_code" || true
+  fi
+  cleanup
   exit "$exit_code"
 }
 
-trap dump_debug ERR
-trap cleanup EXIT
+trap finish_smoke EXIT
 
 run_check "generate disposable quarantine keypair" bash -c "openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out '${tmp_dir}/private.pem' >/dev/null 2>&1 && openssl rsa -pubout -in '${tmp_dir}/private.pem' -out '${tmp_dir}/public.pem' >/dev/null 2>&1"
 export QUARANTINE_PUBLIC_KEY="$(base64 -w0 "${tmp_dir}/public.pem")"
