@@ -40,7 +40,7 @@ function diagnostics(lines) {
   // Only explicit diagnostics participate in grouping. Exit codes alone are ambiguous.
   const tests = lines.filter(line => /^FAILED\s+\S+::\S+\s+-\s+\S/.test(line));
   if (tests.length) return [...new Set(tests)];
-  const smoke = lines.filter(line => /^HMR_FAILURE_JSON=/.test(line)).flatMap(line => {
+  const smoke = lines.filter(line => line.startsWith('HMR_FAILURE_JSON=')).flatMap(line => {
     try {
       const failure = JSON.parse(line.slice('HMR_FAILURE_JSON='.length));
       if (!failure.message || !failure.check || !failure.storage || !failure.mode) return [];
@@ -67,7 +67,9 @@ function reportsForJob(run, job, log) {
       if (!detail) identity.push(run.id, job.id || run.run_attempt, step.number);
       const key = `v2-${hash(identity)}`;
       const occurrence = `${run.id}-${job.id || run.run_attempt}-${step.number}-${key}`;
-      const evidence = clean((detail || lines.slice(-35).join('\n') || 'Job logs unavailable.').slice(0,10000));
+      const symptoms = lines.filter(line => /HMR_FAILURE_JSON=|current check:|(?:failed|error|exited)(?:[ :.(]|$)/i.test(line));
+      const excerpt = (symptoms.length ? symptoms.slice(-50) : lines.slice(-35)).join('\n');
+      const evidence = clean((detail || excerpt || 'Job logs unavailable.').slice(0,10000));
       return { key, occurrence,
         title: clean(`[ci] ${job.name}: ${detail ? detail.split('\n')[0] : `${step.name} — diagnostics incomplete`}`).slice(0,240),
         body: `Main publish did not succeed.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
