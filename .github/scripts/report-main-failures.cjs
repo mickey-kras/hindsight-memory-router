@@ -43,9 +43,9 @@ function diagnostics(lines) {
   const smoke = lines.filter(line => line.startsWith('HMR_FAILURE_JSON=')).flatMap(line => {
     try {
       const failure = JSON.parse(line.slice('HMR_FAILURE_JSON='.length));
-      if (!failure.message || !failure.check || !failure.storage || !failure.mode) return [];
+      if (!failure.check || !failure.storage || !failure.mode) return [];
       return [JSON.stringify({ mode: failure.mode, storage: failure.storage,
-        check: failure.check, message: failure.message })];
+        check: failure.check, message: failure.message || null })];
     } catch { return []; }
   });
   if (smoke.length) return [...new Set(smoke)];
@@ -63,19 +63,22 @@ function reportsForJob(run, job, log) {
     const lines = stepLines(log, step);
     const details = diagnostics(lines);
     return (details.length ? details : [null]).map(detail => {
+      const incompleteSmoke = detail?.startsWith('{"mode":') && !JSON.parse(detail).message;
+      const identified = detail && !incompleteSmoke;
       const identity = [job.name, step.name, detail];
-      if (!detail) identity.push(run.id, job.id || run.run_attempt, step.number);
+      if (!identified) identity.push(run.id, job.id || run.run_attempt, step.number);
       const key = `v2-${hash(identity)}`;
       const occurrence = `${run.id}-${job.id || run.run_attempt}-${step.number}-${key}`;
       const symptoms = lines.filter(line => /HMR_FAILURE_JSON=|current check:|(?:failed|error|exited)(?:[ :.(]|$)/i.test(line));
       const excerpt = (symptoms.length ? symptoms.slice(-50) : lines.slice(-35)).join('\n');
-      const evidence = clean((detail || excerpt || 'Job logs unavailable.').slice(0,10000));
+      const diagnostic = identified ? detail : [detail, excerpt].filter(Boolean).join('\n');
+      const evidence = clean((diagnostic || 'Job logs unavailable.').slice(0,10000));
       return { key, occurrence,
         title: clean(`[ci] ${job.name}: ${detail ? detail.split('\n')[0] : `${step.name} — diagnostics incomplete`}`).slice(0,240),
         body: `Main publish did not succeed.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
           `- Commit: ${run.head_sha}\n- Report attempt: ${run.run_attempt}\n- Run: ${run.html_url}\n` +
           `- Job: ${job.html_url}\n- Conclusion: ${job.conclusion}\n\n` +
-          (detail ? '' : 'No reliable error signature was available; this issue is scoped to this occurrence.\n\n') +
+          (identified ? '' : 'No reliable error signature was available; this issue is scoped to this occurrence.\n\n') +
           `\`\`\`text\n${evidence}\n\`\`\`\n` };
     });
   });

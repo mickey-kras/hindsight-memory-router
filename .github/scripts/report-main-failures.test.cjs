@@ -49,6 +49,18 @@ test('smoke assertion groups on backend, check and exact message', () => {
     reportsForJob(run, job, smoke('postgres'))[0].key);
 });
 
+test('a known smoke assertion does not hide another backend startup failure', () => {
+  const smoke = (storage, message) => log('HMR_FAILURE_JSON=' + JSON.stringify({ mode: 'fake',
+    storage, check: 'readiness', message }));
+  const text = [smoke('sqlite', 'HTTP 503'), smoke('postgres', '')].join('\n');
+  const reports = reportsForJob(run, job, text);
+  assert.equal(reports.length, 2);
+  const next = reportsForJob({ ...run, id: 43 }, job, text);
+  assert.equal(reports[0].key, next[0].key);
+  assert.notEqual(reports[1].key, next[1].key);
+  assert.match(reports[1].body, /No reliable error signature/);
+});
+
 test('missing logs and job-level cancellation still create actionable occurrence', () => {
   const result = reportsForJob(run, { ...job, steps: [], conclusion: 'cancelled' }, '');
   assert.equal(result.length, 1);
