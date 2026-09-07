@@ -8,12 +8,13 @@ from typing import Any
 from .db import Database, Tx
 from .errors import HttpError
 
+_FOR_UPDATE = " FOR UPDATE"
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
-_MEMORY_SELECT_FOR_UPDATE = _MEMORY_SELECT + " FOR UPDATE"
+_MEMORY_SELECT_FOR_UPDATE = _MEMORY_SELECT + _FOR_UPDATE
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
-_REQUEST_SELECT_FOR_UPDATE = _REQUEST_SELECT + " FOR UPDATE"
+_REQUEST_SELECT_FOR_UPDATE = _REQUEST_SELECT + _FOR_UPDATE
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
-_ID_SELECT_FOR_UPDATE = _ID_SELECT + " FOR UPDATE"
+_ID_SELECT_FOR_UPDATE = _ID_SELECT + _FOR_UPDATE
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
     "WHERE status IN ('pending','postponed') "
@@ -299,9 +300,7 @@ class QuarantineRepository:
             or {}
         )
         existing_live = existing if existing and not _expired(existing, at) else None
-        existing_pending = bool(
-            existing_live and existing_live.get("status") in {"pending", "postponed"}
-        )
+        existing_pending = _is_pending(existing_live)
         next_pending = int(totals.get("pending_count") or 0) - int(existing_pending) + 1
         existing_bytes = int(existing_live.get("encrypted_bytes") or 0) if existing_live else 0
         item_bytes = len(
@@ -310,16 +309,21 @@ class QuarantineRepository:
         next_bytes = int(totals.get("encrypted_bytes") or 0) - existing_bytes + item_bytes
         if next_pending > capacity.max_pending_items or next_bytes > capacity.max_encrypted_bytes:
             raise HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted")
-        if capacity.max_pending_items_per_writer > 0:
-            scoped = await _scoped_pending_count(tx, item, at)
-            if existing_pending and existing_live and _same_scope(item, existing_live):
-                scoped -= 1
-            if scoped + 1 > capacity.max_pending_items_per_writer:
-                raise HttpError(
-                    507,
-                    "quarantine_writer_capacity_exceeded",
-                    "writer quarantine capacity is exhausted",
-                )
+        if capacity.max_pending_items_per_writer <= 0:
+            return
+        scoped = await _scoped_pending_count(tx, item, at)
+        if existing_pending and existing_live and _same_scope(item, existing_live):
+            scoped -= 1
+        if scoped + 1 > capacity.max_pending_items_per_writer:
+            raise HttpError(
+                507,
+                "quarantine_writer_capacity_exceeded",
+                "writer quarantine capacity is exhausted",
+            )
+
+
+def _is_pending(item: dict[str, Any] | None) -> bool:
+    return bool(item and item.get("status") in {"pending", "postponed"})
 
 
 async def _scoped_pending_count(tx: Tx, item: dict[str, Any], at: str) -> int:

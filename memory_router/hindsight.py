@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
-from typing import Any, Literal, cast
+from typing import Any, Literal, NoReturn, cast
 from urllib.parse import quote, urlencode
 
 import httpx
@@ -84,7 +84,8 @@ class HindsightGatewayError(HttpError):
             "network": "Upstream memory service is unavailable",
             "response-too-large": "Upstream memory service response exceeded the size limit",
         }[kind]
-        status = client_status if client_status is not None else (504 if kind == "timeout" else 502)
+        default_status = 504 if kind == "timeout" else 502
+        status = client_status if client_status is not None else default_status
         super().__init__(status, code, message)
         self.kind = kind
         self.upstream_status = upstream_status
@@ -195,7 +196,7 @@ class HindsightGateway:
             RecallResponse.model_validate(value)
             for result in value.get("results", []):
                 canonical_json({"id": result["id"], "text": result["text"]})
-        except (ValidationError, ValueError, RecursionError) as exc:
+        except (ValidationError, ValueError) as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
@@ -309,20 +310,7 @@ class HindsightGateway:
             async with asyncio.timeout(self.timeout_ms / 1000.0):
                 response = await self.client.send(request, stream=True)
                 if not response.is_success:
-                    client_status = None
-                    if (
-                        preserve_http_status
-                        and 400 <= response.status_code < 500
-                        and response.status_code not in {401, 403}
-                    ):
-                        client_status = response.status_code
-                    raise HindsightGatewayError(
-                        "http",
-                        upstream_status=response.status_code,
-                        operation=operation,
-                        method=method,
-                        client_status=client_status,
-                    )
+                    _raise_http_error(response, operation, method, preserve_http_status)
                 if expected_status is not None and response.status_code != expected_status:
                     raise HindsightGatewayError(
                         "invalid-response",
@@ -330,52 +318,16 @@ class HindsightGateway:
                         operation=operation,
                         method=method,
                     )
-                content_length = response.headers.get("content-length")
-                if (
-                    content_length
-                    and content_length.isdigit()
-                    and int(content_length) > max_response_bytes
-                ):
+                if _response_too_large(response, max_response_bytes):
                     raise HindsightGatewayError(
                         "response-too-large",
                         upstream_status=response.status_code,
                         operation=operation,
                         method=method,
                     )
-                chunks: list[bytes] = []
-                size = 0
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > max_response_bytes:
-                        raise HindsightGatewayError(
-                            "response-too-large",
-                            upstream_status=response.status_code,
-                            operation=operation,
-                            method=method,
-                        )
-                    chunks.append(chunk)
-                raw = b"".join(chunks)
-                if not raw:
-                    if allow_empty_response:
-                        return None
-                    raise HindsightGatewayError(
-                        "invalid-response",
-                        upstream_status=response.status_code,
-                        operation=operation,
-                        method=method,
-                    )
-                try:
-                    value = json.loads(raw, parse_constant=_reject_non_finite)
-                    _assert_response_depth(value)
-                    _assert_finite_numbers(value)
-                    return value
-                except (ValueError, UnicodeError, RecursionError) as exc:
-                    raise HindsightGatewayError(
-                        "invalid-response",
-                        upstream_status=response.status_code,
-                        operation=operation,
-                        method=method,
-                    ) from exc
+                return await _read_response(
+                    response, max_response_bytes, operation, method, allow_empty_response
+                )
         except (TimeoutError, httpx.TimeoutException) as exc:
             raise HindsightGatewayError(
                 "timeout", operation=operation, method=method, timeout_ms=self.timeout_ms
@@ -387,6 +339,70 @@ class HindsightGateway:
         finally:
             if response is not None:
                 await response.aclose()
+
+
+async def _read_response(
+    response: httpx.Response,
+    limit: int,
+    operation: str,
+    method: str,
+    allow_empty: bool,
+) -> Any:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in response.aiter_bytes():
+        size += len(chunk)
+        if size > limit:
+            raise HindsightGatewayError(
+                "response-too-large",
+                upstream_status=response.status_code,
+                operation=operation,
+                method=method,
+            )
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    if not raw:
+        if allow_empty:
+            return None
+        raise HindsightGatewayError(
+            "invalid-response",
+            upstream_status=response.status_code,
+            operation=operation,
+            method=method,
+        )
+    try:
+        value = json.loads(raw, parse_constant=_reject_non_finite)
+        _assert_response_depth(value)
+        _assert_finite_numbers(value)
+        return value
+    except (ValueError, RecursionError) as exc:
+        raise HindsightGatewayError(
+            "invalid-response",
+            upstream_status=response.status_code,
+            operation=operation,
+            method=method,
+        ) from exc
+
+
+def _raise_http_error(
+    response: httpx.Response, operation: str, method: str, preserve_status: bool
+) -> NoReturn:
+    status = response.status_code
+    client_status = (
+        status if preserve_status and 400 <= status < 500 and status not in {401, 403} else None
+    )
+    raise HindsightGatewayError(
+        "http",
+        upstream_status=status,
+        operation=operation,
+        method=method,
+        client_status=client_status,
+    )
+
+
+def _response_too_large(response: httpx.Response, limit: int) -> bool:
+    content_length = response.headers.get("content-length")
+    return bool(content_length and content_length.isdigit() and int(content_length) > limit)
 
 
 def hindsight_log_fields(error: HindsightGatewayError) -> dict[str, Any]:

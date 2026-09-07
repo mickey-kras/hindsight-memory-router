@@ -12,6 +12,8 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 CAPACITY_LOCK_ID = 72_499_123
+SQLITE_PREFIX = "sqlite:"
+SQLITE_MEMORY_PATH = ":memory:"
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS quarantine_items (
@@ -39,10 +41,10 @@ def is_postgres(url: str) -> bool:
 
 
 def sqlite_path(url: str) -> str:
-    value = url[len("sqlite:") :]
+    value = url[len(SQLITE_PREFIX) :]
     if not value:
         raise RuntimeError("SQLite database path is required")
-    if value == ":memory:":
+    if value == SQLITE_MEMORY_PATH:
         return value
     if value.startswith("///"):
         return "/" + value[3:]
@@ -109,7 +111,7 @@ class SqliteDatabase(Database):
         self.lock = asyncio.Lock()
 
     async def initialize(self) -> None:
-        if self.path != ":memory:":
+        if self.path != SQLITE_MEMORY_PATH:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.connection = await aiosqlite.connect(self.path)
         self.connection.row_factory = aiosqlite.Row
@@ -138,6 +140,10 @@ class SqliteDatabase(Database):
                 await self.connection.commit()
 
 
+def _escaped_quote(statement: str, index: int, quoted: bool, quote: str) -> bool:
+    return quoted and index + 1 < len(statement) and statement[index + 1] == quote
+
+
 class PostgresTx(Tx):
     dialect = "postgres"
 
@@ -154,14 +160,14 @@ class PostgresTx(Tx):
             char = statement[index]
             if char == "'" and not in_double:
                 output.append(char)
-                if in_single and index + 1 < len(statement) and statement[index + 1] == "'":
+                if _escaped_quote(statement, index, in_single, "'"):
                     output.append("'")
                     index += 2
                     continue
                 in_single = not in_single
             elif char == '"' and not in_single:
                 output.append(char)
-                if in_double and index + 1 < len(statement) and statement[index + 1] == '"':
+                if _escaped_quote(statement, index, in_double, '"'):
                     output.append('"')
                     index += 2
                     continue
@@ -216,7 +222,7 @@ class PostgresDatabase(Database):
 async def create_database(url: str) -> Database:
     if is_postgres(url):
         db: Database = PostgresDatabase(url)
-    elif url.startswith("sqlite:"):
+    elif url.startswith(SQLITE_PREFIX):
         db = SqliteDatabase(sqlite_path(url))
     else:
         raise RuntimeError(
@@ -256,10 +262,10 @@ async def validate_storage(db: Database, url: str) -> None:
         await db.ping()
     except Exception as exc:
         raise RuntimeError(f"quarantine storage is unreachable: {exc}") from exc
-    if not url.startswith("sqlite:"):
+    if not url.startswith(SQLITE_PREFIX):
         return
     path = sqlite_path(url)
-    if path == ":memory:":
+    if path == SQLITE_MEMORY_PATH:
         return
     if not os.access(Path(path).parent, os.W_OK) or (
         Path(path).exists() and not os.access(path, os.W_OK)

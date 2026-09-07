@@ -261,30 +261,12 @@ class OpenClawFacade:
         query: list[tuple[str, str]] | None = None,
         bank_override: str | None = None,
     ) -> Any:
-        target_bank = bank_override
-        if target_bank is None:
-            writer = self.policy.registry.writers.get(writer_id)
-            if writer is None:
-                await self._audit(
-                    writer_id,
-                    "openclaw_unknown_writer",
-                    {"method": route.method, "resource": route.resource},
-                    None,
-                )
-                raise HttpError(404, "unknown_writer", "writer is not registered")
-            target_bank = writer.write_bank
+        target_bank = await self._target_bank(route, writer_id, bank_override)
 
         forwarded_query = [
             (key, value) for key, value in (query or []) if key in route.query_params
         ]
-        supplied_query = {key for key, _ in forwarded_query}
-        missing_query = [name for name in route.required_query_params if name not in supplied_query]
-        if missing_query:
-            raise HttpError(
-                400,
-                "invalid_request",
-                f"missing required query parameter: {missing_query[0]}",
-            )
+        _validate_required_query(route, forwarded_query)
         request_evidence: dict[str, Any] = {
             "bank_id": writer_id,
             "resource": route.resource,
@@ -295,12 +277,7 @@ class OpenClawFacade:
         if body is not None:
             request_evidence["body"] = body
 
-        if route.resource == "reflect" and body is not None:
-            self.policy.limits.assert_recall_bounds(body)
-        if route.template == "memories/dry-run-extract" and body is not None:
-            if not isinstance(body.get("items"), list):
-                raise HttpError(400, "invalid_request", "items must be an array")
-            self.policy.limits.assert_retain_bounds(body)
+        self._validate_request_bounds(route, body)
 
         if route.read:
             await self.policy.limits.consume_recall(writer_id)
@@ -309,30 +286,8 @@ class OpenClawFacade:
 
         # Route metadata and free-text query values are not persisted payload. Query
         # values decode valid Base64 but do not fail closed on ordinary URL syntax.
-        scan_input = {
-            key: value
-            for key, value in request_evidence.items()
-            if key not in {"resource", "query"}
-        }
-        scan = (
-            scan_recall_body(scan_input)
-            if route.request_scan == "recall"
-            else scan_retain_body(scan_input)
-        )
-        scan.extend(scan_query_values(forwarded_query))
-        if not scan.safe:
-            await self._audit(writer_id, "openclaw_suspicious_request", request_evidence, scan)
-            raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
-
-        bank = quote(target_bank, safe="")
-        suffix = route.template
-        for name in route.params:
-            suffix = suffix.replace("{" + name + "}", quote(params[name], safe=""))
-        path = f"/v1/default/banks/{bank}"
-        if suffix:
-            path += f"/{suffix}"
-        if forwarded_query:
-            path += "?" + urlencode(forwarded_query)
+        await self._validate_safe_request(route, writer_id, request_evidence, forwarded_query)
+        path = _facade_path(route, target_bank, params, forwarded_query)
 
         value = await self.policy.hindsight.openclaw_request(
             f"openclaw_{route.operation}",
@@ -343,35 +298,7 @@ class OpenClawFacade:
             allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
-            response_scan = await _scan_facade_response(value, writer_id=writer_id)
-            if response_scan.findings and all(
-                finding.matched in {"facade_field_limit", "facade_time_limit"}
-                for finding in response_scan.findings
-            ):
-                error_kind = (
-                    "timeout"
-                    if any(
-                        finding.matched == "facade_time_limit" for finding in response_scan.findings
-                    )
-                    else "response-too-large"
-                )
-                raise _scan_unavailable(
-                    "response exceeded safety scan limits",
-                    error_kind=error_kind,
-                    writer_id=writer_id,
-                )
-            if not response_scan.safe:
-                await self._audit(
-                    writer_id,
-                    "openclaw_suspicious_provider_response",
-                    {"resource": route.resource, "response": value},
-                    response_scan,
-                )
-                raise HttpError(
-                    502,
-                    "hindsight_unsafe_response",
-                    "upstream memory service returned unsafe content",
-                )
+            await self._validate_safe_response(route, writer_id, value)
         try:
             if route.strict_contract:
                 validate_openclaw_response(
@@ -386,6 +313,79 @@ class OpenClawFacade:
                 "invalid-response", operation=f"openclaw_{route.operation}", method=route.method
             ) from exc
         return value
+
+    async def _validate_safe_request(
+        self,
+        route: FacadeRoute,
+        writer_id: str,
+        evidence: dict[str, Any],
+        query: list[tuple[str, str]],
+    ) -> None:
+        scan_input = {
+            key: value for key, value in evidence.items() if key not in {"resource", "query"}
+        }
+        scan = (
+            scan_recall_body(scan_input)
+            if route.request_scan == "recall"
+            else scan_retain_body(scan_input)
+        )
+        scan.extend(scan_query_values(query))
+        if scan.safe:
+            return
+        await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan)
+        raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
+
+    async def _target_bank(self, route: FacadeRoute, writer_id: str, override: str | None) -> str:
+        if override is not None:
+            return override
+        writer = self.policy.registry.writers.get(writer_id)
+        if writer is not None:
+            return str(writer.write_bank)
+        await self._audit(
+            writer_id,
+            "openclaw_unknown_writer",
+            {"method": route.method, "resource": route.resource},
+            None,
+        )
+        raise HttpError(404, "unknown_writer", "writer is not registered")
+
+    def _validate_request_bounds(self, route: FacadeRoute, body: dict[str, Any] | None) -> None:
+        if body is None:
+            return
+        if route.resource == "reflect":
+            self.policy.limits.assert_recall_bounds(body)
+        if route.template != "memories/dry-run-extract":
+            return
+        if not isinstance(body.get("items"), list):
+            raise HttpError(400, "invalid_request", "items must be an array")
+        self.policy.limits.assert_retain_bounds(body)
+
+    async def _validate_safe_response(self, route: FacadeRoute, writer_id: str, value: Any) -> None:
+        response_scan = await _scan_facade_response(value, writer_id=writer_id)
+        if _only_scan_limit_findings(response_scan):
+            error_kind = (
+                "timeout"
+                if any(finding.matched == "facade_time_limit" for finding in response_scan.findings)
+                else "response-too-large"
+            )
+            raise _scan_unavailable(
+                "response exceeded safety scan limits",
+                error_kind=error_kind,
+                writer_id=writer_id,
+            )
+        if response_scan.safe:
+            return
+        await self._audit(
+            writer_id,
+            "openclaw_suspicious_provider_response",
+            {"resource": route.resource, "response": value},
+            response_scan,
+        )
+        raise HttpError(
+            502,
+            "hindsight_unsafe_response",
+            "upstream memory service returned unsafe content",
+        )
 
     async def _audit(
         self,
@@ -429,3 +429,32 @@ class OpenClawFacade:
                 writer_id=writer_id,
                 reason=reason,
             )
+
+
+def _only_scan_limit_findings(scan: SafetyResult) -> bool:
+    limits = {"facade_field_limit", "facade_time_limit"}
+    return bool(scan.findings) and all(finding.matched in limits for finding in scan.findings)
+
+
+def _validate_required_query(route: FacadeRoute, query: list[tuple[str, str]]) -> None:
+    supplied = {key for key, _ in query}
+    missing = [name for name in route.required_query_params if name not in supplied]
+    if missing:
+        raise HttpError(400, "invalid_request", f"missing required query parameter: {missing[0]}")
+
+
+def _facade_path(
+    route: FacadeRoute,
+    bank_id: str,
+    params: dict[str, str],
+    query: list[tuple[str, str]],
+) -> str:
+    suffix = route.template
+    for name in route.params:
+        suffix = suffix.replace("{" + name + "}", quote(params[name], safe=""))
+    path = f"/v1/default/banks/{quote(bank_id, safe='')}"
+    if suffix:
+        path += f"/{suffix}"
+    if query:
+        path += "?" + urlencode(query)
+    return path
