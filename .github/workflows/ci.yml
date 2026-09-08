@@ -49,6 +49,9 @@ jobs:
             --output-file requirements.txt pyproject.toml
           diff -u requirements.expected.txt requirements.txt
 
+      - name: PR branch updater tests
+        run: node --test .github/scripts/pr-branch-updater.test.cjs
+
       - name: Failure reporter tests
         run: node --test .github/scripts/report-main-failures.test.cjs
 
