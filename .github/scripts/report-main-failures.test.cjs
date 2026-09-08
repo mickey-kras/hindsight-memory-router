@@ -144,3 +144,11 @@ run_check 'start compose stack' bash -c 'exit 3'
   assert.match(result.stderr, /HMR_FAILURE_JSON=.*start compose stack/);
   assert.ok(result.stderr.indexOf('logs --no-color') < result.stderr.indexOf('CLEANUP'));
 });
+
+test('captures fractional timestamps in the final step second', () => {
+  const text = '2026-09-05T00:00:03.900Z #225: unresolved: missing workflows permission';
+  const first = reportsForJob(run, job, text)[0];
+  assert.match(first.body, /#225: unresolved: missing workflows permission/);
+  assert.equal(first.key, reportsForJob({ ...run, id: 43 }, job, text)[0].key);
+  assert.doesNotMatch(first.body, /diagnostics incomplete/);
+});
