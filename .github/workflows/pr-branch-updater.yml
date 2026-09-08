@@ -13,50 +13,13 @@ jobs:
     name: update
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
       - name: Update open PR branches
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const repoFullName = `${owner}/${repo}`;
-
-            const pulls = await github.paginate(github.rest.pulls.list, {
-              owner,
-              repo,
-              state: 'open',
-              base: 'main',
-              per_page: 100,
-            });
-
-            core.info(`Found ${pulls.length} open PR(s) targeting main.`);
-
-            for (const pull of pulls) {
-              if (pull.head.repo.full_name !== repoFullName) {
-                core.info(`#${pull.number}: skip fork PR ${pull.head.repo.full_name}`);
-                continue;
-              }
-
-              const { data: current } = await github.rest.pulls.get({
-                owner,
-                repo,
-                pull_number: pull.number,
-              });
-
-              if (current.mergeable_state !== 'behind') {
-                core.info(`#${pull.number}: skip, mergeable_state=${current.mergeable_state}`);
-                continue;
-              }
-
-              try {
-                await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
-                  owner,
-                  repo,
-                  pull_number: pull.number,
-                  expected_head_sha: current.head.sha,
-                });
-                core.info(`#${pull.number}: update branch requested`);
-              } catch (error) {
-                core.warning(`#${pull.number}: update branch failed: ${error.message}`);
-              }
-            }
+            const { run } = require('./.github/scripts/pr-branch-updater.cjs');
+            await run({ github, context, core });
