@@ -62,132 +62,141 @@ class QuarantineAdminService:
         item = await self._require_claim_candidate(quarantine_id)
         decrypted = self._verify_exact(item, body.get("decrypted"))
         if item["kind"] == "retain_request":
-            payload = decrypted["payload"]
-            if not isinstance(payload, dict) or payload.get("action") != "retain":
-                raise HttpError(
-                    409, "invalid_quarantine_payload", "retain approval requires a retain request"
-                )
-            writer_id = payload.get("writer_id")
-            if not isinstance(writer_id, str) or not writer_id:
-                raise HttpError(400, "invalid_request", "writer_id is required")
-            writer = self.registry.writers.get(writer_id)
-            if writer is None:
-                raise HttpError(
-                    409,
-                    "writer_not_registered",
-                    "register the writer before approving its original retain request",
-                )
-            retain_body = parse_retain_body(payload.get("body"))
-            scan = scan_retain_body(retain_body)
-            if not scan.safe and item.get("reason") != "suspicious_content":
-                raise HttpError(
-                    409,
-                    "quarantine_security_review_required",
-                    "unsafe retain cannot be approved from an unknown-writer review; resubmit after registering the writer so it is classified as suspicious_content",
-                )
-            self.limits.assert_retain_bounds(retain_body)
-            source = str(item.get("source") or "quarantine_review")
-            approved_body = prepare_retain_body(
-                retain_body, writer_id, source, writer.write_bank, decision="approved"
-            )
-            details = {"writer_id": writer_id, "target_bank": writer.write_bank}
-            if item["status"] == "review_side_effect_completed":
-                await finish_approve_retain(
-                    self.repository,
-                    quarantine_id,
-                    str(item["updated_at"]),
-                    details,
-                    expected_sha256=str(item["sha256"]),
-                )
-            else:
-                await self.limits.consume_retain(writer_id)
-                at = iso_now()
-                claimed = await claim_review(
-                    self.repository,
-                    quarantine_id,
-                    "retain_request",
-                    at,
-                    self.review_stale_seconds,
-                    True,
-                    expected_sha256=str(item["sha256"]),
-                    expected_updated_at=_optional_str(item.get("updated_at")),
-                )
-                try:
-                    await self.hindsight.retain(writer.write_bank, approved_body)
-                except Exception as exc:
-                    if _side_effect_definitely_failed(exc):
-                        await interrupt_review(self.repository, claimed, at, exc)
-                    raise
-                await complete_side_effect(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    expected_sha256=str(item["sha256"]),
-                )
-                await finish_approve_retain(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    details,
-                    expected_sha256=str(item["sha256"]),
-                )
-            return {
-                "approved": True,
-                "quarantine_id": quarantine_id,
-                "target_bank": writer.write_bank,
-            }
+            return await self._approve_retain(quarantine_id, item, decrypted)
         if item["kind"] == "recalled_memory":
-            payload = decrypted["payload"]
-            if (
-                not isinstance(payload, dict)
-                or payload.get("action") != "recalled_memory"
-                or not isinstance(payload.get("result"), dict)
-            ):
-                raise HttpError(
-                    409,
-                    "invalid_quarantine_payload",
-                    "recalled memory approval requires a recalled memory payload",
-                )
-            bank_id = payload.get("bank_id")
-            result = payload["result"]
-            if bank_id != item.get("source_bank") or result.get("id") != item.get(
-                "source_memory_id"
-            ):
-                raise HttpError(
-                    409,
-                    "quarantine_source_mismatch",
-                    "recalled memory source does not match quarantine metadata",
-                )
-            at = iso_now()
-            claimed = await claim_review(
-                self.repository,
-                quarantine_id,
-                "recalled_memory",
-                at,
-                self.review_stale_seconds,
-                expected_sha256=str(item["sha256"]),
-                expected_updated_at=_optional_str(item.get("updated_at")),
-            )
-            try:
-                await finish_approve_memory(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    expected_sha256=str(item["sha256"]),
-                )
-            except Exception as exc:
-                await interrupt_review(self.repository, claimed, at, exc)
-                raise
-            return {
-                "reviewed": True,
-                "allowed": True,
-                "quarantine_id": quarantine_id,
-                "source_bank": bank_id,
-                "source_memory_id": result["id"],
-            }
+            return await self._approve_recalled_memory(quarantine_id, item, decrypted)
         raise HttpError(
             409, "invalid_review_action", "this quarantine item cannot be approved into memory"
         )
+
+    async def _approve_retain(
+        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any]
+    ) -> dict[str, Any]:
+        payload = decrypted["payload"]
+        if not isinstance(payload, dict) or payload.get("action") != "retain":
+            raise HttpError(
+                409, "invalid_quarantine_payload", "retain approval requires a retain request"
+            )
+        writer_id = payload.get("writer_id")
+        if not isinstance(writer_id, str) or not writer_id:
+            raise HttpError(400, "invalid_request", "writer_id is required")
+        writer = self.registry.writers.get(writer_id)
+        if writer is None:
+            raise HttpError(
+                409,
+                "writer_not_registered",
+                "register the writer before approving its original retain request",
+            )
+        retain_body = parse_retain_body(payload.get("body"))
+        if not scan_retain_body(retain_body).safe and item.get("reason") != "suspicious_content":
+            raise HttpError(
+                409,
+                "quarantine_security_review_required",
+                "unsafe retain cannot be approved from an unknown-writer review; resubmit after registering the writer so it is classified as suspicious_content",
+            )
+        self.limits.assert_retain_bounds(retain_body)
+        approved_body = prepare_retain_body(
+            retain_body,
+            writer_id,
+            str(item.get("source") or "quarantine_review"),
+            writer.write_bank,
+            decision="approved",
+        )
+        details = {"writer_id": writer_id, "target_bank": writer.write_bank}
+        if item["status"] == "review_side_effect_completed":
+            await finish_approve_retain(
+                self.repository,
+                quarantine_id,
+                str(item["updated_at"]),
+                details,
+                expected_sha256=str(item["sha256"]),
+            )
+        else:
+            await self._execute_retain_approval(
+                quarantine_id, item, writer_id, writer.write_bank, approved_body, details
+            )
+        return {"approved": True, "quarantine_id": quarantine_id, "target_bank": writer.write_bank}
+
+    async def _execute_retain_approval(
+        self,
+        quarantine_id: str,
+        item: dict[str, Any],
+        writer_id: str,
+        bank: str,
+        approved_body: dict[str, Any],
+        details: dict[str, Any],
+    ) -> None:
+        await self.limits.consume_retain(writer_id)
+        at = iso_now()
+        claimed = await claim_review(
+            self.repository,
+            quarantine_id,
+            "retain_request",
+            at,
+            self.review_stale_seconds,
+            True,
+            expected_sha256=str(item["sha256"]),
+            expected_updated_at=_optional_str(item.get("updated_at")),
+        )
+        try:
+            await self.hindsight.retain(bank, approved_body)
+        except Exception as exc:
+            if _side_effect_definitely_failed(exc):
+                await interrupt_review(self.repository, claimed, at, exc)
+            raise
+        await complete_side_effect(
+            self.repository, quarantine_id, at, expected_sha256=str(item["sha256"])
+        )
+        await finish_approve_retain(
+            self.repository, quarantine_id, at, details, expected_sha256=str(item["sha256"])
+        )
+
+    async def _approve_recalled_memory(
+        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any]
+    ) -> dict[str, Any]:
+        payload = decrypted["payload"]
+        if (
+            not isinstance(payload, dict)
+            or payload.get("action") != "recalled_memory"
+            or not isinstance(payload.get("result"), dict)
+        ):
+            raise HttpError(
+                409,
+                "invalid_quarantine_payload",
+                "recalled memory approval requires a recalled memory payload",
+            )
+        bank_id = payload.get("bank_id")
+        result = payload["result"]
+        if bank_id != item.get("source_bank") or result.get("id") != item.get("source_memory_id"):
+            raise HttpError(
+                409,
+                "quarantine_source_mismatch",
+                "recalled memory source does not match quarantine metadata",
+            )
+        at = iso_now()
+        claimed = await claim_review(
+            self.repository,
+            quarantine_id,
+            "recalled_memory",
+            at,
+            self.review_stale_seconds,
+            expected_sha256=str(item["sha256"]),
+            expected_updated_at=_optional_str(item.get("updated_at")),
+        )
+        try:
+            await finish_approve_memory(
+                self.repository, quarantine_id, at, expected_sha256=str(item["sha256"])
+            )
+        except Exception as exc:
+            await interrupt_review(self.repository, claimed, at, exc)
+            raise
+        return {
+            "reviewed": True,
+            "allowed": True,
+            "quarantine_id": quarantine_id,
+            "source_bank": bank_id,
+            "source_memory_id": result["id"],
+        }
 
     async def reject(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_claim_candidate(quarantine_id)

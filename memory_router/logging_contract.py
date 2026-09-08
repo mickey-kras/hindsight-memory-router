@@ -224,10 +224,7 @@ def sanitize_output_field(key: str, value: Any) -> Any | None:
             value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
         )
     if key in DURATION_FIELDS:
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            numeric = float(value)
-            return numeric if math.isfinite(numeric) and numeric >= 0 else None
-        return None
+        return _nonnegative_number(value)
     if key in BOOLEAN_FIELDS:
         return value if isinstance(value, bool) else None
     if key in {"error_kind", "error_fingerprint", "outcome", "route_class", "reason"}:
@@ -235,84 +232,32 @@ def sanitize_output_field(key: str, value: Any) -> Any | None:
     return None
 
 
+def _nonnegative_number(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) and numeric >= 0 else None
+
+
 def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
     safe_fields = {
         key: value for key, value in fields.items() if key in SAFE_FIELDS and value is not None
     }
-    if "error_kind" in safe_fields and (
-        not isinstance(safe_fields["error_kind"], str)
-        or safe_fields["error_kind"] not in ERROR_KINDS
-    ):
-        safe_fields["error_kind"] = "unexpected"
-    if "error_fingerprint" in safe_fields:
-        fingerprint = safe_text(safe_fields["error_fingerprint"], fallback="", limit=80)
-        if FINGERPRINT_PATTERN.fullmatch(fingerprint):
-            safe_fields["error_fingerprint"] = fingerprint
-        else:
-            safe_fields.pop("error_fingerprint")
-    if "outcome" in safe_fields and (
-        not isinstance(safe_fields["outcome"], str) or safe_fields["outcome"] not in OUTCOMES
-    ):
-        safe_fields["outcome"] = "failed"
-    if "reason" in safe_fields:
-        reason = safe_text(safe_fields["reason"], fallback="runtime-other", limit=128).replace(
-            "_", "-"
-        )
-        safe_fields["reason"] = reason if reason in REASONS else "runtime-other"
-    if "request_id" in safe_fields:
-        request_id = safe_text(safe_fields["request_id"], fallback="unavailable", limit=129)
-        if REQUEST_ID_PATTERN.fullmatch(request_id):
-            safe_fields["request_id"] = request_id
-        else:
-            safe_fields.pop("request_id")
-    if "writer_id" in safe_fields:
-        writer_id = safe_text(safe_fields["writer_id"], fallback="", limit=129)
-        safe_fields["writer_id"] = (
-            writer_id
-            if WRITER_ID_PATTERN.fullmatch(writer_id)
-            else _opaque_text(safe_fields["writer_id"], "writer")
-        )
+    _sanitize_vocabularies(safe_fields)
+    _sanitize_pattern_field(safe_fields, "error_fingerprint", FINGERPRINT_PATTERN, 80)
+    _sanitize_pattern_field(
+        safe_fields, "request_id", REQUEST_ID_PATTERN, 129, fallback="unavailable"
+    )
+    _sanitize_identifier(safe_fields, "writer_id", "writer")
     for id_field in ("principal", "token_key_id", "bank"):
-        if id_field in safe_fields:
-            candidate = safe_text(safe_fields[id_field], fallback="", limit=129)
-            safe_fields[id_field] = (
-                candidate
-                if WRITER_ID_PATTERN.fullmatch(candidate)
-                else _opaque_text(safe_fields[id_field], id_field)
-            )
-    if "decision" in safe_fields and safe_fields["decision"] not in DECISIONS:
-        safe_fields.pop("decision")
-    if "scope" in safe_fields:
-        scope = safe_text(safe_fields["scope"], fallback="", limit=65)
-        if scope in SCOPE_VOCABULARY:
-            safe_fields["scope"] = scope
-        else:
-            safe_fields.pop("scope")
-    if "logger" in safe_fields:
-        logger_name = safe_text(safe_fields["logger"], fallback="", limit=129)
-        safe_fields["logger"] = (
-            logger_name
-            if LOGGER_PATTERN.fullmatch(logger_name)
-            else _opaque_text(safe_fields["logger"], "logger")
-        )
+        _sanitize_identifier(safe_fields, id_field, id_field)
+    _sanitize_scope(safe_fields)
+    _sanitize_logger(safe_fields)
     for field, limit in TEXT_LIMITS.items():
         if field in safe_fields:
             safe_fields[field] = safe_text(safe_fields[field], fallback="unavailable", limit=limit)
-    if safe_fields.get("operation") not in OPERATIONS:
-        safe_fields.pop("operation", None)
-    for field in ("request_method", "upstream_method"):
-        if field in safe_fields:
-            method = safe_fields[field].upper()
-            safe_fields[field] = method
-            if method not in METHODS:
-                safe_fields.pop(field)
-    for field in INTEGER_FIELDS | DURATION_FIELDS | BOOLEAN_FIELDS:
-        if field in safe_fields:
-            value = sanitize_output_field(field, safe_fields[field])
-            if value is None:
-                safe_fields.pop(field)
-            else:
-                safe_fields[field] = value
+    _sanitize_operation_fields(safe_fields)
+    _sanitize_typed_fields(safe_fields)
     route_class = safe_fields.get("route_class")
     safe_fields["route_class"] = (
         route_class
@@ -320,3 +265,86 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
         else "unmatched"
     )
     return safe_fields
+
+
+def _sanitize_vocabularies(fields: dict[str, Any]) -> None:
+    error_kind = fields.get("error_kind")
+    if "error_kind" in fields and (
+        not isinstance(error_kind, str) or error_kind not in ERROR_KINDS
+    ):
+        fields["error_kind"] = "unexpected"
+    outcome = fields.get("outcome")
+    if "outcome" in fields and (not isinstance(outcome, str) or outcome not in OUTCOMES):
+        fields["outcome"] = "failed"
+    if "reason" in fields:
+        reason = safe_text(fields["reason"], fallback="runtime-other", limit=128).replace("_", "-")
+        fields["reason"] = reason if reason in REASONS else "runtime-other"
+    decision = fields.get("decision")
+    if not isinstance(decision, str) or decision not in DECISIONS:
+        fields.pop("decision", None)
+
+
+def _sanitize_scope(fields: dict[str, Any]) -> None:
+    if "scope" not in fields:
+        return
+    scope = safe_text(fields["scope"], fallback="", limit=65)
+    if scope in SCOPE_VOCABULARY:
+        fields["scope"] = scope
+    else:
+        fields.pop("scope")
+
+
+def _sanitize_logger(fields: dict[str, Any]) -> None:
+    if "logger" not in fields:
+        return
+    name = safe_text(fields["logger"], fallback="", limit=129)
+    fields["logger"] = (
+        name if LOGGER_PATTERN.fullmatch(name) else _opaque_text(fields["logger"], "logger")
+    )
+
+
+def _sanitize_operation_fields(fields: dict[str, Any]) -> None:
+    if fields.get("operation") not in OPERATIONS:
+        fields.pop("operation", None)
+    for field in ("request_method", "upstream_method"):
+        if field in fields:
+            fields[field] = fields[field].upper()
+            if fields[field] not in METHODS:
+                fields.pop(field)
+
+
+def _sanitize_typed_fields(fields: dict[str, Any]) -> None:
+    for field in INTEGER_FIELDS | DURATION_FIELDS | BOOLEAN_FIELDS:
+        if field not in fields:
+            continue
+        value = sanitize_output_field(field, fields[field])
+        if value is None:
+            fields.pop(field)
+        else:
+            fields[field] = value
+
+
+def _sanitize_pattern_field(
+    fields: dict[str, Any],
+    key: str,
+    pattern: re.Pattern[str],
+    limit: int,
+    *,
+    fallback: str = "",
+) -> None:
+    if key not in fields:
+        return
+    candidate = safe_text(fields[key], fallback=fallback, limit=limit)
+    if pattern.fullmatch(candidate):
+        fields[key] = candidate
+    else:
+        fields.pop(key)
+
+
+def _sanitize_identifier(fields: dict[str, Any], key: str, prefix: str) -> None:
+    if key not in fields:
+        return
+    candidate = safe_text(fields[key], fallback="", limit=129)
+    fields[key] = (
+        candidate if WRITER_ID_PATTERN.fullmatch(candidate) else _opaque_text(fields[key], prefix)
+    )

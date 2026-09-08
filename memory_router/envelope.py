@@ -224,14 +224,7 @@ def parse_envelope(value: Any) -> dict[str, Any]:
         raise ValueError("encrypted quarantine envelope must be an object")
     envelope = dict(value)
     encryption = dict(envelope["encryption"])
-    if envelope.get("version") != 1:
-        raise ValueError("unsupported quarantine envelope version")
-    if encryption.get("algorithm") != "AES-256-GCM":
-        raise ValueError("unsupported quarantine encryption algorithm")
-    if encryption.get("key_wrap") != "RSA-OAEP-SHA256":
-        raise ValueError("unsupported quarantine key wrapping algorithm")
-    if encryption.get("aad") not in (None, AAD_FORMAT):
-        raise ValueError("unsupported quarantine AAD format")
+    _validate_encryption_metadata(envelope, encryption)
     if not isinstance(envelope.get("quarantine_id"), str) or not QUARANTINE_ID_RE.fullmatch(
         envelope["quarantine_id"]
     ):
@@ -243,9 +236,7 @@ def parse_envelope(value: Any) -> dict[str, Any]:
     ):
         raise ValueError("invalid quarantine object digest")
     for field in (ENVELOPE_WRAPPED_FIELD, "iv_b64", "tag_b64"):
-        if not isinstance(encryption.get(field), str):
-            raise ValueError(f"{field} must be valid base64")
-        base64.b64decode(encryption[field], validate=True)
+        _validate_base64_field(encryption, field)
     if len(base64.b64decode(encryption["iv_b64"], validate=True)) != 12:
         raise ValueError("invalid AES-GCM initialization vector length")
     if len(base64.b64decode(encryption["tag_b64"], validate=True)) != 16:
@@ -254,6 +245,33 @@ def parse_envelope(value: Any) -> dict[str, Any]:
         raise ValueError("ciphertext_b64 must be valid base64")
     base64.b64decode(envelope["ciphertext_b64"], validate=True)
     return envelope
+
+
+def _validate_encryption_metadata(envelope: dict[str, Any], encryption: dict[str, Any]) -> None:
+    expected = {
+        "version": (envelope.get("version"), 1, "unsupported quarantine envelope version"),
+        "algorithm": (
+            encryption.get("algorithm"),
+            "AES-256-GCM",
+            "unsupported quarantine encryption algorithm",
+        ),
+        "key_wrap": (
+            encryption.get("key_wrap"),
+            "RSA-OAEP-SHA256",
+            "unsupported quarantine key wrapping algorithm",
+        ),
+    }
+    for actual, wanted, message in expected.values():
+        if actual != wanted:
+            raise ValueError(message)
+    if encryption.get("aad") not in (None, AAD_FORMAT):
+        raise ValueError("unsupported quarantine AAD format")
+
+
+def _validate_base64_field(encryption: dict[str, Any], field: str) -> None:
+    if not isinstance(encryption.get(field), str):
+        raise ValueError(f"{field} must be valid base64")
+    base64.b64decode(encryption[field], validate=True)
 
 
 def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:

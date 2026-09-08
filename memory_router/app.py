@@ -150,18 +150,18 @@ def _normalize_dot_segments(path: str) -> str:
     last_index = len(segments) - 1
     for index, segment in enumerate(segments):
         dot_segment = _PERCENT_DOT.sub(".", segment)
-        if dot_segment == ".":
-            if index == last_index:
-                output.append("")
-            continue
-        if dot_segment == "..":
-            if output and not (len(output) == 1 and output[0] == ""):
-                output.pop()
-            if index == last_index:
-                output.append("")
+        if dot_segment in {".", ".."}:
+            _apply_dot_segment(output, dot_segment, index == last_index)
             continue
         output.append(segment)
     return "/".join(output)
+
+
+def _apply_dot_segment(output: list[str], segment: str, trailing: bool) -> None:
+    if segment == ".." and output and output != [""]:
+        output.pop()
+    if trailing:
+        output.append("")
 
 
 def _decode_path_segment(value: str) -> str:
@@ -504,13 +504,15 @@ async def _json_body(
     if not body:
         return _EMPTY_BODY if empty_as_none else {}
     try:
-        value = json.loads(
-            bytes(body), parse_constant=lambda raw: (_ for _ in ()).throw(ValueError(raw))
-        )
-    except (ValueError, UnicodeError, RecursionError) as exc:
+        value = json.loads(bytes(body), parse_constant=_reject_json_constant)
+    except (ValueError, RecursionError) as exc:
         raise HttpError(400, "invalid_json", "invalid JSON body") from exc
     _assert_json_depth(value)
     return value
+
+
+def _reject_json_constant(raw: str) -> None:
+    raise ValueError(raw)
 
 
 async def _auth_failure_rate(route_group: str) -> None:
