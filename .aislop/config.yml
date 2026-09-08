@@ -1,6 +1,9 @@
 ci:
   failBelow: 95
 
+telemetry:
+  enabled: false
+
 exclude:
   - dist
   - node_modules
@@ -9,6 +12,8 @@ exclude:
 
 rules:
   security/hardcoded-secret: error
+  # The required npm audit gate owns dependency findings and its narrow exception.
+  security/vulnerable-dependency: off
   # Replaced by the deterministic allowlist in tests/test_hardcoded_urls.py.
   ai-slop/hardcoded-url: off
 

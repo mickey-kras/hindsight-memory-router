@@ -31,8 +31,6 @@ jobs:
       contents: write
       pull-requests: write
     uses: ./.github/workflows/pr-branch-updater.yml
-    secrets:
-      PR_BRANCH_UPDATE_TOKEN: ${{ secrets.PR_BRANCH_UPDATE_TOKEN }}
 
   aislop:
     name: aislop
