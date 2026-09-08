@@ -140,8 +140,8 @@ class SqliteDatabase(Database):
                 await self.connection.commit()
 
 
-def _escaped_quote(statement: str, index: int, quoted: bool, quote: str) -> bool:
-    return quoted and index + 1 < len(statement) and statement[index + 1] == quote
+def _escaped_quote(statement: str, index: int, quote: str) -> bool:
+    return index + 1 < len(statement) and statement[index + 1] == quote
 
 
 class PostgresTx(Tx):
@@ -154,30 +154,26 @@ class PostgresTx(Tx):
     def sql(statement: str) -> str:
         output: list[str] = []
         index = 0
-        in_single = False
-        in_double = False
+        active_quote: str | None = None
         while index < len(statement):
             char = statement[index]
-            if char == "'" and not in_double:
+            if active_quote is not None:
                 output.append(char)
-                if _escaped_quote(statement, index, in_single, "'"):
-                    output.append("'")
+                if char == active_quote and _escaped_quote(statement, index, active_quote):
+                    output.append(active_quote)
                     index += 2
                     continue
-                in_single = not in_single
-            elif char == '"' and not in_single:
+                if char == active_quote:
+                    active_quote = None
+            elif char in {"'", '"'}:
                 output.append(char)
-                if _escaped_quote(statement, index, in_double, '"'):
-                    output.append('"')
-                    index += 2
-                    continue
-                in_double = not in_double
-            elif char == "?" and not in_single and not in_double:
+                active_quote = char
+            elif char == "?":
                 output.append("%s")
             else:
                 output.append(char)
             index += 1
-        if in_single or in_double:
+        if active_quote is not None:
             raise ValueError("unterminated SQL quoted literal")
         return "".join(output)
 

@@ -102,6 +102,27 @@ class Cursor:
         return self.many
 
 
+@pytest.mark.parametrize(
+    ("statement", "expected"),
+    [
+        ("SELECT '?', ?", "SELECT '?', %s"),
+        ('SELECT "?", ?', 'SELECT "?", %s'),
+        ("SELECT 'it''s ?', ?", "SELECT 'it''s ?', %s"),
+        ('SELECT "a""?b", ?', 'SELECT "a""?b", %s'),
+    ],
+)
+def test_postgres_tx_translation_preserves_quoted_placeholders(
+    statement: str, expected: str
+) -> None:
+    assert db_module.PostgresTx.sql(statement) == expected
+
+
+@pytest.mark.parametrize("statement", ["SELECT '", 'SELECT "'])
+def test_postgres_tx_translation_rejects_unterminated_quotes(statement: str) -> None:
+    with pytest.raises(ValueError, match="unterminated SQL quoted literal"):
+        db_module.PostgresTx.sql(statement)
+
+
 @pytest.mark.asyncio
 async def test_postgres_tx_translation() -> None:
     connection = SimpleNamespace(execute=AsyncMock())
