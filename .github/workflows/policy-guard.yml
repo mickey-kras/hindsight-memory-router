@@ -1,7 +1,7 @@
 name: policy
 
 on:
-  pull_request_target:
+  pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
@@ -27,6 +27,8 @@ jobs:
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
+            const dependabotWorkflowPath = [wfDir, 'dependabot-auto-merge.yml'].join('/');
+            const dependabotScriptPath = ['.github', 'scripts', 'dependabot-auto-merge.cjs'].join('/');
             const failureReporterPath = ['.github', 'scripts', 'upsert-main-failure-issue.sh'].join('/');
             const sonarReporterPath = ['.github', 'scripts', 'sync-sonar-findings.py'].join('/');
             const packagePath = 'package.json';
@@ -73,7 +75,8 @@ jobs:
                 (path.endsWith('.yml') || path.endsWith('.yaml')),
             );
             const policySensitiveChanged =
-              workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath);
+              workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath) ||
+              changed.has(dependabotScriptPath);
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -204,8 +207,8 @@ jobs:
               const privileged = privilegedWriteKeys.filter((permission) =>
                 hasYamlScalar(content, permission, 'write'),
               );
-              if (privileged.length > 0 && path !== publishPath) {
-                fail(`${path}: privileged write permissions are only allowed in publish.yml`);
+              if (privileged.length > 0 && ![publishPath, dependabotWorkflowPath].includes(path)) {
+                fail(`${path}: privileged write permissions are only allowed in trusted workflows`);
               }
               if (privileged.length > 0 && hasYamlEvent(content, 'pull_request')) {
                 fail(`${path}: pull request workflows must not have privileged write permissions`);
@@ -258,11 +261,52 @@ jobs:
                 if (!publish.includes('python .github/scripts/sync-sonar-findings.py')) {
                   fail('publish.yml: SonarQube failures must synchronize actionable findings');
                 }
+                if (!publish.includes('echo "published=false" >> "$GITHUB_OUTPUT"')) {
+                  fail('publish.yml: superseded main runs must finish without a false publish failure');
+                }
+                if (!publish.includes("if: steps.push.outputs.published == 'true'")) {
+                  fail('publish.yml: post-publish supply-chain steps must require a published image');
+                }
                 if (!/^  pages:\s*$/m.test(publish)) {
                   fail('publish.yml: architecture Pages deployment job must stay present');
                 }
                 if (!publish.includes('actions/deploy-pages@')) {
                   fail('publish.yml: architecture site must deploy through GitHub Pages Actions');
+                }
+              }
+            }
+
+            if (changed.has(dependabotWorkflowPath)) {
+              if (removedOrRenamed.has(dependabotWorkflowPath)) {
+                fail('dependabot-auto-merge.yml: protected workflow must not be removed or renamed');
+              } else {
+                const workflow = await readFileAtHead(dependabotWorkflowPath);
+                if (!hasYamlEvent(workflow, 'pull_request_target')) {
+                  fail('dependabot-auto-merge.yml: trusted PR trigger must stay enabled');
+                }
+                if (!workflow.includes(['ref: $', '{{ github.workflow_sha }}'].join(''))) {
+                  fail('dependabot-auto-merge.yml: automation must load from the trusted workflow revision');
+                }
+                if (!workflow.includes("github.event.pull_request.user.login == 'dependabot[bot]'")) {
+                  fail('dependabot-auto-merge.yml: PR events must remain restricted to Dependabot');
+                }
+              }
+            }
+
+            if (changed.has(dependabotScriptPath)) {
+              if (removedOrRenamed.has(dependabotScriptPath)) {
+                fail('dependabot-auto-merge.cjs: protected automation must not be removed or renamed');
+              } else {
+                const automation = await readFileAtHead(dependabotScriptPath);
+                const contracts = [
+                  'id: 49699333',
+                  'verifiedCommits',
+                  "'--auto', '--squash', '--match-head-commit'",
+                ];
+                for (const contract of contracts) {
+                  if (!automation.includes(contract)) {
+                    fail(`dependabot-auto-merge.cjs: missing safety contract: ${contract}`);
+                  }
                 }
               }
             }
