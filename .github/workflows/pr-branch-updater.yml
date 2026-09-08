@@ -2,6 +2,10 @@ name: pr branch updater
 
 on:
   workflow_call:
+    secrets:
+      PR_BRANCH_UPDATE_TOKEN:
+        description: Repository token with Contents, Pull requests, and Workflows write access
+        required: false
   workflow_dispatch:
 
 permissions:
@@ -20,6 +24,7 @@ jobs:
       - name: Update open PR branches
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
+          github-token: ${{ secrets.PR_BRANCH_UPDATE_TOKEN || github.token }}
           script: |
             const { run } = require('./.github/scripts/pr-branch-updater.cjs');
             await run({ github, context, core });
