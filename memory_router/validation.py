@@ -9,6 +9,8 @@ from .canonical import canonical_json
 from .errors import HttpError
 from .models import RecallBody, RetainBody
 
+_INVALID_RETAIN_BODY_MESSAGE = "retain body is invalid"
+
 
 def parse_retain_body(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
@@ -26,13 +28,13 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
 
 def _retain_validation_message(loc: tuple[Any, ...]) -> str:
     if not loc:
-        return "retain body is invalid"
+        return _INVALID_RETAIN_BODY_MESSAGE
     if loc[0] == "async":
         return "async must be a boolean"
     if loc[0] == "document_tags":
         return "document_tags must contain strings"
     if loc[0] != "items":
-        return "retain body is invalid"
+        return _INVALID_RETAIN_BODY_MESSAGE
     if len(loc) == 1:
         return "retain body requires at least one memory item"
     if len(loc) == 2:
@@ -47,7 +49,7 @@ def _retain_validation_message(loc: tuple[Any, ...]) -> str:
         "metadata": "metadata must map strings to strings",
         "update_mode": "update_mode must be replace or append",
     }
-    return mapping.get(field, "retain body is invalid")
+    return mapping.get(field, _INVALID_RETAIN_BODY_MESSAGE)
 
 
 def parse_recall_body(value: Any) -> dict[str, Any]:

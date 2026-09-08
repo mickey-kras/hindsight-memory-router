@@ -196,7 +196,7 @@ class HindsightGateway:
             RecallResponse.model_validate(value)
             for result in value.get("results", []):
                 canonical_json({"id": result["id"], "text": result["text"]})
-        except (ValidationError, ValueError) as exc:
+        except ValueError as exc:
             raise HindsightGatewayError(
                 "invalid-response", operation="recall", method="POST"
             ) from exc
