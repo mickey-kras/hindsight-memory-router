@@ -5,10 +5,6 @@ async function updatePull({ github, owner, repo, number, sleep }) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
     if (pull.state !== 'open' || pull.base.ref !== 'main' ||
         pull.head.repo?.full_name !== `${owner}/${repo}`) return 'ineligible';
-    // Dependabot owns rebases; Actions commits require approval and cannot update workflows.
-    if (pull.user?.login === 'dependabot[bot]' && pull.user.id === 49699333) {
-      return 'managed by Dependabot automatic rebasing';
-    }
     // PR base metadata can lag behind the branch tip after a merge.
     const { data: main } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
     const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
@@ -18,6 +14,19 @@ async function updatePull({ github, owner, repo, number, sleep }) {
     if (comparison.ahead_by === 0) return 'current';
     if (!Number.isInteger(comparison.ahead_by) || comparison.ahead_by < 0) {
       throw new Error('invalid commit comparison');
+    }
+    // Ask Dependabot to write the commit so its normal PR checks can run.
+    if (pull.user?.login === 'dependabot[bot]' && pull.user.id === 49699333) {
+      const marker = `<!-- dependabot-rebase:${pull.head.sha}:${main.object.sha} -->`;
+      const comments = await github.paginate(github.rest.issues.listComments, {
+        owner, repo, issue_number: number, per_page: 100,
+      });
+      if (comments.some(comment => comment.user?.id === 41898282 && comment.body?.includes(marker))) {
+        return 'Dependabot rebase already requested; completion pending';
+      }
+      await github.rest.issues.createComment({ owner, repo, issue_number: number,
+        body: `@dependabot rebase\n\n${marker}` });
+      return 'Dependabot rebase requested; completion pending';
     }
     if (pull.mergeable === false) return 'conflicting';
     if (pull.mergeable === true) {
