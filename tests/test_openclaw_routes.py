@@ -159,6 +159,38 @@ async def test_unknown_query_key_is_dropped_without_scanning() -> None:
     assert "ignore" not in forwarded
 
 
+@pytest.mark.parametrize("detail", [None, "metadata", "content", "full"])
+@pytest.mark.asyncio
+async def test_mental_model_list_preserves_upstream_detail_default(detail: str | None) -> None:
+    query = "" if detail is None else f"?detail={detail}"
+    path = f"/v1/default/banks/openclaw/mental-models{query}"
+    content = None if detail in {None, "metadata"} else "Prefers concise answers"
+    payload = {
+        "items": [
+            {
+                "id": "page-1",
+                "bank_id": "resolved-main",
+                "name": "Preferences",
+                "content": content,
+                "source_query": None,
+                "max_tokens": None,
+                "trigger": None,
+            }
+        ],
+        "total": 1,
+    }
+    policy = _policy(payload)
+    app_module.runtime.policy = policy
+
+    result = await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert result.status_code == 200
+    assert _payload(result) == payload
+    assert policy.hindsight.openclaw_request.await_args.args[2] == (
+        f"/v1/default/banks/resolved-main/mental-models{query}"
+    )
+
+
 @pytest.mark.parametrize(
     "body",
     [{}, {"query": 123}, {"query": "safe", "max_tokens": "many"}],
