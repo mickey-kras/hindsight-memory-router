@@ -121,7 +121,21 @@ jobs:
         run: coverage run -m pytest && coverage report --fail-under=90
 
       - name: Python dependency audit
-        run: pip-audit -r requirements.txt
+        run: |
+          for attempt in 1 2 3; do
+            if pip-audit -r requirements.txt > "$RUNNER_TEMP/pip-audit.log" 2>&1; then
+              cat "$RUNNER_TEMP/pip-audit.log"
+              exit 0
+            else
+              status=$?
+            fi
+            cat "$RUNNER_TEMP/pip-audit.log"
+            if ! grep -Eq '^(requests\.exceptions\.(ConnectionError|Timeout|ConnectTimeout|ReadTimeout)|urllib3\.exceptions\.(ProtocolError|MaxRetryError|ReadTimeoutError)|ConnectionResetError):' "$RUNNER_TEMP/pip-audit.log" || [ "$attempt" -eq 3 ]; then
+              exit "$status"
+            fi
+            echo "::warning::Python audit connection failed; retrying ($attempt/3)"
+            sleep "$((attempt * 5))"
+          done
 
       - name: Bandit
         run: bandit -q -r memory_router
