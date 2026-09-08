@@ -5,8 +5,10 @@ async function updatePull({ github, owner, repo, number, sleep }) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
     if (pull.state !== 'open' || pull.base.ref !== 'main' ||
         pull.head.repo?.full_name !== `${owner}/${repo}`) return 'ineligible';
+    // PR base metadata can lag behind the branch tip after a merge.
+    const { data: main } = await github.rest.git.getRef({ owner, repo, ref: 'heads/main' });
     const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
-      owner, repo, basehead: `${pull.head.sha}...${pull.base.sha}`,
+      owner, repo, basehead: `${pull.head.sha}...${main.object.sha}`,
     });
     // With the PR head as the comparison base, ahead_by counts missing main commits.
     if (comparison.ahead_by === 0) return 'current';
