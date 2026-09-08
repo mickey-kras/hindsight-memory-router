@@ -8,6 +8,8 @@ from .repository import QuarantineRepository, insert_event, is_expired, stored
 from .timestamps import parse_iso
 
 REVIEW_STALE_SECONDS = 60
+_EXPIRED_MESSAGE = "quarantine item has expired"
+_NOT_FOUND_MESSAGE = "quarantine item not found"
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
@@ -33,7 +35,7 @@ def _assert_reviewable(item: dict[str, Any], at: str) -> None:
             409, "quarantine_already_finalized", "quarantine item is not pending review"
         )
     if is_expired(item, at):
-        raise HttpError(409, "quarantine_expired", "quarantine item has expired")
+        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
 
 
 def _assert_snapshot(
@@ -67,7 +69,7 @@ async def postpone(
     async with repository.db.transaction() as tx:
         item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
-            raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
         if not expired:
             _assert_reviewable(item, at)
@@ -90,7 +92,7 @@ async def postpone(
             )
             result = stored(await tx.fetchone(_SELECT_ITEM, (quarantine_id,))) or {}
     if expired:
-        raise HttpError(409, "quarantine_expired", "quarantine item has expired")
+        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
     return result
 
 
@@ -129,7 +131,7 @@ async def claim_review(
     async with repository.db.transaction() as tx:
         item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
-            raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         _assert_snapshot(item, expected_sha256, expected_updated_at)
         item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
         if not expired:
@@ -151,7 +153,7 @@ async def claim_review(
                 )
             claimed = item
     if expired:
-        raise HttpError(409, "quarantine_expired", "quarantine item has expired")
+        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
     return claimed
 
 
@@ -258,7 +260,7 @@ async def remove(
     async with repository.db.transaction() as tx:
         item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
         if not item:
-            raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
         if not expired:
             _assert_reviewable(item, at)
@@ -267,7 +269,7 @@ async def remove(
             )
             await insert_event(tx, quarantine_id, event_type, at, {})
     if expired:
-        raise HttpError(409, "quarantine_expired", "quarantine item has expired")
+        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
 
 
 async def recover_interrupted(
@@ -335,7 +337,7 @@ async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
 async def require_reviewable(tx: Any, quarantine_id: str, at: str) -> dict[str, Any]:
     item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
     if not item:
-        raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+        raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
     _assert_reviewable(item, at)
     return item
 

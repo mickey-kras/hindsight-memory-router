@@ -18,6 +18,20 @@ _SWEEP_EVERY = 128
 logger = logging.getLogger(__name__)
 
 
+def _normalize_buckets(buckets: list[Bucket]) -> list[Bucket]:
+    normalized: dict[str, Bucket] = {}
+    for bucket in buckets:
+        if bucket[1] > 0 and bucket[2] > 0:
+            normalized[bucket[0]] = bucket
+    return sorted(normalized.values())
+
+
+def _normalize_identities(identities: list[Distinct]) -> list[Distinct]:
+    return sorted(
+        {(item[0], item[1]): item for item in identities if item[2] > 0 and item[3] > 0}.values()
+    )
+
+
 class ConcurrencyLeaseUnavailable(RuntimeError):
     pass
 
@@ -55,30 +69,8 @@ class InMemoryRateLimiter:
             self.consume_count += 1
             if self.consume_count % _SWEEP_EVERY == 0:
                 self._sweep_stale(now)
-            live: list[tuple[str, deque[int]]] = []
-            for key, maximum, window in buckets:
-                if maximum <= 0 or window <= 0:
-                    continue
-                self.event_windows[key] = window
-                queue = self.events[key]
-                cutoff = now - window
-                while queue and queue[0] <= cutoff:
-                    queue.popleft()
-                if len(queue) >= maximum:
-                    raise rate_limited()
-                live.append((key, queue))
-            additions: dict[str, set[str]] = defaultdict(set)
-            for scope, identity, maximum, window in identities:
-                if maximum <= 0 or window <= 0:
-                    continue
-                self.distinct_windows[scope] = window
-                cutoff = now - window
-                current = self.distinct[scope]
-                for key, timestamp in list(current.items()):
-                    if timestamp <= cutoff:
-                        del current[key]
-                if identity not in current:
-                    additions[scope].add(identity)
+            live = self._live_buckets(buckets, now)
+            additions = self._distinct_additions(identities, now)
             for scope, _, maximum, _ in identities:
                 if maximum > 0 and len(self.distinct[scope]) + len(additions[scope]) > maximum:
                     raise rate_limited()
@@ -89,30 +81,59 @@ class InMemoryRateLimiter:
                     self.distinct[scope][identity] = now
             self._drop_empty()
 
+    def _live_buckets(self, buckets: list[Bucket], now: int) -> list[tuple[str, deque[int]]]:
+        live: list[tuple[str, deque[int]]] = []
+        for key, maximum, window in buckets:
+            if maximum <= 0 or window <= 0:
+                continue
+            self.event_windows[key] = window
+            queue = self.events[key]
+            cutoff = now - window
+            while queue and queue[0] <= cutoff:
+                queue.popleft()
+            if len(queue) >= maximum:
+                raise rate_limited()
+            live.append((key, queue))
+        return live
+
+    def _distinct_additions(self, identities: list[Distinct], now: int) -> dict[str, set[str]]:
+        additions: dict[str, set[str]] = defaultdict(set)
+        for scope, identity, maximum, window in identities:
+            if maximum <= 0 or window <= 0:
+                continue
+            self.distinct_windows[scope] = window
+            current = self.distinct[scope]
+            for key, timestamp in current.copy().items():
+                if timestamp <= now - window:
+                    del current[key]
+            if identity not in current:
+                additions[scope].add(identity)
+        return additions
+
     def _sweep_stale(self, now: int) -> None:
-        for key, queue in list(self.events.items()):
+        for key, queue in self.events.copy().items():
             window = self.event_windows.get(key)
             if window is None:
                 continue
             cutoff = now - window
             while queue and queue[0] <= cutoff:
                 queue.popleft()
-        for scope, values in list(self.distinct.items()):
+        for scope, values in self.distinct.copy().items():
             window = self.distinct_windows.get(scope)
             if window is None:
                 continue
             cutoff = now - window
-            for identity, timestamp in list(values.items()):
+            for identity, timestamp in values.copy().items():
                 if timestamp <= cutoff:
                     del values[identity]
         self._drop_empty()
 
     def _drop_empty(self) -> None:
-        for key, queue in list(self.events.items()):
+        for key, queue in self.events.copy().items():
             if not queue:
                 self.events.pop(key, None)
                 self.event_windows.pop(key, None)
-        for scope, values in list(self.distinct.items()):
+        for scope, values in self.distinct.copy().items():
             if not values:
                 self.distinct.pop(scope, None)
                 self.distinct_windows.pop(scope, None)
@@ -156,27 +177,11 @@ class _PostgresSession:
     async def consume_many_distinct(
         self, buckets: list[Bucket], identities: list[Distinct], at_ms: int | None = None
     ) -> None:
-        normalized_buckets = sorted(
-            {
-                key: (key, maximum, window)
-                for key, maximum, window in buckets
-                if maximum > 0 and window > 0
-            }.values()
-        )
-        normalized_identities = sorted(
-            {
-                (scope, identity): (scope, identity, maximum, window)
-                for scope, identity, maximum, window in identities
-                if maximum > 0 and window > 0
-            }.values()
-        )
+        normalized_buckets = _normalize_buckets(buckets)
+        normalized_identities = _normalize_identities(identities)
         if not normalized_buckets and not normalized_identities:
             return
-        for key in sorted(
-            {f"rate-limit:{key}" for key, _, _ in normalized_buckets}
-            | {f"rate-limit-distinct:{scope}" for scope, _, _, _ in normalized_identities}
-        ):
-            await self.tx.execute(ADVISORY_LOCK_SQL, (key,))
+        await self._lock_scopes(normalized_buckets, normalized_identities)
         now = at_ms if at_ms is not None else await self._database_now_ms()
         windows = [window for _, _, window in normalized_buckets] + [
             window for _, _, _, window in normalized_identities
@@ -184,47 +189,12 @@ class _PostgresSession:
         await self._record_max_window(max(windows))
         if self.global_sweep:
             await self._global_sweep(now)
-        for key, maximum, window in normalized_buckets:
-            cutoff = now - window
-            await self.tx.execute(
-                "DELETE FROM quarantine_rate_limit_events WHERE bucket=? AND occurred_at_ms<=?",
-                (key, cutoff),
-            )
-            row = (
-                await self.tx.fetchone(
-                    "SELECT COUNT(*) count FROM quarantine_rate_limit_events WHERE bucket=?", (key,)
-                )
-                or {}
-            )
-            if int(row.get("count") or 0) >= maximum:
-                raise rate_limited()
+        await self._check_buckets(normalized_buckets, now)
         by_scope: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
         for scope, identity, maximum, window in normalized_identities:
             by_scope[scope].append((identity, maximum, window))
         for scope, values in by_scope.items():
-            maximum, window = values[0][1], values[0][2]
-            cutoff = now - window
-            await self.tx.execute(
-                "DELETE FROM quarantine_rate_limit_identities WHERE scope=? AND occurred_at_ms<=?",
-                (scope, cutoff),
-            )
-            row = (
-                await self.tx.fetchone(
-                    "SELECT COUNT(*) count FROM quarantine_rate_limit_identities WHERE scope=?",
-                    (scope,),
-                )
-                or {}
-            )
-            existing = 0
-            for identity, _, _ in values:
-                found = await self.tx.fetchone(
-                    "SELECT 1 present FROM quarantine_rate_limit_identities WHERE scope=? AND identity=?",
-                    (scope, identity),
-                )
-                existing += int(found is not None)
-            additions = len({identity for identity, _, _ in values}) - existing
-            if int(row.get("count") or 0) + additions > maximum:
-                raise rate_limited()
+            await self._check_distinct_scope(scope, values, now)
         for key, _, _ in normalized_buckets:
             await self.tx.execute(
                 "INSERT INTO quarantine_rate_limit_events(bucket,occurred_at_ms) VALUES(?,?)",
@@ -236,6 +206,53 @@ class _PostgresSession:
                 "ON CONFLICT(scope,identity) DO UPDATE SET occurred_at_ms=EXCLUDED.occurred_at_ms",
                 (scope, identity, now),
             )
+
+    async def _check_buckets(self, buckets: list[Bucket], now: int) -> None:
+        for key, maximum, window in buckets:
+            await self.tx.execute(
+                "DELETE FROM quarantine_rate_limit_events WHERE bucket=? AND occurred_at_ms<=?",
+                (key, now - window),
+            )
+            row = (
+                await self.tx.fetchone(
+                    "SELECT COUNT(*) count FROM quarantine_rate_limit_events WHERE bucket=?", (key,)
+                )
+                or {}
+            )
+            if int(row.get("count") or 0) >= maximum:
+                raise rate_limited()
+
+    async def _lock_scopes(self, buckets: list[Bucket], identities: list[Distinct]) -> None:
+        keys = {f"rate-limit:{key}" for key, _, _ in buckets}
+        keys.update(f"rate-limit-distinct:{scope}" for scope, _, _, _ in identities)
+        for key in sorted(keys):
+            await self.tx.execute(ADVISORY_LOCK_SQL, (key,))
+
+    async def _check_distinct_scope(
+        self, scope: str, values: list[tuple[str, int, int]], now: int
+    ) -> None:
+        maximum, window = values[0][1], values[0][2]
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_identities WHERE scope=? AND occurred_at_ms<=?",
+            (scope, now - window),
+        )
+        row = (
+            await self.tx.fetchone(
+                "SELECT COUNT(*) count FROM quarantine_rate_limit_identities WHERE scope=?",
+                (scope,),
+            )
+            or {}
+        )
+        existing = 0
+        for identity, _, _ in values:
+            found = await self.tx.fetchone(
+                "SELECT 1 present FROM quarantine_rate_limit_identities WHERE scope=? AND identity=?",
+                (scope, identity),
+            )
+            existing += int(found is not None)
+        additions = len({identity for identity, _, _ in values}) - existing
+        if int(row.get("count") or 0) + additions > maximum:
+            raise rate_limited()
 
     async def _record_max_window(self, window: int) -> None:
         if self.max_window_cache is None and not self.global_sweep:

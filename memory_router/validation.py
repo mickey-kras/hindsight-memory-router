@@ -20,32 +20,34 @@ def parse_retain_body(value: Any) -> dict[str, Any]:
     try:
         parsed = RetainBody.model_validate(value)
     except ValidationError as exc:
-        loc = _first_error_location(exc)
-        if loc and loc[0] == "items":
-            if len(loc) == 1:
-                message = "retain body requires at least one memory item"
-            elif len(loc) == 2:
-                message = f"memory item {loc[1]} must be an object"
-            else:
-                field = loc[2] if isinstance(loc[2], str) else ""
-                mapping = {
-                    "content": f"memory item {loc[1]} content must be a non-empty string",
-                    "context": "context must be a string or null",
-                    "document_id": "document_id must be a string or null",
-                    "timestamp": "timestamp must be a string or null",
-                    "tags": "tags must contain strings",
-                    "metadata": "metadata must map strings to strings",
-                    "update_mode": "update_mode must be replace or append",
-                }
-                message = mapping.get(field, "retain body is invalid")
-        elif loc and loc[0] == "async":
-            message = "async must be a boolean"
-        elif loc and loc[0] == "document_tags":
-            message = "document_tags must contain strings"
-        else:
-            message = "retain body is invalid"
-        raise _invalid_retain(message) from exc
+        raise _invalid_retain(_retain_validation_message(_first_error_location(exc))) from exc
     return parsed.model_dump(by_alias=True, exclude_unset=True)
+
+
+def _retain_validation_message(loc: tuple[Any, ...]) -> str:
+    if not loc:
+        return "retain body is invalid"
+    if loc[0] == "async":
+        return "async must be a boolean"
+    if loc[0] == "document_tags":
+        return "document_tags must contain strings"
+    if loc[0] != "items":
+        return "retain body is invalid"
+    if len(loc) == 1:
+        return "retain body requires at least one memory item"
+    if len(loc) == 2:
+        return f"memory item {loc[1]} must be an object"
+    field = loc[2] if isinstance(loc[2], str) else ""
+    mapping = {
+        "content": f"memory item {loc[1]} content must be a non-empty string",
+        "context": "context must be a string or null",
+        "document_id": "document_id must be a string or null",
+        "timestamp": "timestamp must be a string or null",
+        "tags": "tags must contain strings",
+        "metadata": "metadata must map strings to strings",
+        "update_mode": "update_mode must be replace or append",
+    }
+    return mapping.get(field, "retain body is invalid")
 
 
 def parse_recall_body(value: Any) -> dict[str, Any]:

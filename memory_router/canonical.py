@@ -7,6 +7,7 @@ from typing import Any
 import rfc8785
 
 _MAX_SAFE_INTEGER = (1 << 53) - 1
+_JSON_VALUES_ONLY = "value must contain JSON values only"
 
 
 def canonical_json(value: Any) -> str:
@@ -14,12 +15,11 @@ def canonical_json(value: Any) -> str:
         return rfc8785.dumps(_rfc8785_safe(value)).decode("utf-8")
     except (
         rfc8785.CanonicalizationError,
-        UnicodeError,
         TypeError,
         ValueError,
         OverflowError,
     ) as exc:
-        raise ValueError("value must contain JSON values only") from exc
+        raise ValueError(_JSON_VALUES_ONLY) from exc
 
 
 def _rfc8785_safe(value: Any) -> Any:
@@ -41,10 +41,10 @@ def _rfc8785_safe(value: Any) -> Any:
             return [_rfc8785_safe(entry) for entry in value]
         case dict():
             if any(not isinstance(key, str) for key in value):
-                raise ValueError("value must contain JSON values only")
+                raise ValueError(_JSON_VALUES_ONLY)
             return {key: _rfc8785_safe(entry) for key, entry in value.items()}
         case _:
-            raise ValueError("value must contain JSON values only")
+            raise ValueError(_JSON_VALUES_ONLY)
 
 
 def assert_json_depth(value: Any, *, max_depth: int) -> None:

@@ -253,7 +253,7 @@ def _json_handler(*, filter_runtime_noise: bool = False) -> logging.Handler:
 
 
 def _replace_owned_handler(logger: logging.Logger, handler: logging.Handler) -> None:
-    for existing in list(logger.handlers):
+    for existing in logger.handlers[:]:
         if getattr(existing, "_memory_router_json", False):
             logger.removeHandler(existing)
             existing.close()
@@ -261,7 +261,7 @@ def _replace_owned_handler(logger: logging.Logger, handler: logging.Handler) -> 
 
 
 def _replace_owned_noise_filter(logger: logging.Logger) -> None:
-    for existing in list(logger.filters):
+    for existing in logger.filters[:]:
         if getattr(existing, "_memory_router_runtime_noise", False):
             logger.removeFilter(existing)
     noise_filter = _ProtocolNoiseFilter()

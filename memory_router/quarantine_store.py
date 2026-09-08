@@ -75,13 +75,11 @@ class QuarantineStore:
 
             encrypted = self._encrypt(input_, quarantine_id)
             item = self._build_item(input_, quarantine_id, encrypted)
-            mode = (
-                "memory"
-                if input_["kind"] == "recalled_memory"
-                else "request"
-                if input_["kind"] in {"retain_request", "recall_request"} and item.get("dedupe_key")
-                else "id"
-            )
+            mode = "id"
+            if input_["kind"] == "recalled_memory":
+                mode = "memory"
+            elif input_["kind"] in {"retain_request", "recall_request"} and item.get("dedupe_key"):
+                mode = "request"
             capacity = self.capacity
             if input_["kind"] == "security_event":
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes)

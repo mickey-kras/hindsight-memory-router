@@ -58,23 +58,31 @@ def validate_openclaw_response(
             return
         raise ValueError("mental model delete response must be empty or an object")
 
-    model: type[_Response]
-    if method == "PUT" and resource == "":
-        model = BankProfileResponse
-    elif method == "PATCH" and resource == "config":
-        model = BankConfigResponse
-    elif method == "GET" and resource == "mental-models" and mental_model_id is None:
-        model = MentalModelListResponse
-    elif method == "POST" and resource == "mental-models" and mental_model_id is None:
-        model = CreateMentalModelResponse
-    elif method in {"GET", "PATCH"} and resource == "mental-models" and mental_model_id is not None:
-        model = MentalModelResponse
-    elif method == "POST" and resource == "reflect":
-        model = ReflectResponse
-    else:
+    model = _response_model(method, resource, mental_model_id)
+    if model is None:
         raise ValueError("unsupported OpenClaw response contract")
 
     try:
         model.model_validate(value)
     except ValidationError as exc:
         raise ValueError("invalid Hindsight OpenClaw response") from exc
+
+
+def _response_model(
+    method: str, resource: str, mental_model_id: str | None
+) -> type[_Response] | None:
+    if resource == "mental-models":
+        if mental_model_id is not None and method in {"GET", "PATCH"}:
+            return MentalModelResponse
+        if mental_model_id is None:
+            mental_models: dict[str, type[_Response]] = {
+                "GET": MentalModelListResponse,
+                "POST": CreateMentalModelResponse,
+            }
+            return mental_models.get(method)
+    models: dict[tuple[str, str], type[_Response]] = {
+        ("PUT", ""): BankProfileResponse,
+        ("PATCH", "config"): BankConfigResponse,
+        ("POST", "reflect"): ReflectResponse,
+    }
+    return models.get((method, resource))
