@@ -28,11 +28,12 @@ function normalize(text) {
 }
 
 function stepLines(log, step) {
+  // GitHub step boundaries have second precision; log timestamps include fractions.
   const start = Date.parse(step.started_at), end = Date.parse(step.completed_at);
   if (!Number.isFinite(start) || !Number.isFinite(end)) return [];
   return log.split('\n').filter(line => {
     const timestamp = Date.parse(line.split(' ')[0]);
-    return timestamp >= start && timestamp <= end;
+    return timestamp >= start && timestamp < end + 1000;
   }).map(normalize).filter(Boolean);
 }
 
@@ -49,6 +50,8 @@ function diagnostics(lines) {
     } catch { return []; }
   });
   if (smoke.length) return [...new Set(smoke)];
+  const updates = lines.filter(line => /^#\d+: unresolved: \S/.test(line));
+  if (updates.length) return [...new Set(updates)];
   const errors = lines.filter(line =>
     /^(?:[\w.]+(?:Error|Exception):\s+\S|##\[error\]\S)/.test(line) &&
     !/Process completed with exit code|The operation was canceled|Quality Gate has FAILED/.test(line));
