@@ -10,13 +10,17 @@ function fixture({ mergeable = true, ahead = 1, fail = false, fork = false } = {
   const github = {
     paginate: async () => [pull],
     rest: {
+      git: { getRef: async (args) => {
+        assert.equal(args.ref, 'heads/main');
+        return { data: { object: { sha: 'current-main' } } };
+      } },
       pulls: { list: () => {}, get: async () => ({ data: { ...pull,
         mergeable: Array.isArray(mergeable) ? mergeable[Math.min(reads++, mergeable.length - 1)] : mergeable,
         mergeable_state: 'blocked',
       } }) },
       repos: { compareCommitsWithBasehead: async (args) => {
         calls.comparisons.push(args.basehead);
-        return { data: { ahead_by: ahead } };
+        return { data: { ahead_by: args.basehead.endsWith('...base') ? 0 : ahead } };
       } },
     },
     request: async (_route, args) => {
@@ -30,9 +34,9 @@ function fixture({ mergeable = true, ahead = 1, fail = false, fork = false } = {
     sleep: async (ms) => calls.sleeps.push(ms) } };
 }
 
-test('updates a branch missing main commits despite blocked checks', async () => {
+test('updates against current main despite stale PR base metadata and blocked checks', async () => {
   const { args, calls } = fixture(); await run(args);
-  assert.deepEqual(calls.comparisons, ['head...base']);
+  assert.deepEqual(calls.comparisons, ['head...current-main']);
   assert.equal(calls.updates[0].expected_head_sha, 'head');
 });
 test('retries unknown mergeability and then updates', async () => {
