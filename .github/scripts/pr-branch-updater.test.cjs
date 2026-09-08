@@ -2,10 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { run } = require('./pr-branch-updater.cjs');
 
-function fixture({ mergeable = true, ahead = 1, fail = false, fork = false } = {}) {
+function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user } = {}) {
   const calls = { updates: [], sleeps: [], failures: [], comparisons: [] };
   let reads = 0;
-  const pull = { number: 1, state: 'open', base: { ref: 'main', sha: 'base' },
+  const pull = { number: 1, user, state: 'open', base: { ref: 'main', sha: 'base' },
     head: { sha: 'head', repo: { full_name: fork ? 'other/repo' : 'owner/repo' } } };
   const github = {
     paginate: async () => [pull],
@@ -56,4 +56,17 @@ for (const [name, options] of Object.entries({ current: { ahead: 0 }, conflict: 
 test('API failure is not reported as success', async () => {
   const { args, calls } = fixture({ fail: true }); await run(args);
   assert.equal(calls.failures.length, 1);
+});
+
+test('leaves Dependabot branches to native rebasing, including workflow updates', async () => {
+  const { args, calls } = fixture({ user: { login: 'dependabot[bot]', id: 49699333 }, fail: true });
+  await run(args);
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.comparisons, []);
+  assert.deepEqual(calls.failures, []);
+});
+test('a bot-like name alone does not bypass branch updates', async () => {
+  const { args, calls } = fixture({ user: { login: 'dependabot[bot]', id: 1 } });
+  await run(args);
+  assert.equal(calls.updates.length, 1);
 });
