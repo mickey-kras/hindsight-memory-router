@@ -5,8 +5,9 @@
 - Unsigned or non-Dependabot commits require manual review.
 - PR events and the 30-minute refresh use the same implementation.
 - Dependabot handles its own branch updates with `rebase-strategy: auto`.
-  The PR branch updater leaves those branches alone: updates made with
-  `GITHUB_TOKEN` require workflow approval and cannot change workflow files.
+  The PR branch updater requests `@dependabot rebase` when main has advanced.
+  Requests are deduplicated by PR head and main commit; requested does not
+  mean completed. Dependabot writes the update and triggers normal PR checks.
 - `GITHUB_TOKEN` handles auto-merge and main-workflow dispatch. No App or PAT.
 - The refresh starts missing main validation for the current Dependabot merge.
   Existing runs are reused; failed runs remain visible.
