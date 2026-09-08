@@ -361,7 +361,7 @@ jobs:
                 if (!ci.includes('pip-audit -r requirements.txt')) {
                   fail('ci.yml: Python dependency audit must stay present');
                 }
-                if (!ci.includes('npm audit "$@" --audit-level=moderate')) {
+                if (!ci.includes('node .github/scripts/npm-audit.cjs')) {
                   fail('ci.yml: Node dependency audit must stay present');
                 }
                 if (!/^  container:\s*$/m.test(ci)) {
