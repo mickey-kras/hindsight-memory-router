@@ -526,3 +526,34 @@ async def test_postgres_rate_limiter_paths() -> None:
         return "locked"
 
     assert await limiter.with_identity_lock("id", op) == "locked"
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.0.0.2", "[::1]"])
+def test_loopback_http_transport_does_not_warn(host: str, caplog: pytest.LogCaptureFixture) -> None:
+    settings = config.RouterSettings(HINDSIGHT_BASE_URL=f"http://{host}:8888")
+    config.assert_auth_environment(settings)
+    assert all(
+        getattr(record, "reason", None) != "insecure-hindsight-transport"
+        for record in caplog.records
+    )
+
+
+def test_empty_operator_tokens_remain_fail_closed() -> None:
+    settings = config.RouterSettings(
+        MEMORY_ROUTER_TOKEN="",
+        MEMORY_ROUTER_ADMIN_TOKEN="",
+        MEMORY_ROUTER_ADMIN_READ_TOKEN="",
+        MEMORY_ROUTER_ADMIN_REVIEW_TOKEN="",
+        MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN="",
+    )
+    assert not auth.router_authorized(
+        "Bearer ", config.secret_value(settings.memory_router_token), False
+    )
+    tokens = {
+        "legacy": config.secret_value(settings.memory_router_admin_token),
+        "read": config.secret_value(settings.memory_router_admin_read_token),
+        "review": config.secret_value(settings.memory_router_admin_review_token),
+        "cleanup": config.secret_value(settings.memory_router_admin_cleanup_token),
+    }
+    for scope in ("read", "review", "cleanup"):
+        assert not auth.admin_authorized("Bearer ", scope, tokens)

@@ -8,3 +8,6 @@
 # the literal only exists in superseded commit c412fed and was removed in 11cf294.
 c412fed76bebbcf1c95e1ef68f533e94a95a0d02:tests/test_security.py:generic-api-key:143
 c412fed76bebbcf1c95e1ef68f533e94a95a0d02:tests/test_security.py:generic-api-key:223
+
+a7bed509e9f61f1b4559e1bfcf08eed152639c48:tests/test_principals.py:generic-api-key:372
+a7bed509e9f61f1b4559e1bfcf08eed152639c48:tests/test_foundations.py:generic-api-key:260

@@ -23,8 +23,8 @@ from memory_router.envelope import (
 )
 
 
-def keypair() -> tuple[str, str]:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def keypair(key_size: int = 2048) -> tuple[str, str]:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     private_pem = private.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
@@ -172,8 +172,9 @@ def test_authenticated_metadata_tampering_fails() -> None:
         decrypt_envelope(envelope, private)
 
 
-def test_legacy_no_aad_envelope_still_decrypts() -> None:
-    public_pem, private_pem = keypair()
+@pytest.mark.parametrize("key_size", [1024, 2048])
+def test_legacy_no_aad_envelope_still_decrypts(key_size: int) -> None:
+    public_pem, private_pem = keypair(key_size)
     value = decrypted()
     plaintext = canonical_decrypted(value).encode()
     data_key = AESGCM.generate_key(bit_length=256)

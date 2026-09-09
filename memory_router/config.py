@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -300,13 +301,18 @@ def assert_no_private_key_environment() -> None:
         raise RuntimeError(f"{injected} must not be available to the memory-router process")
 
 
+def _loopback_host(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host or "").is_loopback
+    except ValueError:
+        return False
+
+
 def assert_auth_environment(settings: RouterSettings) -> None:
     hindsight_url = urlsplit(settings.hindsight_base_url)
-    if hindsight_url.scheme == "http" and hindsight_url.hostname not in {
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }:
+    if hindsight_url.scheme == "http" and not _loopback_host(hindsight_url.hostname):
         log_event(
             logger,
             "warning",

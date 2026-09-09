@@ -215,6 +215,7 @@ class Runtime:
         self.quarantine_limiter: RateLimiter = InMemoryRateLimiter()
         self.admin_limiter: RateLimiter = InMemoryRateLimiter()
         self.auth_limiter: RateLimiter = InMemoryRateLimiter()
+        self.auth_prefilter = InMemoryRateLimiter()
         self.principal_limiter: RateLimiter = InMemoryRateLimiter()
         self.principal_concurrency_limiter: PostgresConcurrencyLimiter | None = None
         self.principal_concurrency: dict[tuple[str, str], int] = {}
@@ -256,6 +257,7 @@ class Runtime:
     async def start(self) -> None:
         settings = self.settings or load_settings()
         self.configure(settings)
+        self.auth_prefilter = InMemoryRateLimiter()
         assert_no_private_key_environment()
         assert_auth_environment(settings)
         hindsight_timeout_ms = settings.hindsight_timeout_ms
@@ -521,6 +523,9 @@ def _reject_json_constant(raw: str) -> None:
 
 async def _auth_failure_rate(route_group: str) -> None:
     try:
+        await runtime.auth_prefilter.consume_many(
+            [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
+        )
         await runtime.auth_limiter.consume_many(
             [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
         )
@@ -530,6 +535,29 @@ async def _auth_failure_rate(route_group: str) -> None:
         raise rate_limit_error(
             code="auth_rate_limited", message="too many authentication failures"
         ) from exc
+    except Exception as exc:
+        raise _rate_storage_unavailable("auth", exc) from exc
+
+
+def _rate_storage_unavailable(scope: str, error: Exception) -> HttpError:
+    code = f"{scope}_rate_unavailable"
+    log_event(
+        logger,
+        "error",
+        code,
+        request_id=current_request_id(),
+        operation="authenticate" if scope == "auth" else "authorize",
+        error_kind="storage",
+        error=error,
+        http_status=503,
+        outcome="degraded",
+    )
+    return HttpError(
+        503,
+        code,
+        f"{scope} rate control is temporarily unavailable",
+        headers={"retry-after": "1"},
+    )
 
 
 async def _principal_rate(session: PrincipalSession, scope: str, route_class: str) -> None:
@@ -732,6 +760,8 @@ async def _admin_rate(method: str) -> None:
         raise rate_limit_error(
             code="admin_rate_limited", message=f"too many admin {request_class} requests"
         ) from exc
+    except Exception as exc:
+        raise _rate_storage_unavailable("admin", exc) from exc
 
 
 @app.get("/health/live")

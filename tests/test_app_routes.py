@@ -9,6 +9,7 @@ import pytest
 from memory_router import app as app_module
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.rate_limit import InMemoryRateLimiter
 from tests.request_helpers import request
 
 
@@ -36,6 +37,7 @@ def runtime_state() -> None:
     app_module.runtime.admin_window = 60_000
     app_module.runtime.admin_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.auth_prefilter = InMemoryRateLimiter()
     app_module.runtime.auth_failure_max = 120
     app_module.runtime.auth_failure_window = 60_000
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
@@ -472,3 +474,41 @@ async def test_lifespan_cleans_up_runtime_when_scanner_start_fails(
     start_scanner.assert_called_once_with()
     shutdown_scanner.assert_awaited_once_with()
     stop.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_authentication_flood_stops_before_shared_storage() -> None:
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.auth_failure_max = 2
+    shared = app_module.runtime.auth_limiter.consume_many
+    shared.side_effect = HttpError(429, "limited", "limited")
+    for _ in range(10):
+        with pytest.raises(HttpError) as limited:
+            await app_module._router_auth(request("GET", "/v1/default/banks/main/memories"))
+        assert limited.value.code == "auth_rate_limited"
+    assert shared.await_count == 2
+    app_module.runtime.auditor.persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["auth", "admin"])
+async def test_rate_storage_failure_returns_retryable_unavailable(
+    scope: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    limiter = (
+        app_module.runtime.auth_limiter if scope == "auth" else app_module.runtime.admin_limiter
+    )
+    limiter.consume_many.side_effect = OSError("storage offline")
+    operation = (
+        app_module._auth_failure_rate("router")
+        if scope == "auth"
+        else app_module._admin_rate("GET")
+    )
+    with pytest.raises(HttpError) as unavailable:
+        await operation
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == f"{scope}_rate_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
+    event = next(record for record in caplog.records if record.msg == unavailable.value.code)
+    assert event.error_kind == "storage"
+    assert event.http_status == 503

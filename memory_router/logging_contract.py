@@ -52,6 +52,8 @@ EVENTS = frozenset(
         "principal_concurrency_release_failed",
         "principal_concurrency_unavailable",
         "principal_rate_unavailable",
+        "auth_rate_unavailable",
+        "admin_rate_unavailable",
         "bank_unavailable",
         "configuration_warning",
         "facade_scan_failed",

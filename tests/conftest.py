@@ -14,6 +14,7 @@ def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
     openclaw_module.start_facade_scan_executor()
     previous_runtime = vars(app_module.runtime).copy()
     previous_admin_tokens = dict(app_module.runtime.admin_tokens)
+    app_module.runtime.auth_prefilter = app_module.InMemoryRateLimiter()
     application_logger = logging.getLogger("memory_router")
     application_logger.addHandler(caplog.handler)
     logging_module.reset_log_state()
