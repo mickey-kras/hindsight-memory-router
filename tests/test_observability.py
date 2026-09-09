@@ -235,6 +235,32 @@ async def test_hindsight_readiness_probe_has_its_own_timeout(
     assert record.error_kind == "timeout"  # type: ignore[attr-defined]
 
 
+@pytest.mark.asyncio
+async def test_readiness_probe_propagates_cancellation_and_finishes_cleanup() -> None:
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+    state = probes.ReadinessLogState()
+
+    async def hang() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    task = asyncio.create_task(probes.timed_probe(hang, state, timeout=60))
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cleaned_up.is_set()
+    assert state.healthy is None
+    assert state.candidate is None
+    assert state.last_failure_log == {}
+
+
 class AsyncFail:
     def __init__(self, error: Exception) -> None:
         self.error = error
