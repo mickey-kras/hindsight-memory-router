@@ -271,6 +271,8 @@ class Runtime:
             await self.rate_limit_database.initialize()
             self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
             await self.quarantine_limiter.initialize()
+            self.admin_limiter = self.quarantine_limiter
+            self.auth_limiter = self.quarantine_limiter
             self.principal_limiter = self.quarantine_limiter
             self.principal_concurrency_limiter = PostgresConcurrencyLimiter(
                 self.rate_limit_database
@@ -278,9 +280,10 @@ class Runtime:
             await self.principal_concurrency_limiter.initialize()
         else:
             self.quarantine_limiter = InMemoryRateLimiter()
+            self.admin_limiter = InMemoryRateLimiter()
+            self.auth_limiter = InMemoryRateLimiter()
             self.principal_limiter = InMemoryRateLimiter()
             self.principal_concurrency_limiter = None
-        self.auth_limiter = InMemoryRateLimiter()
         limits = QuarantineLimits(
             max_item_bytes=settings.quarantine_max_item_bytes,
             max_pending_items=settings.quarantine_max_pending_items,

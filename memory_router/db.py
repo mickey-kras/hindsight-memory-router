@@ -114,6 +114,8 @@ class SqliteDatabase(Database):
         if self.path != SQLITE_MEMORY_PATH:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.connection = await aiosqlite.connect(self.path)
+        if self.path != SQLITE_MEMORY_PATH:
+            os.chmod(self.path, 0o600)
         self.connection.row_factory = aiosqlite.Row
         await self.connection.execute("PRAGMA journal_mode = WAL")
         await self.connection.execute("PRAGMA foreign_keys = ON")

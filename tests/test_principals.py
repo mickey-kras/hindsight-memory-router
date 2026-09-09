@@ -369,7 +369,7 @@ def test_principal_mode_rejects_legacy_token_and_anonymous_at_startup() -> None:
         assert_auth_environment(
             RouterSettings(
                 MEMORY_ROUTER_PRINCIPALS="/app/principals.json",
-                MEMORY_ROUTER_TOKEN="legacy",  # noqa: S106 - synthetic test credential
+                MEMORY_ROUTER_TOKEN="legacy-0123456789012345678901234",  # noqa: S106
             )
         )
     with pytest.raises(RuntimeError, match="MEMORY_ROUTER_ALLOW_ANONYMOUS must be false"):

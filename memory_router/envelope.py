@@ -112,6 +112,8 @@ def decode_public_key(value: str) -> rsa.RSAPublicKey:
         raise ValueError("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPublicKey):
         raise ValueError("QUARANTINE_PUBLIC_KEY must be an RSA public key")
+    if key.key_size < 2048:
+        raise ValueError("QUARANTINE_PUBLIC_KEY RSA key must be at least 2048 bits")
     return key
 
 
@@ -127,6 +129,8 @@ def decode_private_key(value: str) -> rsa.RSAPrivateKey:
         raise ValueError("private key must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPrivateKey):
         raise ValueError("private key must be an RSA private key")
+    if key.key_size < 2048:
+        raise ValueError("private RSA key must be at least 2048 bits")
     return key
 
 

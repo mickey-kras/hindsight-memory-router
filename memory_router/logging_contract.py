@@ -144,6 +144,7 @@ REASONS = frozenset(
         "application-startup",
         "asgi-application-error",
         "http-protocol-error",
+        "insecure-hindsight-transport",
         "legacy-admin-token",
         "direct-stdlib-log",
         "openclaw-suspicious-provider-response",

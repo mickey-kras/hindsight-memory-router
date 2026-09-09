@@ -38,10 +38,10 @@ services:
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_DEPLOYMENT_MODE: single
       MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "false"
-      MEMORY_ROUTER_TOKEN: test-router-token
-      MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-read-token
-      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token
-      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-cleanup-token
+      MEMORY_ROUTER_TOKEN: test-router-token-01234567890123456
+      MEMORY_ROUTER_ADMIN_READ_TOKEN: test-admin-read-token-012345678901
+      MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token-0123456789
+      MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN: test-admin-cleanup-token-01234567
       MEMORY_ROUTER_REGISTRY: /app/integration-writer-registry.json
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key

@@ -5,8 +5,16 @@ import logging
 import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BeforeValidator, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import PydanticUseDefault
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -197,6 +205,19 @@ class RouterSettings(BaseSettings):
         8_192, validation_alias="HINDSIGHT_RECALL_MAX_TOKENS"
     )
 
+    @field_validator(
+        "memory_router_token",
+        "memory_router_admin_token",
+        "memory_router_admin_read_token",
+        "memory_router_admin_review_token",
+        "memory_router_admin_cleanup_token",
+    )
+    @classmethod
+    def validate_token_length(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and 0 < len(value.get_secret_value()) < 32:
+            raise ValueError("must contain at least 32 characters")
+        return value
+
     @model_validator(mode="after")
     def validate_deployment(self) -> RouterSettings:
         if (
@@ -280,6 +301,20 @@ def assert_no_private_key_environment() -> None:
 
 
 def assert_auth_environment(settings: RouterSettings) -> None:
+    hindsight_url = urlsplit(settings.hindsight_base_url)
+    if hindsight_url.scheme == "http" and hindsight_url.hostname not in {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+    }:
+        log_event(
+            logger,
+            "warning",
+            "configuration_warning",
+            operation="configuration",
+            outcome="degraded",
+            reason="insecure-hindsight-transport",
+        )
     if settings.memory_router_principals:
         if secret_value(settings.memory_router_token):
             raise RuntimeError(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -29,6 +30,7 @@ async def test_sqlite_database_transactions_schema_and_ping(tmp_path: Path) -> N
         async with database.transaction():
             pass
     await database.initialize()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
     await db_module.initialize_schema(database)
     await database.ping()
     async with database.transaction() as tx:

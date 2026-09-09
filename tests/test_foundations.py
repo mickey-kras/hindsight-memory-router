@@ -76,11 +76,11 @@ def test_typed_settings_preserve_strict_environment_parsing(
     assert config.load_settings().memory_router_allow_anonymous is False
 
     secrets = {
-        "MEMORY_ROUTER_TOKEN": "router-secret",
-        "MEMORY_ROUTER_ADMIN_TOKEN": "admin-secret",
-        "MEMORY_ROUTER_ADMIN_READ_TOKEN": "read-secret",
-        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": "review-secret",
-        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": "cleanup-secret",
+        "MEMORY_ROUTER_TOKEN": "router-secret-01234567890123456789",
+        "MEMORY_ROUTER_ADMIN_TOKEN": "admin-secret-012345678901234567890",
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN": "read-secret-0123456789012345678901",
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": "review-secret-01234567890123456789",
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": "cleanup-secret-0123456789012345678",
         "HINDSIGHT_API_KEY": "hindsight-secret",
     }
     for name, value in secrets.items():
@@ -90,7 +90,26 @@ def test_typed_settings_preserve_strict_environment_parsing(
     rendered = (repr(settings), str(settings), repr(settings.model_dump()))
     for secret in (*secrets.values(), "database-secret"):
         assert all(secret not in value for value in rendered)
-    assert config.secret_value(settings.memory_router_token) == "router-secret"
+    assert config.secret_value(settings.memory_router_token) == secrets["MEMORY_ROUTER_TOKEN"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MEMORY_ROUTER_TOKEN",
+        "MEMORY_ROUTER_ADMIN_TOKEN",
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN",
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN",
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN",
+    ],
+)
+def test_configured_router_tokens_require_at_least_32_characters(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(name, "short-token")
+
+    with pytest.raises(RuntimeError, match=f"{name} must contain at least 32 characters"):
+        config.load_settings()
 
 
 def test_typed_settings_ignore_lowercase_environment_names(
@@ -106,8 +125,8 @@ def test_typed_settings_suppress_secret_validation_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secrets = (
-        "router-secret",
-        "admin-secret",
+        "router-secret-01234567890123456789",
+        "admin-secret-012345678901234567890",
         "hindsight-secret",
         "database-secret",
     )
@@ -234,16 +253,26 @@ def test_environment_assertions(
         "admin-read-token-missing",
         "admin-review-token-missing",
         "admin-cleanup-token-missing",
+        "insecure-hindsight-transport",
     }
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
-    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
+    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy-0123456789012345678901234")
     config.assert_auth_environment(config.load_settings())
     assert {
         record.reason  # type: ignore[attr-defined]
         for record in caplog.records
         if record.msg == "configuration_warning"
-    } == {"anonymous-mode", "legacy-admin-token"}
+    } == {"anonymous-mode", "legacy-admin-token", "insecure-hindsight-transport"}
+
+    caplog.clear()
+    settings = config.load_settings()
+    settings.hindsight_base_url = "http://127.0.0.1:8888"
+    config.assert_auth_environment(settings)
+    assert all(
+        getattr(record, "reason", None) != "insecure-hindsight-transport"
+        for record in caplog.records
+    )
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:

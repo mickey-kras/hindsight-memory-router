@@ -16,6 +16,8 @@ from memory_router.db import create_database
 from memory_router.envelope import (
     canonical_decrypted,
     create_envelope,
+    decode_private_key,
+    decode_public_key,
     decrypt_envelope,
     estimate_envelope_size,
 )
@@ -88,6 +90,24 @@ def test_envelope_round_trip_preserves_existing_format() -> None:
     assert len(base64.b64decode(envelope["encryption"]["iv_b64"])) == 12
     assert len(base64.b64decode(envelope["encryption"]["tag_b64"])) == 16
     assert decrypt_envelope(envelope, private) == decrypted()
+
+
+def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=1024)  # noqa: S505
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = private.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+
+    with pytest.raises(ValueError, match="at least 2048 bits"):
+        decode_public_key(public_pem)
+    with pytest.raises(ValueError, match="at least 2048 bits"):
+        decode_private_key(private_pem)
 
 
 @pytest.mark.parametrize("key_size", [2048, 4096])
