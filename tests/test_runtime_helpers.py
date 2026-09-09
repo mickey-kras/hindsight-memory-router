@@ -247,7 +247,7 @@ def test_app_scope_and_now() -> None:
     assert app_module._scope("GET", "/x") == "read"
     assert app_module._scope("POST", "/admin/quarantine/cleanup") == "cleanup"
     assert app_module._scope("POST", "/x") == "review"
-    assert app_module._now().endswith("Z")
+    assert app_module.iso_now().endswith("Z")
 
 
 def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:

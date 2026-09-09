@@ -16,6 +16,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from . import probes
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
 from .canonical import assert_json_depth
@@ -53,16 +54,6 @@ from .principals import (
     load_principal_registry,
     scope_limit_operation,
 )
-from .probes import _CACHE_MAX_STALENESS_SECONDS as _CACHE_MAX_STALENESS_SECONDS
-from .probes import _READINESS_CACHE_SECONDS as _READINESS_CACHE_SECONDS
-from .probes import _cached_probe_response as _cached_probe_response
-from .probes import _CachedProbe as _CachedProbe
-from .probes import _ProbeCache as _ProbeCache
-from .probes import _readiness as _readiness
-from .probes import _readiness_log_state as _readiness_log_state
-from .probes import _ReadinessLogState as _ReadinessLogState
-from .probes import _storage_readiness_log_state as _storage_readiness_log_state
-from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import (
     ConcurrencyLeaseUnavailable,
@@ -87,8 +78,6 @@ _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
-_READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
-_EMPTY_BODY = EMPTY_BODY
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
@@ -98,10 +87,6 @@ try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
     _ROUTER_VERSION = "0.0.0"
-
-
-def _now() -> str:
-    return iso_now()
 
 
 def _scope(method: str, path: str) -> str:
@@ -268,7 +253,7 @@ class Runtime:
         self.database = await create_database(database_url)
         self.repository = QuarantineRepository(self.database)
         await validate_storage(self.database, database_url)
-        await recover_interrupted(self.repository, _now(), self.review_stale_seconds)
+        await recover_interrupted(self.repository, iso_now(), self.review_stale_seconds)
         if is_postgres(database_url):
             self.rate_limit_database = PostgresDatabase(database_url, max_size=5)
             await self.rate_limit_database.initialize()
@@ -359,7 +344,7 @@ class Runtime:
         repository = _require_runtime(self.repository, "repository")
         while True:
             await asyncio.sleep(interval)
-            at = _now()
+            at = iso_now()
             try:
                 await recover_interrupted(repository, at, self.review_stale_seconds)
                 await sweep_expired(repository, at)
@@ -508,7 +493,7 @@ async def _json_body(
         if len(body) > body_limit:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
-        return _EMPTY_BODY if empty_as_none else {}
+        return EMPTY_BODY if empty_as_none else {}
     try:
         value = json.loads(bytes(body), parse_constant=_reject_json_constant)
     except (ValueError, RecursionError) as exc:
@@ -781,10 +766,10 @@ async def _database_health(
         await asyncio.wait_for(repository.ping(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS)
     except Exception as exc:
         duration_ms = round((time.monotonic() - started) * 1000, 3)
-        _storage_readiness_log_state.record(exc, duration_ms)
+        probes.storage_readiness_log_state.record(exc, duration_ms)
         return False, exc, duration_ms
     duration_ms = round((time.monotonic() - started) * 1000, 3)
-    _storage_readiness_log_state.record(None, duration_ms)
+    probes.storage_readiness_log_state.record(None, duration_ms)
     return True, None, duration_ms
 
 
@@ -798,10 +783,10 @@ async def _hindsight_health(
         )
     except Exception as exc:
         duration_ms = round((time.monotonic() - started) * 1000, 3)
-        _readiness_log_state.record(exc, duration_ms)
+        probes.readiness_log_state.record(exc, duration_ms)
         return False, None, exc, duration_ms
     duration_ms = round((time.monotonic() - started) * 1000, 3)
-    _readiness_log_state.record(None, duration_ms)
+    probes.readiness_log_state.record(None, duration_ms)
     return True, response, None, duration_ms
 
 
@@ -826,7 +811,7 @@ async def _health_ready_response() -> Response:
             status_code, payload = 503, {"status": "unhealthy"}
         return JSONResponse(payload, status_code=status_code)
 
-    return await _readiness.get(refresh)
+    return await probes.readiness.get(refresh)
 
 
 @app.get("/health")
@@ -859,7 +844,7 @@ async def _version_response() -> Response:
             return _version_failure(error)
         return JSONResponse(payload)
 
-    return await _version.get(refresh)
+    return await probes.version.get(refresh)
 
 
 def _version_failure(error: HindsightGatewayError) -> Response:

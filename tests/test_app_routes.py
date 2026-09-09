@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from memory_router import app as app_module
+from memory_router import probes
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
 from memory_router.rate_limit import InMemoryRateLimiter
@@ -19,8 +20,8 @@ def payload(response: object) -> object:
 
 @pytest.fixture(autouse=True)
 def runtime_state() -> None:
-    app_module._readiness_log_state = app_module._ReadinessLogState()
-    app_module._storage_readiness_log_state = app_module._ReadinessLogState(
+    probes.readiness_log_state = probes.ReadinessLogState()
+    probes.storage_readiness_log_state = probes.ReadinessLogState(
         "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
     )
     app_module.runtime.allow_anonymous = True
@@ -72,13 +73,13 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     response = await app_module.ready()
     assert response.status_code == 200
     assert payload(response) == upstream_health
-    cached = app_module._readiness.cache
+    cached = probes.readiness.cache
     assert cached is not None and isinstance(cached.body, bytes)
-    assert app_module._readiness.cache is cached
+    assert probes.readiness.cache is cached
 
     repository.ping.side_effect = RuntimeError("database down")
     hindsight.health.reset_mock()
-    app_module._readiness.cache = None
+    probes.readiness.cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -88,7 +89,7 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
-    app_module._readiness.cache = None
+    probes.readiness.cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -127,7 +128,7 @@ async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     assert await app_module._json_body(request("POST", "/", body={"x": 1})) == {"x": 1}
     assert (
         await app_module._json_body(request("POST", "/"), empty_as_none=True)
-        is app_module._EMPTY_BODY
+        is app_module.EMPTY_BODY
     )
     assert (
         await app_module._json_body(request("POST", "/", body=b"null"), empty_as_none=True) is None

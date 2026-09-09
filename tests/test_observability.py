@@ -14,6 +14,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 import memory_router.app as app_module
+from memory_router import probes
 from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.logging import (
@@ -186,7 +187,7 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(app_module, "_readiness_log_state", app_module._ReadinessLogState())
+    monkeypatch.setattr(probes, "readiness_log_state", probes.ReadinessLogState())
     error = HindsightGatewayError(  # type: ignore[arg-type]
         kind,
         upstream_status=503 if kind == "http" else None,
@@ -220,7 +221,7 @@ async def test_hindsight_readiness_probe_has_its_own_timeout(
         await release.wait()
 
     monkeypatch.setattr(app_module, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(app_module, "_readiness_log_state", app_module._ReadinessLogState())
+    monkeypatch.setattr(probes, "readiness_log_state", probes.ReadinessLogState())
     hindsight = SimpleNamespace(health=hang)
 
     for _ in range(2):
@@ -245,8 +246,8 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = app_module._ReadinessLogState()
-    monkeypatch.setattr(app_module, "_readiness_log_state", state)
+    state = probes.ReadinessLogState()
+    monkeypatch.setattr(probes, "readiness_log_state", state)
     error = HindsightGatewayError("network", operation="health", method="GET")
     health = AsyncFail(error)
     hindsight = type("Hindsight", (), {"health": health})()
@@ -281,7 +282,7 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
 def test_readiness_debounce_ignores_alternating_observations(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    state = app_module._ReadinessLogState()
+    state = probes.ReadinessLogState()
     failure = HindsightGatewayError("network", operation="health", method="GET")
 
     state.record(failure, 1.0)
@@ -296,7 +297,7 @@ def test_readiness_debounce_ignores_alternating_observations(
 async def test_readiness_logs_new_failure_kind_without_waiting(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    state = app_module._ReadinessLogState()
+    state = probes.ReadinessLogState()
     first = HindsightGatewayError("network", operation="health", method="GET")
     second = HindsightGatewayError("timeout", operation="health", method="GET")
 
@@ -348,17 +349,17 @@ async def test_storage_readiness_timeout_is_recorded(
 
 @pytest.mark.asyncio
 async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None:
-    app_module._readiness.cache = app_module._CachedProbe(
-        time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
+    probes.readiness.cache = probes.CachedProbe(
+        time.monotonic() - probes.READINESS_CACHE_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
     )
-    app_module._readiness.lock = asyncio.Lock()
-    await app_module._readiness.lock.acquire()
+    probes.readiness.lock = asyncio.Lock()
+    await probes.readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness.lock.release()
+        probes.readiness.lock.release()
 
     assert response.status_code == 200
     assert response.body == b'{"status":"healthy"}'
@@ -366,17 +367,17 @@ async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None
 
 @pytest.mark.asyncio
 async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
-    app_module._readiness.cache = app_module._CachedProbe(
-        time.monotonic() - app_module._CACHE_MAX_STALENESS_SECONDS - 0.1,
+    probes.readiness.cache = probes.CachedProbe(
+        time.monotonic() - probes.CACHE_MAX_STALENESS_SECONDS - 0.1,
         200,
         b'{"status":"healthy"}',
     )
-    app_module._readiness.lock = asyncio.Lock()
-    await app_module._readiness.lock.acquire()
+    probes.readiness.lock = asyncio.Lock()
+    await probes.readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness.lock.release()
+        probes.readiness.lock.release()
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"status": "unhealthy"}
@@ -384,12 +385,12 @@ async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
 
 @pytest.mark.asyncio
 async def test_readiness_cold_refresh_returns_503_instead_of_queueing() -> None:
-    app_module._readiness.lock = asyncio.Lock()
-    await app_module._readiness.lock.acquire()
+    probes.readiness.lock = asyncio.Lock()
+    await probes.readiness.lock.acquire()
     try:
         response = await app_module._health_ready_response()
     finally:
-        app_module._readiness.lock.release()
+        probes.readiness.lock.release()
 
     assert response.status_code == 503
     assert json.loads(response.body) == {"status": "unhealthy"}
@@ -403,8 +404,8 @@ async def test_readiness_ttl_expiry_refetches_dependencies(
     health = AsyncMock(return_value={"status": "healthy", "database": "connected"})
     monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=ping))
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=health))
-    app_module._readiness.cache = app_module._CachedProbe(
-        time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
+    probes.readiness.cache = probes.CachedProbe(
+        time.monotonic() - probes.READINESS_CACHE_SECONDS - 0.1,
         503,
         b'{"status":"unhealthy"}',
     )
@@ -443,7 +444,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
     monkeypatch.setattr(app_module.runtime, "hindsight", None)
 
     for _ in range(2):
-        app_module._readiness.cache = None
+        probes.readiness.cache = None
         response = await app_module._health_ready_response()
         assert response.status_code == 503
 
@@ -456,7 +457,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
         ),
     )
     for _ in range(2):
-        app_module._readiness.cache = None
+        probes.readiness.cache = None
         response = await app_module._health_ready_response()
         assert response.status_code == 200
 
@@ -488,11 +489,11 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
     assert second.status_code == 503
     version.assert_awaited_once()
 
-    assert app_module._version.cache is not None
-    app_module._version.cache = app_module._CachedProbe(
-        time.monotonic() - app_module._READINESS_CACHE_SECONDS - 0.1,
-        app_module._version.cache.status_code,
-        app_module._version.cache.body,
+    assert probes.version.cache is not None
+    probes.version.cache = probes.CachedProbe(
+        time.monotonic() - probes.READINESS_CACHE_SECONDS - 0.1,
+        probes.version.cache.status_code,
+        probes.version.cache.body,
     )
     await app_module._version_response()
     assert version.await_count == 2
@@ -501,21 +502,21 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
 @pytest.mark.parametrize(
     ("age", "expected_status"),
     [
-        (app_module._READINESS_CACHE_SECONDS + 0.1, 200),
-        (app_module._CACHE_MAX_STALENESS_SECONDS + 0.1, 503),
+        (probes.READINESS_CACHE_SECONDS + 0.1, 200),
+        (probes.CACHE_MAX_STALENESS_SECONDS + 0.1, 503),
     ],
 )
 @pytest.mark.asyncio
 async def test_version_stale_response_is_bounded(age: float, expected_status: int) -> None:
-    app_module._version.cache = app_module._CachedProbe(
+    probes.version.cache = probes.CachedProbe(
         time.monotonic() - age, 200, b'{"api_version":"cached"}'
     )
-    app_module._version.lock = asyncio.Lock()
-    await app_module._version.lock.acquire()
+    probes.version.lock = asyncio.Lock()
+    await probes.version.lock.acquire()
     try:
         response = await app_module._version_response()
     finally:
-        app_module._version.lock.release()
+        probes.version.lock.release()
 
     assert response.status_code == expected_status
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from memory_router import security as security_module
+from memory_router import security_rules
 from memory_router.security import (
     SafetyResult,
     scan_facade_result,
@@ -130,22 +130,22 @@ def test_benign_junction_prose_stays_clean(a: str, b: str) -> None:
 def test_fused_token_gates_are_aligned() -> None:
     # A fused token matches iff both the availability prefilter and the token
     # matcher accept it; no length may pass one gate while failing the other.
-    for signal in security_module._RULE_SIGNAL_WORDS:  # noqa: SLF001
-        padding = security_module._rule_fused_padding(signal)  # noqa: SLF001
+    for signal in security_rules._RULE_SIGNAL_WORDS:  # noqa: SLF001
+        padding = security_rules._rule_fused_padding(signal)  # noqa: SLF001
         for extra in range(0, padding + 2):
             token = "z" * extra + signal
-            matched = security_module._rule_token_matches(  # noqa: SLF001
+            matched = security_rules._rule_token_matches(  # noqa: SLF001
                 token, signal, from_start=True
             )
-            _, available = security_module._rule_edge_tokens(token, deadline=None)  # noqa: SLF001
+            _, available = security_rules._rule_edge_tokens(token, deadline=None)  # noqa: SLF001
             assert matched == (signal in available), (signal, token)
 
 
 def test_fused_short_signal_padding_requires_eight_chars() -> None:
-    assert security_module._rule_fused_padding("key") == 8  # noqa: SLF001
-    assert security_module._rule_fused_padding("instructions") == 4  # noqa: SLF001
-    assert not security_module._rule_edge_matches("the api", "fakekey data")  # noqa: SLF001
-    assert security_module._rule_edge_matches("the api", "zzzzzzzzzzzzkey data")  # noqa: SLF001
+    assert security_rules._rule_fused_padding("key") == 8  # noqa: SLF001
+    assert security_rules._rule_fused_padding("instructions") == 4  # noqa: SLF001
+    assert not security_rules._rule_edge_matches("the api", "fakekey data")  # noqa: SLF001
+    assert security_rules._rule_edge_matches("the api", "zzzzzzzzzzzzkey data")  # noqa: SLF001
 
 
 def test_fused_long_signal_padding_still_detects_attacks() -> None:
@@ -165,10 +165,10 @@ def test_gap_budget_predicate_semantics() -> None:
     gap_one_junk = (1, frozenset({"zz"}), 0, 3)
     gap_two_same = (2, frozenset({"zz"}), 0, 6)
     gap_two_distinct = (2, frozenset({"foo", "bar"}), 0, 9)
-    assert security_module._rule_gap_allowed(gap_clean, gap_clean)  # noqa: SLF001
-    assert security_module._rule_gap_allowed(gap_one_junk, gap_clean)  # noqa: SLF001
-    assert security_module._rule_gap_allowed(gap_two_same, gap_clean)  # noqa: SLF001
-    assert not security_module._rule_gap_allowed(gap_two_distinct, gap_clean)  # noqa: SLF001
+    assert security_rules._rule_gap_allowed(gap_clean, gap_clean)  # noqa: SLF001
+    assert security_rules._rule_gap_allowed(gap_one_junk, gap_clean)  # noqa: SLF001
+    assert security_rules._rule_gap_allowed(gap_two_same, gap_clean)  # noqa: SLF001
+    assert not security_rules._rule_gap_allowed(gap_two_distinct, gap_clean)  # noqa: SLF001
 
 
 @pytest.mark.parametrize(
@@ -197,7 +197,7 @@ def test_openssh_backup_pair_flags_only_within_field_private_key() -> None:
 
 
 def test_fail_closed_tier_requires_clear_padding() -> None:
-    gap = security_module._rule_gap_fail_closed  # noqa: SLF001
+    gap = security_rules._rule_gap_fail_closed  # noqa: SLF001
     filler = frozenset({"the"})
     assert not gap((0, frozenset(), 0, 0), (2, frozenset({"the", "existing"}), 0, 20))
     assert gap((2, frozenset({"alpha", "beta"}), 0, 12), (0, frozenset(), 0, 0))
