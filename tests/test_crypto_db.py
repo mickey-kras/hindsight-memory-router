@@ -99,10 +99,14 @@ def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
         serialization.PrivateFormat.PKCS8,
         serialization.NoEncryption(),
     ).decode()
-    public_pem = private.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
 
     with pytest.raises(ValueError, match="at least 2048 bits"):
         decode_public_key(public_pem)
