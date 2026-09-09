@@ -18,6 +18,8 @@ DEFAULT_HINDSIGHT_TIMEOUT_MS = 10_000
 DEFAULT_HINDSIGHT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_FACADE_RESPONSE_BYTES = 256 * 1024
 MAX_HINDSIGHT_JSON_DEPTH = 64
+BANK_LIST_PAGE_LIMIT = 500
+MAX_BANK_LIST_PAGES = 1_000
 _UNSUPPORTED_FACADE_FEATURES = (
     "mcp",
     "bank_llm_health",
@@ -231,8 +233,11 @@ class HindsightGateway:
     async def _list_visible_banks(self, allowed: set[str], q: str | None) -> list[dict[str, Any]]:
         visible: list[dict[str, Any]] = []
         upstream_offset = 0
-        for _ in range(1_000):
-            query: dict[str, str | int] = {"limit": 500, "offset": upstream_offset}
+        for _ in range(MAX_BANK_LIST_PAGES):
+            query: dict[str, str | int] = {
+                "limit": BANK_LIST_PAGE_LIMIT,
+                "offset": upstream_offset,
+            }
             if q is not None:
                 query["q"] = q
             value = await self._request(

@@ -26,14 +26,14 @@ def router_authorized(authorization: str | None, token: str | None, allow_anonym
 
 def admin_authorized(authorization: str | None, scope: str, tokens: dict[str, str | None]) -> bool:
     allowed: list[str] = []
-    if tokens.get("legacy"):
-        allowed.append(tokens["legacy"] or "")
+    if legacy := tokens.get("legacy"):
+        allowed.append(legacy)
     if scope == "read":
         allowed.extend(value for value in (tokens.get("read"), tokens.get("review")) if value)
-    elif scope == "review" and tokens.get("review"):
-        allowed.append(tokens["review"] or "")
-    elif scope == "cleanup" and tokens.get("cleanup"):
-        allowed.append(tokens["cleanup"] or "")
+    elif scope == "review" and (review := tokens.get("review")):
+        allowed.append(review)
+    elif scope == "cleanup" and (cleanup := tokens.get("cleanup")):
+        allowed.append(cleanup)
     return any(bearer_matches(authorization, token) for token in allowed)
 
 

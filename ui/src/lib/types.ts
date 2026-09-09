@@ -8,13 +8,16 @@ export type QuarantineKind =
 
 export type QuarantineStatus = "pending" | "postponed" | "reviewed_allowed" | "reviewed_blocked";
 
-export type ReviewReason =
-  | "unknown_writer"
-  | "suspicious_content"
-  | "suspicious_query"
-  | "recalled_suspicious_memory"
-  | "denied_endpoint"
-  | "auth_failed";
+export const REASONS = [
+  "unknown_writer",
+  "suspicious_content",
+  "suspicious_query",
+  "recalled_suspicious_memory",
+  "denied_endpoint",
+  "auth_failed",
+] as const;
+
+export type ReviewReason = (typeof REASONS)[number];
 
 export interface QuarantineItemSummary {
   quarantine_id: string;

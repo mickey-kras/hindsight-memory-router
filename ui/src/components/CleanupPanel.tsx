@@ -1,17 +1,9 @@
 import { useState } from "react";
 import { ApiError, runCleanup, type AdminTokens } from "../lib/api";
+import { REASONS } from "../lib/types";
 import type { CleanupResponse, ReviewReason } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { Banner } from "./Banner";
-
-const REASONS: ReviewReason[] = [
-  "unknown_writer",
-  "suspicious_content",
-  "suspicious_query",
-  "recalled_suspicious_memory",
-  "denied_endpoint",
-  "auth_failed",
-];
 
 interface Props {
   tokens: AdminTokens;

@@ -307,7 +307,7 @@ async def test_postpone_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     item, _ = exact_item("retain_request", {})
     svc, _, _, _ = service(item)
     postpone = AsyncMock(return_value={"postpone_count": 1})
-    monkeypatch.setattr(admin_module, "postpone", postpone)
+    monkeypatch.setattr(admin_module, "postpone_item", postpone)
     assert (await svc.postpone(QID))["count"] == 1
     postpone.assert_awaited_once()
     assert postpone.await_args.args[3:] == (300, 2)

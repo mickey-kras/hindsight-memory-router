@@ -18,9 +18,9 @@ from .review_repository import (
     finish_approve_retain,
     finish_reject_memory,
     interrupt_review,
-    postpone,
     remove,
 )
+from .review_repository import postpone as postpone_item
 from .security import scan_retain_body
 from .timestamps import iso_now, parse_iso
 from .validation import parse_retain_body
@@ -266,7 +266,7 @@ class QuarantineAdminService:
 
     async def postpone(self, quarantine_id: str) -> dict[str, Any]:
         await self._require_claim_candidate(quarantine_id)
-        next_item = await postpone(
+        next_item = await postpone_item(
             self.repository,
             quarantine_id,
             iso_now(),

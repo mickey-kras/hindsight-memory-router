@@ -49,7 +49,7 @@ TOKEN_PREFIX = "mr_"  # noqa: S105  # nosec B105 - token format prefix, not a cr
 PRINCIPAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 SECRET_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+DIGEST_PATTERN = SECRET_PATTERN
 _BEARER_PREFIX = "Bearer "
 
 # Compared against tokens with an unknown key ID so the verification path does
