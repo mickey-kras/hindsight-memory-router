@@ -16,16 +16,6 @@ WHERE status IN ('pending','postponed')
 ORDER BY expires_at
 LIMIT ?
 """
-_SWEEP_SQL_FOR_UPDATE = """
-SELECT quarantine_id, expires_at
-FROM quarantine_items
-WHERE status IN ('pending','postponed')
-  AND expires_at IS NOT NULL
-  AND expires_at <= ?
-ORDER BY expires_at
-LIMIT ?
-FOR UPDATE
-"""
 
 
 async def preview_cleanup(
@@ -59,11 +49,7 @@ async def cleanup(
     where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
         rows = await tx.fetchall(
-            _cleanup_query(
-                "quarantine_id, encrypted_bytes",
-                where,
-                for_update=tx.dialect == "postgres",
-            ),
+            tx.select_for_update(_cleanup_query("quarantine_id, encrypted_bytes", where)),
             params,
         )
         if len(rows) != expected_count:
@@ -90,7 +76,7 @@ async def cleanup(
 
 async def sweep_expired(repository: QuarantineRepository, at: str) -> int:
     async with repository.db.transaction() as tx:
-        query = _SWEEP_SQL_FOR_UPDATE if tx.dialect == "postgres" else _SWEEP_SQL
+        query = tx.select_for_update(_SWEEP_SQL)
         rows = await tx.fetchall(query, (at, BATCH_LIMIT))
         for row in rows:
             await tx.execute(
@@ -163,6 +149,5 @@ def cleanup_params(
     return " AND ".join(clauses), params
 
 
-def _cleanup_query(select: str, where: str, *, for_update: bool = False) -> str:
-    suffix = " FOR UPDATE" if for_update else ""
-    return f"SELECT {select} FROM quarantine_items WHERE {where}{suffix}"  # nosec B608  # noqa: S608
+def _cleanup_query(select: str, where: str) -> str:
+    return f"SELECT {select} FROM quarantine_items WHERE {where}"  # nosec B608  # noqa: S608

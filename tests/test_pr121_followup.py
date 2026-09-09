@@ -8,6 +8,7 @@ import pytest
 from memory_router import admin as admin_module
 from memory_router import security as security_module
 from memory_router.admin import QuarantineAdminService
+from memory_router.db import SqliteTx
 from memory_router.errors import HttpError
 from memory_router.models import WriterRegistry
 from memory_router.policy import RouterPolicy, recalled_content_digest
@@ -122,7 +123,7 @@ def test_scanner_field_budget_fails_closed(monkeypatch: pytest.MonkeyPatch) -> N
     )
 
 
-class ReviewTx:
+class ReviewTx(SqliteTx):
     dialect = "sqlite"
 
     def __init__(self, row: dict[str, object]) -> None:

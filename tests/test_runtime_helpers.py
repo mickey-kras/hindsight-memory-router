@@ -136,6 +136,9 @@ def test_hindsight_error_details_variants() -> None:
 
 
 class Tx:
+    def select_for_update(self, sql: str) -> str:
+        return sql + " FOR UPDATE" if self.dialect == "postgres" else sql
+
     def __init__(
         self,
         *,

@@ -10,6 +10,7 @@ from fastapi import Request
 from memory_router import admin as admin_module
 from memory_router import app as app_module
 from memory_router.canonical import sha256_hex
+from memory_router.db import PostgresTx, SqliteTx
 from memory_router.envelope import canonical_decrypted
 from memory_router.errors import HttpError
 from memory_router.models import WriterRegistry
@@ -33,7 +34,7 @@ class TxContext:
         return None
 
 
-class FakeReviewTx:
+class FakeReviewTx(SqliteTx):
     dialect = "sqlite"
 
     def __init__(self, row: dict[str, object]) -> None:
@@ -129,7 +130,7 @@ async def test_stale_claim_is_not_recovered_by_claim_review() -> None:
     assert not any("status='postponed'" in sql for sql, _ in tx.executed)
 
 
-class FakeStoreTx:
+class FakeStoreTx(SqliteTx):
     dialect = "sqlite"
 
     def __init__(self, existing: dict[str, object]) -> None:
@@ -343,7 +344,7 @@ def test_json_depth_is_bounded_before_recursive_security_processing() -> None:
     assert exc.value.code == "json_too_deep"
 
 
-class FakePostgresTx:
+class FakePostgresTx(PostgresTx):
     dialect = "postgres"
 
     def __init__(self) -> None:

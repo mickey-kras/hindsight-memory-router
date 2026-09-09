@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
+from memory_router.db import PostgresTx
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.models import WriterRegistry
@@ -155,7 +156,7 @@ async def test_reviewed_stable_digest_still_rescans_unsafe_volatile_extra() -> N
     assert store.items[0]["kind"] == "recalled_memory"
 
 
-class SweepTx:
+class SweepTx(PostgresTx):
     dialect = "postgres"
 
     def __init__(self) -> None:
@@ -186,7 +187,7 @@ async def test_postgres_global_sweep_uses_database_max_window() -> None:
     assert global_deletes == [(40_000,)]
 
 
-class ReviewTx:
+class ReviewTx(PostgresTx):
     dialect = "postgres"
 
     def __init__(self) -> None:

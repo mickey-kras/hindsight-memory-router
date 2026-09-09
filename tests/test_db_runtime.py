@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memory_router import db as db_module
+from memory_router.db import PostgresTx
 
 
 def test_database_url_helpers(tmp_path: Path) -> None:
@@ -35,6 +36,9 @@ async def test_sqlite_database_transactions_schema_and_ping(tmp_path: Path) -> N
     await database.ping()
     async with database.transaction() as tx:
         assert tx.dialect == "sqlite"
+        assert tx.select_for_update("SELECT 1") == "SELECT 1"
+        assert await tx.column_exists("quarantine_items", "dedupe_key")
+        assert not await tx.column_exists("quarantine_items", "missing")
         await tx.execute(
             "INSERT INTO quarantine_events(event_id,quarantine_id,occurred_at,event_type,details) VALUES(?,?,?,?,?)",
             ("1", "q", "now", "x", "{}"),
@@ -130,6 +134,7 @@ async def test_postgres_tx_translation() -> None:
     connection = SimpleNamespace(execute=AsyncMock())
     connection.execute.side_effect = [None, Cursor({"x": 1}), Cursor(many=[{"x": 1}])]
     tx = db_module.PostgresTx(connection)
+    assert tx.select_for_update("SELECT 1") == "SELECT 1 FOR UPDATE"
     assert tx.sql("a=? AND b=?") == "a=%s AND b=%s"
     await tx.execute("UPDATE x SET a=?", (1,))
     assert await tx.fetchone("SELECT ? x", (1,)) == {"x": 1}
@@ -139,7 +144,7 @@ async def test_postgres_tx_translation() -> None:
 
 @pytest.mark.asyncio
 async def test_initialize_schema_postgres_and_existing_columns() -> None:
-    class Tx:
+    class Tx(PostgresTx):
         dialect = "postgres"
 
         def __init__(self) -> None:

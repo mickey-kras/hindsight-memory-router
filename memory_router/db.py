@@ -56,6 +56,12 @@ def sqlite_path(url: str) -> str:
 class Tx:
     dialect: str
 
+    def select_for_update(self, sql: str) -> str:
+        raise NotImplementedError
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        raise NotImplementedError
+
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         raise NotImplementedError
 
@@ -85,6 +91,16 @@ class Database:
 
 class SqliteTx(Tx):
     dialect = "sqlite"
+
+    def select_for_update(self, sql: str) -> str:
+        return sql
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        return bool(
+            await self.fetchone(
+                "SELECT 1 present FROM pragma_table_info(?) WHERE name=?", (table, column)
+            )
+        )
 
     def __init__(self, connection: aiosqlite.Connection) -> None:
         self.connection = connection
@@ -148,6 +164,17 @@ def _escaped_quote(statement: str, index: int, quote: str) -> bool:
 
 class PostgresTx(Tx):
     dialect = "postgres"
+
+    def select_for_update(self, sql: str) -> str:
+        return sql + " FOR UPDATE"
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        return bool(
+            await self.fetchone(
+                "SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?",
+                (table, column),
+            )
+        )
 
     def __init__(self, connection: Any) -> None:
         self.connection = connection
@@ -239,17 +266,7 @@ async def initialize_schema(db: Database) -> None:
             ("requarantine_count", "requarantine_count INTEGER NOT NULL DEFAULT 0"),
             ("expires_at", "expires_at TEXT"),
         ):
-            if tx.dialect == "postgres":
-                present = await tx.fetchone(
-                    "SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?",
-                    ("quarantine_items", name),
-                )
-            else:
-                present = await tx.fetchone(
-                    "SELECT 1 present FROM pragma_table_info('quarantine_items') WHERE name=?",
-                    (name,),
-                )
-            if not present:
+            if not await tx.column_exists("quarantine_items", name):
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")
         for statement in SCHEMA[1:]:
             await tx.execute(statement)

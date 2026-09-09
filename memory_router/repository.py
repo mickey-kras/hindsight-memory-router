@@ -8,13 +8,9 @@ from typing import Any
 from .db import Database, Tx
 from .errors import HttpError
 
-_FOR_UPDATE = " FOR UPDATE"
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
-_MEMORY_SELECT_FOR_UPDATE = _MEMORY_SELECT + _FOR_UPDATE
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
-_REQUEST_SELECT_FOR_UPDATE = _REQUEST_SELECT + _FOR_UPDATE
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
-_ID_SELECT_FOR_UPDATE = _ID_SELECT + _FOR_UPDATE
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
     "WHERE status IN ('pending','postponed') "
@@ -153,15 +149,14 @@ class QuarantineRepository:
     async def _find_existing(
         self, tx: Tx, item: dict[str, Any], mode: str
     ) -> dict[str, Any] | None:
-        locked = tx.dialect == "postgres"
         if mode == "memory":
-            query = _MEMORY_SELECT_FOR_UPDATE if locked else _MEMORY_SELECT
+            query = tx.select_for_update(_MEMORY_SELECT)
             row = await tx.fetchone(query, (item["source_bank"], item["source_memory_id"]))
         elif mode == "request":
-            query = _REQUEST_SELECT_FOR_UPDATE if locked else _REQUEST_SELECT
+            query = tx.select_for_update(_REQUEST_SELECT)
             row = await tx.fetchone(query, (item["dedupe_key"],))
         else:
-            query = _ID_SELECT_FOR_UPDATE if locked else _ID_SELECT
+            query = tx.select_for_update(_ID_SELECT)
             row = await tx.fetchone(query, (item["quarantine_id"],))
         return stored(row)
 

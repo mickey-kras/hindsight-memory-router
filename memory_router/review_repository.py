@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .db import Tx
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .repository import QuarantineRepository, insert_event, is_expired, stored
@@ -11,13 +12,7 @@ REVIEW_STALE_SECONDS = 60
 _EXPIRED_MESSAGE = "quarantine item has expired"
 _NOT_FOUND_MESSAGE = "quarantine item not found"
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
-_SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
-_SELECT_IN_PROGRESS_FOR_UPDATE = _SELECT_IN_PROGRESS + " FOR UPDATE"
-
-
-def _item_query(tx: Any) -> str:
-    return _SELECT_ITEM_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_ITEM
 
 
 def _stale(updated_at: str, at: str, stale_seconds: int = REVIEW_STALE_SECONDS) -> bool:
@@ -67,7 +62,7 @@ async def postpone(
     expired = False
     result: dict[str, Any] = {}
     async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+        item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
@@ -129,7 +124,7 @@ async def claim_review(
     expired = False
     claimed: dict[str, Any] = {}
     async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+        item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         _assert_snapshot(item, expected_sha256, expected_updated_at)
@@ -177,7 +172,9 @@ async def interrupt_review(
     repository: QuarantineRepository, claimed: dict[str, Any], at: str, error: Exception
 ) -> None:
     async with repository.db.transaction() as tx:
-        current = stored(await tx.fetchone(_item_query(tx), (claimed["quarantine_id"],)))
+        current = stored(
+            await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (claimed["quarantine_id"],))
+        )
         if (
             not current
             or current["status"] not in {"review_in_progress", "review_side_effect_started"}
@@ -258,7 +255,7 @@ async def remove(
 ) -> None:
     expired = False
     async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+        item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
         if not item:
             raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
         item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
@@ -276,7 +273,7 @@ async def recover_interrupted(
     repository: QuarantineRepository, at: str, stale_seconds: int = REVIEW_STALE_SECONDS
 ) -> None:
     async with repository.db.transaction() as tx:
-        query = _SELECT_IN_PROGRESS_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_IN_PROGRESS
+        query = tx.select_for_update(_SELECT_IN_PROGRESS)
         rows = await tx.fetchall(query)
         for row in rows:
             if not _stale(str(row["updated_at"]), at, stale_seconds):
@@ -288,7 +285,7 @@ async def recover_interrupted(
 
 
 async def _recover_stale_for_action(
-    tx: Any,
+    tx: Tx,
     item: dict[str, Any],
     at: str,
     stale_seconds: int | None,
@@ -306,7 +303,7 @@ async def _recover_stale_for_action(
     return {**item, "status": "postponed", "updated_at": at}, False
 
 
-async def _expire_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
+async def _expire_stale_claim(tx: Tx, item: dict[str, Any], at: str) -> None:
     await tx.execute(
         "DELETE FROM quarantine_items WHERE quarantine_id=? AND status='review_in_progress'",
         (item["quarantine_id"],),
@@ -320,7 +317,7 @@ async def _expire_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
     )
 
 
-async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
+async def _restore_stale_claim(tx: Tx, item: dict[str, Any], at: str) -> None:
     await tx.execute(
         "UPDATE quarantine_items SET status='postponed',updated_at=? WHERE quarantine_id=? AND status='review_in_progress'",
         (at, item["quarantine_id"]),
@@ -334,8 +331,8 @@ async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
     )
 
 
-async def require_reviewable(tx: Any, quarantine_id: str, at: str) -> dict[str, Any]:
-    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+async def require_reviewable(tx: Tx, quarantine_id: str, at: str) -> dict[str, Any]:
+    item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
     if not item:
         raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
     _assert_reviewable(item, at)
@@ -343,7 +340,7 @@ async def require_reviewable(tx: Any, quarantine_id: str, at: str) -> dict[str, 
 
 
 async def require_in_progress(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -359,7 +356,7 @@ async def require_in_progress(
 
 
 async def require_side_effect_started(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -375,7 +372,7 @@ async def require_side_effect_started(
 
 
 async def require_side_effect_completed(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -391,14 +388,14 @@ async def require_side_effect_completed(
 
 
 async def _require_review_state(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     status: str,
     *,
     expected_sha256: str | None = None,
 ) -> dict[str, Any]:
-    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+    item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
     if not item or item["status"] != status or item["updated_at"] != at:
         raise HttpError(
             409, "quarantine_review_changed", "quarantine item changed while review was in progress"
@@ -410,7 +407,7 @@ async def _require_review_state(
     return item
 
 
-async def mark_recalled(tx: Any, item: dict[str, Any], status: str, at: str) -> None:
+async def mark_recalled(tx: Tx, item: dict[str, Any], status: str, at: str) -> None:
     await tx.execute(
         "UPDATE quarantine_items SET status=?,encrypted_envelope=NULL,encrypted_bytes=0,updated_at=? WHERE quarantine_id=?",
         (status, at, item["quarantine_id"]),
