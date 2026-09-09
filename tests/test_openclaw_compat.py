@@ -29,7 +29,7 @@ def make_policy(response: object = None) -> FakePolicy:
             consume_retain=AsyncMock(),
             consume_recall=AsyncMock(),
         ),
-        _quarantine=AsyncMock(return_value={"quarantine_id": "q1"}),
+        quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 
 
@@ -338,7 +338,7 @@ async def test_openclaw_request_strings_keys_and_values_are_scanned(
 
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
 
 
 @pytest.mark.parametrize(
@@ -355,7 +355,7 @@ async def test_openclaw_unsafe_provider_content_never_reaches_agent_when_audit_f
     response: dict[str, object],
 ) -> None:
     policy = make_policy(response)
-    policy._quarantine.side_effect = HttpError(507, "quarantine_full", "full")
+    policy.quarantine_security_event.side_effect = HttpError(507, "quarantine_full", "full")
     facade = OpenClawFacade(policy)
 
     with pytest.raises(HttpError) as blocked:

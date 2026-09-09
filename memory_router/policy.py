@@ -202,7 +202,7 @@ class RouterPolicy:
         dedupe = self.security_event_identities.resolve(
             writer_id, security_event_dedupe_key(method, path)
         )
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": "http",
@@ -248,7 +248,7 @@ class RouterPolicy:
             return True
         digest = _audit_digest(evidence)
         try:
-            await self._quarantine(
+            await self.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": source,
@@ -373,7 +373,7 @@ class RouterPolicy:
             "result": result,
         }
         payload = self._with_transformations(payload, scan)
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -392,7 +392,7 @@ class RouterPolicy:
         digest = _recalled_audit_digest(result)
         scan = scan_recall_result(result)
         memory_id = str(result.get("id", "unknown"))
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -419,7 +419,7 @@ class RouterPolicy:
     ) -> None:
         digest = _audit_digest(body)
         findings = [] if scan is None else [finding.public() for finding in scan.findings]
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -446,7 +446,7 @@ class RouterPolicy:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"action": "retain", "writer_id": writer_id, "body": body}
         payload = self._with_transformations(payload, scan)
-        result = await self._quarantine(
+        result = await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -483,7 +483,7 @@ class RouterPolicy:
             payload: dict[str, Any] = {"action": "recall", "writer_id": writer_id, "body": body}
             payload = self._with_transformations(payload, scan)
             target = ",".join(sorted(target_banks)) if target_banks else None
-            await self._quarantine(
+            await self.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": source,
@@ -524,7 +524,7 @@ class RouterPolicy:
                 {"writer_id": writer_id, "reason": reason, "status": exc.status, "code": exc.code},
             )
 
-    async def _quarantine(self, values: dict[str, Any]) -> dict[str, str]:
+    async def quarantine_security_event(self, values: dict[str, Any]) -> dict[str, str]:
         return cast(dict[str, str], await self.store.put({"timestamp": iso_now(), **values}))
 
     @staticmethod

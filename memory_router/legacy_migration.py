@@ -93,7 +93,7 @@ async def import_legacy_quarantine(
             "expires_at": None,
         }
         async with repository.db.transaction() as tx:
-            await repository._insert(tx, item)
+            await repository.insert_item(tx, item)
 
         postpone_count = int(record.get("postpone_count") or 0)
         if record["decision"] == "postponed":

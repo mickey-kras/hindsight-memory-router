@@ -677,7 +677,7 @@ async def test_openclaw_security_audit_failure_event_is_emitted(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     policy = SimpleNamespace(
-        _quarantine=AsyncMock(side_effect=RuntimeError("secret audit failure"))
+        quarantine_security_event=AsyncMock(side_effect=RuntimeError("secret audit failure"))
     )
 
     await OpenClawFacade(policy)._audit(  # noqa: SLF001 - event-path regression coverage

@@ -148,7 +148,7 @@ class QuarantineRepository:
                     int(existing.get("requarantine_count") or 0) + 1,
                 )
             else:
-                await self._insert(tx, item)
+                await self.insert_item(tx, item)
 
     async def _find_existing(
         self, tx: Tx, item: dict[str, Any], mode: str
@@ -165,7 +165,7 @@ class QuarantineRepository:
             row = await tx.fetchone(query, (item["quarantine_id"],))
         return stored(row)
 
-    async def _insert(self, tx: Tx, item: dict[str, Any]) -> None:
+    async def insert_item(self, tx: Tx, item: dict[str, Any]) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         await tx.execute(
             """INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",

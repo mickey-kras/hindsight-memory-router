@@ -22,7 +22,7 @@ def _policy(response: object) -> SimpleNamespace:
             consume_retain=AsyncMock(),
             consume_recall=AsyncMock(),
         ),
-        _quarantine=AsyncMock(return_value={"quarantine_id": "q1"}),
+        quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 
 
@@ -135,4 +135,4 @@ async def test_each_openclaw_conditional_route_blocks_unsafe_provider_content(
 
     assert blocked.value.status == 502
     assert blocked.value.code == "hindsight_unsafe_response"
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()

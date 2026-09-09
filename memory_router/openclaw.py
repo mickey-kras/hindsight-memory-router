@@ -400,7 +400,7 @@ class OpenClawFacade:
             digest = sha256_hex(repr(type(value)))
         findings = [] if scan is None else [finding.public() for finding in scan.findings]
         try:
-            await self.policy._quarantine(  # noqa: SLF001 - same package policy boundary
+            await self.policy.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": "openclaw",
