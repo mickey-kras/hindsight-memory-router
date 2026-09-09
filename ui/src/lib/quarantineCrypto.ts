@@ -5,7 +5,6 @@ import { canonicalJson, sha256Hex } from "./jcs";
 import { REASONS } from "./types";
 import type {
   DecryptedQuarantineObject,
-  EncryptionMetadata,
   EncryptedQuarantineEnvelope,
   ReviewReason,
 } from "./types";

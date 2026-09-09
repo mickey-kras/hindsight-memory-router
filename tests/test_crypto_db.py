@@ -110,6 +110,21 @@ def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
         decode_private_key(private_pem)
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "recalled_suspicious_supplemental",
+        "openclaw_suspicious_request",
+        "openclaw_unknown_writer",
+        "openclaw_suspicious_provider_response",
+    ],
+)
+def test_security_event_producer_reasons_are_accepted(reason: str) -> None:
+    value = decrypted() | {"reason": reason}
+
+    assert canonical_decrypted(value)
+
+
 @pytest.mark.parametrize("key_size", [2048, 4096])
 @pytest.mark.parametrize(
     "metadata",

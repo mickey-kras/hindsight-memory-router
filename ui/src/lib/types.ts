@@ -13,8 +13,12 @@ export const REASONS = [
   "suspicious_content",
   "suspicious_query",
   "recalled_suspicious_memory",
+  "recalled_suspicious_supplemental",
   "denied_endpoint",
   "auth_failed",
+  "openclaw_suspicious_request",
+  "openclaw_unknown_writer",
+  "openclaw_suspicious_provider_response",
 ] as const;
 
 export type ReviewReason = (typeof REASONS)[number];
