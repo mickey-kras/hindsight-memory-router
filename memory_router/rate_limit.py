@@ -6,7 +6,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn
+from typing import Any, NoReturn, Protocol
 
 from .errors import HttpError
 from .logging import log_event
@@ -16,6 +16,22 @@ Bucket = tuple[str, int, int]
 Distinct = tuple[str, str, int, int]
 _SWEEP_EVERY = 128
 logger = logging.getLogger(__name__)
+
+
+class RateLimitConsumer(Protocol):
+    async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None: ...
+
+    async def consume_many_distinct(
+        self, buckets: list[Bucket], identities: list[Distinct], at_ms: int | None = None
+    ) -> None: ...
+
+
+class RateLimiter(RateLimitConsumer, Protocol):
+    async def initialize(self) -> None: ...
+
+    async def with_identity_lock[T](
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
+    ) -> T: ...
 
 
 def _normalize_buckets(buckets: list[Bucket]) -> list[Bucket]:
@@ -57,6 +73,9 @@ class InMemoryRateLimiter:
         self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
         self.consume_count = 0
+
+    async def initialize(self) -> None:
+        return None
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -139,7 +158,7 @@ class InMemoryRateLimiter:
                 self.distinct_windows.pop(scope, None)
 
     async def with_identity_lock[T](
-        self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T:
         async with self.guard:
             lock, users = self.locks.get(identity, (asyncio.Lock(), 0))
@@ -362,7 +381,7 @@ class PostgresRateLimiter:
         self._commit_session(session)
 
     async def with_identity_lock[T](
-        self, identity: str, operation: Callable[[Any], Awaitable[T]]
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T:
         async with self.database.transaction() as tx:
             await tx.execute(

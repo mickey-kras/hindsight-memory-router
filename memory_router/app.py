@@ -69,6 +69,7 @@ from .rate_limit import (
     InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
     PostgresRateLimiter,
+    RateLimiter,
 )
 from .repository import QuarantineRepository
 from .request_dispatch import (
@@ -211,10 +212,10 @@ class Runtime:
         self.policy: RouterPolicy | None = None
         self.admin: QuarantineAdminService | None = None
         self.auditor: AuthFailureAuditor | None = None
-        self.quarantine_limiter: Any = None
-        self.admin_limiter = InMemoryRateLimiter()
-        self.auth_limiter: Any = InMemoryRateLimiter()
-        self.principal_limiter: Any = InMemoryRateLimiter()
+        self.quarantine_limiter: RateLimiter = InMemoryRateLimiter()
+        self.admin_limiter: RateLimiter = InMemoryRateLimiter()
+        self.auth_limiter: RateLimiter = InMemoryRateLimiter()
+        self.principal_limiter: RateLimiter = InMemoryRateLimiter()
         self.principal_concurrency_limiter: PostgresConcurrencyLimiter | None = None
         self.principal_concurrency: dict[tuple[str, str], int] = {}
         self.sweeper: asyncio.Task[None] | None = None

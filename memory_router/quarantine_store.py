@@ -10,6 +10,7 @@ from .canonical import sha256_hex
 from .dedupe import request_family_identity
 from .envelope import create_envelope, decode_public_key, estimate_envelope_size
 from .errors import HttpError
+from .rate_limit import RateLimitConsumer, RateLimiter
 from .repository import Capacity, QuarantineRepository
 from .timestamps import iso_format, parse_iso
 
@@ -34,7 +35,7 @@ class QuarantineStore:
         public_key: str,
         repository: QuarantineRepository,
         limits: QuarantineLimits,
-        rate_limiter: Any,
+        rate_limiter: RateLimiter,
     ) -> None:
         key = decode_public_key(public_key)
         self.public_key = public_key
@@ -53,7 +54,7 @@ class QuarantineStore:
         known = await self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
 
-        async def operation(_session: Any) -> dict[str, str]:
+        async def operation(_session: RateLimitConsumer) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
             if (
                 input_["kind"] in {"retain_request", "recall_request"}

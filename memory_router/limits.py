@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import HttpError, rate_limit_error
+from .rate_limit import RateLimiter
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ class HindsightLimitConfig:
 
 
 class HindsightLimits:
-    def __init__(self, config: HindsightLimitConfig, limiter: Any) -> None:
+    def __init__(self, config: HindsightLimitConfig, limiter: RateLimiter) -> None:
         self.config = config
         self.limiter = limiter
 
