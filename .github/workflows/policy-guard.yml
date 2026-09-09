@@ -29,7 +29,7 @@ jobs:
               ".github/scripts/release.cjs": "4d61f95640ec9d284b27783512b4308aba523cfd287e58e0d9222cf7cf5ed9c5",
               ".github/scripts/release-settings.cjs": "c2502d720dc7c1355b3497a38ac7db825a16307aa0e146cdcf313871445f15ff",
               ".github/scripts/release.test.cjs": "6559fac06661b1ad76f78bfe3d038b80279753c0a4dbec9fb8f659a03064a59a",
-              ".github/scripts/release-policy.test.py": "6e8f60e06669caded9eb29d953dbe1820c91ace971f71c7810b542bbf4eaf0f7",
+              ".github/scripts/release-policy.test.py": "8c74868e4fe3ba1d46c1beb28f8bd3202c2fc35df9d5f9abbaa1b9e23d10bd80",
               ".github/rulesets/protect-release-branches.json": "310afd18e1c1b898540487ac963f727c2fe16c52595341f713bcb2c1cf3219cd",
               ".github/scripts/publish-image.sh": "0842e989b7457fb881ddd24ae8343401ed9755908be6b35011fbe01ec56562dd",
               ".github/scripts/publish-image.test.cjs": "be5928bc9756a22bb6a4542a7f1866b1409265fd6c07e22a2f17cb4b75dbaf11",
