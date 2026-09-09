@@ -43,8 +43,6 @@ class RateLimitConsumer(Protocol):
 
 
 class RateLimiter(RateLimitConsumer, Protocol):
-    async def initialize(self) -> None: ...
-
     async def with_identity_lock[T](
         self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T: ...
@@ -93,9 +91,6 @@ class InMemoryRateLimiter:
         self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
         self.consume_count = 0
-
-    async def initialize(self) -> None:
-        return None
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)

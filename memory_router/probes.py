@@ -174,7 +174,8 @@ async def timed_probe[T](
     value: T | None = None
     error: Exception | None = None
     try:
-        value = await asyncio.wait_for(operation(), timeout=timeout)
+        async with asyncio.timeout(timeout):
+            value = await operation()
     except Exception as exc:
         error = exc
     duration_ms = round((time.monotonic() - started) * 1000, 3)
