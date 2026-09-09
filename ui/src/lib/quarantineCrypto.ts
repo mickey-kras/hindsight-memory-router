@@ -153,7 +153,7 @@ export async function decryptEnvelope(
     aesKey = await crypto.subtle.decrypt(
       { name: "RSA-OAEP" },
       privateKey,
-      b64ToBytes(enc.wrapped_key_b64, "wrapped field").buffer as ArrayBuffer,
+      b64ToBytes(enc.wrapped_key_b64, "wrapped_key_b64").buffer as ArrayBuffer,
     );
   } catch {
     throw new DecryptError("wrong decryption key for this quarantine envelope");

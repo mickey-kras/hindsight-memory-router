@@ -11,6 +11,7 @@ runs can leave the gitignored files for local cleanup or diagnosis.
 import json
 import sys
 from pathlib import Path
+from typing import get_args
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -28,6 +29,7 @@ if len(sys.argv) > 1:
     raise SystemExit("usage: gen_fixtures.py [--clean]")
 
 from memory_router.envelope import (  # noqa: E402
+    QuarantineReason,
     canonical_decrypted,
     create_envelope,
     decrypt_envelope,
@@ -171,4 +173,16 @@ for case in CASES:
     )
 
 (FIXTURE_DIR / "index.json").write_text(json.dumps({"items": items}, indent=2))
+reason_envelopes: dict[str, object] = {}
+for reason in get_args(QuarantineReason):
+    value = {
+        "quarantine_id": "q_reason_0123456789abcdef",
+        "created_at": "2026-08-29T00:00:00.000Z",
+        "reason": reason,
+        "payload": {"action": "security_event"},
+    }
+    envelope = create_envelope(value, public_pem)
+    assert decrypt_envelope(envelope, private_pem) == value
+    reason_envelopes[reason] = envelope
+(FIXTURE_DIR / "reasons.json").write_text(json.dumps(reason_envelopes, indent=2))
 print("fixtures:", [i["record"]["quarantine_id"] for i in items])
