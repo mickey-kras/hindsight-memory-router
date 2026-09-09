@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast
+from typing import Any, cast, get_args, get_origin
 
 from .canonical import canonical_json, sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .logging import log_event
+from .models import RecallResponse
 from .observability import current_request_id
 from .repository import (
     REVIEW_IN_PROGRESS,
@@ -22,7 +23,20 @@ from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_r
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
-_RECALL_RESPONSE_MAP_FIELDS = ("chunks", "entities", "source_facts", "trace")
+_RECALL_RESPONSE_MAP_FIELDS = tuple(
+    name
+    for name, field in RecallResponse.model_fields.items()
+    if get_origin(field.annotation) is dict
+    or any(get_origin(member) is dict for member in get_args(field.annotation))
+)
+_QUARANTINE_ERRORS: dict[str, tuple[int, str]] = {
+    "quarantine_capacity_exceeded": (507, "capacity"),
+    "quarantine_writer_capacity_exceeded": (507, "capacity"),
+    "quarantine_rate_limited": (429, "rate-limit"),
+    "quarantine_item_too_large": (413, "payload-too-large"),
+    "quarantine_request_in_review": (409, "conflict"),
+    "quarantine_item_in_review": (409, "conflict"),
+}
 
 
 def prepare_retain_body(
@@ -543,28 +557,15 @@ class RouterPolicy:
 
     @staticmethod
     def _quarantine_unavailable(error: HttpError) -> bool:
-        return (
-            error.status in {507, 429}
-            or (error.status == 413 and error.code == "quarantine_item_too_large")
-            or (
-                error.status == 409
-                and error.code in {"quarantine_request_in_review", "quarantine_item_in_review"}
-            )
-        )
+        expected_status, _ = _QUARANTINE_ERRORS.get(error.code, (None, None))
+        return error.status in {507, 429} or error.status == expected_status
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
         raw_error_kind = (
             details.get("error_kind") or details.get("error_type") or details.get("code")
         )
-        error_kind = {
-            "quarantine_capacity_exceeded": "capacity",
-            "quarantine_writer_capacity_exceeded": "capacity",
-            "quarantine_rate_limited": "rate-limit",
-            "quarantine_item_too_large": "payload-too-large",
-            "quarantine_request_in_review": "conflict",
-            "quarantine_item_in_review": "conflict",
-        }.get(str(raw_error_kind), raw_error_kind)
+        _, error_kind = _QUARANTINE_ERRORS.get(str(raw_error_kind), (None, raw_error_kind))
         log_event(
             logger,
             "error" if event == "recall_supplemental_audit_unavailable" else "warning",

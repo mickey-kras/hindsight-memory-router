@@ -154,3 +154,29 @@ def cached_probe_response(cached: CachedProbe) -> Response:
     return Response(
         content=cached.body, status_code=cached.status_code, media_type="application/json"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResult[T]:
+    value: T | None
+    error: Exception | None
+    duration_ms: float
+
+    @property
+    def healthy(self) -> bool:
+        return self.error is None
+
+
+async def timed_probe[T](
+    operation: Callable[[], Awaitable[T]], state: ReadinessLogState, timeout: float
+) -> ProbeResult[T]:
+    started = time.monotonic()
+    value: T | None = None
+    error: Exception | None = None
+    try:
+        value = await asyncio.wait_for(operation(), timeout=timeout)
+    except Exception as exc:
+        error = exc
+    duration_ms = round((time.monotonic() - started) * 1000, 3)
+    state.record(error, duration_ms)
+    return ProbeResult(value, error, duration_ms)

@@ -20,6 +20,15 @@ from .repository import (
 )
 from .timestamps import iso_format, parse_iso
 
+_DEDUPE_DIGEST_PREFIX_LENGTH = 48
+
+
+def _deduped_id(prefix: str, key: str) -> str:
+    digest = sha256_hex(key)
+    return (
+        f"q_{prefix}{digest[:_DEDUPE_DIGEST_PREFIX_LENGTH]}_{digest[_DEDUPE_DIGEST_PREFIX_LENGTH:]}"
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class QuarantineLimits:
@@ -224,18 +233,15 @@ class QuarantineStore:
 
     def _resolve_id(self, input_: dict[str, Any]) -> str:
         if input_["kind"] == "security_event" and input_.get("dedupeKey"):
-            digest = sha256_hex(input_["dedupeKey"])
-            return f"q_security{digest[:48]}_{digest[48:]}"
+            return _deduped_id("security", input_["dedupeKey"])
         if input_["kind"] in {"retain_request", "recall_request"} and input_.get("dedupeKey"):
-            digest = sha256_hex(input_["dedupeKey"])
-            return f"q_request{digest[:48]}_{digest[48:]}"
+            return _deduped_id("request", input_["dedupeKey"])
         if (
             input_["kind"] == "recalled_memory"
             and input_.get("sourceBank") is not None
             and input_.get("sourceMemoryId") is not None
         ):
-            digest = sha256_hex(f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
-            return f"q_memory{digest[:48]}_{digest[48:]}"
+            return _deduped_id("memory", f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
         stamp = re.sub(r"[^0-9A-Za-z]", "", input_["timestamp"])
         return f"q_{stamp}_{secrets.token_hex(8)}"
 

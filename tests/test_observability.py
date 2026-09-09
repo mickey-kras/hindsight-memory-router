@@ -199,7 +199,8 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     caplog.set_level(logging.WARNING, logger="memory_router.app")
 
     await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    healthy, response, _, _ = await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    probe = await app_module._hindsight_health(hindsight)
+    healthy, response = probe.healthy, probe.value  # type: ignore[arg-type]
 
     assert (healthy, response) == (False, None)
     record = next(record for record in caplog.records if record.msg == "hindsight_readiness_failed")
@@ -225,7 +226,8 @@ async def test_hindsight_readiness_probe_has_its_own_timeout(
     hindsight = SimpleNamespace(health=hang)
 
     for _ in range(2):
-        healthy, response, error, _ = await app_module._hindsight_health(hindsight)
+        probe = await app_module._hindsight_health(hindsight)
+        healthy, response, error = probe.healthy, probe.value, probe.error
         assert (healthy, response) == (False, None)
         assert isinstance(error, TimeoutError)
 

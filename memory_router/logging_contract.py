@@ -94,41 +94,32 @@ OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
 ROUTE_CLASSES = frozenset(
     {"readiness", "liveness", "version", "admin", "memory", "openclaw", "unmatched"}
 )
-OPERATIONS = frozenset(
-    {
-        "authenticate",
-        "authorize",
-        "configuration",
-        "consume-principal-rate",
-        "facade_scan",
-        "health",
-        "invalidate_memory",
-        "manage-concurrency-lease",
-        "openclaw_bank",
-        "openclaw_config",
-        "openclaw_mental-models",
-        "openclaw_reflect",
-        "quarantine_maintenance",
-        "recall",
-        "request",
-        "release-concurrency-lease",
-        "retain",
-        "security_audit",
-        "shutdown",
-        "startup",
-        "storage_health",
-        "version",
-        "bank.list",
-        "memory.recall",
-        "memory.retain",
-        "memory.reflect",
-        "bank.config.read",
-        "bank.config.write",
-        "quarantine.review",
-        "quarantine.decide",
-        "bank.admin",
-    }
-) | frozenset(f"openclaw_{route.operation}" for route in FACADE_ROUTES)
+OPERATIONS = (
+    frozenset(
+        {
+            "authenticate",
+            "authorize",
+            "configuration",
+            "consume-principal-rate",
+            "facade_scan",
+            "health",
+            "invalidate_memory",
+            "manage-concurrency-lease",
+            "quarantine_maintenance",
+            "recall",
+            "request",
+            "release-concurrency-lease",
+            "retain",
+            "security_audit",
+            "shutdown",
+            "startup",
+            "storage_health",
+            "version",
+        }
+    )
+    | SCOPE_VOCABULARY
+    | frozenset(f"openclaw_{route.operation}" for route in FACADE_ROUTES)
+)
 METHODS = frozenset({"GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS"})
 REASONS = frozenset(
     {

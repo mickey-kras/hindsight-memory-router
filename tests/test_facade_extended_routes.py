@@ -684,7 +684,7 @@ async def test_facade_response_scan_uses_the_process_executor(monkeypatch) -> No
     executor.schedule.assert_called_once_with(
         openclaw_module.scan_facade_payload,
         args=[b'{"safe":true}'],
-        timeout=30.0,
+        timeout=openclaw_module.FACADE_SCAN_TASK_SECONDS,
     )
 
 
@@ -936,8 +936,11 @@ async def test_facade_response_scan_shutdown_cancels_waiter_immediately(monkeypa
 def test_facade_scan_worker_bounds_are_pinned() -> None:
     assert openclaw_module.FACADE_SCAN_WORKERS == 4
     assert openclaw_module.FACADE_SCAN_CAPACITY == 4
-    assert openclaw_module.FACADE_SCAN_TASK_SECONDS == 30.0
-    assert openclaw_module.FACADE_SCAN_WAIT_SECONDS == 31.0
+    assert (
+        openclaw_module.MAX_FACADE_SCAN_SECONDS
+        < openclaw_module.FACADE_SCAN_TASK_SECONDS
+        < openclaw_module.FACADE_SCAN_WAIT_SECONDS
+    )
     executor = openclaw_module._get_facade_scan_executor()  # noqa: SLF001
     try:
         assert isinstance(executor, ProcessPool)

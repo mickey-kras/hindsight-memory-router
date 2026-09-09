@@ -6,10 +6,13 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, NamedTuple, NoReturn, Protocol
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, Protocol
 
 from .errors import HttpError
 from .logging import log_event
+
+if TYPE_CHECKING:
+    from .db import Tx
 
 ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(?,0))"
 
@@ -224,6 +227,16 @@ class InMemoryConcurrencyLimiter:
                 del self.active[bucket]
 
 
+async def _database_now_ms(tx: Tx) -> int:
+    row = (
+        await tx.fetchone(
+            "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
+        )
+        or {}
+    )
+    return int(row["now_ms"])
+
+
 class _PostgresSession:
     def __init__(
         self,
@@ -248,7 +261,7 @@ class _PostgresSession:
         if not normalized_buckets and not normalized_identities:
             return
         await self._lock_scopes(normalized_buckets, normalized_identities)
-        now = at_ms if at_ms is not None else await self._database_now_ms()
+        now = at_ms if at_ms is not None else await _database_now_ms(self.tx)
         windows = [window for _, _, window in normalized_buckets] + [
             window for _, _, _, window in normalized_identities
         ]
@@ -359,15 +372,6 @@ class _PostgresSession:
         await self.tx.execute(
             "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (cutoff,)
         )
-
-    async def _database_now_ms(self) -> int:
-        row = (
-            await self.tx.fetchone(
-                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
-            )
-            or {}
-        )
-        return int(row["now_ms"])
 
 
 class PostgresRateLimiter:
@@ -521,7 +525,7 @@ class PostgresConcurrencyLimiter:
                 ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
-            now = await self._database_now_ms(tx)
+            now = await _database_now_ms(tx)
             await tx.execute(
                 "DELETE FROM principal_concurrency_leases WHERE bucket=? AND expires_at_ms<=?",
                 (bucket, now),
@@ -574,7 +578,7 @@ class PostgresConcurrencyLimiter:
                 ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
-            now = await self._database_now_ms(tx)
+            now = await _database_now_ms(tx)
             row = await tx.fetchone(
                 "UPDATE principal_concurrency_leases SET expires_at_ms=? "
                 "WHERE bucket=? AND lease_id=? AND expires_at_ms>? RETURNING lease_id",
@@ -589,13 +593,3 @@ class PostgresConcurrencyLimiter:
                 "DELETE FROM principal_concurrency_leases WHERE bucket=? AND lease_id=?",
                 (bucket, lease_id),
             )
-
-    @staticmethod
-    async def _database_now_ms(tx: Any) -> int:
-        row = (
-            await tx.fetchone(
-                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
-            )
-            or {}
-        )
-        return int(row["now_ms"])

@@ -27,6 +27,7 @@ from .principals import (
 from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 EMPTY_BODY = object()
+MEMORY_ROUTE = re.compile(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?")
 
 
 class JsonBodyReader(Protocol):
@@ -136,7 +137,7 @@ class AuthenticatedRequestDispatcher:
         principal: PrincipalSession | None,
         route_class: str,
     ) -> Response | None:
-        match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
+        match = MEMORY_ROUTE.fullmatch(pathname)
         if method == "POST" and match:
             writer_id, action = self.deps.decode_path_segment(match.group(1)), match.group(2)
             if principal is None:

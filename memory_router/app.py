@@ -60,6 +60,7 @@ from .rate_limit import (
 from .repository import QuarantineRepository
 from .request_dispatch import (
     EMPTY_BODY,
+    MEMORY_ROUTE,
     AuthenticatedRequestDispatcher,
     DispatchDependencies,
 )
@@ -102,7 +103,7 @@ def _route_class(request: Request) -> str:
         return "version"
     if path.startswith("/admin/"):
         return "admin"
-    if re.fullmatch(r"/v1/default/banks/[^/]+/memories(?:/recall)?", path):
+    if MEMORY_ROUTE.fullmatch(path):
         return "memory"
     if path.startswith("/v1/default/banks/"):
         return "openclaw"
@@ -673,13 +674,11 @@ async def _admin_auth(request: Request, scope: str) -> bool:
         return True
     auditor = _require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT)
     route_class = _route_class(request)
-    if admin_token_recognized(authorization, runtime.admin_tokens):
-        auditor.log_failure(route_class)
-        await _auth_failure_rate("admin")
-        return False
+    recognized = admin_token_recognized(authorization, runtime.admin_tokens)
     auditor.log_failure(route_class)
     await _auth_failure_rate("admin")
-    await auditor.persist("admin", route_class)
+    if not recognized:
+        await auditor.persist("admin", route_class)
     return False
 
 
@@ -709,36 +708,16 @@ async def health_live() -> dict[str, str | float]:
     }
 
 
-async def _database_health(
-    repository: QuarantineRepository,
-) -> tuple[bool, Exception | None, float]:
-    started = time.monotonic()
-    try:
-        await asyncio.wait_for(repository.ping(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS)
-    except Exception as exc:
-        duration_ms = round((time.monotonic() - started) * 1000, 3)
-        probes.storage_readiness_log_state.record(exc, duration_ms)
-        return False, exc, duration_ms
-    duration_ms = round((time.monotonic() - started) * 1000, 3)
-    probes.storage_readiness_log_state.record(None, duration_ms)
-    return True, None, duration_ms
+async def _database_health(repository: QuarantineRepository) -> probes.ProbeResult[None]:
+    return await probes.timed_probe(
+        repository.ping, probes.storage_readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
+    )
 
 
-async def _hindsight_health(
-    hindsight: HindsightGateway,
-) -> tuple[bool, Any, Exception | None, float]:
-    started = time.monotonic()
-    try:
-        response = await asyncio.wait_for(
-            hindsight.health(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS
-        )
-    except Exception as exc:
-        duration_ms = round((time.monotonic() - started) * 1000, 3)
-        probes.readiness_log_state.record(exc, duration_ms)
-        return False, None, exc, duration_ms
-    duration_ms = round((time.monotonic() - started) * 1000, 3)
-    probes.readiness_log_state.record(None, duration_ms)
-    return True, response, None, duration_ms
+async def _hindsight_health(hindsight: HindsightGateway) -> probes.ProbeResult[dict[str, object]]:
+    return await probes.timed_probe(
+        hindsight.health, probes.readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
+    )
 
 
 async def _health_ready_response() -> Response:
@@ -752,12 +731,10 @@ async def _health_ready_response() -> Response:
                 asyncio.gather(_database_health(repository), _hindsight_health(hindsight)),
                 timeout=_REFRESH_TIMEOUT_SECONDS,
             )
-            database_healthy, _, _ = database_check
-            hindsight_healthy, hindsight_response, _, _ = hindsight_check
-            if not database_healthy or not hindsight_healthy:
+            if not database_check.healthy or not hindsight_check.healthy:
                 status_code, payload = 503, {"status": "unhealthy"}
             else:
-                payload = hindsight_response
+                payload = hindsight_check.value
         except Exception:
             status_code, payload = 503, {"status": "unhealthy"}
         return JSONResponse(payload, status_code=status_code)

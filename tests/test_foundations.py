@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from memory_router import auth, config, dedupe, validation
+from memory_router import auth, config, dedupe, rate_limit, validation
 from memory_router.errors import HttpError
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
 from memory_router.rate_limit import (
@@ -514,7 +514,7 @@ async def test_postgres_rate_limiter_paths() -> None:
     )
     assert any("advisory_xact_lock" in sql for sql, _ in tx.executed)
 
-    assert await _PostgresSession(FakeTx([{"now_ms": 123}]))._database_now_ms() == 123
+    assert await rate_limit._database_now_ms(FakeTx([{"now_ms": 123}])) == 123
     await _PostgresSession(FakeTx()).consume_many_distinct([], [])
 
     with pytest.raises(HttpError):

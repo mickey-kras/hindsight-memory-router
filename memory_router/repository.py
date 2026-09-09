@@ -41,6 +41,17 @@ REVIEWABLE_FILTER_SQL = (
     "status IN (" + ",".join(repr(status) for status in (PENDING, POSTPONED)) + ")"
 )
 
+STAT_KEYS = (
+    "total_items",
+    "pending_items",
+    "postponed_items",
+    "expired_items",
+    "reviewed_allowed_items",
+    "reviewed_blocked_items",
+    "encrypted_bytes",
+    "event_count",
+)
+
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
@@ -128,16 +139,7 @@ class QuarantineRepository:
                 or {}
             )
             events = await tx.fetchone("SELECT COUNT(*) event_count FROM quarantine_events") or {}
-        keys = (
-            "total_items",
-            "pending_items",
-            "postponed_items",
-            "expired_items",
-            "reviewed_allowed_items",
-            "reviewed_blocked_items",
-            "encrypted_bytes",
-        )
-        return {key: int(row.get(key) or 0) for key in keys} | {
+        return {key: int(row.get(key) or 0) for key in STAT_KEYS if key != "event_count"} | {
             "event_count": int(events.get("event_count") or 0)
         }
 

@@ -4,6 +4,8 @@ import ast
 import hashlib
 from pathlib import Path
 
+from memory_router.request_dispatch import MEMORY_ROUTE
+
 APP_PATH = Path("memory_router/app.py")
 REQUEST_DISPATCH_PATH = Path("memory_router/request_dispatch.py")
 POLICY_PATH = Path("memory_router/policy.py")
@@ -177,6 +179,13 @@ def _regex_assignment(statement: ast.stmt) -> tuple[str, str] | None:
     ):
         return None
     call = statement.value
+    if (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "MEMORY_ROUTE"
+        and call.func.attr == "fullmatch"
+    ):
+        return statement.targets[0].id, MEMORY_ROUTE.pattern
     if (
         isinstance(call.func, ast.Attribute)
         and isinstance(call.func.value, ast.Name)

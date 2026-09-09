@@ -15,6 +15,7 @@ from .repository import (
     REVIEW_IN_PROGRESS,
     REVIEW_SIDE_EFFECT_COMPLETED,
     REVIEWABLE_STATUSES,
+    STAT_KEYS,
     is_expired,
 )
 from .review_repository import (
@@ -288,18 +289,7 @@ class QuarantineAdminService:
 
     async def stats(self) -> dict[str, int]:
         stats = await self.repository.stats(iso_now())
-        return {
-            key: stats[key]
-            for key in (
-                "total_items",
-                "pending_items",
-                "postponed_items",
-                "reviewed_allowed_items",
-                "reviewed_blocked_items",
-                "encrypted_bytes",
-                "event_count",
-            )
-        }
+        return {key: stats[key] for key in STAT_KEYS if key != "expired_items"}
 
     async def cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
         scope = body.get("scope", PENDING)

@@ -659,10 +659,13 @@ def _scan_window(  # NOSONAR
 ) -> None:
     if context.limit_reached:
         return
-    counter = "skip_windows" if skip else "rolling_windows"
-    limit = MAX_SKIP_WINDOWS if skip else MAX_ROLLING_WINDOWS
-    setattr(context, counter, getattr(context, counter) + 1)
-    if getattr(context, counter) > limit:
+    if skip:
+        context.skip_windows += 1
+        count, limit = context.skip_windows, MAX_SKIP_WINDOWS
+    else:
+        context.rolling_windows += 1
+        count, limit = context.rolling_windows, MAX_ROLLING_WINDOWS
+    if count > limit:
         context.result.add(SafetyFinding("window_limit", "span_limit"))
         context.limit_reached = True
         return
