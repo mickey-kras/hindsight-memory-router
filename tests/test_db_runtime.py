@@ -172,3 +172,15 @@ async def test_initialize_schema_postgres_and_existing_columns() -> None:
     assert any(
         "information_schema.columns" not in call and "ALTER TABLE" in call for call in tx.calls
     )
+
+
+@pytest.mark.asyncio
+async def test_sqlite_backend_keeps_operation_limits_independent(tmp_path: Path) -> None:
+    backend = await db_module.create_backend(f"sqlite:{tmp_path / 'backend.db'}")
+    try:
+        assert backend.rate_limit_database is None
+        assert backend.concurrency_limiter is None
+        assert backend.create_limiter() is not backend.rate_limiter
+        assert backend.create_limiter() is not backend.create_limiter()
+    finally:
+        await backend.database.close()

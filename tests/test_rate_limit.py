@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
@@ -10,6 +11,7 @@ from memory_router.rate_limit import (
     Bucket,
     ConcurrencyLeaseLost,
     ConcurrencyLeaseRefreshFailed,
+    InMemoryConcurrencyLimiter,
     PostgresConcurrencyLimiter,
     PostgresRateLimiter,
     _PostgresSession,
@@ -224,3 +226,41 @@ async def test_postgres_concurrency_release_failure_does_not_mask_result(
 def test_postgres_concurrency_rejects_unsafe_lease_duration() -> None:
     with pytest.raises(ValueError, match="at least 3000"):
         PostgresConcurrencyLimiter(SimpleNamespace(), lease_ms=0)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_concurrency_rejects_overlap_and_releases_after_cancellation() -> None:
+    limiter = InMemoryConcurrencyLimiter()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block() -> None:
+        entered.set()
+        await release.wait()
+
+    task = asyncio.create_task(limiter.run("agent:retain", 1, block))
+    await entered.wait()
+    rejected = AsyncMock()
+    try:
+        with pytest.raises(HttpError) as throttled:
+            await limiter.run("agent:retain", 1, rejected)
+        assert throttled.value.code == "principal_concurrency_limited"
+        rejected.assert_not_awaited()
+        assert (
+            await limiter.run("other:retain", 1, AsyncMock(return_value="independent"))
+            == "independent"
+        )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert await limiter.run("agent:retain", 1, AsyncMock(return_value="released")) == "released"
+    assert limiter.active == {}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_concurrency_releases_after_operation_failure() -> None:
+    limiter = InMemoryConcurrencyLimiter()
+    with pytest.raises(ValueError, match="operation failed"):
+        await limiter.run("agent:retain", 1, AsyncMock(side_effect=ValueError("operation failed")))
+    assert await limiter.run("agent:retain", 1, AsyncMock(return_value="recovered")) == "recovered"

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memory_router import app as app_module
+from memory_router import db as db_module
 
 
 @pytest.mark.asyncio
@@ -19,19 +20,19 @@ async def test_postgres_runtime_shares_admin_and_auth_failure_limits(
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
     monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
-    primary_db = SimpleNamespace()
-    monkeypatch.setattr(app_module, "create_database", AsyncMock(return_value=primary_db))
+    primary_db = SimpleNamespace(dialect="postgres")
+    monkeypatch.setattr(db_module, "create_database", AsyncMock(return_value=primary_db))
     monkeypatch.setattr(app_module, "validate_storage", AsyncMock())
     monkeypatch.setattr(app_module, "recover_interrupted", AsyncMock())
     repository = SimpleNamespace(close=AsyncMock())
     monkeypatch.setattr(app_module, "QuarantineRepository", lambda _: repository)
 
     rate_db = SimpleNamespace(initialize=AsyncMock(), close=AsyncMock())
-    monkeypatch.setattr(app_module, "PostgresDatabase", lambda *args, **kwargs: rate_db)
+    monkeypatch.setattr(db_module, "PostgresDatabase", lambda *args, **kwargs: rate_db)
     shared_limiter = SimpleNamespace(initialize=AsyncMock())
-    monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda _: shared_limiter)
+    monkeypatch.setattr(db_module, "PostgresRateLimiter", lambda _: shared_limiter)
     concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
-    monkeypatch.setattr(app_module, "PostgresConcurrencyLimiter", lambda _: concurrency_limiter)
+    monkeypatch.setattr(db_module, "PostgresConcurrencyLimiter", lambda _: concurrency_limiter)
 
     store = object()
     hindsight = SimpleNamespace(close=AsyncMock())

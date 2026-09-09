@@ -194,6 +194,36 @@ class InMemoryRateLimiter:
                         self.locks[identity] = (lock, remaining)
 
 
+class ConcurrencyLimiter(Protocol):
+    async def run[T](
+        self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]
+    ) -> T: ...
+
+
+class InMemoryConcurrencyLimiter:
+    def __init__(self) -> None:
+        self.active: dict[str, int] = {}
+
+    async def run[T](self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
+        active = self.active.get(bucket, 0)
+        if active >= maximum:
+            raise HttpError(
+                429,
+                "principal_concurrency_limited",
+                "too many concurrent requests for principal",
+                headers={"retry-after": "1"},
+            )
+        self.active[bucket] = active + 1
+        try:
+            return await operation()
+        finally:
+            remaining = self.active[bucket] - 1
+            if remaining:
+                self.active[bucket] = remaining
+            else:
+                del self.active[bucket]
+
+
 class _PostgresSession:
     def __init__(
         self,

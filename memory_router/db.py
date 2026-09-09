@@ -4,12 +4,20 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from .rate_limit import (
+    InMemoryRateLimiter,
+    PostgresConcurrencyLimiter,
+    PostgresRateLimiter,
+    RateLimiter,
+)
 
 CAPACITY_LOCK_ID = 72_499_123
 SQLITE_PREFIX = "sqlite:"
@@ -256,6 +264,35 @@ async def create_database(url: str) -> Database:
     await db.initialize()
     await initialize_schema(db)
     return db
+
+
+@dataclass(frozen=True, slots=True)
+class Backend:
+    database: Database
+    rate_limiter: RateLimiter
+    concurrency_limiter: PostgresConcurrencyLimiter | None = None
+    rate_limit_database: PostgresDatabase | None = None
+
+    def create_limiter(self) -> RateLimiter:
+        return self.rate_limiter if self.rate_limit_database is not None else InMemoryRateLimiter()
+
+
+async def create_backend(url: str) -> Backend:
+    database = await create_database(url)
+    if database.dialect != "postgres":
+        return Backend(database, InMemoryRateLimiter())
+    rate_database = PostgresDatabase(url, max_size=5)
+    try:
+        await rate_database.initialize()
+        limiter = PostgresRateLimiter(rate_database)
+        await limiter.initialize()
+        concurrency = PostgresConcurrencyLimiter(rate_database)
+        await concurrency.initialize()
+        return Backend(database, limiter, concurrency, rate_database)
+    except BaseException:
+        await rate_database.close()
+        await database.close()
+        raise
 
 
 async def initialize_schema(db: Database) -> None:

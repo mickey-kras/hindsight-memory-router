@@ -11,6 +11,7 @@ from pytest_httpx import HTTPXMock
 
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
+from memory_router import db as db_module
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.maintenance import (
@@ -333,12 +334,12 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
     monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
-    primary_db = SimpleNamespace()
+    primary_db = SimpleNamespace(dialect="postgres")
     create_database = AsyncMock(return_value=primary_db)
     validate_storage = AsyncMock()
     recover_interrupted = AsyncMock()
     repository = SimpleNamespace(close=AsyncMock())
-    monkeypatch.setattr(app_module, "create_database", create_database)
+    monkeypatch.setattr(db_module, "create_database", create_database)
     monkeypatch.setattr(app_module, "validate_storage", validate_storage)
     monkeypatch.setattr(app_module, "recover_interrupted", recover_interrupted)
     monkeypatch.setattr(app_module, "QuarantineRepository", lambda database: repository)
@@ -351,11 +352,11 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
         return rate_db
 
     rate_limiter = SimpleNamespace(initialize=AsyncMock())
-    monkeypatch.setattr(app_module, "PostgresDatabase", postgres_database)
-    monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda database: rate_limiter)
+    monkeypatch.setattr(db_module, "PostgresDatabase", postgres_database)
+    monkeypatch.setattr(db_module, "PostgresRateLimiter", lambda database: rate_limiter)
     concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
     monkeypatch.setattr(
-        app_module, "PostgresConcurrencyLimiter", lambda database: concurrency_limiter
+        db_module, "PostgresConcurrencyLimiter", lambda database: concurrency_limiter
     )
 
     store = object()
