@@ -9,6 +9,9 @@ updates:
       default-days: 7
     rebase-strategy: auto
     open-pull-requests-limit: 3
+    # Pydantic pins its compatible core version exactly.
+    ignore:
+      - dependency-name: pydantic-core
     groups:
       pip-minor-patch:
         patterns: ["*"]
