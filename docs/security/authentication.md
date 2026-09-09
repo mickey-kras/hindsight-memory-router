@@ -2,6 +2,8 @@
 
 Router and quarantine credentials are separate.
 
+Set legacy router and admin tokens to at least 32 characters. Shorter tokens block startup.
+
 ## Principal mode
 
 Set `MEMORY_ROUTER_PRINCIPALS=/path/principals.json`. This disables the shared router token. Startup rejects:
