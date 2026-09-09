@@ -7,6 +7,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from .security_models import SafetyFinding, SafetyResult, _EncodedState
 from .security_rules import _add_unicode_findings, _amg_scan, _rule_scan
@@ -37,7 +38,15 @@ _BASE64_COLON_AFTER = re.compile(r"\s*:")
 _BASE64_JSON_LABEL_AFTER = re.compile(r"[\"']\s*:\s*")
 _BASE64_NUMBERED_LABEL = re.compile(r"(?:part|chunk|fragment)\d*", re.I)
 _CANONICAL_BASE64 = re.compile(r"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
-_DecodedBase64Candidate = tuple[str, str, int, int, bool, bool]
+
+
+class _DecodedBase64Candidate(NamedTuple):
+    compact: str
+    spaced: str
+    parts: int
+    skipped: int
+    terminated: bool
+    credible: bool
 
 
 def _split_base64_candidates(  # NOSONAR
@@ -169,8 +178,7 @@ def _split_decoded_base64_candidates(  # NOSONAR
         candidate: _DecodedBase64Candidate,
     ) -> bool:
         nonlocal exhausted, work_bytes
-        compact, spaced, _, _, _, _ = candidate
-        size = len(compact.encode("utf-8")) + len(spaced.encode("utf-8"))
+        size = len(candidate.compact.encode("utf-8")) + len(candidate.spaced.encode("utf-8"))
         if size > max_work_bytes:
             exhausted = True
             return True
@@ -205,46 +213,60 @@ def _split_decoded_base64_candidates(  # NOSONAR
             exhausted = True
             break
         next_candidates: list[_DecodedBase64Candidate] = []
-        if not add(next_candidates, (decoded, decoded, 1, 0, True, fragment_credible)):
+        if not add(
+            next_candidates,
+            _DecodedBase64Candidate(decoded, decoded, 1, 0, True, fragment_credible),
+        ):
             break
-        for compact, spaced, parts, skipped, terminated, credible in candidates:
+        for candidate in candidates:
             if deadline is not None and time.monotonic() >= deadline:
                 exhausted = True
                 break
             if not add(
                 next_candidates,
-                (
-                    _bounded_utf8_suffix(f"{compact}{decoded}".encode()),
-                    _bounded_append(spaced, decoded),
-                    parts + 1,
-                    skipped,
-                    terminated,
-                    credible or fragment_credible,
+                _DecodedBase64Candidate(
+                    _bounded_utf8_suffix(f"{candidate.compact}{decoded}".encode()),
+                    _bounded_append(candidate.spaced, decoded),
+                    candidate.parts + 1,
+                    candidate.skipped,
+                    candidate.terminated,
+                    candidate.credible or fragment_credible,
                 ),
             ):
                 exhausted = True
                 break
-            if skipped < MAX_SPLIT_BASE64_SKIPS and not add(
+            if candidate.skipped < MAX_SPLIT_BASE64_SKIPS and not add(
                 next_candidates,
-                (compact, spaced, parts, skipped + 1, terminated, credible),
+                _DecodedBase64Candidate(
+                    candidate.compact,
+                    candidate.spaced,
+                    candidate.parts,
+                    candidate.skipped + 1,
+                    candidate.terminated,
+                    candidate.credible,
+                ),
             ):
                 exhausted = True
                 break
-            if skipped >= MAX_SPLIT_BASE64_SKIPS and (credible or fragment_credible):
+            if candidate.skipped >= MAX_SPLIT_BASE64_SKIPS and (
+                candidate.credible or fragment_credible
+            ):
                 soft_exhausted = True
         unique = dict.fromkeys(next_candidates)
-        if len(unique) > MAX_SPLIT_BASE64_CANDIDATES and any(candidate[-1] for candidate in unique):
+        if len(unique) > MAX_SPLIT_BASE64_CANDIDATES and any(
+            candidate.credible for candidate in unique
+        ):
             soft_exhausted = True
-        candidates = sorted(unique, key=lambda value: (-len(value[0]), value[3]))[
+        candidates = sorted(unique, key=lambda value: (-len(value.compact), value.skipped))[
             :MAX_SPLIT_BASE64_CANDIDATES
         ]
         if exhausted:
             break
     return (
         [
-            (compact, spaced)
-            for compact, spaced, parts, _, terminated, _ in candidates
-            if parts >= 2 and terminated
+            (candidate.compact, candidate.spaced)
+            for candidate in candidates
+            if candidate.parts >= 2 and candidate.terminated
         ],
         exhausted or soft_exhausted,
     )

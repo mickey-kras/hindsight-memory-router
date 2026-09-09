@@ -4,12 +4,20 @@ import asyncio
 import os
 from collections.abc import AsyncIterator, Iterable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+from .rate_limit import (
+    InMemoryRateLimiter,
+    PostgresConcurrencyLimiter,
+    PostgresRateLimiter,
+    RateLimiter,
+)
 
 CAPACITY_LOCK_ID = 72_499_123
 SQLITE_PREFIX = "sqlite:"
@@ -56,6 +64,12 @@ def sqlite_path(url: str) -> str:
 class Tx:
     dialect: str
 
+    def select_for_update(self, sql: str) -> str:
+        raise NotImplementedError
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        raise NotImplementedError
+
     async def execute(self, sql: str, params: Iterable[Any] = ()) -> None:
         raise NotImplementedError
 
@@ -86,6 +100,16 @@ class Database:
 class SqliteTx(Tx):
     dialect = "sqlite"
 
+    def select_for_update(self, sql: str) -> str:
+        return sql
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        return bool(
+            await self.fetchone(
+                "SELECT 1 present FROM pragma_table_info(?) WHERE name=?", (table, column)
+            )
+        )
+
     def __init__(self, connection: aiosqlite.Connection) -> None:
         self.connection = connection
 
@@ -114,6 +138,8 @@ class SqliteDatabase(Database):
         if self.path != SQLITE_MEMORY_PATH:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.connection = await aiosqlite.connect(self.path)
+        if self.path != SQLITE_MEMORY_PATH:
+            os.chmod(self.path, 0o600)
         self.connection.row_factory = aiosqlite.Row
         await self.connection.execute("PRAGMA journal_mode = WAL")
         await self.connection.execute("PRAGMA foreign_keys = ON")
@@ -146,6 +172,17 @@ def _escaped_quote(statement: str, index: int, quote: str) -> bool:
 
 class PostgresTx(Tx):
     dialect = "postgres"
+
+    def select_for_update(self, sql: str) -> str:
+        return sql + " FOR UPDATE"
+
+    async def column_exists(self, table: str, column: str) -> bool:
+        return bool(
+            await self.fetchone(
+                "SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?",
+                (table, column),
+            )
+        )
 
     def __init__(self, connection: Any) -> None:
         self.connection = connection
@@ -229,6 +266,35 @@ async def create_database(url: str) -> Database:
     return db
 
 
+@dataclass(frozen=True, slots=True)
+class Backend:
+    database: Database
+    rate_limiter: RateLimiter
+    concurrency_limiter: PostgresConcurrencyLimiter | None = None
+    rate_limit_database: PostgresDatabase | None = None
+
+    def create_limiter(self) -> RateLimiter:
+        return self.rate_limiter if self.rate_limit_database is not None else InMemoryRateLimiter()
+
+
+async def create_backend(url: str) -> Backend:
+    database = await create_database(url)
+    if database.dialect != "postgres":
+        return Backend(database, InMemoryRateLimiter())
+    rate_database = PostgresDatabase(url, max_size=5)
+    try:
+        await rate_database.initialize()
+        limiter = PostgresRateLimiter(rate_database)
+        await limiter.initialize()
+        concurrency = PostgresConcurrencyLimiter(rate_database)
+        await concurrency.initialize()
+        return Backend(database, limiter, concurrency, rate_database)
+    except BaseException:
+        await rate_database.close()
+        await database.close()
+        raise
+
+
 async def initialize_schema(db: Database) -> None:
     async with db.transaction(capacity_lock=True) as tx:
         await tx.execute(SCHEMA[0])
@@ -237,17 +303,7 @@ async def initialize_schema(db: Database) -> None:
             ("requarantine_count", "requarantine_count INTEGER NOT NULL DEFAULT 0"),
             ("expires_at", "expires_at TEXT"),
         ):
-            if tx.dialect == "postgres":
-                present = await tx.fetchone(
-                    "SELECT 1 present FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=? AND column_name=?",
-                    ("quarantine_items", name),
-                )
-            else:
-                present = await tx.fetchone(
-                    "SELECT 1 present FROM pragma_table_info('quarantine_items') WHERE name=?",
-                    (name,),
-                )
-            if not present:
+            if not await tx.column_exists("quarantine_items", name):
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")
         for statement in SCHEMA[1:]:
             await tx.execute(statement)

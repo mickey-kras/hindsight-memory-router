@@ -37,7 +37,7 @@ async def test_reflect_enforces_recall_bounds_before_quota_or_hindsight(
         ),
         hindsight=hindsight,
         limits=limits,
-        _quarantine=AsyncMock(),
+        quarantine_security_event=AsyncMock(),
     )
 
     with pytest.raises(HttpError) as blocked:

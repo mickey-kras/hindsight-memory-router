@@ -1,23 +1,31 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
+from .db import Tx
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
-from .repository import QuarantineRepository, insert_event, is_expired, stored
+from .repository import (
+    POSTPONED,
+    REVIEW_IN_PROGRESS,
+    REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEW_SIDE_EFFECT_STARTED,
+    REVIEWABLE_STATUSES,
+    REVIEWED_ALLOWED,
+    REVIEWED_BLOCKED,
+    QuarantineRepository,
+    insert_event,
+    is_expired,
+    stored,
+)
 from .timestamps import parse_iso
 
 REVIEW_STALE_SECONDS = 60
 _EXPIRED_MESSAGE = "quarantine item has expired"
 _NOT_FOUND_MESSAGE = "quarantine item not found"
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
-_SELECT_ITEM_FOR_UPDATE = _SELECT_ITEM + " FOR UPDATE"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
-_SELECT_IN_PROGRESS_FOR_UPDATE = _SELECT_IN_PROGRESS + " FOR UPDATE"
-
-
-def _item_query(tx: Any) -> str:
-    return _SELECT_ITEM_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_ITEM
 
 
 def _stale(updated_at: str, at: str, stale_seconds: int = REVIEW_STALE_SECONDS) -> bool:
@@ -30,7 +38,7 @@ def _stale(updated_at: str, at: str, stale_seconds: int = REVIEW_STALE_SECONDS) 
 
 
 def _assert_reviewable(item: dict[str, Any], at: str) -> None:
-    if item["status"] not in {"pending", "postponed"}:
+    if item["status"] not in REVIEWABLE_STATUSES:
         raise HttpError(
             409, "quarantine_already_finalized", "quarantine item is not pending review"
         )
@@ -57,43 +65,55 @@ def _assert_snapshot(
         )
 
 
+async def _mutate_review[T](
+    repository: QuarantineRepository,
+    quarantine_id: str,
+    at: str,
+    stale_seconds: int | None,
+    mutation: Callable[[Tx, dict[str, object]], Awaitable[T]],
+    *,
+    expected_sha256: str | None = None,
+    expected_updated_at: str | None = None,
+) -> T:
+    expired = False
+    result: T
+    async with repository.db.transaction() as tx:
+        item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
+        if not item:
+            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
+        _assert_snapshot(item, expected_sha256, expected_updated_at)
+        item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
+        if not expired:
+            _assert_reviewable(item, at)
+            result = await mutation(tx, item)
+    if expired:
+        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
+    return result
+
+
 async def postpone(
     repository: QuarantineRepository,
     quarantine_id: str,
     at: str,
     stale_seconds: int | None = None,
     max_postpones: int | None = None,
-) -> dict[str, Any]:
-    expired = False
-    result: dict[str, Any] = {}
-    async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
-        if not item:
-            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
-        item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
-        if not expired:
-            _assert_reviewable(item, at)
-            if max_postpones is not None and int(item.get("postpone_count") or 0) >= max_postpones:
-                raise HttpError(
-                    409,
-                    "postpone_limit_reached",
-                    "maximum postpone count reached; approve, reject, or wait for QUARANTINE_ITEM_TTL_DAYS expiry",
-                )
-            await tx.execute(
-                "UPDATE quarantine_items SET status='postponed',postpone_count=postpone_count+1,updated_at=? WHERE quarantine_id=?",
-                (at, quarantine_id),
+) -> dict[str, object]:
+    async def apply(tx: Tx, item: dict[str, object]) -> dict[str, object]:
+        count = int(cast(int, item.get("postpone_count")) or 0)
+        if max_postpones is not None and count >= max_postpones:
+            raise HttpError(
+                409,
+                "postpone_limit_reached",
+                "maximum postpone count reached; approve, reject, or wait for QUARANTINE_ITEM_TTL_DAYS expiry",
             )
-            await insert_event(
-                tx,
-                quarantine_id,
-                "postponed",
-                at,
-                {"postpone_count": int(item["postpone_count"]) + 1},
-            )
-            result = stored(await tx.fetchone(_SELECT_ITEM, (quarantine_id,))) or {}
-    if expired:
-        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
-    return result
+        await tx.execute(
+            "UPDATE quarantine_items SET status='postponed',postpone_count=postpone_count+1,updated_at=? WHERE quarantine_id=?",
+            (at, quarantine_id),
+        )
+        await insert_event(tx, quarantine_id, POSTPONED, at, {"postpone_count": count + 1})
+        return stored(await tx.fetchone(_SELECT_ITEM, (quarantine_id,))) or {}
+
+    return await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
 
 
 async def mark_memory_reviewed(
@@ -126,35 +146,33 @@ async def claim_review(
     expected_sha256: str | None = None,
     expected_updated_at: str | None = None,
 ) -> dict[str, Any]:
-    expired = False
-    claimed: dict[str, Any] = {}
-    async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
-        if not item:
-            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
-        _assert_snapshot(item, expected_sha256, expected_updated_at)
-        item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
-        if not expired:
-            _assert_reviewable(item, at)
-            if item["kind"] != kind:
-                raise HttpError(409, "invalid_review_action", "invalid quarantine review action")
-            status = "review_side_effect_started" if side_effect else "review_in_progress"
-            await tx.execute(
-                "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
-                (status, at, quarantine_id),
+    async def apply(tx: Tx, item: dict[str, object]) -> dict[str, object]:
+        if item["kind"] != kind:
+            raise HttpError(409, "invalid_review_action", "invalid quarantine review action")
+        status = REVIEW_SIDE_EFFECT_STARTED if side_effect else REVIEW_IN_PROGRESS
+        await tx.execute(
+            "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+            (status, at, quarantine_id),
+        )
+        if side_effect:
+            await insert_event(
+                tx,
+                quarantine_id,
+                REVIEW_SIDE_EFFECT_STARTED,
+                at,
+                {"previous_status": item["status"]},
             )
-            if side_effect:
-                await insert_event(
-                    tx,
-                    quarantine_id,
-                    "review_side_effect_started",
-                    at,
-                    {"previous_status": item["status"]},
-                )
-            claimed = item
-    if expired:
-        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
-    return claimed
+        return item
+
+    return await _mutate_review(
+        repository,
+        quarantine_id,
+        at,
+        stale_seconds,
+        apply,
+        expected_sha256=expected_sha256,
+        expected_updated_at=expected_updated_at,
+    )
 
 
 async def complete_side_effect(
@@ -170,22 +188,24 @@ async def complete_side_effect(
             "UPDATE quarantine_items SET status='review_side_effect_completed',updated_at=? WHERE quarantine_id=?",
             (at, quarantine_id),
         )
-        await insert_event(tx, quarantine_id, "review_side_effect_completed", at, {})
+        await insert_event(tx, quarantine_id, REVIEW_SIDE_EFFECT_COMPLETED, at, {})
 
 
 async def interrupt_review(
     repository: QuarantineRepository, claimed: dict[str, Any], at: str, error: Exception
 ) -> None:
     async with repository.db.transaction() as tx:
-        current = stored(await tx.fetchone(_item_query(tx), (claimed["quarantine_id"],)))
+        current = stored(
+            await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (claimed["quarantine_id"],))
+        )
         if (
             not current
-            or current["status"] not in {"review_in_progress", "review_side_effect_started"}
+            or current["status"] not in {REVIEW_IN_PROGRESS, REVIEW_SIDE_EFFECT_STARTED}
             or current["updated_at"] != at
         ):
             return
         status = str(claimed["status"])
-        if status not in {"pending", "postponed"}:
+        if status not in REVIEWABLE_STATUSES:
             raise RuntimeError(f"cannot restore review to {status}")
         await tx.execute(
             "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
@@ -232,7 +252,7 @@ async def finish_approve_memory(
             raise HttpError(
                 409, "invalid_review_action", "only recalled memories can be marked reviewed"
             )
-        await mark_recalled(tx, item, "reviewed_allowed", at)
+        await mark_recalled(tx, item, REVIEWED_ALLOWED, at)
 
 
 async def finish_reject_memory(
@@ -246,7 +266,7 @@ async def finish_reject_memory(
         item = await require_side_effect_completed(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
-        await mark_recalled(tx, item, "reviewed_blocked", at)
+        await mark_recalled(tx, item, REVIEWED_BLOCKED, at)
 
 
 async def remove(
@@ -256,27 +276,20 @@ async def remove(
     at: str,
     stale_seconds: int | None = None,
 ) -> None:
-    expired = False
-    async with repository.db.transaction() as tx:
-        item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
-        if not item:
-            raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
-        item, expired = await _recover_stale_for_action(tx, item, at, stale_seconds)
-        if not expired:
-            _assert_reviewable(item, at)
-            await tx.execute(
-                "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
-            )
-            await insert_event(tx, quarantine_id, event_type, at, {})
-    if expired:
-        raise HttpError(409, "quarantine_expired", _EXPIRED_MESSAGE)
+    async def apply(tx: Tx, item: dict[str, object]) -> None:
+        await tx.execute(
+            "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
+        )
+        await insert_event(tx, quarantine_id, event_type, at, {})
+
+    await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
 
 
 async def recover_interrupted(
     repository: QuarantineRepository, at: str, stale_seconds: int = REVIEW_STALE_SECONDS
 ) -> None:
     async with repository.db.transaction() as tx:
-        query = _SELECT_IN_PROGRESS_FOR_UPDATE if tx.dialect == "postgres" else _SELECT_IN_PROGRESS
+        query = tx.select_for_update(_SELECT_IN_PROGRESS)
         rows = await tx.fetchall(query)
         for row in rows:
             if not _stale(str(row["updated_at"]), at, stale_seconds):
@@ -288,14 +301,14 @@ async def recover_interrupted(
 
 
 async def _recover_stale_for_action(
-    tx: Any,
+    tx: Tx,
     item: dict[str, Any],
     at: str,
     stale_seconds: int | None,
 ) -> tuple[dict[str, Any], bool]:
     if (
         stale_seconds is None
-        or item["status"] != "review_in_progress"
+        or item["status"] != REVIEW_IN_PROGRESS
         or not _stale(str(item.get("updated_at") or ""), at, stale_seconds)
     ):
         return item, False
@@ -303,10 +316,10 @@ async def _recover_stale_for_action(
         await _expire_stale_claim(tx, item, at)
         return item, True
     await _restore_stale_claim(tx, item, at)
-    return {**item, "status": "postponed", "updated_at": at}, False
+    return {**item, "status": POSTPONED, "updated_at": at}, False
 
 
-async def _expire_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
+async def _expire_stale_claim(tx: Tx, item: dict[str, Any], at: str) -> None:
     await tx.execute(
         "DELETE FROM quarantine_items WHERE quarantine_id=? AND status='review_in_progress'",
         (item["quarantine_id"],),
@@ -316,11 +329,11 @@ async def _expire_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
         item["quarantine_id"],
         "expired",
         at,
-        {"recovered": True, "previous_status": "review_in_progress"},
+        {"recovered": True, "previous_status": REVIEW_IN_PROGRESS},
     )
 
 
-async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
+async def _restore_stale_claim(tx: Tx, item: dict[str, Any], at: str) -> None:
     await tx.execute(
         "UPDATE quarantine_items SET status='postponed',updated_at=? WHERE quarantine_id=? AND status='review_in_progress'",
         (at, item["quarantine_id"]),
@@ -330,12 +343,12 @@ async def _restore_stale_claim(tx: Any, item: dict[str, Any], at: str) -> None:
         item["quarantine_id"],
         "review_interrupted",
         at,
-        {"outcome": "postponed", "recovered": True},
+        {"outcome": POSTPONED, "recovered": True},
     )
 
 
-async def require_reviewable(tx: Any, quarantine_id: str, at: str) -> dict[str, Any]:
-    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+async def require_reviewable(tx: Tx, quarantine_id: str, at: str) -> dict[str, Any]:
+    item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
     if not item:
         raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
     _assert_reviewable(item, at)
@@ -343,7 +356,7 @@ async def require_reviewable(tx: Any, quarantine_id: str, at: str) -> dict[str, 
 
 
 async def require_in_progress(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -353,13 +366,13 @@ async def require_in_progress(
         tx,
         quarantine_id,
         at,
-        "review_in_progress",
+        REVIEW_IN_PROGRESS,
         expected_sha256=expected_sha256,
     )
 
 
 async def require_side_effect_started(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -369,13 +382,13 @@ async def require_side_effect_started(
         tx,
         quarantine_id,
         at,
-        "review_side_effect_started",
+        REVIEW_SIDE_EFFECT_STARTED,
         expected_sha256=expected_sha256,
     )
 
 
 async def require_side_effect_completed(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     *,
@@ -385,20 +398,20 @@ async def require_side_effect_completed(
         tx,
         quarantine_id,
         at,
-        "review_side_effect_completed",
+        REVIEW_SIDE_EFFECT_COMPLETED,
         expected_sha256=expected_sha256,
     )
 
 
 async def _require_review_state(
-    tx: Any,
+    tx: Tx,
     quarantine_id: str,
     at: str,
     status: str,
     *,
     expected_sha256: str | None = None,
 ) -> dict[str, Any]:
-    item = stored(await tx.fetchone(_item_query(tx), (quarantine_id,)))
+    item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
     if not item or item["status"] != status or item["updated_at"] != at:
         raise HttpError(
             409, "quarantine_review_changed", "quarantine item changed while review was in progress"
@@ -410,7 +423,7 @@ async def _require_review_state(
     return item
 
 
-async def mark_recalled(tx: Any, item: dict[str, Any], status: str, at: str) -> None:
+async def mark_recalled(tx: Tx, item: dict[str, Any], status: str, at: str) -> None:
     await tx.execute(
         "UPDATE quarantine_items SET status=?,encrypted_envelope=NULL,encrypted_bytes=0,updated_at=? WHERE quarantine_id=?",
         (status, at, item["quarantine_id"]),
@@ -418,7 +431,7 @@ async def mark_recalled(tx: Any, item: dict[str, Any], status: str, at: str) -> 
     await insert_event(
         tx,
         item["quarantine_id"],
-        "reviewed_allowed" if status == "reviewed_allowed" else "reviewed_blocked",
+        REVIEWED_ALLOWED if status == REVIEWED_ALLOWED else REVIEWED_BLOCKED,
         at,
         {
             "source_bank": item.get("source_bank"),

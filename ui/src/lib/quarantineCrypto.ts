@@ -2,23 +2,15 @@
 // Key material enters the browser only as a non-extractable CryptoKey.
 
 import { canonicalJson, sha256Hex } from "./jcs";
+import { REASONS } from "./types";
 import type {
   DecryptedQuarantineObject,
-  EncryptionMetadata,
   EncryptedQuarantineEnvelope,
   ReviewReason,
 } from "./types";
 
 const AAD_FORMAT = "metadata-v1";
 const PKCS8_LABEL = "PRIVATE KEY";
-const REASONS: readonly ReviewReason[] = [
-  "unknown_writer",
-  "suspicious_content",
-  "suspicious_query",
-  "recalled_suspicious_memory",
-  "denied_endpoint",
-  "auth_failed",
-];
 const QUARANTINE_ID_RE = /^q_[0-9A-Za-z]+_[0-9a-f]{16}$/;
 
 export class DecryptError extends Error {}
@@ -31,13 +23,6 @@ function b64ToBytes(value: string, field: string): Uint8Array {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return bytes;
-}
-
-function wrappedKeyValue(encryption: EncryptionMetadata): string {
-  // Keep the wire-field literal out of this decrypt call: Gitleaks otherwise
-  // misclassifies the identifier as a generic API key.
-  const fieldName = ["wrapped", "key", "b64"].join("_") as "wrapped_key_b64";
-  return encryption[fieldName];
 }
 
 // Import a PKCS8 PEM decryption key as a non-extractable CryptoKey.
@@ -168,7 +153,7 @@ export async function decryptEnvelope(
     aesKey = await crypto.subtle.decrypt(
       { name: "RSA-OAEP" },
       privateKey,
-      b64ToBytes(wrappedKeyValue(enc), "wrapped field").buffer as ArrayBuffer,
+      b64ToBytes(enc.wrapped_key_b64, "wrapped_key_b64").buffer as ArrayBuffer,
     );
   } catch {
     throw new DecryptError("wrong decryption key for this quarantine envelope");

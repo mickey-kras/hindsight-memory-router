@@ -27,6 +27,7 @@ from .principals import (
 from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 EMPTY_BODY = object()
+MEMORY_ROUTE = re.compile(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?")
 
 
 class JsonBodyReader(Protocol):
@@ -61,19 +62,11 @@ class DispatchDependencies:
     principal_rate: PrincipalRate
     concurrency: ConcurrencyRunner
     decode_path_segment: Callable[[str], str]
-    facade_factory: Callable[[RouterPolicy], OpenClawFacade]
 
 
 class AuthenticatedRequestDispatcher:
     def __init__(self, dependencies: DispatchDependencies) -> None:
-        self.policy = dependencies.policy
-        self.resolver = dependencies.resolver
-        self.hindsight = dependencies.hindsight
-        self.json_body = dependencies.json_body
-        self.principal_rate = dependencies.principal_rate
-        self.concurrency = dependencies.concurrency
-        self.decode_path_segment = dependencies.decode_path_segment
-        self.facade_factory = dependencies.facade_factory
+        self.deps = dependencies
 
     async def dispatch(
         self,
@@ -103,8 +96,8 @@ class AuthenticatedRequestDispatcher:
         route_class: str,
     ) -> Response | None:
         if principal is not None and method == "GET" and pathname == "/v1/default/banks":
-            resolver = _require(self.resolver, "principal resolver")
-            await self.principal_rate(principal, SCOPE_BANK_LIST, route_class)
+            resolver = _require(self.deps.resolver, "principal resolver")
+            await self.deps.principal_rate(principal, SCOPE_BANK_LIST, route_class)
             banks = resolver.list_banks(principal)
             if not banks:
                 log_authorization_decision(
@@ -126,8 +119,8 @@ class AuthenticatedRequestDispatcher:
                     latency_ms=0.0,
                 )
             q, limit, offset = _bank_list_query(request)
-            hindsight = _require(self.hindsight, "hindsight gateway")
-            payload = await self.concurrency(
+            hindsight = _require(self.deps.hindsight, "hindsight gateway")
+            payload = await self.deps.concurrency(
                 request,
                 principal,
                 SCOPE_BANK_LIST,
@@ -144,32 +137,32 @@ class AuthenticatedRequestDispatcher:
         principal: PrincipalSession | None,
         route_class: str,
     ) -> Response | None:
-        match = re.fullmatch(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?", pathname)
+        match = MEMORY_ROUTE.fullmatch(pathname)
         if method == "POST" and match:
-            writer_id, action = self.decode_path_segment(match.group(1)), match.group(2)
+            writer_id, action = self.deps.decode_path_segment(match.group(1)), match.group(2)
             if principal is None:
                 return await self._dispatch_legacy_memory(request, writer_id, action)
             scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
-            await self.principal_rate(principal, scope, route_class)
+            await self.deps.principal_rate(principal, scope, route_class)
             require_grant(session=principal, scope=scope, bank=writer_id, route_class=route_class)
             body_limit = principal.limits[scope_limit_operation(scope)].max_body_bytes
             if action == "recall":
-                body = parse_recall_body(await self.json_body(request, max_bytes=body_limit))
-                self.policy.limits.assert_recall_bounds(body)
-                payload = await self.concurrency(
+                body = parse_recall_body(await self.deps.json_body(request, max_bytes=body_limit))
+                self.deps.policy.limits.assert_recall_bounds(body)
+                payload = await self.deps.concurrency(
                     request,
                     principal,
                     scope,
-                    lambda: self.policy.recall_bank(principal.principal_id, writer_id, body),
+                    lambda: self.deps.policy.recall_bank(principal.principal_id, writer_id, body),
                 )
             else:
-                body = parse_retain_body(await self.json_body(request, max_bytes=body_limit))
-                self.policy.limits.assert_retain_bounds(body)
-                payload = await self.concurrency(
+                body = parse_retain_body(await self.deps.json_body(request, max_bytes=body_limit))
+                self.deps.policy.limits.assert_retain_bounds(body)
+                payload = await self.deps.concurrency(
                     request,
                     principal,
                     scope,
-                    lambda: self.policy.retain_bank(principal.principal_id, writer_id, body),
+                    lambda: self.deps.policy.retain_bank(principal.principal_id, writer_id, body),
                 )
             return JSONResponse(payload)
         return None
@@ -178,12 +171,12 @@ class AuthenticatedRequestDispatcher:
         self, request: Request, writer_id: str, action: str | None
     ) -> Response:
         if action == "recall":
-            body = parse_recall_body(await self.json_body(request))
-            self.policy.limits.assert_recall_bounds(body)
-            return JSONResponse(await self.policy.recall(writer_id, body))
-        body = parse_retain_body(await self.json_body(request))
-        self.policy.limits.assert_retain_bounds(body)
-        return JSONResponse(await self.policy.retain(writer_id, body))
+            body = parse_recall_body(await self.deps.json_body(request))
+            self.deps.policy.limits.assert_recall_bounds(body)
+            return JSONResponse(await self.deps.policy.recall(writer_id, body))
+        body = parse_retain_body(await self.deps.json_body(request))
+        self.deps.policy.limits.assert_retain_bounds(body)
+        return JSONResponse(await self.deps.policy.retain(writer_id, body))
 
     async def _dispatch_facade(
         self,
@@ -200,12 +193,12 @@ class AuthenticatedRequestDispatcher:
         bank = route_match.group("bank")
         scope = facade_scope(route)
         if principal is not None:
-            await self.principal_rate(principal, scope, route_class)
+            await self.deps.principal_rate(principal, scope, route_class)
             require_grant(session=principal, scope=scope, bank=bank, route_class=route_class)
         body = await self._facade_body(request, route.body, route.body_label, principal, scope)
         if route.template == "reflect" and body is not None:
             body = parse_reflect_body(body)
-        facade = self.facade_factory(self.policy)
+        facade = OpenClawFacade(self.deps.policy)
 
         def operation() -> Awaitable[dict[str, Any]]:
             return facade.forward(
@@ -218,7 +211,7 @@ class AuthenticatedRequestDispatcher:
             )
 
         payload = (
-            await self.concurrency(request, principal, scope, operation)
+            await self.deps.concurrency(request, principal, scope, operation)
             if principal is not None
             else await operation()
         )
@@ -228,7 +221,7 @@ class AuthenticatedRequestDispatcher:
         if not pathname.startswith("/v1/default/banks/"):
             return match_facade_route(method, pathname)
         try:
-            decoded = "/".join(self.decode_path_segment(part) for part in pathname.split("/"))
+            decoded = "/".join(self.deps.decode_path_segment(part) for part in pathname.split("/"))
         except HttpError as exc:
             if exc.code == "invalid_path_segment":
                 raise
@@ -253,7 +246,7 @@ class AuthenticatedRequestDispatcher:
             if principal is not None
             else None
         )
-        raw = await self.json_body(request, empty_as_none=True, max_bytes=max_bytes)
+        raw = await self.deps.json_body(request, empty_as_none=True, max_bytes=max_bytes)
         if raw is EMPTY_BODY:
             if requirement == "required":
                 raise HttpError(400, "invalid_request", f"{label} body is required")
@@ -275,15 +268,17 @@ class AuthenticatedRequestDispatcher:
     ) -> Response:
         denied_writer_id = self._known_denied_bank(pathname)
         if principal is not None:
-            await self.principal_rate(principal, SCOPE_BANK_ADMIN, route_class)
-            denied = await self.policy.deny_endpoint(
+            await self.deps.principal_rate(principal, SCOPE_BANK_ADMIN, route_class)
+            denied = await self.deps.policy.deny_endpoint(
                 method, pathname, writer_id=principal.principal_id
             )
         else:
             denied = (
-                await self.policy.deny_endpoint(method, pathname)
+                await self.deps.policy.deny_endpoint(method, pathname)
                 if denied_writer_id is None
-                else await self.policy.deny_endpoint(method, pathname, writer_id=denied_writer_id)
+                else await self.deps.policy.deny_endpoint(
+                    method, pathname, writer_id=denied_writer_id
+                )
             )
         return JSONResponse(denied, status_code=404)
 
@@ -292,10 +287,10 @@ class AuthenticatedRequestDispatcher:
         if match is None:
             return None
         try:
-            candidate = self.decode_path_segment(match.group(1))
+            candidate = self.deps.decode_path_segment(match.group(1))
         except HttpError:
             return None
-        writers = getattr(getattr(self.policy, "registry", None), "writers", {})
+        writers = getattr(getattr(self.deps.policy, "registry", None), "writers", {})
         return candidate if candidate in writers else None
 
 

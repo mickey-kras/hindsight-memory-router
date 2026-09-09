@@ -3,10 +3,20 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterable
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
-from pydantic import BeforeValidator, Field, SecretStr, ValidationError, model_validator
+from pydantic import (
+    BeforeValidator,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_core import PydanticUseDefault
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -197,6 +207,19 @@ class RouterSettings(BaseSettings):
         8_192, validation_alias="HINDSIGHT_RECALL_MAX_TOKENS"
     )
 
+    @field_validator(
+        "memory_router_token",
+        "memory_router_admin_token",
+        "memory_router_admin_read_token",
+        "memory_router_admin_review_token",
+        "memory_router_admin_cleanup_token",
+    )
+    @classmethod
+    def validate_token_length(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and 0 < len(value.get_secret_value()) < 32:
+            raise ValueError("must contain at least 32 characters")
+        return value
+
     @model_validator(mode="after")
     def validate_deployment(self) -> RouterSettings:
         if (
@@ -279,7 +302,38 @@ def assert_no_private_key_environment() -> None:
         raise RuntimeError(f"{injected} must not be available to the memory-router process")
 
 
+def _loopback_host(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host or "").is_loopback
+    except ValueError:
+        return False
+
+
+def _warn_configuration(conditions: Iterable[tuple[bool, str]]) -> None:
+    for condition, reason in conditions:
+        if condition:
+            log_event(
+                logger,
+                "warning",
+                "configuration_warning",
+                operation="configuration",
+                outcome="degraded",
+                reason=reason,
+            )
+
+
 def assert_auth_environment(settings: RouterSettings) -> None:
+    hindsight_url = urlsplit(settings.hindsight_base_url)
+    _warn_configuration(
+        [
+            (
+                hindsight_url.scheme == "http" and not _loopback_host(hindsight_url.hostname),
+                "insecure-hindsight-transport",
+            )
+        ]
+    )
     if settings.memory_router_principals:
         if secret_value(settings.memory_router_token):
             raise RuntimeError(
@@ -290,61 +344,20 @@ def assert_auth_environment(settings: RouterSettings) -> None:
                 "MEMORY_ROUTER_ALLOW_ANONYMOUS must be false "
                 "when MEMORY_ROUTER_PRINCIPALS is configured"
             )
-    if not settings.memory_router_principals and not secret_value(settings.memory_router_token):
-        if settings.memory_router_allow_anonymous:
-            log_event(
-                logger,
-                "warning",
-                "configuration_warning",
-                operation="configuration",
-                outcome="degraded",
-                reason="anonymous-mode",
-            )
-        else:
-            log_event(
-                logger,
-                "warning",
-                "configuration_warning",
-                operation="configuration",
-                outcome="degraded",
-                reason="router-token-missing",
-            )
-    if secret_value(settings.memory_router_admin_token):
-        log_event(
-            logger,
-            "warning",
-            "configuration_warning",
-            operation="configuration",
-            outcome="degraded",
-            reason="legacy-admin-token",
-        )
-        return
-    if not secret_value(settings.memory_router_admin_read_token) and not secret_value(
-        settings.memory_router_admin_review_token
-    ):
-        log_event(
-            logger,
-            "warning",
-            "configuration_warning",
-            operation="configuration",
-            outcome="degraded",
-            reason="admin-read-token-missing",
-        )
-    if not secret_value(settings.memory_router_admin_review_token):
-        log_event(
-            logger,
-            "warning",
-            "configuration_warning",
-            operation="configuration",
-            outcome="degraded",
-            reason="admin-review-token-missing",
-        )
-    if not secret_value(settings.memory_router_admin_cleanup_token):
-        log_event(
-            logger,
-            "warning",
-            "configuration_warning",
-            operation="configuration",
-            outcome="degraded",
-            reason="admin-cleanup-token-missing",
-        )
+    router_missing = not settings.memory_router_principals and not secret_value(
+        settings.memory_router_token
+    )
+    legacy = bool(secret_value(settings.memory_router_admin_token))
+    read = bool(secret_value(settings.memory_router_admin_read_token))
+    review = bool(secret_value(settings.memory_router_admin_review_token))
+    cleanup = bool(secret_value(settings.memory_router_admin_cleanup_token))
+    _warn_configuration(
+        [
+            (router_missing and settings.memory_router_allow_anonymous, "anonymous-mode"),
+            (router_missing and not settings.memory_router_allow_anonymous, "router-token-missing"),
+            (legacy, "legacy-admin-token"),
+            (not legacy and not (read or review), "admin-read-token-missing"),
+            (not legacy and not review, "admin-review-token-missing"),
+            (not legacy and not cleanup, "admin-cleanup-token-missing"),
+        ]
+    )

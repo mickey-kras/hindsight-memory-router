@@ -3,15 +3,28 @@ from __future__ import annotations
 import json
 import traceback
 from pathlib import Path
+from secrets import token_urlsafe
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
 
-from memory_router import auth, config, dedupe, validation
+from memory_router import auth, config, dedupe, rate_limit, validation
+from memory_router.canonical import canonical_json
 from memory_router.errors import HttpError
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
-from memory_router.rate_limit import InMemoryRateLimiter, PostgresRateLimiter, _PostgresSession
+from memory_router.models import WriterRegistry
+from memory_router.rate_limit import (
+    Bucket,
+    Distinct,
+    InMemoryRateLimiter,
+    PostgresRateLimiter,
+    _PostgresSession,
+)
+from memory_router.validation import parse_recall_body, parse_retain_body
+from tests.fakes import (
+    FakeDatabase,
+)
 
 
 def test_auth_helpers_and_scopes() -> None:
@@ -76,11 +89,11 @@ def test_typed_settings_preserve_strict_environment_parsing(
     assert config.load_settings().memory_router_allow_anonymous is False
 
     secrets = {
-        "MEMORY_ROUTER_TOKEN": "router-secret",
-        "MEMORY_ROUTER_ADMIN_TOKEN": "admin-secret",
-        "MEMORY_ROUTER_ADMIN_READ_TOKEN": "read-secret",
-        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": "review-secret",
-        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": "cleanup-secret",
+        "MEMORY_ROUTER_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": token_urlsafe(24),
         "HINDSIGHT_API_KEY": "hindsight-secret",
     }
     for name, value in secrets.items():
@@ -90,7 +103,26 @@ def test_typed_settings_preserve_strict_environment_parsing(
     rendered = (repr(settings), str(settings), repr(settings.model_dump()))
     for secret in (*secrets.values(), "database-secret"):
         assert all(secret not in value for value in rendered)
-    assert config.secret_value(settings.memory_router_token) == "router-secret"
+    assert config.secret_value(settings.memory_router_token) == secrets["MEMORY_ROUTER_TOKEN"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "MEMORY_ROUTER_TOKEN",
+        "MEMORY_ROUTER_ADMIN_TOKEN",
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN",
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN",
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN",
+    ],
+)
+def test_configured_router_tokens_require_at_least_32_characters(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(name, "short-token")
+
+    with pytest.raises(RuntimeError, match=f"{name} must contain at least 32 characters"):
+        config.load_settings()
 
 
 def test_typed_settings_ignore_lowercase_environment_names(
@@ -106,8 +138,8 @@ def test_typed_settings_suppress_secret_validation_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secrets = (
-        "router-secret",
-        "admin-secret",
+        token_urlsafe(24),
+        token_urlsafe(24),
         "hindsight-secret",
         "database-secret",
     )
@@ -234,16 +266,26 @@ def test_environment_assertions(
         "admin-read-token-missing",
         "admin-review-token-missing",
         "admin-cleanup-token-missing",
+        "insecure-hindsight-transport",
     }
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
-    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy")
+    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", token_urlsafe(24))
     config.assert_auth_environment(config.load_settings())
     assert {
         record.reason  # type: ignore[attr-defined]
         for record in caplog.records
         if record.msg == "configuration_warning"
-    } == {"anonymous-mode", "legacy-admin-token"}
+    } == {"anonymous-mode", "legacy-admin-token", "insecure-hindsight-transport"}
+
+    caplog.clear()
+    settings = config.load_settings()
+    settings.hindsight_base_url = "http://127.0.0.1:8888"
+    config.assert_auth_environment(settings)
+    assert all(
+        getattr(record, "reason", None) != "insecure-hindsight-transport"
+        for record in caplog.records
+    )
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -407,23 +449,25 @@ async def test_hindsight_quota_buckets_and_mapping() -> None:
 @pytest.mark.asyncio
 async def test_in_memory_sliding_window_expiry_and_disabled_buckets() -> None:
     limiter = InMemoryRateLimiter()
-    await limiter.consume_many([("off", 0, 1), ("x", 1, 10)], at_ms=10)
+    await limiter.consume_many([Bucket("off", 0, 1), Bucket("x", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
-        await limiter.consume_many([("x", 1, 10)], at_ms=10)
-    await limiter.consume_many([("x", 1, 10)], at_ms=20)
+        await limiter.consume_many([Bucket("x", 1, 10)], at_ms=10)
+    await limiter.consume_many([Bucket("x", 1, 10)], at_ms=20)
 
 
 @pytest.mark.asyncio
 async def test_in_memory_rate_limiter_count_distinct_expiry_and_lock() -> None:
     limiter = InMemoryRateLimiter()
     await limiter.consume_many_distinct(
-        [("b", 1, 10), ("off", 0, 1)], [("s", "a", 1, 10), ("off", "x", 0, 1)], at_ms=10
+        [Bucket("b", 1, 10), Bucket("off", 0, 1)],
+        [Distinct("s", "a", 1, 10), Distinct("off", "x", 0, 1)],
+        at_ms=10,
     )
     with pytest.raises(HttpError):
-        await limiter.consume_many([("b", 1, 10)], at_ms=10)
+        await limiter.consume_many([Bucket("b", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
-        await limiter.consume_many_distinct([], [("s", "b", 1, 10)], at_ms=10)
-    await limiter.consume_many_distinct([("b", 1, 10)], [("s", "b", 1, 10)], at_ms=20)
+        await limiter.consume_many_distinct([], [Distinct("s", "b", 1, 10)], at_ms=10)
+    await limiter.consume_many_distinct([Bucket("b", 1, 10)], [Distinct("s", "b", 1, 10)], at_ms=20)
 
     async def operation(session: InMemoryRateLimiter) -> str:
         assert session is limiter
@@ -447,44 +491,27 @@ class FakeTx:
         return self.rows.pop(0) if self.rows else None
 
 
-class TxContext:
-    def __init__(self, tx: FakeTx) -> None:
-        self.tx = tx
-
-    async def __aenter__(self) -> FakeTx:
-        return self.tx
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeDatabase:
-    def __init__(self, tx: FakeTx) -> None:
-        self.tx = tx
-
-    def transaction(self) -> TxContext:
-        return TxContext(self.tx)
-
-
 @pytest.mark.asyncio
 async def test_postgres_rate_limiter_paths() -> None:
     tx = FakeTx([{"count": 0}, {"count": 0}, None, {"now_ms": 100}])
     session = _PostgresSession(tx)
     await session.consume_many_distinct(
-        [("b", 2, 10), ("b", 2, 10), ("off", 0, 1)], [("s", "a", 2, 10)], at_ms=50
+        [Bucket("b", 2, 10), Bucket("b", 2, 10), Bucket("off", 0, 1)],
+        [Distinct("s", "a", 2, 10)],
+        at_ms=50,
     )
     assert any("advisory_xact_lock" in sql for sql, _ in tx.executed)
 
-    assert await _PostgresSession(FakeTx([{"now_ms": 123}]))._database_now_ms() == 123
+    assert await rate_limit._database_now_ms(FakeTx([{"now_ms": 123}])) == 123
     await _PostgresSession(FakeTx()).consume_many_distinct([], [])
 
     with pytest.raises(HttpError):
         await _PostgresSession(FakeTx([{"count": 1}])).consume_many_distinct(
-            [("b", 1, 10)], [], at_ms=20
+            [Bucket("b", 1, 10)], [], at_ms=20
         )
     with pytest.raises(HttpError):
         await _PostgresSession(FakeTx([{"count": 1}, None])).consume_many_distinct(
-            [], [("s", "new", 1, 10)], at_ms=20
+            [], [Distinct("s", "new", 1, 10)], at_ms=20
         )
 
     tx2 = FakeTx()
@@ -497,3 +524,83 @@ async def test_postgres_rate_limiter_paths() -> None:
         return "locked"
 
     assert await limiter.with_identity_lock("id", op) == "locked"
+
+
+@pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.0.0.2", "[::1]"])
+def test_loopback_http_transport_does_not_warn(host: str, caplog: pytest.LogCaptureFixture) -> None:
+    settings = config.RouterSettings(HINDSIGHT_BASE_URL=f"http://{host}:8888")
+    config.assert_auth_environment(settings)
+    assert all(
+        getattr(record, "reason", None) != "insecure-hindsight-transport"
+        for record in caplog.records
+    )
+
+
+def test_empty_operator_tokens_remain_fail_closed() -> None:
+    settings = config.RouterSettings(
+        MEMORY_ROUTER_TOKEN="",
+        MEMORY_ROUTER_ADMIN_TOKEN="",
+        MEMORY_ROUTER_ADMIN_READ_TOKEN="",
+        MEMORY_ROUTER_ADMIN_REVIEW_TOKEN="",
+        MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN="",
+    )
+    assert not auth.router_authorized(
+        "Bearer ", config.secret_value(settings.memory_router_token), False
+    )
+    tokens = {
+        "legacy": config.secret_value(settings.memory_router_admin_token),
+        "read": config.secret_value(settings.memory_router_admin_read_token),
+        "review": config.secret_value(settings.memory_router_admin_review_token),
+        "cleanup": config.secret_value(settings.memory_router_admin_cleanup_token),
+    }
+    for scope in ("read", "review", "cleanup"):
+        assert not auth.admin_authorized("Bearer ", scope, tokens)
+
+
+def test_facade_writer_must_be_able_to_read_its_write_bank() -> None:
+    with pytest.raises(ValueError, match="write_bank must be present in read_banks"):
+        WriterRegistry.model_validate(
+            {
+                "writers": {
+                    "write_only": {
+                        "role": "writer",
+                        "source": "application",
+                        "write_bank": "custom",
+                        "read_banks": [],
+                    },
+                    "main": {
+                        "role": "default",
+                        "source": "application",
+                        "write_bank": "main",
+                        "read_banks": ["research"],
+                    },
+                },
+                "defaults": {
+                    "unknown_writer_action": "review_queue",
+                    "suspicious_content_action": "review_queue",
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize("field", ["async", "document_tags"])
+def test_retain_optional_fields_reject_explicit_null(field: str) -> None:
+    with pytest.raises(HttpError):
+        parse_retain_body({"items": [{"content": "x"}], field: None})
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "budget", "tags_match", "trace"])
+def test_recall_optional_fields_reject_explicit_null(field: str) -> None:
+    with pytest.raises(HttpError):
+        parse_recall_body({"query": "x", field: None})
+
+
+def test_recall_types_and_tags_remain_nullable() -> None:
+    parsed = parse_recall_body({"query": "x", "types": None, "tags": None})
+    assert parsed["types"] is None and parsed["tags"] is None
+
+
+def test_canonicalization_rejects_lossy_values() -> None:
+    for value in (2**53, -(2**53), float("inf"), float("-inf"), float("nan"), "\ud800"):
+        with pytest.raises(ValueError, match="JSON values only"):
+            canonical_json(value)

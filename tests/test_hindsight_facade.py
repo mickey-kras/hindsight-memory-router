@@ -1,38 +1,17 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
+from pydantic import ValidationError
 
 from memory_router.config import DEFAULT_REGISTRY
+from memory_router.models import RecallResponse
 from memory_router.policy import RouterPolicy
-
-
-class FakeHindsight:
-    def __init__(self, response: dict[str, Any]) -> None:
-        self.response = response
-
-    async def recall(self, _bank: str, _body: dict[str, Any]) -> dict[str, Any]:
-        return self.response
-
-
-class FakeLimits:
-    async def consume_recall(self, _writer: str) -> None:
-        return None
-
-
-class FakeStore:
-    def __init__(self) -> None:
-        self.items: list[dict[str, Any]] = []
-
-    async def put(self, item: dict[str, Any]) -> dict[str, str]:
-        self.items.append(item)
-        return {"quarantine_id": "q_test_0123456789abcdef", "sha256": "a" * 64}
-
-
-class FakeRepository:
-    async def find_memory_state(self, _bank: str, _memory_id: str) -> None:
-        return None
+from tests.fakes import (
+    FakeHindsight,
+    FakeLimits,
+    FakeRepository,
+    FakeStore,
+)
 
 
 @pytest.mark.asyncio
@@ -46,10 +25,10 @@ async def test_recall_preserves_hindsight_top_level_fields_while_filtering_resul
         "source_facts": {"fact-1": {"id": "fact-1", "text": "source fact"}},
         "trace": {"duration_ms": 1.0},
     }
-    store = FakeStore()
+    store = FakeStore(quarantine_id="q_test_0123456789abcdef")
     policy = RouterPolicy(
         DEFAULT_REGISTRY.model_copy(deep=True),
-        FakeHindsight(upstream),
+        FakeHindsight(response=upstream),
         FakeLimits(),
         store,
         FakeRepository(),
@@ -79,10 +58,21 @@ async def test_recall_preserves_explicit_null_hindsight_top_level_fields() -> No
     }
     policy = RouterPolicy(
         DEFAULT_REGISTRY.model_copy(deep=True),
-        FakeHindsight(upstream),
+        FakeHindsight(response=upstream),
         FakeLimits(),
-        FakeStore(),
+        FakeStore(quarantine_id="q_test_0123456789abcdef"),
         FakeRepository(),
     )
 
     assert await policy.recall("main", {"query": "status"}) == upstream
+
+
+def test_recall_result_only_validates_id_and_text() -> None:
+    parsed = RecallResponse.model_validate(
+        {"results": [{"id": "1", "text": "ok", "type": 7, "metadata": "opaque"}]}
+    )
+    dumped = parsed.model_dump()
+    assert dumped["results"][0]["type"] == 7
+    assert dumped["results"][0]["metadata"] == "opaque"
+    with pytest.raises(ValidationError):
+        RecallResponse.model_validate({"results": [{"id": 1, "text": "ok"}]})

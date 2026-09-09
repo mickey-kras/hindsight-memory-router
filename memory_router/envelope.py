@@ -22,8 +22,12 @@ QuarantineReason = Literal[
     "suspicious_content",
     "suspicious_query",
     "recalled_suspicious_memory",
+    "recalled_suspicious_supplemental",
     "denied_endpoint",
     "auth_failed",
+    "openclaw_suspicious_request",
+    "openclaw_unknown_writer",
+    "openclaw_suspicious_provider_response",
 ]
 _REASONS = frozenset(get_args(QuarantineReason))
 
@@ -112,10 +116,12 @@ def decode_public_key(value: str) -> rsa.RSAPublicKey:
         raise ValueError("QUARANTINE_PUBLIC_KEY must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPublicKey):
         raise ValueError("QUARANTINE_PUBLIC_KEY must be an RSA public key")
+    if key.key_size < 2048:
+        raise ValueError("QUARANTINE_PUBLIC_KEY RSA key must be at least 2048 bits")
     return key
 
 
-def decode_private_key(value: str) -> rsa.RSAPrivateKey:
+def _load_private_key(value: str) -> rsa.RSAPrivateKey:
     trimmed = value.strip()
     if not trimmed:
         raise ValueError("private key is required")
@@ -127,6 +133,13 @@ def decode_private_key(value: str) -> rsa.RSAPrivateKey:
         raise ValueError("private key must be PEM or base64-encoded PEM") from exc
     if not isinstance(key, rsa.RSAPrivateKey):
         raise ValueError("private key must be an RSA private key")
+    return key
+
+
+def decode_private_key(value: str) -> rsa.RSAPrivateKey:
+    key = _load_private_key(value)
+    if key.key_size < 2048:
+        raise ValueError("private RSA key must be at least 2048 bits")
     return key
 
 
@@ -277,7 +290,7 @@ def _validate_base64_field(encryption: dict[str, Any], field: str) -> None:
 def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:
     envelope = parse_envelope(value)
     encryption = envelope["encryption"]
-    key = decode_private_key(private_key_input).decrypt(
+    key = _load_private_key(private_key_input).decrypt(
         base64.b64decode(encryption[ENVELOPE_WRAPPED_FIELD]),
         padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
     )

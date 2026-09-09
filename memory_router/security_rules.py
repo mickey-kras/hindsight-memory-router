@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Iterable
+from typing import NamedTuple
 
 from agent_memory_guard.detectors import (
     ExcessiveAutonomyDetector,
@@ -251,7 +252,11 @@ _RULE_MIN_FUSED_TOKEN_LEN = min(
 _RuleToken = tuple[str, int, int]
 
 
-_RuleGap = tuple[int, frozenset[str], int, int]
+class _RuleGap(NamedTuple):
+    arbitrary_count: int
+    arbitrary_words: frozenset[str]
+    signal_count: int
+    padding_bytes: int
 
 
 def _append_rule_matches(
@@ -603,7 +608,9 @@ def _rule_part_gap(  # NOSONAR
     selected_bytes = sum(len(word.encode("utf-8")) for word in expected)
     padding_bytes = max(0, len(value[span_start:span_end].encode("utf-8")) - selected_bytes)
     arbitrary = [word for word in skipped if word not in _RULE_SIGNAL_WORDS]
-    return len(arbitrary), frozenset(arbitrary), len(skipped) - len(arbitrary), padding_bytes
+    return _RuleGap(
+        len(arbitrary), frozenset(arbitrary), len(skipped) - len(arbitrary), padding_bytes
+    )
 
 
 def _rule_fused_padding(expected: str) -> int:
@@ -627,10 +634,10 @@ def _rule_gap_allowed(previous: _RuleGap, current: _RuleGap) -> bool:
     Budget-exceeded subsequences are still reported (fail closed); this
     predicate records whether the match carried only bounded padding.
     """
-    arbitrary_count = previous[0] + current[0]
-    arbitrary_words = previous[1] | current[1]
-    signal_count = previous[2] + current[2]
-    padding_bytes = previous[3] + current[3]
+    arbitrary_count = previous.arbitrary_count + current.arbitrary_count
+    arbitrary_words = previous.arbitrary_words | current.arbitrary_words
+    signal_count = previous.signal_count + current.signal_count
+    padding_bytes = previous.padding_bytes + current.padding_bytes
     skipped_count = arbitrary_count + signal_count
     return bool(
         skipped_count == 0
@@ -647,14 +654,14 @@ def _rule_gap_benign_adjacency(previous: _RuleGap, current: _RuleGap) -> bool:
     with rule-shaped word sequences across field junctions. Short filler-only
     runs stay clean; nonce-word padding and longer runs still fail closed.
     """
-    arbitrary_count = previous[0] + current[0]
+    arbitrary_count = previous.arbitrary_count + current.arbitrary_count
     if not 0 < arbitrary_count <= _RULE_MAX_FILLER_SKIPS:
         return False
-    if previous[2] + current[2]:
+    if previous.signal_count + current.signal_count:
         return False
-    if previous[3] + current[3] >= _RULE_PADDING_BYTES:
+    if previous.padding_bytes + current.padding_bytes >= _RULE_PADDING_BYTES:
         return False
-    arbitrary_words = previous[1] | current[1]
+    arbitrary_words = previous.arbitrary_words | current.arbitrary_words
     return bool(arbitrary_words) and arbitrary_words <= _RULE_FILLER_WORDS
 
 
@@ -665,9 +672,9 @@ def _rule_gap_fail_closed(previous: _RuleGap, current: _RuleGap) -> bool:
     words overall, so ordinary ops prose ("the existing permissions doc")
     stays clean while nonce-word padding still fails closed.
     """
-    arbitrary_count = previous[0] + current[0]
-    signal_count = previous[2] + current[2]
-    filler_words = (previous[1] | current[1]) & _RULE_FILLER_WORDS
+    arbitrary_count = previous.arbitrary_count + current.arbitrary_count
+    signal_count = previous.signal_count + current.signal_count
+    filler_words = (previous.arbitrary_words | current.arbitrary_words) & _RULE_FILLER_WORDS
     non_filler_count = arbitrary_count - len(filler_words)
     skipped_count = arbitrary_count + signal_count
     return non_filler_count >= 2 or skipped_count >= 3

@@ -2,19 +2,41 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast
+from typing import Any, cast, get_args, get_origin
 
 from .canonical import canonical_json, sha256_hex
 from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .logging import log_event
+from .models import RecallResponse
 from .observability import current_request_id
+from .repository import (
+    REVIEW_IN_PROGRESS,
+    REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEW_SIDE_EFFECT_STARTED,
+    REVIEWABLE_STATUSES,
+    REVIEWED_ALLOWED,
+    REVIEWED_BLOCKED,
+)
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
-_RECALL_RESPONSE_MAP_FIELDS = ("chunks", "entities", "source_facts", "trace")
+_RECALL_RESPONSE_MAP_FIELDS = tuple(
+    name
+    for name, field in RecallResponse.model_fields.items()
+    if get_origin(field.annotation) is dict
+    or any(get_origin(member) is dict for member in get_args(field.annotation))
+)
+_QUARANTINE_ERRORS: dict[str, tuple[int, str]] = {
+    "quarantine_capacity_exceeded": (507, "capacity"),
+    "quarantine_writer_capacity_exceeded": (507, "capacity"),
+    "quarantine_rate_limited": (429, "rate-limit"),
+    "quarantine_item_too_large": (413, "payload-too-large"),
+    "quarantine_request_in_review": (409, "conflict"),
+    "quarantine_item_in_review": (409, "conflict"),
+}
 
 
 def prepare_retain_body(
@@ -202,7 +224,7 @@ class RouterPolicy:
         dedupe = self.security_event_identities.resolve(
             writer_id, security_event_dedupe_key(method, path)
         )
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": "http",
@@ -248,7 +270,7 @@ class RouterPolicy:
             return True
         digest = _audit_digest(evidence)
         try:
-            await self._quarantine(
+            await self.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": source,
@@ -328,13 +350,13 @@ class RouterPolicy:
         state = await self.repository.find_memory_state(bank_id, str(result["id"]))
         digest = recalled_content_digest(result)
         if state and state["status"] in {
-            "reviewed_blocked",
-            "review_in_progress",
-            "review_side_effect_started",
-            "review_side_effect_completed",
+            REVIEWED_BLOCKED,
+            REVIEW_IN_PROGRESS,
+            REVIEW_SIDE_EFFECT_STARTED,
+            REVIEW_SIDE_EFFECT_COMPLETED,
         }:
             return False
-        if state and state["status"] == "reviewed_allowed":
+        if state and state["status"] == REVIEWED_ALLOWED:
             if state.get("source_content_sha256") == digest:
                 volatile = {
                     key: value for key, value in result.items() if key not in {"id", "text"}
@@ -348,7 +370,7 @@ class RouterPolicy:
             await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
             return False
         scan = scan_recall_result(result)
-        if state and state["status"] in {"pending", "postponed"}:
+        if state and state["status"] in REVIEWABLE_STATUSES:
             if state.get("source_content_sha256") == digest:
                 return False
             await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
@@ -373,7 +395,7 @@ class RouterPolicy:
             "result": result,
         }
         payload = self._with_transformations(payload, scan)
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -392,7 +414,7 @@ class RouterPolicy:
         digest = _recalled_audit_digest(result)
         scan = scan_recall_result(result)
         memory_id = str(result.get("id", "unknown"))
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -419,7 +441,7 @@ class RouterPolicy:
     ) -> None:
         digest = _audit_digest(body)
         findings = [] if scan is None else [finding.public() for finding in scan.findings]
-        await self._quarantine(
+        await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -446,7 +468,7 @@ class RouterPolicy:
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {"action": "retain", "writer_id": writer_id, "body": body}
         payload = self._with_transformations(payload, scan)
-        result = await self._quarantine(
+        result = await self.quarantine_security_event(
             {
                 "writerId": writer_id,
                 "source": source,
@@ -483,7 +505,7 @@ class RouterPolicy:
             payload: dict[str, Any] = {"action": "recall", "writer_id": writer_id, "body": body}
             payload = self._with_transformations(payload, scan)
             target = ",".join(sorted(target_banks)) if target_banks else None
-            await self._quarantine(
+            await self.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": source,
@@ -524,7 +546,7 @@ class RouterPolicy:
                 {"writer_id": writer_id, "reason": reason, "status": exc.status, "code": exc.code},
             )
 
-    async def _quarantine(self, values: dict[str, Any]) -> dict[str, str]:
+    async def quarantine_security_event(self, values: dict[str, Any]) -> dict[str, str]:
         return cast(dict[str, str], await self.store.put({"timestamp": iso_now(), **values}))
 
     @staticmethod
@@ -535,28 +557,15 @@ class RouterPolicy:
 
     @staticmethod
     def _quarantine_unavailable(error: HttpError) -> bool:
-        return (
-            error.status in {507, 429}
-            or (error.status == 413 and error.code == "quarantine_item_too_large")
-            or (
-                error.status == 409
-                and error.code in {"quarantine_request_in_review", "quarantine_item_in_review"}
-            )
-        )
+        expected_status, _ = _QUARANTINE_ERRORS.get(error.code, (None, None))
+        return error.status in {507, 429} or error.status == expected_status
 
     @staticmethod
     def _log_degradation(event: str, details: dict[str, Any]) -> None:
         raw_error_kind = (
             details.get("error_kind") or details.get("error_type") or details.get("code")
         )
-        error_kind = {
-            "quarantine_capacity_exceeded": "capacity",
-            "quarantine_writer_capacity_exceeded": "capacity",
-            "quarantine_rate_limited": "rate-limit",
-            "quarantine_item_too_large": "payload-too-large",
-            "quarantine_request_in_review": "conflict",
-            "quarantine_item_in_review": "conflict",
-        }.get(str(raw_error_kind), raw_error_kind)
+        _, error_kind = _QUARANTINE_ERRORS.get(str(raw_error_kind), (None, raw_error_kind))
         log_event(
             logger,
             "error" if event == "recall_supplemental_audit_unavailable" else "warning",

@@ -11,6 +11,7 @@ from pytest_httpx import HTTPXMock
 
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
+from memory_router import db as db_module
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.maintenance import (
@@ -19,6 +20,9 @@ from memory_router.maintenance import (
     preview_cleanup,
     prune_events_before,
     sweep_expired,
+)
+from tests.fakes import (
+    TxContext,
 )
 
 
@@ -136,6 +140,9 @@ def test_hindsight_error_details_variants() -> None:
 
 
 class Tx:
+    def select_for_update(self, sql: str) -> str:
+        return sql + " FOR UPDATE" if self.dialect == "postgres" else sql
+
     def __init__(
         self,
         *,
@@ -160,20 +167,9 @@ class Tx:
         self.calls.append((sql, params))
 
 
-class Ctx:
-    def __init__(self, tx: Tx) -> None:
-        self.tx = tx
-
-    async def __aenter__(self) -> Tx:
-        return self.tx
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
 class Repo:
     def __init__(self, tx: Tx) -> None:
-        self.db = SimpleNamespace(transaction=lambda: Ctx(tx))
+        self.db = SimpleNamespace(transaction=lambda: TxContext(tx))
 
 
 def test_cleanup_params_validation() -> None:
@@ -244,7 +240,7 @@ def test_app_scope_and_now() -> None:
     assert app_module._scope("GET", "/x") == "read"
     assert app_module._scope("POST", "/admin/quarantine/cleanup") == "cleanup"
     assert app_module._scope("POST", "/x") == "review"
-    assert app_module._now().endswith("Z")
+    assert app_module.iso_now().endswith("Z")
 
 
 def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,12 +326,12 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
     monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
-    primary_db = SimpleNamespace()
+    primary_db = SimpleNamespace(dialect="postgres")
     create_database = AsyncMock(return_value=primary_db)
     validate_storage = AsyncMock()
     recover_interrupted = AsyncMock()
     repository = SimpleNamespace(close=AsyncMock())
-    monkeypatch.setattr(app_module, "create_database", create_database)
+    monkeypatch.setattr(db_module, "create_database", create_database)
     monkeypatch.setattr(app_module, "validate_storage", validate_storage)
     monkeypatch.setattr(app_module, "recover_interrupted", recover_interrupted)
     monkeypatch.setattr(app_module, "QuarantineRepository", lambda database: repository)
@@ -348,11 +344,11 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
         return rate_db
 
     rate_limiter = SimpleNamespace(initialize=AsyncMock())
-    monkeypatch.setattr(app_module, "PostgresDatabase", postgres_database)
-    monkeypatch.setattr(app_module, "PostgresRateLimiter", lambda database: rate_limiter)
+    monkeypatch.setattr(db_module, "PostgresDatabase", postgres_database)
+    monkeypatch.setattr(db_module, "PostgresRateLimiter", lambda database: rate_limiter)
     concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
     monkeypatch.setattr(
-        app_module, "PostgresConcurrencyLimiter", lambda database: concurrency_limiter
+        db_module, "PostgresConcurrencyLimiter", lambda database: concurrency_limiter
     )
 
     store = object()
@@ -390,10 +386,10 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     assert runtime.database is primary_db
     assert runtime.rate_limit_database is rate_db
     assert runtime.quarantine_limiter is rate_limiter
+    assert runtime.admin_limiter is rate_limiter
+    assert runtime.auth_limiter is rate_limiter
     assert runtime.principal_limiter is rate_limiter
     assert runtime.principal_concurrency_limiter is concurrency_limiter
-    assert isinstance(runtime.auth_limiter, app_module.InMemoryRateLimiter)
-    assert runtime.auth_limiter is not rate_limiter
     assert hindsight_limiter_calls == [rate_limiter]
     assert runtime.hindsight is hindsight
     assert runtime.policy is policy
@@ -475,3 +471,49 @@ async def test_runtime_stop_and_sweep(
     with pytest.raises(RuntimeError, match="stop"):
         await rt._sweep_loop(1, 0)
     assert "quarantine_sweeper_failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_postgres_runtime_shares_admin_and_auth_failure_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("QUARANTINE_DATABASE_URL", "postgresql://db")
+    monkeypatch.setenv("QUARANTINE_SWEEP_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("MEMORY_ROUTER_DEPLOYMENT_MODE", "cluster")
+    monkeypatch.setenv("MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT", "true")
+    monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
+    monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
+
+    primary_db = SimpleNamespace(dialect="postgres")
+    monkeypatch.setattr(db_module, "create_database", AsyncMock(return_value=primary_db))
+    monkeypatch.setattr(app_module, "validate_storage", AsyncMock())
+    monkeypatch.setattr(app_module, "recover_interrupted", AsyncMock())
+    repository = SimpleNamespace(close=AsyncMock())
+    monkeypatch.setattr(app_module, "QuarantineRepository", lambda _: repository)
+
+    rate_db = SimpleNamespace(initialize=AsyncMock(), close=AsyncMock())
+    monkeypatch.setattr(db_module, "PostgresDatabase", lambda *args, **kwargs: rate_db)
+    shared_limiter = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(db_module, "PostgresRateLimiter", lambda _: shared_limiter)
+    concurrency_limiter = SimpleNamespace(initialize=AsyncMock())
+    monkeypatch.setattr(db_module, "PostgresConcurrencyLimiter", lambda _: concurrency_limiter)
+
+    store = object()
+    hindsight = SimpleNamespace(close=AsyncMock())
+    registry = SimpleNamespace(writers={})
+    monkeypatch.setattr(app_module, "QuarantineStore", lambda *args: store)
+    monkeypatch.setattr(app_module, "HindsightGateway", lambda *args: hindsight)
+    monkeypatch.setattr(app_module, "load_registry", lambda _: registry)
+    monkeypatch.setattr(app_module, "HindsightLimits", lambda *args: object())
+    monkeypatch.setattr(app_module, "RouterPolicy", lambda *args: object())
+    monkeypatch.setattr(app_module, "QuarantineAdminService", lambda *args: object())
+    monkeypatch.setattr(app_module, "AuthFailureAuditor", lambda _: object())
+
+    runtime = app_module.Runtime()
+    await runtime.start()
+    assert runtime.quarantine_limiter is shared_limiter
+    assert runtime.admin_limiter is shared_limiter
+    assert runtime.auth_limiter is shared_limiter
+    assert runtime.principal_limiter is shared_limiter
+    assert runtime.principal_concurrency_limiter is concurrency_limiter
+    await runtime.stop()

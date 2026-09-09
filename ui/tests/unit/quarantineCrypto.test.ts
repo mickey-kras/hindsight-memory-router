@@ -13,7 +13,9 @@ import {
 import type {
   DecryptedQuarantineObject,
   EncryptedQuarantineEnvelope,
+  ReviewReason,
 } from "../../src/lib/types";
+import { REASONS } from "../../src/lib/types";
 
 const FIXTURES = new URL("../fixtures/", import.meta.url);
 
@@ -30,6 +32,13 @@ const IDS = [
 ];
 
 describe("decryptEnvelope conformance", () => {
+  it.each(REASONS)("decrypts the supported reason %s", async (reason) => {
+    const envelopes = fixture<Record<ReviewReason, EncryptedQuarantineEnvelope>>("reasons.json");
+    const key = await importDecryptionKeyPem(privatePem);
+    const decrypted = await decryptEnvelope(envelopes[reason], key);
+    expect(decrypted.reason).toBe(reason);
+  });
+
   it.each(IDS)("%s: decrypts to the Python-verified object", async (id) => {
     const envelope = fixture<EncryptedQuarantineEnvelope>(`${id}.envelope.json`);
     const expected = fixture<DecryptedQuarantineObject>(`${id}.decrypted.json`);

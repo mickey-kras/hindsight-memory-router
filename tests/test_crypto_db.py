@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ast
 import base64
+import inspect
 import json
 import sqlite3
 from pathlib import Path
+from typing import get_args
 
 import pytest
 from cryptography.exceptions import InvalidTag
@@ -11,18 +14,22 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from memory_router import auth, openclaw, policy
 from memory_router.canonical import canonical_json, sha256_hex
 from memory_router.db import create_database
 from memory_router.envelope import (
+    QuarantineReason,
     canonical_decrypted,
     create_envelope,
+    decode_private_key,
+    decode_public_key,
     decrypt_envelope,
     estimate_envelope_size,
 )
 
 
-def keypair() -> tuple[str, str]:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+def keypair(key_size: int = 2048) -> tuple[str, str]:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
     private_pem = private.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.PKCS8,
@@ -90,6 +97,43 @@ def test_envelope_round_trip_preserves_existing_format() -> None:
     assert decrypt_envelope(envelope, private) == decrypted()
 
 
+def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
+    private = rsa.generate_private_key(public_exponent=65537, key_size=1024)  # noqa: S505
+    private_pem = private.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
+    public_pem = (
+        private.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode()
+    )
+
+    with pytest.raises(ValueError, match="at least 2048 bits"):
+        decode_public_key(public_pem)
+    with pytest.raises(ValueError, match="at least 2048 bits"):
+        decode_private_key(private_pem)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "recalled_suspicious_supplemental",
+        "openclaw_suspicious_request",
+        "openclaw_unknown_writer",
+        "openclaw_suspicious_provider_response",
+    ],
+)
+def test_security_event_producer_reasons_are_accepted(reason: str) -> None:
+    value = decrypted() | {"reason": reason}
+
+    assert canonical_decrypted(value)
+
+
 @pytest.mark.parametrize("key_size", [2048, 4096])
 @pytest.mark.parametrize(
     "metadata",
@@ -133,8 +177,9 @@ def test_authenticated_metadata_tampering_fails() -> None:
         decrypt_envelope(envelope, private)
 
 
-def test_legacy_no_aad_envelope_still_decrypts() -> None:
-    public_pem, private_pem = keypair()
+@pytest.mark.parametrize("key_size", [1024, 2048])
+def test_legacy_no_aad_envelope_still_decrypts(key_size: int) -> None:
+    public_pem, private_pem = keypair(key_size)
     value = decrypted()
     plaintext = canonical_decrypted(value).encode()
     data_key = AESGCM.generate_key(bit_length=256)
@@ -223,3 +268,36 @@ async def test_existing_sqlite_schema_is_migrated_in_place(tmp_path: Path) -> No
         }
     finally:
         await database.close()
+
+
+def test_quarantine_reason_vocabulary_covers_producers() -> None:
+    reasons: set[str] = set()
+    for module in (auth, openclaw, policy):
+        for node in ast.walk(ast.parse(inspect.getsource(module))):
+            values: list[ast.expr] = []
+            if isinstance(node, ast.Dict):
+                values.extend(
+                    value
+                    for key, value in zip(node.keys, node.values, strict=True)
+                    if isinstance(key, ast.Constant) and key.value == "reason"
+                )
+            if isinstance(node, ast.Call):
+                values.extend(keyword.value for keyword in node.keywords if keyword.arg == "reason")
+                if (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "_audit"
+                    and len(node.args) > 1
+                ):
+                    values.append(node.args[1])
+            reasons.update(
+                value.value
+                for value in values
+                if isinstance(value, ast.Constant) and isinstance(value.value, str)
+            )
+    assert {
+        "recalled_suspicious_supplemental",
+        "openclaw_suspicious_request",
+        "openclaw_unknown_writer",
+        "openclaw_suspicious_provider_response",
+    } <= reasons
+    assert reasons <= set(get_args(QuarantineReason))

@@ -8,6 +8,7 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from memory_router.db import PostgresTx
 from memory_router.errors import HttpError
 from memory_router.quarantine_store import (
     QuarantineLimits,
@@ -57,7 +58,7 @@ class Limiter:
         return await operation(self.session)  # type: ignore[operator]
 
 
-class FakePostgresTx:
+class FakePostgresTx(PostgresTx):
     dialect = "postgres"
 
     def __init__(self, state: dict[str, object]) -> None:

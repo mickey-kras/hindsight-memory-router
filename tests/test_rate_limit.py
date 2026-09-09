@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, call
 
@@ -7,61 +8,29 @@ import pytest
 
 from memory_router.errors import HttpError
 from memory_router.rate_limit import (
+    Bucket,
     ConcurrencyLeaseLost,
     ConcurrencyLeaseRefreshFailed,
+    InMemoryConcurrencyLimiter,
+    InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
     PostgresRateLimiter,
     _PostgresSession,
 )
-
-
-class TxContext:
-    def __init__(self, tx: object) -> None:
-        self.tx = tx
-
-    async def __aenter__(self) -> object:
-        return self.tx
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeDatabase:
-    def __init__(self, tx: object) -> None:
-        self.tx = tx
-
-    def transaction(self) -> TxContext:
-        return TxContext(self.tx)
-
-
-class FakePostgresTx:
-    def __init__(self) -> None:
-        self.executed: list[tuple[str, object]] = []
-        self.state_reads = 0
-
-    async def execute(self, sql: str, params: object = None) -> None:
-        self.executed.append((sql, params))
-
-    async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
-        self.executed.append((sql, params))
-        if "clock_timestamp" in sql:
-            return {"now_ms": 100}
-        if "SELECT max_window_ms" in sql:
-            self.state_reads += 1
-            return {"max_window_ms": 60_000}
-        if "COUNT(*)" in sql:
-            return {"count": 0}
-        return None
+from tests.fakes import (
+    FakeDatabase,
+    FakeRateLimitTx,
+)
 
 
 @pytest.mark.asyncio
 async def test_postgres_max_window_cache_updates_only_after_commit() -> None:
-    tx = FakePostgresTx()
+    tx = FakeRateLimitTx()
     limiter = PostgresRateLimiter(SimpleNamespace())
     cache = limiter.max_window_cache
 
     first = _PostgresSession(tx, max_window_cache=cache)
-    await first.consume_many([("first", 10, 10_000)], at_ms=100_000)
+    await first.consume_many([Bucket("first", 10, 10_000)], at_ms=100_000)
     assert tx.state_reads == 1
     assert cache[0] == 0
     assert first.observed_max_window == 60_000
@@ -71,17 +40,17 @@ async def test_postgres_max_window_cache_updates_only_after_commit() -> None:
     assert cache[0] == 60_000
 
     second = _PostgresSession(tx, max_window_cache=cache)
-    await second.consume_many([("second", 10, 10_000)], at_ms=100_001)
+    await second.consume_many([Bucket("second", 10, 10_000)], at_ms=100_001)
     assert tx.state_reads == 1
 
     rolled_back = _PostgresSession(tx, max_window_cache=cache)
-    await rolled_back.consume_many([("larger", 10, 120_000)], at_ms=100_002)
+    await rolled_back.consume_many([Bucket("larger", 10, 120_000)], at_ms=100_002)
     assert tx.state_reads == 2
     assert cache[0] == 60_000
     assert rolled_back.observed_max_window == 120_000
 
     retried = _PostgresSession(tx, max_window_cache=cache)
-    await retried.consume_many([("larger-retry", 10, 120_000)], at_ms=100_003)
+    await retried.consume_many([Bucket("larger-retry", 10, 120_000)], at_ms=100_003)
     assert tx.state_reads == 3
     assert cache[0] == 60_000
     state_writes = [
@@ -99,7 +68,7 @@ async def _result(value: str) -> str:
 
 @pytest.mark.asyncio
 async def test_postgres_concurrency_limiter_acquires_and_releases() -> None:
-    tx = FakePostgresTx()
+    tx = FakeRateLimitTx()
     limiter = PostgresConcurrencyLimiter(FakeDatabase(tx), lease_ms=30_000)
     await limiter.initialize()
 
@@ -119,7 +88,7 @@ async def test_postgres_concurrency_limiter_acquires_and_releases() -> None:
 
 @pytest.mark.asyncio
 async def test_postgres_concurrency_limiter_rejects_full_bucket() -> None:
-    class FullTx(FakePostgresTx):
+    class FullTx(FakeRateLimitTx):
         async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
             if "clock_timestamp" in sql:
                 return {"now_ms": 100}
@@ -137,7 +106,7 @@ async def test_postgres_concurrency_limiter_rejects_full_bucket() -> None:
 
 @pytest.mark.asyncio
 async def test_postgres_concurrency_refresh_requires_live_owned_lease() -> None:
-    class RefreshTx(FakePostgresTx):
+    class RefreshTx(FakeRateLimitTx):
         async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
             self.executed.append((sql, params))
             if "clock_timestamp" in sql:
@@ -159,7 +128,7 @@ async def test_postgres_concurrency_refresh_requires_live_owned_lease() -> None:
 
 @pytest.mark.asyncio
 async def test_postgres_concurrency_refresh_rejects_lost_lease() -> None:
-    class LostTx(FakePostgresTx):
+    class LostTx(FakeRateLimitTx):
         async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
             if "clock_timestamp" in sql:
                 return {"now_ms": 100}
@@ -204,7 +173,7 @@ async def test_postgres_concurrency_heartbeat_fails_before_expiry_margin(
 async def test_postgres_concurrency_release_failure_does_not_mask_result(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    limiter = PostgresConcurrencyLimiter(FakeDatabase(FakePostgresTx()))
+    limiter = PostgresConcurrencyLimiter(FakeDatabase(FakeRateLimitTx()))
     release = AsyncMock(side_effect=OSError("database down"))
     monkeypatch.setattr(limiter, "_release", release)
 
@@ -223,3 +192,76 @@ async def test_postgres_concurrency_release_failure_does_not_mask_result(
 def test_postgres_concurrency_rejects_unsafe_lease_duration() -> None:
     with pytest.raises(ValueError, match="at least 3000"):
         PostgresConcurrencyLimiter(SimpleNamespace(), lease_ms=0)
+
+
+@pytest.mark.asyncio
+async def test_in_memory_concurrency_rejects_overlap_and_releases_after_cancellation() -> None:
+    limiter = InMemoryConcurrencyLimiter()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block() -> None:
+        entered.set()
+        await release.wait()
+
+    task = asyncio.create_task(limiter.run("agent:retain", 1, block))
+    await entered.wait()
+    rejected = AsyncMock()
+    try:
+        with pytest.raises(HttpError) as throttled:
+            await limiter.run("agent:retain", 1, rejected)
+        assert throttled.value.code == "principal_concurrency_limited"
+        rejected.assert_not_awaited()
+        assert (
+            await limiter.run("other:retain", 1, AsyncMock(return_value="independent"))
+            == "independent"
+        )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert await limiter.run("agent:retain", 1, AsyncMock(return_value="released")) == "released"
+    assert limiter.active == {}
+
+
+@pytest.mark.asyncio
+async def test_in_memory_concurrency_releases_after_operation_failure() -> None:
+    limiter = InMemoryConcurrencyLimiter()
+    with pytest.raises(ValueError, match="operation failed"):
+        await limiter.run("agent:retain", 1, AsyncMock(side_effect=ValueError("operation failed")))
+    assert await limiter.run("agent:retain", 1, AsyncMock(return_value="recovered")) == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_postgres_global_sweep_uses_database_max_window() -> None:
+    tx = FakeRateLimitTx()
+    session = _PostgresSession(tx, global_sweep=True, max_window_cache=[1_000])
+    await session.consume_many([Bucket("hot", 2, 1_000)], at_ms=100_000)
+
+    global_deletes = [
+        params
+        for sql, params in tx.executed
+        if sql == "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?"
+    ]
+    assert global_deletes == [(40_000,)]
+
+
+@pytest.mark.asyncio
+async def test_postgres_periodic_sweep_prunes_cold_rate_limit_keys() -> None:
+    tx = FakeRateLimitTx()
+    await _PostgresSession(tx, global_sweep=True).consume_many(
+        [Bucket("hot", 2, 10_000)], at_ms=100_000
+    )
+    sql = [statement for statement, _ in tx.executed]
+    assert "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?" in sql
+    assert "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?" in sql
+
+
+@pytest.mark.asyncio
+async def test_in_memory_limiter_periodically_prunes_untouched_keys() -> None:
+    limiter = InMemoryRateLimiter()
+    await limiter.consume_many([Bucket("stale", 1, 10)], at_ms=0)
+    for index in range(1, 128):
+        await limiter.consume_many([Bucket(f"live-{index}", 1, 10_000)], at_ms=100)
+    assert "stale" not in limiter.events
+    assert "stale" not in limiter.event_windows

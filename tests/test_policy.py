@@ -5,60 +5,21 @@ from typing import Any
 import pytest
 
 from memory_router.config import DEFAULT_REGISTRY
+from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
 from memory_router.policy import RouterPolicy, recalled_content_digest
-
-
-class FakeHindsight:
-    def __init__(self, recall_results: list[dict[str, Any]] | None = None) -> None:
-        self.retain_calls: list[tuple[str, dict[str, Any]]] = []
-        self.recall_calls: list[tuple[str, dict[str, Any]]] = []
-        self.recall_results = recall_results or []
-        self.recall_error: Exception | None = None
-
-    async def retain(self, bank: str, body: dict[str, Any]) -> dict[str, bool]:
-        self.retain_calls.append((bank, body))
-        return {"ok": True}
-
-    async def recall(self, bank: str, body: dict[str, Any]) -> dict[str, Any]:
-        self.recall_calls.append((bank, body))
-        if self.recall_error:
-            raise self.recall_error
-        return {"results": self.recall_results}
-
-
-class FakeLimits:
-    def __init__(self) -> None:
-        self.retain: list[str] = []
-        self.recall: list[str] = []
-
-    async def consume_retain(self, writer: str) -> None:
-        self.retain.append(writer)
-
-    async def consume_recall(self, writer: str) -> None:
-        self.recall.append(writer)
-
-
-class FakeStore:
-    def __init__(self) -> None:
-        self.items: list[dict[str, Any]] = []
-
-    async def put(self, item: dict[str, Any]) -> dict[str, str]:
-        self.items.append(item)
-        return {"quarantine_id": "q_test_0123456789abcdef", "sha256": "a" * 64}
-
-
-class FakeRepository:
-    def __init__(self) -> None:
-        self.states: dict[tuple[str, str], dict[str, Any]] = {}
-
-    async def find_memory_state(self, bank: str, memory_id: str) -> dict[str, Any] | None:
-        return self.states.get((bank, memory_id))
+from tests.fakes import (
+    FakeHindsight,
+    FakeLimits,
+    FakeRepository,
+    FakeStore,
+    registry,
+)
 
 
 def policy(hindsight: FakeHindsight) -> tuple[RouterPolicy, FakeLimits, FakeStore, FakeRepository]:
     limits = FakeLimits()
-    store = FakeStore()
+    store = FakeStore(quarantine_id="q_test_0123456789abcdef")
     repository = FakeRepository()
     return (
         RouterPolicy(DEFAULT_REGISTRY.model_copy(deep=True), hindsight, limits, store, repository),
@@ -254,3 +215,124 @@ async def test_review_in_progress_memory_is_suppressed_without_refresh() -> None
     }
     assert await router.recall("main", {"query": "status"}) == {"results": []}
     assert store.items == []
+
+
+@pytest.mark.asyncio
+async def test_uncanonicalizable_recalled_result_degrades_to_bounded_placeholder() -> None:
+    result = {"id": "m1", "text": "system prompt", "rank": 1 << 60}
+    store = FakeStore([ValueError("value must contain JSON values only"), None])
+    router = RouterPolicy(
+        registry(), FakeHindsight([result]), FakeLimits(), store, FakeRepository()
+    )
+
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert len(store.items) == 2
+    assert store.items[1]["kind"] == "security_event"
+    payload = store.items[1]["payload"]
+    assert isinstance(payload, dict)
+    assert payload["action"] == "recalled_memory_too_large"
+    assert "result" not in payload
+
+
+@pytest.mark.asyncio
+async def test_oversized_suspicious_recall_records_bounded_security_event() -> None:
+    too_large = HttpError(413, "quarantine_item_too_large", "too large")
+    store = FakeStore([too_large, None])
+    router = RouterPolicy(registry(), FakeHindsight(), FakeLimits(), store, FakeRepository())
+    body = {"query": "system prompt", "padding": "x" * 1024}
+
+    assert await router.recall("main", body) == {"results": []}
+    assert len(store.items) == 2
+    placeholder = store.items[1]
+    assert placeholder["kind"] == "security_event"
+    payload = placeholder["payload"]
+    assert isinstance(payload, dict)
+    assert payload["action"] == "recall_request_too_large"
+    assert "body" not in payload
+    assert payload["findings"]
+
+
+@pytest.mark.asyncio
+async def test_reviewed_stable_digest_still_rescans_unsafe_volatile_extra() -> None:
+    result = {"id": "m1", "text": "approved", "metadata": "system prompt"}
+    state = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(result),
+    }
+    store = FakeStore()
+    router = RouterPolicy(
+        registry(), FakeHindsight([result]), FakeLimits(), store, FakeRepository(state)
+    )
+
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items
+    assert store.items[0]["kind"] == "recalled_memory"
+
+
+@pytest.mark.asyncio
+async def test_approved_flagged_recall_text_stays_allowed_when_digest_matches() -> None:
+    result = {"id": "m1", "text": "system prompt", "score": 0.7}
+    state = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(result),
+    }
+    store = FakeStore()
+    router = RouterPolicy(
+        registry(), FakeHindsight([result]), FakeLimits(), store, FakeRepository(state)
+    )
+
+    assert await router.recall("main", {"query": "status"}) == {"results": [result]}
+    assert store.items == []
+
+
+@pytest.mark.asyncio
+async def test_oversized_unsafe_recall_records_bounded_security_placeholder() -> None:
+    result = {"id": "m1", "text": "system prompt"}
+    store = FakeStore([HttpError(413, "quarantine_item_too_large", "too large")])
+    router = RouterPolicy(
+        registry(), FakeHindsight([result]), FakeLimits(), store, FakeRepository(None)
+    )
+
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert len(store.items) == 2
+    placeholder = store.items[1]
+    assert placeholder["kind"] == "security_event"
+    payload = placeholder["payload"]
+    assert isinstance(payload, dict)
+    assert payload["action"] == "recalled_memory_too_large"
+    assert payload["memory_id"] == "m1"
+    assert "result" not in payload
+    assert "text" not in payload
+
+
+@pytest.mark.asyncio
+async def test_reviewed_memory_pin_ignores_volatile_recall_scores_but_not_text() -> None:
+    approved = {"id": "m1", "text": "approved", "scores": {"semantic": 0.1}}
+    changed_score = {"id": "m1", "text": "approved", "scores": {"semantic": 0.9}}
+    state = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    store = FakeStore()
+    router = RouterPolicy(
+        registry(), FakeHindsight([changed_score]), FakeLimits(), store, FakeRepository(state)
+    )
+    assert await router.recall("main", {"query": "status"}) == {"results": [changed_score]}
+    assert store.items == []
+
+    changed_text = {"id": "m1", "text": "system prompt", "scores": {"semantic": 0.9}}
+    router = RouterPolicy(
+        registry(), FakeHindsight([changed_text]), FakeLimits(), store, FakeRepository(state)
+    )
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items
+
+
+@pytest.mark.asyncio
+async def test_oversized_quarantine_memory_degrades_only_that_result() -> None:
+    result = {"id": "m1", "text": "system prompt"}
+    store = FakeStore(error=HttpError(413, "quarantine_item_too_large", "too large"))
+    router = RouterPolicy(
+        registry(), FakeHindsight([result]), FakeLimits(), store, FakeRepository(None)
+    )
+    assert await router.recall("main", {"query": "status"}) == {"results": []}

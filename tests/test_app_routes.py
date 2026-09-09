@@ -3,12 +3,16 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import quote
 
 import pytest
+from fastapi import Request
 
 from memory_router import app as app_module
+from memory_router import probes
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.rate_limit import InMemoryRateLimiter
 from tests.request_helpers import request
 
 
@@ -18,8 +22,8 @@ def payload(response: object) -> object:
 
 @pytest.fixture(autouse=True)
 def runtime_state() -> None:
-    app_module._readiness_log_state = app_module._ReadinessLogState()
-    app_module._storage_readiness_log_state = app_module._ReadinessLogState(
+    probes.readiness_log_state = probes.ReadinessLogState()
+    probes.storage_readiness_log_state = probes.ReadinessLogState(
         "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
     )
     app_module.runtime.allow_anonymous = True
@@ -36,6 +40,7 @@ def runtime_state() -> None:
     app_module.runtime.admin_window = 60_000
     app_module.runtime.admin_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.auth_prefilter = InMemoryRateLimiter()
     app_module.runtime.auth_failure_max = 120
     app_module.runtime.auth_failure_window = 60_000
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
@@ -70,13 +75,13 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     response = await app_module.ready()
     assert response.status_code == 200
     assert payload(response) == upstream_health
-    cached = app_module._readiness.cache
+    cached = probes.readiness.cache
     assert cached is not None and isinstance(cached.body, bytes)
-    assert app_module._readiness.cache is cached
+    assert probes.readiness.cache is cached
 
     repository.ping.side_effect = RuntimeError("database down")
     hindsight.health.reset_mock()
-    app_module._readiness.cache = None
+    probes.readiness.cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -86,7 +91,7 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
-    app_module._readiness.cache = None
+    probes.readiness.cache = None
     response = await app_module.health_ready()
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
@@ -125,7 +130,7 @@ async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     assert await app_module._json_body(request("POST", "/", body={"x": 1})) == {"x": 1}
     assert (
         await app_module._json_body(request("POST", "/"), empty_as_none=True)
-        is app_module._EMPTY_BODY
+        is app_module.EMPTY_BODY
     )
     assert (
         await app_module._json_body(request("POST", "/", body=b"null"), empty_as_none=True) is None
@@ -472,3 +477,160 @@ async def test_lifespan_cleans_up_runtime_when_scanner_start_fails(
     start_scanner.assert_called_once_with()
     shutdown_scanner.assert_awaited_once_with()
     stop.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_authentication_flood_stops_before_shared_storage() -> None:
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.auth_failure_max = 2
+    shared = app_module.runtime.auth_limiter.consume_many
+    shared.side_effect = HttpError(429, "limited", "limited")
+    for _ in range(10):
+        with pytest.raises(HttpError) as limited:
+            await app_module._router_auth(request("GET", "/v1/default/banks/main/memories"))
+        assert limited.value.code == "auth_rate_limited"
+    assert shared.await_count == 2
+    app_module.runtime.auditor.persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["auth", "admin"])
+async def test_rate_storage_failure_returns_retryable_unavailable(
+    scope: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    limiter = (
+        app_module.runtime.auth_limiter if scope == "auth" else app_module.runtime.admin_limiter
+    )
+    limiter.consume_many.side_effect = OSError("storage offline")
+    operation = (
+        app_module._auth_failure_rate("router")
+        if scope == "auth"
+        else app_module._admin_rate("GET")
+    )
+    with pytest.raises(HttpError) as unavailable:
+        await operation
+    assert unavailable.value.status == 503
+    assert unavailable.value.code == f"{scope}_rate_unavailable"
+    assert unavailable.value.headers == {"retry-after": "1"}
+    event = next(record for record in caplog.records if record.msg == unavailable.value.code)
+    assert event.error_kind == "storage"
+    assert event.http_status == 503
+
+
+def test_json_depth_is_bounded_before_recursive_security_processing() -> None:
+    value: object = "leaf"
+    for _ in range(app_module._MAX_JSON_DEPTH + 1):
+        value = [value]
+    with pytest.raises(HttpError) as exc:
+        app_module._assert_json_depth(value)
+    assert exc.value.code == "json_too_deep"
+
+
+@pytest.mark.asyncio
+async def test_mis_scoped_valid_admin_token_is_logged_and_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/x",
+            "headers": [(b"authorization", b"Bearer read")],
+        }
+    )
+    monkeypatch.setattr(
+        app_module.runtime,
+        "admin_tokens",
+        {"legacy": None, "read": "read", "review": "review", "cleanup": "cleanup"},
+    )
+    failure_rate = AsyncMock()
+    auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+    monkeypatch.setattr(app_module, "_auth_failure_rate", failure_rate)
+    monkeypatch.setattr(app_module.runtime, "auditor", auditor)
+    assert await app_module._admin_auth(request, "review") is False
+    auditor.log_failure.assert_called_once_with("admin")
+    failure_rate.assert_awaited_once_with("admin")
+    auditor.persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_auth_precedes_malformed_path_fallback() -> None:
+    previous_allow = app_module.runtime.allow_anonymous
+    previous_token = app_module.runtime.router_token
+    previous_auditor = app_module.runtime.auditor
+    previous_policy = app_module.runtime.policy
+    try:
+        app_module.runtime.allow_anonymous = False
+        router_token = "sec" + "ret"
+        app_module.runtime.router_token = router_token
+        app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+        app_module.runtime.policy = SimpleNamespace(
+            deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
+        )
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+        assert response.status_code == 401
+
+        app_module.runtime.router_token = None
+        app_module.runtime.allow_anonymous = True
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+        assert response.status_code == 404
+        app_module.runtime.policy.deny_endpoint.assert_awaited_with("GET", "/bad%ZZ")
+    finally:
+        app_module.runtime.allow_anonymous = previous_allow
+        app_module.runtime.router_token = previous_token
+        app_module.runtime.auditor = previous_auditor
+        app_module.runtime.policy = previous_policy
+
+
+@pytest.mark.asyncio
+async def test_dot_segments_and_trace_reach_normalized_deny_endpoint() -> None:
+    previous_allow = app_module.runtime.allow_anonymous
+    previous_policy = app_module.runtime.policy
+    try:
+        app_module.runtime.allow_anonymous = True
+        policy = SimpleNamespace(
+            limits=SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock()),
+            deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+        )
+        app_module.runtime.policy = policy
+        response = await app_module.dispatch("unused", request("TRACE", "/a/../blocked"))
+        assert response.status_code == 404
+        policy.deny_endpoint.assert_awaited_with("TRACE", "/blocked")
+    finally:
+        app_module.runtime.allow_anonymous = previous_allow
+        app_module.runtime.policy = previous_policy
+
+
+def test_matched_segment_decode_remains_strict() -> None:
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        app_module._decode_path_segment("bad%ZZ")
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        app_module._decode_path_segment("%FF")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%252e%252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%25252e%25252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%2525252e%2525252e")
+    assert app_module._decode_path_segment("%25FF") == "%FF"
+    assert app_module._decode_path_segment("item%252ename") == "item%2ename"
+    over_encoded = "%2eitem"
+    for _ in range(10):
+        over_encoded = quote(over_encoded, safe="")
+    with pytest.raises(HttpError, match="excessive nested encoding"):
+        app_module._decode_path_segment(over_encoded)
+    max_depth_dot = "%2e"
+    for _ in range(8):
+        max_depth_dot = quote(max_depth_dot, safe="")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment(max_depth_dot)
+    assert app_module._MAX_PATH_PROBE_DECODES == 8  # noqa: SLF001
+
+
+def test_trailing_dot_segment_preserves_trailing_slash() -> None:
+    assert app_module._normalize_dot_segments("/a/.") == "/a/"
+    assert app_module._normalize_dot_segments("/a/%2e") == "/a/"
+    assert app_module._normalize_dot_segments("/a/./b") == "/a/b"
+    assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
+    assert app_module._normalize_dot_segments("/..") == "/"
+    assert app_module._normalize_dot_segments("../a") == "a"

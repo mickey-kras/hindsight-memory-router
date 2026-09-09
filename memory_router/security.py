@@ -6,54 +6,36 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
+from . import security_base64, security_rules, security_screen, security_windows
 from .scan_windows import bounded_skip_fragments
-
-# isort: off
+from .security_base64 import MAX_BASE64_DECODED_BYTES as MAX_BASE64_DECODED_BYTES
+from .security_base64 import MAX_BASE64_SPANS as MAX_BASE64_SPANS
+from .security_base64 import MAX_SPLIT_BASE64_CANDIDATE_BYTES as MAX_SPLIT_BASE64_CANDIDATE_BYTES
+from .security_base64 import MAX_SPLIT_BASE64_CANDIDATES as MAX_SPLIT_BASE64_CANDIDATES
+from .security_base64 import MAX_SPLIT_BASE64_FIELDS as MAX_SPLIT_BASE64_FIELDS
 from .security_base64 import (
-    _lossy_viable_base64_prefix as _lossy_viable_base64_prefix,
-    _scan_encoded as _scan_encoded,
-    _split_base64_candidates as _split_base64_candidates_impl,
-    _split_decoded_base64_candidates as _split_decoded_base64_candidates,
-    _viable_base64_prefix as _viable_base64_prefix,
+    MAX_SPLIT_BASE64_RECOVERY_ATTEMPTS as MAX_SPLIT_BASE64_RECOVERY_ATTEMPTS,
 )
+from .security_base64 import (
+    MAX_SPLIT_BASE64_RECOVERY_MIN_PARTS as MAX_SPLIT_BASE64_RECOVERY_MIN_PARTS,
+)
+from .security_base64 import (
+    MAX_SPLIT_BASE64_RECOVERY_PAIR_PARTS as MAX_SPLIT_BASE64_RECOVERY_PAIR_PARTS,
+)
+from .security_base64 import (
+    MAX_SPLIT_BASE64_RECOVERY_TRIPLE_PARTS as MAX_SPLIT_BASE64_RECOVERY_TRIPLE_PARTS,
+)
+from .security_base64 import (
+    MAX_SPLIT_BASE64_RECOVERY_WORK_BYTES as MAX_SPLIT_BASE64_RECOVERY_WORK_BYTES,
+)
+from .security_base64 import MAX_SPLIT_BASE64_SKIPS as MAX_SPLIT_BASE64_SKIPS
+from .security_base64 import MAX_SPLIT_BASE64_WORK_BYTES as MAX_SPLIT_BASE64_WORK_BYTES
 from .security_models import SafetyFinding as SafetyFinding
 from .security_models import SafetyResult as SafetyResult
 from .security_models import _EncodedState
-from .security_rules import (
-    _RULE_SIGNAL_WORDS as _RULE_SIGNAL_WORDS,
-    _add_unicode_findings as _add_unicode_findings,
-    _amg_scan as _amg_scan,
-    _bare_secret_name_fragments as _bare_secret_name_fragments,
-    _crosses_field_boundary as _crosses_field_boundary,
-    _deadline_reached as _deadline_reached,
-    _exceeds_non_ascii_budget as _exceeds_non_ascii_budget_impl,
-    _rule_edge_matches as _rule_edge_matches,
-    _rule_edge_tokens as _rule_edge_tokens,
-    _rule_fused_padding as _rule_fused_padding,
-    _rule_gap_allowed as _rule_gap_allowed,
-    _rule_gap_fail_closed as _rule_gap_fail_closed,
-    _rule_scan as _rule_scan,
-    _rule_token_matches as _rule_token_matches,
-    _split_instruction_rule_scan as _split_instruction_rule_scan,
-    _string_exceeds_scan_limit as _string_exceeds_scan_limit,
-    _trim_boundary_padding as _trim_boundary_padding,
-)
-from .security_screen import (
-    _QUERY_WINDOW_SCREEN as _QUERY_WINDOW_SCREEN,
-    _WINDOW_WHITESPACE as _WINDOW_WHITESPACE,
-    _window_form_scan_needed as _window_form_scan_needed,
-)
-from .security_windows import (
-    _bounded_append as _bounded_append,
-    _bounded_utf8_prefix as _bounded_utf8_prefix,
-    _bounded_utf8_suffix as _bounded_utf8_suffix,
-    _join_variants as _join_variants,
-    _junction_variants as _junction_variants,
-    _sequence_join_variants as _sequence_join_variants,
-    _trim_evasion_variants as _trim_evasion_variants,
-)
-
-# isort: on
+from .security_rules import MAX_NON_ASCII_CODEPOINTS as MAX_NON_ASCII_CODEPOINTS
+from .security_rules import MAX_SCAN_FIELD_BYTES as MAX_SCAN_FIELD_BYTES
+from .security_windows import MAX_SPLIT_WINDOW_BYTES as MAX_SPLIT_WINDOW_BYTES
 from .unicode_security import (
     UnicodeScanDeadlineExceeded,
     canonicalize_content,
@@ -62,19 +44,6 @@ from .unicode_security import (
 MAX_SCAN_FIELDS = 128
 MAX_ROLLING_WINDOWS = 8_192
 MAX_SKIP_WINDOWS = 8_192
-MAX_SPLIT_WINDOW_BYTES = 512
-MAX_BASE64_SPANS = 8
-MAX_BASE64_DECODED_BYTES = 16 * 1024
-MAX_SPLIT_BASE64_CANDIDATES = 64
-MAX_SPLIT_BASE64_FIELDS = 256
-MAX_SPLIT_BASE64_SKIPS = 2
-MAX_SPLIT_BASE64_CANDIDATE_BYTES = ((MAX_BASE64_DECODED_BYTES + 2) // 3) * 4
-MAX_SPLIT_BASE64_WORK_BYTES = 512 * 1024
-MAX_SPLIT_BASE64_RECOVERY_MIN_PARTS = 3
-MAX_SPLIT_BASE64_RECOVERY_PAIR_PARTS = 64
-MAX_SPLIT_BASE64_RECOVERY_TRIPLE_PARTS = 32
-MAX_SPLIT_BASE64_RECOVERY_ATTEMPTS = 40_000
-MAX_SPLIT_BASE64_RECOVERY_WORK_BYTES = 16 * 1024 * 1024
 FACADE_SCAN_BATCH_FIELDS = 32
 FACADE_SCAN_CARRY_VALUES = MAX_SPLIT_BASE64_SKIPS + 2
 MAX_FACADE_SCAN_FIELDS = 8_192
@@ -83,33 +52,13 @@ MAX_RETAIN_SCAN_FIELDS = MAX_FACADE_SCAN_FIELDS
 MAX_QUERY_SCAN_FIELDS = 256
 MAX_QUERY_ROLLING_WINDOWS = 32_768
 MAX_QUERY_SKIP_WINDOWS = 32_768
-MAX_SCAN_FIELD_BYTES = 1024 * 1024
-MAX_NON_ASCII_CODEPOINTS = 65_536
 MAX_CORE_SCAN_SECONDS = 5.0
 MAX_QUERY_SCAN_SECONDS = 10.0
 
 
-def _split_base64_candidates(
-    fields: Iterable[tuple[str, str, bool]],
-    *,
-    deadline: float | None = None,
-    normalized_fragments: dict[str, tuple[str | None, bool]] | None = None,
-) -> tuple[list[str], bool]:
-    return _split_base64_candidates_impl(
-        fields,
-        deadline=deadline,
-        normalized_fragments=normalized_fragments,
-        max_work_bytes=MAX_SPLIT_BASE64_WORK_BYTES,
-    )
-
-
-def _exceeds_non_ascii_budget(value: str) -> bool:
-    return _exceeds_non_ascii_budget_impl(value, max_codepoints=MAX_NON_ASCII_CODEPOINTS)
-
-
 def _query_window_scan_skippable(window: str, strip_inword_digits: bool) -> bool:
     """True only when every rule/detector scan of this window must be empty."""
-    if _QUERY_WINDOW_SCREEN is None or strip_inword_digits or not window.isascii():
+    if security_screen._QUERY_WINDOW_SCREEN is None or strip_inword_digits or not window.isascii():
         return False
     (
         literals,
@@ -118,13 +67,15 @@ def _query_window_scan_skippable(window: str, strip_inword_digits: bool) -> bool
         compact_literals,
         compact_refinements,
         compact_unscreened,
-    ) = _QUERY_WINDOW_SCREEN
-    if _window_form_scan_needed(literals, refinements, unscreened, window, window.lower()):
+    ) = security_screen._QUERY_WINDOW_SCREEN
+    if security_screen._window_form_scan_needed(
+        literals, refinements, unscreened, window, window.lower()
+    ):
         return False
-    compact = _WINDOW_WHITESPACE.sub("", window)
+    compact = security_screen._WINDOW_WHITESPACE.sub("", window)
     if compact == window and not compact_literals and not compact_unscreened:
         return True
-    return not _window_form_scan_needed(
+    return not security_screen._window_form_scan_needed(
         compact_literals, compact_refinements, compact_unscreened, compact, compact.lower()
     )
 
@@ -202,7 +153,7 @@ def _scan_batched_fields(  # NOSONAR
     deadline = None if deadline_seconds is None else time.monotonic() + deadline_seconds
 
     def finish() -> SafetyResult:
-        if _deadline_reached(combined, deadline, time_limit_match):
+        if security_rules._deadline_reached(combined, deadline, time_limit_match):
             return combined
         _scan_split_base64(
             combined,
@@ -211,7 +162,7 @@ def _scan_batched_fields(  # NOSONAR
             deadline=deadline,
             time_limit_match=time_limit_match,
         )
-        _deadline_reached(combined, deadline, time_limit_match)
+        security_rules._deadline_reached(combined, deadline, time_limit_match)
         return combined
 
     while True:
@@ -295,12 +246,18 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         if index >= MAX_QUERY_SCAN_FIELDS:
             result.add(SafetyFinding("query_field_limit", "span_limit"))
             break
-        if _deadline_reached(result, deadline):
+        if security_rules._deadline_reached(result, deadline):
             break
-        if _string_exceeds_scan_limit(key) or _string_exceeds_scan_limit(raw):
+        if security_rules._string_exceeds_scan_limit(
+            key
+        ) or security_rules._string_exceeds_scan_limit(raw):
             result.add(SafetyFinding("field_size_limit", "span_limit"))
             break
-        if _exceeds_non_ascii_budget(key) or _exceeds_non_ascii_budget(raw):
+        if security_rules._exceeds_non_ascii_budget(
+            key, max_codepoints=security_rules.MAX_NON_ASCII_CODEPOINTS
+        ) or security_rules._exceeds_non_ascii_budget(
+            raw, max_codepoints=security_rules.MAX_NON_ASCII_CODEPOINTS
+        ):
             result.add(SafetyFinding("unicode_size_limit", "span_limit"))
             break
         try:
@@ -308,25 +265,25 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         except UnicodeScanDeadlineExceeded:
             result.add(SafetyFinding("time_limit", "span_limit"))
             break
-        _add_unicode_findings(result, key_transformations)
+        security_rules._add_unicode_findings(result, key_transformations)
         if "keycap" in key_transformations:
             keycap_values.add(canonical_key)
         canonical_keys.append(canonical_key)
         canonical_traversal.append(canonical_key)
         canonical_fields.append((f"query.{key}.key", canonical_key, True))
         try:
-            for finding in _rule_scan(
+            for finding in security_rules._rule_scan(
                 canonical_key,
                 deadline=deadline,
                 strip_inword_digits="keycap" in key_transformations,
             ):
                 result.add(finding)
-            for finding in _amg_scan(
+            for finding in security_rules._amg_scan(
                 f"query.{key}.key", canonical_key, operation="read", deadline=deadline
             ):
                 result.add(finding)
                 direct_detector_matches.add(finding.detector or finding.matched)
-            _scan_encoded(
+            security_base64._scan_encoded(
                 result,
                 f"query.{key}.key",
                 canonical_key,
@@ -343,25 +300,25 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         except UnicodeScanDeadlineExceeded:
             result.add(SafetyFinding("time_limit", "span_limit"))
             break
-        _add_unicode_findings(result, transformations)
+        security_rules._add_unicode_findings(result, transformations)
         if "keycap" in transformations:
             keycap_values.add(canonical)
         canonical_values.append(canonical)
         canonical_traversal.append(canonical)
         canonical_fields.append((f"query.{key}", canonical, False))
         try:
-            for finding in _rule_scan(
+            for finding in security_rules._rule_scan(
                 canonical,
                 deadline=deadline,
                 strip_inword_digits="keycap" in transformations,
             ):
                 result.add(finding)
-            for finding in _amg_scan(
+            for finding in security_rules._amg_scan(
                 f"query.{key}", canonical, operation="read", deadline=deadline
             ):
                 result.add(finding)
                 direct_detector_matches.add(finding.detector or finding.matched)
-            _scan_encoded(
+            security_base64._scan_encoded(
                 result,
                 f"query.{key}",
                 canonical,
@@ -373,7 +330,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         except UnicodeScanDeadlineExceeded:
             result.add(SafetyFinding("time_limit", "span_limit"))
             break
-        if _deadline_reached(result, deadline):
+        if security_rules._deadline_reached(result, deadline):
             break
     window_context = _QueryWindowContext(
         result,
@@ -391,20 +348,24 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         compact_tail = ""
         prefix: list[str] = []
         for value in canonical_fragments:
-            if _deadline_reached(result, deadline):
+            if security_rules._deadline_reached(result, deadline):
                 return result
             windows: list[str] = []
             if prefix:
-                windows.extend(_junction_variants(spaced, compact, value))
-                windows.extend(_trim_evasion_variants(prefix[-1], value, deadline=deadline))
-            spaced = _bounded_append(spaced, value)
-            compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
+                windows.extend(security_windows._junction_variants(spaced, compact, value))
+                windows.extend(
+                    security_windows._trim_evasion_variants(prefix[-1], value, deadline=deadline)
+                )
+            spaced = security_windows._bounded_append(spaced, value)
+            compact = security_windows._bounded_utf8_suffix(f"{compact}{value}".encode())
             if prefix:
-                compact_tail = _bounded_utf8_suffix(f"{compact_tail}{value}".encode())
+                compact_tail = security_windows._bounded_utf8_suffix(
+                    f"{compact_tail}{value}".encode()
+                )
             prefix.append(value)
             if len(prefix) < 2:
                 continue
-            mixed = f"{_bounded_utf8_prefix(prefix[0].encode())} {compact_tail}"
+            mixed = f"{security_windows._bounded_utf8_prefix(prefix[0].encode())} {compact_tail}"
             windows.extend((spaced, compact, mixed))
             for combined in dict.fromkeys(windows):
                 rolling_windows += 1
@@ -414,18 +375,18 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
                 if _scan_query_window(window_context, combined, prefix):
                     return result
         for fragments in bounded_skip_fragments(canonical_fragments):
-            for combined in _sequence_join_variants(fragments, deadline=deadline):
+            for combined in security_windows._sequence_join_variants(fragments, deadline=deadline):
                 skip_windows += 1
                 if skip_windows > MAX_QUERY_SKIP_WINDOWS:
                     result.add(SafetyFinding("window_limit", "span_limit"))
                     return result
                 if _scan_query_window(window_context, combined, fragments):
                     return result
-                if _deadline_reached(result, deadline):
+                if security_rules._deadline_reached(result, deadline):
                     return result
-    if not _deadline_reached(result, deadline):
+    if not security_rules._deadline_reached(result, deadline):
         _scan_split_base64(result, canonical_fields, "read", deadline=deadline)
-        _deadline_reached(result, deadline)
+        security_rules._deadline_reached(result, deadline)
     return result
 
 
@@ -443,12 +404,14 @@ def _scan_query_window(  # NOSONAR
                 cached = ([], [])
             else:
                 cached = (
-                    _split_instruction_rule_scan(
+                    security_rules._split_instruction_rule_scan(
                         window,
                         deadline=context.deadline,
                         strip_inword_digits=strip_inword_digits,
                     ),
-                    _amg_scan("query.rolling", window, operation="read", deadline=context.deadline),
+                    security_rules._amg_scan(
+                        "query.rolling", window, operation="read", deadline=context.deadline
+                    ),
                 )
             context.scan_cache[cache_key] = cached
         findings, detector_findings = cached
@@ -459,14 +422,14 @@ def _scan_query_window(  # NOSONAR
         if finding.reason == "span_limit":
             context.result.add(finding)
             return True
-        if not _bare_secret_name_fragments(
+        if not security_rules._bare_secret_name_fragments(
             finding.matched, fragments, context.canonical_fields
-        ) and any(_crosses_field_boundary(hit, fragments) for hit in finding.hits):
+        ) and any(security_rules._crosses_field_boundary(hit, fragments) for hit in finding.hits):
             context.result.add(SafetyFinding(finding.matched, "split_instruction"))
     for finding in detector_findings:
         detector = finding.detector or finding.matched
         if (
-            any(_crosses_field_boundary(hit, fragments) for hit in finding.hits)
+            any(security_rules._crosses_field_boundary(hit, fragments) for hit in finding.hits)
             if finding.hits
             else detector not in context.direct_detector_matches
         ):
@@ -593,7 +556,7 @@ def _scan_fields(
     if (
         scan_split_base64
         and not context.limit_reached
-        and not _deadline_reached(result, deadline, time_limit_match)
+        and not security_rules._deadline_reached(result, deadline, time_limit_match)
     ):
         _scan_split_base64(
             result,
@@ -602,7 +565,7 @@ def _scan_fields(
             deadline=deadline,
             time_limit_match=time_limit_match,
         )
-        _deadline_reached(result, deadline, time_limit_match)
+        security_rules._deadline_reached(result, deadline, time_limit_match)
     return result
 
 
@@ -624,10 +587,12 @@ def _scan_direct_fields(  # NOSONAR
         if index >= MAX_SCAN_FIELDS:
             result.add(SafetyFinding("field_limit", "span_limit"))
             break
-        if _string_exceeds_scan_limit(raw):
+        if security_rules._string_exceeds_scan_limit(raw):
             result.add(SafetyFinding("field_size_limit", "span_limit"))
             break
-        if _exceeds_non_ascii_budget(raw):
+        if security_rules._exceeds_non_ascii_budget(
+            raw, max_codepoints=security_rules.MAX_NON_ASCII_CODEPOINTS
+        ):
             result.add(SafetyFinding("unicode_size_limit", "span_limit"))
             break
         try:
@@ -639,21 +604,21 @@ def _scan_direct_fields(  # NOSONAR
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
                 options.canonical_output.append((key, canonical, is_key))
-            _add_unicode_findings(result, transformations)
+            security_rules._add_unicode_findings(result, transformations)
             if "keycap" in transformations:
                 keycap_values.add(canonical)
             signature = canonical, is_key
             if signature in scanned_values:
                 continue
             scanned_values.add(signature)
-            for finding in _rule_scan(
+            for finding in security_rules._rule_scan(
                 canonical,
                 deadline=options.deadline,
                 strip_inword_digits="keycap" in transformations,
             ):
                 result.add(finding)
                 direct_rule_matches.add(finding.matched)
-            for finding in _amg_scan(
+            for finding in security_rules._amg_scan(
                 key,
                 canonical,
                 operation=options.operation,
@@ -662,7 +627,7 @@ def _scan_direct_fields(  # NOSONAR
                 result.add(finding)
                 direct_detector_matches.add(finding.detector or finding.matched)
             state = _EncodedState() if options.isolated_encoded_fields else direct_encoded_state
-            _scan_encoded(
+            security_base64._scan_encoded(
                 result,
                 key,
                 canonical,
@@ -673,7 +638,7 @@ def _scan_direct_fields(  # NOSONAR
         except UnicodeScanDeadlineExceeded:
             result.add(SafetyFinding(options.time_limit_match or "time_limit", "span_limit"))
             break
-        if _deadline_reached(result, options.deadline, options.time_limit_match):
+        if security_rules._deadline_reached(result, options.deadline, options.time_limit_match):
             break
     return (
         result,
@@ -694,10 +659,13 @@ def _scan_window(  # NOSONAR
 ) -> None:
     if context.limit_reached:
         return
-    counter = "skip_windows" if skip else "rolling_windows"
-    limit = MAX_SKIP_WINDOWS if skip else MAX_ROLLING_WINDOWS
-    setattr(context, counter, getattr(context, counter) + 1)
-    if getattr(context, counter) > limit:
+    if skip:
+        context.skip_windows += 1
+        count, limit = context.skip_windows, MAX_SKIP_WINDOWS
+    else:
+        context.rolling_windows += 1
+        count, limit = context.rolling_windows, MAX_ROLLING_WINDOWS
+    if count > limit:
         context.result.add(SafetyFinding("window_limit", "span_limit"))
         context.limit_reached = True
         return
@@ -706,12 +674,12 @@ def _scan_window(  # NOSONAR
     cached = context.scan_cache.get(cache_key)
     if cached is None:
         try:
-            split_findings = _split_instruction_rule_scan(
+            split_findings = security_rules._split_instruction_rule_scan(
                 window,
                 deadline=context.deadline,
                 strip_inword_digits=strip_inword_digits,
             )
-            detector_findings = _amg_scan(
+            detector_findings = security_rules._amg_scan(
                 f"rolling.{key}", window, operation=context.operation, deadline=context.deadline
             )
         except UnicodeScanDeadlineExceeded:
@@ -728,14 +696,17 @@ def _scan_window(  # NOSONAR
             context.result.add(finding)
             context.limit_reached = True
             return
-        if finding.matched not in context.direct_rule_matches and not _bare_secret_name_fragments(
-            finding.matched, fragments, context.canonical_fields
+        if (
+            finding.matched not in context.direct_rule_matches
+            and not security_rules._bare_secret_name_fragments(
+                finding.matched, fragments, context.canonical_fields
+            )
         ):
             context.result.add(SafetyFinding(finding.matched, "split_instruction"))
     for finding in detector_findings:
         detector = finding.detector or finding.matched
         if (
-            any(_crosses_field_boundary(hit, fragments) for hit in finding.hits)
+            any(security_rules._crosses_field_boundary(hit, fragments) for hit in finding.hits)
             if finding.hits
             else detector not in context.direct_detector_matches
         ):
@@ -748,7 +719,7 @@ def _scan_window(  # NOSONAR
                     finding.hits,
                 )
             )
-    if _deadline_reached(context.result, context.deadline, context.time_limit_match):
+    if security_rules._deadline_reached(context.result, context.deadline, context.time_limit_match):
         context.limit_reached = True
 
 
@@ -761,17 +732,19 @@ def _scan_rolling_group(  # NOSONAR
     fragments: list[str] = []
     for key, value in group:
         if fragments:
-            for window in _junction_variants(spaced, compact, value):
+            for window in security_windows._junction_variants(spaced, compact, value):
                 _scan_window(context, key, window, [*fragments, value])
-            for window in _trim_evasion_variants(fragments[-1], value, deadline=context.deadline):
+            for window in security_windows._trim_evasion_variants(
+                fragments[-1], value, deadline=context.deadline
+            ):
                 _scan_window(context, key, window, [fragments[-1], value])
-        spaced = _bounded_append(spaced, value)
-        compact = _bounded_utf8_suffix(f"{compact}{value}".encode())
+        spaced = security_windows._bounded_append(spaced, value)
+        compact = security_windows._bounded_utf8_suffix(f"{compact}{value}".encode())
         if fragments:
-            compact_tail = _bounded_utf8_suffix(f"{compact_tail}{value}".encode())
+            compact_tail = security_windows._bounded_utf8_suffix(f"{compact_tail}{value}".encode())
         fragments.append(value)
         if len(fragments) >= 2:
-            mixed = f"{_bounded_utf8_prefix(fragments[0].encode())} {compact_tail}"
+            mixed = f"{security_windows._bounded_utf8_prefix(fragments[0].encode())} {compact_tail}"
             for window in dict.fromkeys((spaced, compact, mixed)):
                 _scan_window(context, key, window, fragments)
         if context.limit_reached:
@@ -786,7 +759,9 @@ def _scan_skip_groups(
             continue
         context.skip_windows = 0
         for fragments in bounded_skip_fragments([value for _, value in group]):
-            for window in _sequence_join_variants(fragments, deadline=context.deadline):
+            for window in security_windows._sequence_join_variants(
+                fragments, deadline=context.deadline
+            ):
                 _scan_window(context, group[-1][0], window, fragments, skip=True)
             if context.limit_reached:
                 return
@@ -814,21 +789,22 @@ def _scan_split_base64(  # NOSONAR
         if not group or group_key in seen_groups:
             continue
         seen_groups.add(group_key)
-        if _deadline_reached(result, deadline, time_limit_match):
+        if security_rules._deadline_reached(result, deadline, time_limit_match):
             return
-        encoded_candidates, encoded_exhausted = _split_base64_candidates(
+        encoded_candidates, encoded_exhausted = security_base64._split_base64_candidates(
             group,
             deadline=deadline,
             normalized_fragments=normalized_fragments,
+            max_work_bytes=security_base64.MAX_SPLIT_BASE64_WORK_BYTES,
         )
-        if _deadline_reached(result, deadline, time_limit_match):
+        if security_rules._deadline_reached(result, deadline, time_limit_match):
             return
         exhausted |= encoded_exhausted
         for candidate in encoded_candidates:
-            if _deadline_reached(result, deadline, time_limit_match):
+            if security_rules._deadline_reached(result, deadline, time_limit_match):
                 return
             try:
-                _scan_encoded(
+                security_base64._scan_encoded(
                     result,
                     "split-base64",
                     candidate,
@@ -839,18 +815,18 @@ def _scan_split_base64(  # NOSONAR
             except UnicodeScanDeadlineExceeded:
                 result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
                 return
-        decoded_candidates, decoded_exhausted = _split_decoded_base64_candidates(
+        decoded_candidates, decoded_exhausted = security_base64._split_decoded_base64_candidates(
             group,
             deadline=deadline,
             normalized_fragments=normalized_fragments,
-            max_work_bytes=MAX_SPLIT_BASE64_WORK_BYTES,
+            max_work_bytes=security_base64.MAX_SPLIT_BASE64_WORK_BYTES,
         )
-        if _deadline_reached(result, deadline, time_limit_match):
+        if security_rules._deadline_reached(result, deadline, time_limit_match):
             return
         exhausted |= decoded_exhausted
         for compact, spaced in decoded_candidates:
             for candidate in dict.fromkeys((compact, spaced)):
-                if _deadline_reached(result, deadline, time_limit_match):
+                if security_rules._deadline_reached(result, deadline, time_limit_match):
                     return
                 try:
                     canonical, transformations = canonicalize_content(candidate, deadline=deadline)
@@ -858,13 +834,13 @@ def _scan_split_base64(  # NOSONAR
                     result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
                     return
                 result.transformations.update(transformations)
-                _add_unicode_findings(result, transformations)
+                security_rules._add_unicode_findings(result, transformations)
                 try:
-                    findings = _rule_scan(
+                    findings = security_rules._rule_scan(
                         canonical,
                         deadline=deadline,
                         strip_inword_digits="keycap" in transformations,
-                    ) + _amg_scan(
+                    ) + security_rules._amg_scan(
                         "split-base64.decoded",
                         canonical,
                         operation=operation,

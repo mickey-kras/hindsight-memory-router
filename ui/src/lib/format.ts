@@ -32,8 +32,12 @@ export const REASON_STYLE: Record<ReviewReason, string> = {
   suspicious_content: "bg-red-500/15 text-red-300 border-red-500/30",
   suspicious_query: "bg-red-500/15 text-red-300 border-red-500/30",
   recalled_suspicious_memory: "bg-red-500/15 text-red-300 border-red-500/30",
+  recalled_suspicious_supplemental: "bg-red-500/15 text-red-300 border-red-500/30",
   denied_endpoint: "bg-violet-500/15 text-violet-300 border-violet-500/30",
   auth_failed: "bg-zinc-500/15 text-zinc-300 border-zinc-500/30",
+  openclaw_suspicious_request: "bg-red-500/15 text-red-300 border-red-500/30",
+  openclaw_unknown_writer: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+  openclaw_suspicious_provider_response: "bg-red-500/15 text-red-300 border-red-500/30",
 };
 
 export const STATUS_STYLE: Record<QuarantineStatus, string> = {

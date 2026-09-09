@@ -16,6 +16,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
+from . import probes
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
 from .canonical import assert_json_depth
@@ -28,12 +29,7 @@ from .config import (
     secret_value,
     validate_settings,
 )
-from .db import (
-    PostgresDatabase,
-    create_database,
-    is_postgres,
-    validate_storage,
-)
+from .db import Database, PostgresDatabase, create_backend, validate_storage
 from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -41,7 +37,6 @@ from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
 from .openclaw import (
-    OpenClawFacade,
     shutdown_facade_scan_executor_async,
     start_facade_scan_executor,
 )
@@ -53,26 +48,19 @@ from .principals import (
     load_principal_registry,
     scope_limit_operation,
 )
-from .probes import _CACHE_MAX_STALENESS_SECONDS as _CACHE_MAX_STALENESS_SECONDS
-from .probes import _READINESS_CACHE_SECONDS as _READINESS_CACHE_SECONDS
-from .probes import _cached_probe_response as _cached_probe_response
-from .probes import _CachedProbe as _CachedProbe
-from .probes import _ProbeCache as _ProbeCache
-from .probes import _readiness as _readiness
-from .probes import _readiness_log_state as _readiness_log_state
-from .probes import _ReadinessLogState as _ReadinessLogState
-from .probes import _storage_readiness_log_state as _storage_readiness_log_state
-from .probes import _version as _version
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import (
+    Bucket,
     ConcurrencyLeaseUnavailable,
+    ConcurrencyLimiter,
+    InMemoryConcurrencyLimiter,
     InMemoryRateLimiter,
-    PostgresConcurrencyLimiter,
-    PostgresRateLimiter,
+    RateLimiter,
 )
 from .repository import QuarantineRepository
 from .request_dispatch import (
     EMPTY_BODY,
+    MEMORY_ROUTE,
     AuthenticatedRequestDispatcher,
     DispatchDependencies,
 )
@@ -86,8 +74,6 @@ _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
 _PROCESS_START = time.monotonic()
-_READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
-_EMPTY_BODY = EMPTY_BODY
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
@@ -97,10 +83,6 @@ try:
     _ROUTER_VERSION = package_version("hindsight-memory-router")
 except PackageNotFoundError:
     _ROUTER_VERSION = "0.0.0"
-
-
-def _now() -> str:
-    return iso_now()
 
 
 def _scope(method: str, path: str) -> str:
@@ -121,7 +103,7 @@ def _route_class(request: Request) -> str:
         return "version"
     if path.startswith("/admin/"):
         return "admin"
-    if re.fullmatch(r"/v1/default/banks/[^/]+/memories(?:/recall)?", path):
+    if MEMORY_ROUTE.fullmatch(path):
         return "memory"
     if path.startswith("/v1/default/banks/"):
         return "openclaw"
@@ -204,19 +186,19 @@ def _assert_json_depth(value: Any) -> None:
 
 class Runtime:
     def __init__(self, settings: RouterSettings | None = None) -> None:
-        self.database: Any = None
+        self.database: Database | None = None
         self.rate_limit_database: PostgresDatabase | None = None
         self.repository: QuarantineRepository | None = None
         self.hindsight: HindsightGateway | None = None
         self.policy: RouterPolicy | None = None
         self.admin: QuarantineAdminService | None = None
         self.auditor: AuthFailureAuditor | None = None
-        self.quarantine_limiter: Any = None
-        self.admin_limiter = InMemoryRateLimiter()
-        self.auth_limiter: Any = InMemoryRateLimiter()
-        self.principal_limiter: Any = InMemoryRateLimiter()
-        self.principal_concurrency_limiter: PostgresConcurrencyLimiter | None = None
-        self.principal_concurrency: dict[tuple[str, str], int] = {}
+        self.quarantine_limiter: RateLimiter = InMemoryRateLimiter()
+        self.admin_limiter: RateLimiter = InMemoryRateLimiter()
+        self.auth_limiter: RateLimiter = InMemoryRateLimiter()
+        self.auth_prefilter = InMemoryRateLimiter()
+        self.principal_limiter: RateLimiter = InMemoryRateLimiter()
+        self.principal_concurrency_limiter: ConcurrencyLimiter = InMemoryConcurrencyLimiter()
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
         self.principal_resolver: PrincipalResolver | None = None
@@ -255,6 +237,7 @@ class Runtime:
     async def start(self) -> None:
         settings = self.settings or load_settings()
         self.configure(settings)
+        self.auth_prefilter = InMemoryRateLimiter()
         assert_no_private_key_environment()
         assert_auth_environment(settings)
         hindsight_timeout_ms = settings.hindsight_timeout_ms
@@ -262,25 +245,19 @@ class Runtime:
             REVIEW_STALE_SECONDS, (hindsight_timeout_ms + 999) // 1000 + 30
         )
         database_url = settings.quarantine_database_url
-        self.database = await create_database(database_url)
+        backend = await create_backend(database_url)
+        self.database = backend.database
+        self.rate_limit_database = backend.rate_limit_database
         self.repository = QuarantineRepository(self.database)
         await validate_storage(self.database, database_url)
-        await recover_interrupted(self.repository, _now(), self.review_stale_seconds)
-        if is_postgres(database_url):
-            self.rate_limit_database = PostgresDatabase(database_url, max_size=5)
-            await self.rate_limit_database.initialize()
-            self.quarantine_limiter = PostgresRateLimiter(self.rate_limit_database)
-            await self.quarantine_limiter.initialize()
-            self.principal_limiter = self.quarantine_limiter
-            self.principal_concurrency_limiter = PostgresConcurrencyLimiter(
-                self.rate_limit_database
-            )
-            await self.principal_concurrency_limiter.initialize()
-        else:
-            self.quarantine_limiter = InMemoryRateLimiter()
-            self.principal_limiter = InMemoryRateLimiter()
-            self.principal_concurrency_limiter = None
-        self.auth_limiter = InMemoryRateLimiter()
+        await recover_interrupted(self.repository, iso_now(), self.review_stale_seconds)
+        self.quarantine_limiter = backend.rate_limiter
+        self.admin_limiter = backend.create_limiter()
+        self.auth_limiter = backend.create_limiter()
+        self.principal_limiter = backend.create_limiter()
+        self.principal_concurrency_limiter = (
+            backend.concurrency_limiter or InMemoryConcurrencyLimiter()
+        )
         limits = QuarantineLimits(
             max_item_bytes=settings.quarantine_max_item_bytes,
             max_pending_items=settings.quarantine_max_pending_items,
@@ -315,9 +292,7 @@ class Runtime:
             max_recall_max_tokens=settings.hindsight_recall_max_tokens,
         )
         registry = load_registry(settings.memory_router_registry)
-        hindsight_limiter = (
-            self.quarantine_limiter if is_postgres(database_url) else InMemoryRateLimiter()
-        )
+        hindsight_limiter = backend.create_limiter()
         hindsight_limits = HindsightLimits(hconfig, hindsight_limiter)
         self.policy = RouterPolicy(registry, hindsight, hindsight_limits, store, self.repository)
         self.admin = QuarantineAdminService(
@@ -353,7 +328,7 @@ class Runtime:
         repository = _require_runtime(self.repository, "repository")
         while True:
             await asyncio.sleep(interval)
-            at = _now()
+            at = iso_now()
             try:
                 await recover_interrupted(repository, at, self.review_stale_seconds)
                 await sweep_expired(repository, at)
@@ -502,7 +477,7 @@ async def _json_body(
         if len(body) > body_limit:
             raise HttpError(413, "payload_too_large", "payload too large")
     if not body:
-        return _EMPTY_BODY if empty_as_none else {}
+        return EMPTY_BODY if empty_as_none else {}
     try:
         value = json.loads(bytes(body), parse_constant=_reject_json_constant)
     except (ValueError, RecursionError) as exc:
@@ -517,8 +492,23 @@ def _reject_json_constant(raw: str) -> None:
 
 async def _auth_failure_rate(route_group: str) -> None:
     try:
+        await runtime.auth_prefilter.consume_many(
+            [
+                Bucket(
+                    f"auth-failure:{route_group}",
+                    runtime.auth_failure_max,
+                    runtime.auth_failure_window,
+                )
+            ]
+        )
         await runtime.auth_limiter.consume_many(
-            [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
+            [
+                Bucket(
+                    f"auth-failure:{route_group}",
+                    runtime.auth_failure_max,
+                    runtime.auth_failure_window,
+                )
+            ]
         )
     except HttpError as exc:
         if exc.status != 429:
@@ -526,6 +516,29 @@ async def _auth_failure_rate(route_group: str) -> None:
         raise rate_limit_error(
             code="auth_rate_limited", message="too many authentication failures"
         ) from exc
+    except Exception as exc:
+        raise _rate_storage_unavailable("auth", exc) from exc
+
+
+def _rate_storage_unavailable(scope: str, error: Exception) -> HttpError:
+    code = f"{scope}_rate_unavailable"
+    log_event(
+        logger,
+        "error",
+        code,
+        request_id=current_request_id(),
+        operation="authenticate" if scope == "auth" else "authorize",
+        error_kind="storage",
+        error=error,
+        http_status=503,
+        outcome="degraded",
+    )
+    return HttpError(
+        503,
+        code,
+        f"{scope} rate control is temporarily unavailable",
+        headers={"retry-after": "1"},
+    )
 
 
 async def _principal_rate(session: PrincipalSession, scope: str, route_class: str) -> None:
@@ -534,7 +547,7 @@ async def _principal_rate(session: PrincipalSession, scope: str, route_class: st
     try:
         await runtime.principal_limiter.consume_many(
             [
-                (
+                Bucket(
                     f"principal:{session.principal_id}:{operation}",
                     limit.rate_limit_max,
                     limit.rate_limit_window_ms,
@@ -586,13 +599,21 @@ async def _principal_rate(session: PrincipalSession, scope: str, route_class: st
         ) from exc
 
 
-def _principal_concurrency_acquire(
-    session: PrincipalSession, scope: str, route_class: str
-) -> tuple[str, str]:
-    operation = scope_limit_operation(scope)
-    key = (session.principal_id, operation)
-    active = runtime.principal_concurrency.get(key, 0)
-    if active >= session.limits[operation].concurrency_max:
+async def _with_principal_concurrency[T](
+    request: Request,
+    session: PrincipalSession,
+    scope: str,
+    operation: Callable[[], Awaitable[T]],
+) -> T:
+    operation_name = scope_limit_operation(scope)
+    bucket = f"{session.principal_id}:{operation_name}"
+    try:
+        return await runtime.principal_concurrency_limiter.run(
+            bucket, session.limits[operation_name].concurrency_max, operation
+        )
+    except HttpError as exc:
+        if exc.code != "principal_concurrency_limited":
+            raise
         log_event(
             logger,
             "warning",
@@ -602,88 +623,36 @@ def _principal_concurrency_acquire(
             error_kind="rate-limit",
             http_status=429,
             outcome="degraded",
-            route_class=route_class,
+            route_class=_route_class(request),
             principal=session.principal_id,
             scope=scope,
         )
         raise rate_limit_error(
             code="principal_concurrency_limited",
             message="too many concurrent requests for principal",
-            headers={"retry-after": "1"},
+            headers=exc.headers,
+        ) from exc
+    except ConcurrencyLeaseUnavailable as exc:
+        log_event(
+            logger,
+            "error",
+            "principal_concurrency_unavailable",
+            request_id=current_request_id(),
+            operation="manage-concurrency-lease",
+            error_kind="storage",
+            error=exc,
+            http_status=503,
+            outcome="degraded",
+            route_class=_route_class(request),
+            principal=session.principal_id,
+            scope=scope,
         )
-    runtime.principal_concurrency[key] = active + 1
-    return key
-
-
-def _principal_concurrency_release(key: tuple[str, str]) -> None:
-    active = runtime.principal_concurrency.get(key, 0) - 1
-    if active > 0:
-        runtime.principal_concurrency[key] = active
-    else:
-        runtime.principal_concurrency.pop(key, None)
-
-
-async def _with_principal_concurrency(
-    request: Request,
-    session: PrincipalSession,
-    scope: str,
-    operation: Callable[[], Awaitable[Any]],
-) -> Any:
-    distributed = runtime.principal_concurrency_limiter
-    if distributed is not None:
-        operation_name = scope_limit_operation(scope)
-        bucket = f"{session.principal_id}:{operation_name}"
-        try:
-            return await distributed.run(
-                bucket, session.limits[operation_name].concurrency_max, operation
-            )
-        except HttpError as exc:
-            if exc.code != "principal_concurrency_limited":
-                raise
-            log_event(
-                logger,
-                "warning",
-                "principal_throttled",
-                request_id=current_request_id(),
-                operation="authorize",
-                error_kind="rate-limit",
-                http_status=429,
-                outcome="degraded",
-                route_class=_route_class(request),
-                principal=session.principal_id,
-                scope=scope,
-            )
-            raise rate_limit_error(
-                code="principal_concurrency_limited",
-                message="too many concurrent requests for principal",
-                headers=exc.headers,
-            ) from exc
-        except ConcurrencyLeaseUnavailable as exc:
-            log_event(
-                logger,
-                "error",
-                "principal_concurrency_unavailable",
-                request_id=current_request_id(),
-                operation="manage-concurrency-lease",
-                error_kind="storage",
-                error=exc,
-                http_status=503,
-                outcome="degraded",
-                route_class=_route_class(request),
-                principal=session.principal_id,
-                scope=scope,
-            )
-            raise HttpError(
-                503,
-                "principal_concurrency_unavailable",
-                "principal concurrency control is temporarily unavailable",
-                headers={"retry-after": "1"},
-            ) from exc
-    key = _principal_concurrency_acquire(session, scope, _route_class(request))
-    try:
-        return await operation()
-    finally:
-        _principal_concurrency_release(key)
+        raise HttpError(
+            503,
+            "principal_concurrency_unavailable",
+            "principal concurrency control is temporarily unavailable",
+            headers={"retry-after": "1"},
+        ) from exc
 
 
 async def _router_auth(request: Request) -> bool:
@@ -705,13 +674,11 @@ async def _admin_auth(request: Request, scope: str) -> bool:
         return True
     auditor = _require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT)
     route_class = _route_class(request)
-    if admin_token_recognized(authorization, runtime.admin_tokens):
-        auditor.log_failure(route_class)
-        await _auth_failure_rate("admin")
-        return False
+    recognized = admin_token_recognized(authorization, runtime.admin_tokens)
     auditor.log_failure(route_class)
     await _auth_failure_rate("admin")
-    await auditor.persist("admin", route_class)
+    if not recognized:
+        await auditor.persist("admin", route_class)
     return False
 
 
@@ -720,7 +687,7 @@ async def _admin_rate(method: str) -> None:
     maximum = runtime.admin_read_max if request_class == "read" else runtime.admin_write_max
     try:
         await runtime.admin_limiter.consume_many(
-            [(f"admin:{request_class}", maximum, runtime.admin_window)]
+            [Bucket(f"admin:{request_class}", maximum, runtime.admin_window)]
         )
     except HttpError as exc:
         if exc.status != 429:
@@ -728,6 +695,8 @@ async def _admin_rate(method: str) -> None:
         raise rate_limit_error(
             code="admin_rate_limited", message=f"too many admin {request_class} requests"
         ) from exc
+    except Exception as exc:
+        raise _rate_storage_unavailable("admin", exc) from exc
 
 
 @app.get("/health/live")
@@ -739,36 +708,16 @@ async def health_live() -> dict[str, str | float]:
     }
 
 
-async def _database_health(
-    repository: QuarantineRepository,
-) -> tuple[bool, Exception | None, float]:
-    started = time.monotonic()
-    try:
-        await asyncio.wait_for(repository.ping(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS)
-    except Exception as exc:
-        duration_ms = round((time.monotonic() - started) * 1000, 3)
-        _storage_readiness_log_state.record(exc, duration_ms)
-        return False, exc, duration_ms
-    duration_ms = round((time.monotonic() - started) * 1000, 3)
-    _storage_readiness_log_state.record(None, duration_ms)
-    return True, None, duration_ms
+async def _database_health(repository: QuarantineRepository) -> probes.ProbeResult[None]:
+    return await probes.timed_probe(
+        repository.ping, probes.storage_readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
+    )
 
 
-async def _hindsight_health(
-    hindsight: HindsightGateway,
-) -> tuple[bool, Any, Exception | None, float]:
-    started = time.monotonic()
-    try:
-        response = await asyncio.wait_for(
-            hindsight.health(), timeout=_DEPENDENCY_PROBE_TIMEOUT_SECONDS
-        )
-    except Exception as exc:
-        duration_ms = round((time.monotonic() - started) * 1000, 3)
-        _readiness_log_state.record(exc, duration_ms)
-        return False, None, exc, duration_ms
-    duration_ms = round((time.monotonic() - started) * 1000, 3)
-    _readiness_log_state.record(None, duration_ms)
-    return True, response, None, duration_ms
+async def _hindsight_health(hindsight: HindsightGateway) -> probes.ProbeResult[dict[str, object]]:
+    return await probes.timed_probe(
+        hindsight.health, probes.readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
+    )
 
 
 async def _health_ready_response() -> Response:
@@ -782,17 +731,15 @@ async def _health_ready_response() -> Response:
                 asyncio.gather(_database_health(repository), _hindsight_health(hindsight)),
                 timeout=_REFRESH_TIMEOUT_SECONDS,
             )
-            database_healthy, _, _ = database_check
-            hindsight_healthy, hindsight_response, _, _ = hindsight_check
-            if not database_healthy or not hindsight_healthy:
+            if not database_check.healthy or not hindsight_check.healthy:
                 status_code, payload = 503, {"status": "unhealthy"}
             else:
-                payload = hindsight_response
+                payload = hindsight_check.value
         except Exception:
             status_code, payload = 503, {"status": "unhealthy"}
         return JSONResponse(payload, status_code=status_code)
 
-    return await _readiness.get(refresh)
+    return await probes.readiness.get(refresh)
 
 
 @app.get("/health")
@@ -825,7 +772,7 @@ async def _version_response() -> Response:
             return _version_failure(error)
         return JSONResponse(payload)
 
-    return await _version.get(refresh)
+    return await probes.version.get(refresh)
 
 
 def _version_failure(error: HindsightGatewayError) -> Response:
@@ -952,7 +899,6 @@ async def dispatch(path: str, request: Request) -> Response:
             principal_rate=_principal_rate,
             concurrency=_with_principal_concurrency,
             decode_path_segment=_decode_path_segment,
-            facade_factory=OpenClawFacade,
         )
     )
     return await dispatcher.dispatch(request, pathname, method, principal, route_class)

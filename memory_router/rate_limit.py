@@ -6,29 +6,65 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn, Protocol
 
 from .errors import HttpError
 from .logging import log_event
 
+if TYPE_CHECKING:
+    from .db import Tx
+
 ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(?,0))"
-Bucket = tuple[str, int, int]
-Distinct = tuple[str, str, int, int]
+
+
+class Bucket(NamedTuple):
+    key: str
+    maximum: int
+    window_ms: int
+
+
+class Distinct(NamedTuple):
+    scope: str
+    identity: str
+    maximum: int
+    window_ms: int
+
+
 _SWEEP_EVERY = 128
 logger = logging.getLogger(__name__)
+
+
+class RateLimitConsumer(Protocol):
+    async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None: ...
+
+    async def consume_many_distinct(
+        self, buckets: list[Bucket], identities: list[Distinct], at_ms: int | None = None
+    ) -> None: ...
+
+
+class RateLimiter(RateLimitConsumer, Protocol):
+    async def initialize(self) -> None: ...
+
+    async def with_identity_lock[T](
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
+    ) -> T: ...
 
 
 def _normalize_buckets(buckets: list[Bucket]) -> list[Bucket]:
     normalized: dict[str, Bucket] = {}
     for bucket in buckets:
-        if bucket[1] > 0 and bucket[2] > 0:
-            normalized[bucket[0]] = bucket
+        if bucket.maximum > 0 and bucket.window_ms > 0:
+            normalized[bucket.key] = bucket
     return sorted(normalized.values())
 
 
 def _normalize_identities(identities: list[Distinct]) -> list[Distinct]:
     return sorted(
-        {(item[0], item[1]): item for item in identities if item[2] > 0 and item[3] > 0}.values()
+        {
+            (item.scope, item.identity): item
+            for item in identities
+            if item.maximum > 0 and item.window_ms > 0
+        }.values()
     )
 
 
@@ -57,6 +93,9 @@ class InMemoryRateLimiter:
         self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
         self.consume_count = 0
+
+    async def initialize(self) -> None:
+        return None
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -139,7 +178,7 @@ class InMemoryRateLimiter:
                 self.distinct_windows.pop(scope, None)
 
     async def with_identity_lock[T](
-        self, identity: str, operation: Callable[[InMemoryRateLimiter], Awaitable[T]]
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T:
         async with self.guard:
             lock, users = self.locks.get(identity, (asyncio.Lock(), 0))
@@ -156,6 +195,46 @@ class InMemoryRateLimiter:
                         self.locks.pop(identity, None)
                     else:
                         self.locks[identity] = (lock, remaining)
+
+
+class ConcurrencyLimiter(Protocol):
+    async def run[T](
+        self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]
+    ) -> T: ...
+
+
+class InMemoryConcurrencyLimiter:
+    def __init__(self) -> None:
+        self.active: dict[str, int] = {}
+
+    async def run[T](self, bucket: str, maximum: int, operation: Callable[[], Awaitable[T]]) -> T:
+        active = self.active.get(bucket, 0)
+        if active >= maximum:
+            raise HttpError(
+                429,
+                "principal_concurrency_limited",
+                "too many concurrent requests for principal",
+                headers={"retry-after": "1"},
+            )
+        self.active[bucket] = active + 1
+        try:
+            return await operation()
+        finally:
+            remaining = self.active[bucket] - 1
+            if remaining:
+                self.active[bucket] = remaining
+            else:
+                del self.active[bucket]
+
+
+async def _database_now_ms(tx: Tx) -> int:
+    row = (
+        await tx.fetchone(
+            "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
+        )
+        or {}
+    )
+    return int(row["now_ms"])
 
 
 class _PostgresSession:
@@ -182,7 +261,7 @@ class _PostgresSession:
         if not normalized_buckets and not normalized_identities:
             return
         await self._lock_scopes(normalized_buckets, normalized_identities)
-        now = at_ms if at_ms is not None else await self._database_now_ms()
+        now = at_ms if at_ms is not None else await _database_now_ms(self.tx)
         windows = [window for _, _, window in normalized_buckets] + [
             window for _, _, _, window in normalized_identities
         ]
@@ -294,15 +373,6 @@ class _PostgresSession:
             "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?", (cutoff,)
         )
 
-    async def _database_now_ms(self) -> int:
-        row = (
-            await self.tx.fetchone(
-                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
-            )
-            or {}
-        )
-        return int(row["now_ms"])
-
 
 class PostgresRateLimiter:
     def __init__(self, database: Any) -> None:
@@ -362,7 +432,7 @@ class PostgresRateLimiter:
         self._commit_session(session)
 
     async def with_identity_lock[T](
-        self, identity: str, operation: Callable[[Any], Awaitable[T]]
+        self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T:
         async with self.database.transaction() as tx:
             await tx.execute(
@@ -455,7 +525,7 @@ class PostgresConcurrencyLimiter:
                 ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
-            now = await self._database_now_ms(tx)
+            now = await _database_now_ms(tx)
             await tx.execute(
                 "DELETE FROM principal_concurrency_leases WHERE bucket=? AND expires_at_ms<=?",
                 (bucket, now),
@@ -508,7 +578,7 @@ class PostgresConcurrencyLimiter:
                 ADVISORY_LOCK_SQL,
                 (f"principal-concurrency:{bucket}",),
             )
-            now = await self._database_now_ms(tx)
+            now = await _database_now_ms(tx)
             row = await tx.fetchone(
                 "UPDATE principal_concurrency_leases SET expires_at_ms=? "
                 "WHERE bucket=? AND lease_id=? AND expires_at_ms>? RETURNING lease_id",
@@ -523,13 +593,3 @@ class PostgresConcurrencyLimiter:
                 "DELETE FROM principal_concurrency_leases WHERE bucket=? AND lease_id=?",
                 (bucket, lease_id),
             )
-
-    @staticmethod
-    async def _database_now_ms(tx: Any) -> int:
-        row = (
-            await tx.fetchone(
-                "SELECT floor(extract(epoch FROM clock_timestamp()) * 1000)::bigint AS now_ms"
-            )
-            or {}
-        )
-        return int(row["now_ms"])

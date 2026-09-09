@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .errors import HttpError, rate_limit_error
+from .rate_limit import Bucket, RateLimiter
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,7 +21,7 @@ class HindsightLimitConfig:
 
 
 class HindsightLimits:
-    def __init__(self, config: HindsightLimitConfig, limiter: Any) -> None:
+    def __init__(self, config: HindsightLimitConfig, limiter: RateLimiter) -> None:
         self.config = config
         self.limiter = limiter
 
@@ -61,12 +62,14 @@ class HindsightLimits:
         try:
             await self.limiter.consume_many(
                 [
-                    (
+                    Bucket(
                         f"hindsight:{kind}:writer:{writer_id}",
                         writer_max,
                         self.config.rate_limit_window_ms,
                     ),
-                    (f"hindsight:{kind}:global", global_max, self.config.rate_limit_window_ms),
+                    Bucket(
+                        f"hindsight:{kind}:global", global_max, self.config.rate_limit_window_ms
+                    ),
                 ]
             )
         except HttpError as exc:

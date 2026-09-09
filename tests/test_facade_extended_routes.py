@@ -60,7 +60,7 @@ def _policy(response: object = None) -> SimpleNamespace:
             consume_recall=AsyncMock(),
         ),
         deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
-        _quarantine=AsyncMock(return_value={"quarantine_id": "q1"}),
+        quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 
 
@@ -367,7 +367,7 @@ async def test_dry_run_extract_uses_batched_retain_request_scan() -> None:
     assert response.status_code == 200
     policy.limits.assert_retain_bounds.assert_called_once_with(body)
     policy.hindsight.openclaw_request.assert_awaited_once()
-    policy._quarantine.assert_not_awaited()
+    policy.quarantine_security_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -394,7 +394,7 @@ async def test_dry_run_extract_batched_scan_still_blocks_split_instructions() ->
     assert blocked.value.status == 422
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
     policy.limits.consume_recall.assert_awaited_once_with("openclaw")
 
 
@@ -545,7 +545,7 @@ async def test_unknown_writer_is_not_forwarded() -> None:
     assert blocked.value.status == 404
     assert blocked.value.code == "unknown_writer"
     policy.hindsight.openclaw_request.assert_not_awaited()
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -618,7 +618,7 @@ async def test_facade_response_allows_independent_padded_base64_values() -> None
     response = await app_module.dispatch(path.lstrip("/"), request("GET", path))
 
     assert response.status_code == 200
-    policy._quarantine.assert_not_awaited()
+    policy.quarantine_security_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -684,7 +684,7 @@ async def test_facade_response_scan_uses_the_process_executor(monkeypatch) -> No
     executor.schedule.assert_called_once_with(
         openclaw_module.scan_facade_payload,
         args=[b'{"safe":true}'],
-        timeout=30.0,
+        timeout=openclaw_module.FACADE_SCAN_TASK_SECONDS,
     )
 
 
@@ -709,7 +709,7 @@ async def test_facade_response_scan_fails_closed_when_capacity_is_full(
     assert record.writer_id == "openclaw"  # type: ignore[attr-defined]
     capacity.acquire.assert_called_once_with(blocking=False)
     capacity.release.assert_not_called()
-    policy._quarantine.assert_not_awaited()
+    policy.quarantine_security_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -936,8 +936,11 @@ async def test_facade_response_scan_shutdown_cancels_waiter_immediately(monkeypa
 def test_facade_scan_worker_bounds_are_pinned() -> None:
     assert openclaw_module.FACADE_SCAN_WORKERS == 4
     assert openclaw_module.FACADE_SCAN_CAPACITY == 4
-    assert openclaw_module.FACADE_SCAN_TASK_SECONDS == 30.0
-    assert openclaw_module.FACADE_SCAN_WAIT_SECONDS == 31.0
+    assert (
+        openclaw_module.MAX_FACADE_SCAN_SECONDS
+        < openclaw_module.FACADE_SCAN_TASK_SECONDS
+        < openclaw_module.FACADE_SCAN_WAIT_SECONDS
+    )
     executor = openclaw_module._get_facade_scan_executor()  # noqa: SLF001
     try:
         assert isinstance(executor, ProcessPool)
@@ -1098,7 +1101,7 @@ async def test_facade_scan_limits_are_operational_failures_without_quarantine(
     assert blocked.value.code == "facade_scan_unavailable"
     assert blocked.value.headers == {"Retry-After": "1"}
     policy.limits.consume_recall.assert_awaited_once_with("openclaw")
-    policy._quarantine.assert_not_awaited()
+    policy.quarantine_security_event.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -1109,7 +1112,7 @@ async def test_security_audit_uses_a_bounded_fallback_digest_for_noncanonical_va
         "openclaw", "openclaw_suspicious_request", float("nan"), None
     )
 
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1137,7 +1140,7 @@ async def test_facade_scan_keeps_detected_content_unsafe_when_a_limit_also_trips
 
     assert blocked.value.status == 502
     assert blocked.value.code == "hindsight_unsafe_response"
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -1152,7 +1155,7 @@ async def test_unsafe_upstream_response_is_blocked_and_audited() -> None:
 
     assert blocked.value.status == 502
     assert blocked.value.code == "hindsight_unsafe_response"
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
 
 
 # Raw/single-encoded dot segments are already collapsed by path normalization.
@@ -1258,7 +1261,7 @@ async def test_facade_rejects_suspicious_request_body() -> None:
     assert blocked.value.status == 422
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
-    policy._quarantine.assert_awaited_once()
+    policy.quarantine_security_event.assert_awaited_once()
     policy.limits.consume_retain.assert_awaited_once_with("openclaw")
 
 

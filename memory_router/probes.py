@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _READINESS_FAILURE_LOG_INTERVAL_SECONDS = 60.0
 
 
-class _ReadinessLogState:
+class ReadinessLogState:
     def __init__(
         self,
         failure_event: str = "hindsight_readiness_failed",
@@ -98,51 +98,51 @@ class _ReadinessLogState:
         self._record_failure(error, duration_ms)
 
 
-_readiness_log_state = _ReadinessLogState()
-_storage_readiness_log_state = _ReadinessLogState(
+readiness_log_state = ReadinessLogState()
+storage_readiness_log_state = ReadinessLogState(
     "storage_readiness_failed", "storage_readiness_recovered", "storage_health"
 )
-_READINESS_CACHE_SECONDS = 1.0
-_CACHE_MAX_STALENESS_SECONDS = 5.0
+READINESS_CACHE_SECONDS = 1.0
+CACHE_MAX_STALENESS_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
-class _CachedProbe:
+class CachedProbe:
     created_at: float
     status_code: int
     body: bytes
 
 
-class _ProbeCache:
+class ProbeCache:
     def __init__(self, fallback: dict[str, Any]) -> None:
-        self.cache: _CachedProbe | None = None
+        self.cache: CachedProbe | None = None
         self.lock: asyncio.Lock | None = None
         self.fallback = fallback
 
     async def get(self, refresh: Callable[[], Awaitable[Response]]) -> Response:
         now = time.monotonic()
-        if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-            return _cached_probe_response(self.cache)
+        if self.cache is not None and now - self.cache.created_at < READINESS_CACHE_SECONDS:
+            return cached_probe_response(self.cache)
         if self.lock is None:
             self.lock = asyncio.Lock()
         if self.lock.locked():
             if (
                 self.cache is not None
-                and now - self.cache.created_at <= _CACHE_MAX_STALENESS_SECONDS
+                and now - self.cache.created_at <= CACHE_MAX_STALENESS_SECONDS
             ):
-                return _cached_probe_response(self.cache)
+                return cached_probe_response(self.cache)
             return JSONResponse(self.fallback, status_code=503)
         async with self.lock:
             now = time.monotonic()
-            if self.cache is not None and now - self.cache.created_at < _READINESS_CACHE_SECONDS:
-                return _cached_probe_response(self.cache)
+            if self.cache is not None and now - self.cache.created_at < READINESS_CACHE_SECONDS:
+                return cached_probe_response(self.cache)
             response = await refresh()
-            self.cache = _CachedProbe(time.monotonic(), response.status_code, bytes(response.body))
+            self.cache = CachedProbe(time.monotonic(), response.status_code, bytes(response.body))
             return response
 
 
-_readiness = _ProbeCache(fallback={"status": "unhealthy"})
-_version = _ProbeCache(
+readiness = ProbeCache(fallback={"status": "unhealthy"})
+version = ProbeCache(
     fallback={
         "error": "hindsight_unavailable",
         "message": "Upstream memory service is unavailable",
@@ -150,7 +150,33 @@ _version = _ProbeCache(
 )
 
 
-def _cached_probe_response(cached: _CachedProbe) -> Response:
+def cached_probe_response(cached: CachedProbe) -> Response:
     return Response(
         content=cached.body, status_code=cached.status_code, media_type="application/json"
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResult[T]:
+    value: T | None
+    error: Exception | None
+    duration_ms: float
+
+    @property
+    def healthy(self) -> bool:
+        return self.error is None
+
+
+async def timed_probe[T](
+    operation: Callable[[], Awaitable[T]], state: ReadinessLogState, timeout: float
+) -> ProbeResult[T]:
+    started = time.monotonic()
+    value: T | None = None
+    error: Exception | None = None
+    try:
+        value = await asyncio.wait_for(operation(), timeout=timeout)
+    except Exception as exc:
+        error = exc
+    duration_ms = round((time.monotonic() - started) * 1000, 3)
+    state.record(error, duration_ms)
+    return ProbeResult(value, error, duration_ms)

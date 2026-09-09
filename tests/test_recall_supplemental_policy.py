@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -8,15 +7,11 @@ import pytest
 from memory_router.config import DEFAULT_REGISTRY
 from memory_router.errors import HttpError
 from memory_router.policy import RouterPolicy
-
-
-class SupplementalHindsight:
-    def __init__(self, response: dict[str, Any]) -> None:
-        self.response = response
-
-    async def recall(self, bank: str, body: dict[str, Any]) -> dict[str, Any]:
-        del bank, body
-        return self.response
+from tests.fakes import (
+    FakeHindsight,
+    FakeLimits,
+    FakeRepository,
+)
 
 
 class Store:
@@ -31,25 +26,15 @@ class Store:
         return {"quarantine_id": "q1", "sha256": "a" * 64}
 
 
-class Repository:
-    async def find_memory_state(self, bank: str, memory_id: str) -> None:
-        del bank, memory_id
-        return None
-
-
 def policy(response: dict[str, Any], store: Store) -> RouterPolicy:
-    limits = SimpleNamespace(consume_recall=lambda writer: _consume(writer))
+    limits = FakeLimits()
     return RouterPolicy(
         DEFAULT_REGISTRY.model_copy(deep=True),
-        SupplementalHindsight(response),
+        FakeHindsight(response=response),
         limits,
         store,
-        Repository(),
+        FakeRepository(),
     )
-
-
-async def _consume(writer: str) -> None:
-    del writer
 
 
 @pytest.mark.asyncio

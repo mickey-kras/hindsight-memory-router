@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from secrets import token_urlsafe
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -14,6 +15,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from memory_router import app as app_module
+from memory_router import request_dispatch
 from memory_router.config import RouterSettings, assert_auth_environment
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES
@@ -24,7 +26,7 @@ from memory_router.principals import (
     facade_scope,
     load_principal_registry,
 )
-from memory_router.rate_limit import ConcurrencyLeaseLost
+from memory_router.rate_limit import ConcurrencyLeaseLost, InMemoryConcurrencyLimiter
 from tests.request_helpers import request
 
 ALPHA_SECRET = "a" * 64
@@ -88,8 +90,7 @@ def principal_runtime_state(tmp_path: Path) -> None:
     app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
     app_module.runtime.auth_limiter = SimpleNamespace(consume_many=AsyncMock())
     app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
-    app_module.runtime.principal_concurrency_limiter = None
-    app_module.runtime.principal_concurrency = {}
+    app_module.runtime.principal_concurrency_limiter = InMemoryConcurrencyLimiter()
     app_module.runtime.hindsight = SimpleNamespace(
         list_banks=AsyncMock(
             return_value={
@@ -115,8 +116,7 @@ def principal_runtime_state(tmp_path: Path) -> None:
     )
     yield
     app_module.runtime.principal_resolver = None
-    app_module.runtime.principal_concurrency_limiter = None
-    app_module.runtime.principal_concurrency = {}
+    app_module.runtime.principal_concurrency_limiter = InMemoryConcurrencyLimiter()
 
 
 def _payload(response: object) -> object:
@@ -369,7 +369,7 @@ def test_principal_mode_rejects_legacy_token_and_anonymous_at_startup() -> None:
         assert_auth_environment(
             RouterSettings(
                 MEMORY_ROUTER_PRINCIPALS="/app/principals.json",
-                MEMORY_ROUTER_TOKEN="legacy",  # noqa: S106 - synthetic test credential
+                MEMORY_ROUTER_TOKEN=token_urlsafe(24),
             )
         )
     with pytest.raises(RuntimeError, match="MEMORY_ROUTER_ALLOW_ANONYMOUS must be false"):
@@ -662,7 +662,7 @@ async def test_principal_concurrency_limit_returns_429(tmp_path: Path) -> None:
     app_module.runtime.principal_resolver = PrincipalResolver(
         load_principal_registry(_write_registry(tmp_path, value))
     )
-    app_module.runtime.principal_concurrency = {("agent-alpha", "retain"): 1}
+    app_module.runtime.principal_concurrency_limiter.active = {"agent-alpha:retain": 1}
     with pytest.raises(HttpError) as throttled:
         await app_module.dispatch(
             "x",
@@ -842,7 +842,7 @@ async def test_facade_routes_enforce_scope_and_forward_target_bank(
 ) -> None:
     forward = AsyncMock(return_value={"config": {}})
     facade = SimpleNamespace(forward=forward)
-    monkeypatch.setattr(app_module, "OpenClawFacade", Mock(return_value=facade))
+    monkeypatch.setattr(request_dispatch, "OpenClawFacade", Mock(return_value=facade))
 
     allowed = await app_module.dispatch(
         "x",

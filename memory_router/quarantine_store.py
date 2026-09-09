@@ -10,8 +10,24 @@ from .canonical import sha256_hex
 from .dedupe import request_family_identity
 from .envelope import create_envelope, decode_public_key, estimate_envelope_size
 from .errors import HttpError
-from .repository import Capacity, QuarantineRepository
+from .rate_limit import Bucket, Distinct, RateLimitConsumer, RateLimiter
+from .repository import (
+    PENDING,
+    REVIEW_IN_PROGRESS,
+    REVIEWABLE_STATUSES,
+    Capacity,
+    QuarantineRepository,
+)
 from .timestamps import iso_format, parse_iso
+
+_DEDUPE_DIGEST_PREFIX_LENGTH = 48
+
+
+def _deduped_id(prefix: str, key: str) -> str:
+    digest = sha256_hex(key)
+    return (
+        f"q_{prefix}{digest[:_DEDUPE_DIGEST_PREFIX_LENGTH]}_{digest[_DEDUPE_DIGEST_PREFIX_LENGTH:]}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +50,7 @@ class QuarantineStore:
         public_key: str,
         repository: QuarantineRepository,
         limits: QuarantineLimits,
-        rate_limiter: Any,
+        rate_limiter: RateLimiter,
     ) -> None:
         key = decode_public_key(public_key)
         self.public_key = public_key
@@ -53,20 +69,20 @@ class QuarantineStore:
         known = await self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
 
-        async def operation(_session: Any) -> dict[str, str]:
+        async def operation(_session: RateLimitConsumer) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
             if (
                 input_["kind"] in {"retain_request", "recall_request"}
                 and input_.get("dedupeKey")
                 and existing
-                and existing["status"] not in {"pending", "postponed"}
+                and existing["status"] not in REVIEWABLE_STATUSES
             ):
                 raise HttpError(
                     409,
                     "quarantine_request_in_review",
                     "matching quarantine request is already being reviewed",
                 )
-            if existing and existing["status"] == "review_in_progress":
+            if existing and existing["status"] == REVIEW_IN_PROGRESS:
                 raise HttpError(
                     409,
                     "quarantine_item_in_review",
@@ -133,7 +149,7 @@ class QuarantineStore:
             "dedupe_key": input_.get("dedupeKey"),
             "sha256": encrypted["sha256"],
             "encrypted": encrypted,
-            "status": "pending",
+            "status": PENDING,
             "postpone_count": 0,
             "requarantine_count": 0,
         }
@@ -169,7 +185,9 @@ class QuarantineStore:
             )
         return False
 
-    async def _charge(self, input_: dict[str, Any], known: bool, session: Any) -> None:
+    async def _charge(
+        self, input_: dict[str, Any], known: bool, session: RateLimitConsumer
+    ) -> None:
         window = self.limits.rate_limit_window_ms
         auth_audit = input_["reason"] == "auth_failed"
         if known:
@@ -178,13 +196,13 @@ class QuarantineStore:
                 if auth_audit
                 else "quarantine-requarantine-ops"
             )
-            await session.consume_many([(key, self.limits.requarantine_ops_max, window)])
+            await session.consume_many([Bucket(key, self.limits.requarantine_ops_max, window)])
             return
         if self.limits.rate_limit_max <= 0:
             return
         if auth_audit:
             await session.consume_many(
-                [("quarantine-writes:auth-audit", self.limits.rate_limit_global_max, window)]
+                [Bucket("quarantine-writes:auth-audit", self.limits.rate_limit_global_max, window)]
             )
             return
         writer = (
@@ -195,10 +213,10 @@ class QuarantineStore:
         family = request_family_identity(
             input_["kind"], input_["reason"], input_.get("writerId"), input_["payload"]
         )
-        identities: list[tuple[str, str, int, int]] = []
+        identities: list[Distinct] = []
         if family:
             identities.append(
-                (
+                Distinct(
                     f"quarantine-request-family:{family[0]}",
                     family[1],
                     self.limits.distinct_family_limit_max,
@@ -207,26 +225,23 @@ class QuarantineStore:
             )
         await session.consume_many_distinct(
             [
-                (f"quarantine-writes:writer:{writer}", self.limits.rate_limit_max, window),
-                ("quarantine-writes", self.limits.rate_limit_global_max, window),
+                Bucket(f"quarantine-writes:writer:{writer}", self.limits.rate_limit_max, window),
+                Bucket("quarantine-writes", self.limits.rate_limit_global_max, window),
             ],
             identities,
         )
 
     def _resolve_id(self, input_: dict[str, Any]) -> str:
         if input_["kind"] == "security_event" and input_.get("dedupeKey"):
-            digest = sha256_hex(input_["dedupeKey"])
-            return f"q_security{digest[:48]}_{digest[48:]}"
+            return _deduped_id("security", input_["dedupeKey"])
         if input_["kind"] in {"retain_request", "recall_request"} and input_.get("dedupeKey"):
-            digest = sha256_hex(input_["dedupeKey"])
-            return f"q_request{digest[:48]}_{digest[48:]}"
+            return _deduped_id("request", input_["dedupeKey"])
         if (
             input_["kind"] == "recalled_memory"
             and input_.get("sourceBank") is not None
             and input_.get("sourceMemoryId") is not None
         ):
-            digest = sha256_hex(f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
-            return f"q_memory{digest[:48]}_{digest[48:]}"
+            return _deduped_id("memory", f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
         stamp = re.sub(r"[^0-9A-Za-z]", "", input_["timestamp"])
         return f"q_{stamp}_{secrets.token_hex(8)}"
 

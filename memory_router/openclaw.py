@@ -19,6 +19,7 @@ from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .security import (
+    MAX_FACADE_SCAN_SECONDS,
     SafetyResult,
     scan_facade_payload,
     scan_query_values,
@@ -29,8 +30,8 @@ from .security import (
 logger = logging.getLogger(__name__)
 FACADE_SCAN_WORKERS = 4
 FACADE_SCAN_CAPACITY = 4
-FACADE_SCAN_TASK_SECONDS = 30.0
-FACADE_SCAN_WAIT_SECONDS = 31.0
+FACADE_SCAN_TASK_SECONDS = MAX_FACADE_SCAN_SECONDS + 1.0
+FACADE_SCAN_WAIT_SECONDS = FACADE_SCAN_TASK_SECONDS + 1.0
 
 
 class _FacadeScannerShutdown(RuntimeError):
@@ -400,7 +401,7 @@ class OpenClawFacade:
             digest = sha256_hex(repr(type(value)))
         findings = [] if scan is None else [finding.public() for finding in scan.findings]
         try:
-            await self.policy._quarantine(  # noqa: SLF001 - same package policy boundary
+            await self.policy.quarantine_security_event(
                 {
                     "writerId": writer_id,
                     "source": "openclaw",
