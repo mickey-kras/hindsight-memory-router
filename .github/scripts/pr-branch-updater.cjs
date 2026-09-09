@@ -15,18 +15,9 @@ async function updatePull({ github, owner, repo, number, sleep }) {
     if (!Number.isInteger(comparison.ahead_by) || comparison.ahead_by < 0) {
       throw new Error('invalid commit comparison');
     }
-    // Ask Dependabot to write the commit so its normal PR checks can run.
+    // Scheduled Dependabot runs rebase with Dependabot's own identity.
     if (pull.user?.login === 'dependabot[bot]' && pull.user.id === 49699333) {
-      const marker = `<!-- dependabot-rebase:${pull.head.sha}:${main.object.sha} -->`;
-      const comments = await github.paginate(github.rest.issues.listComments, {
-        owner, repo, issue_number: number, per_page: 100,
-      });
-      if (comments.some(comment => comment.user?.id === 41898282 && comment.body?.includes(marker))) {
-        return 'Dependabot rebase already requested; completion pending';
-      }
-      await github.rest.issues.createComment({ owner, repo, issue_number: number,
-        body: `@dependabot rebase\n\n${marker}` });
-      return 'Dependabot rebase requested; completion pending';
+      return 'managed by scheduled Dependabot rebasing';
     }
     if (pull.mergeable === false) return 'conflicting';
     if (pull.mergeable === true) {
