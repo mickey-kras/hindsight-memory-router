@@ -1,8 +1,7 @@
 name: policy
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
 
 permissions:
   contents: read
@@ -24,6 +23,7 @@ jobs:
 
             const wfDir = ['.github', 'workflows'].join('/');
             const publishPath = [wfDir, 'publish.yml'].join('/');
+            const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
             const aislopPath = [wfDir, 'aislop.yml'].join('/');
@@ -388,6 +388,30 @@ jobs:
               }
             }
 
+            if (changed.has(prValidationPath)) {
+              if (removedOrRenamed.has(prValidationPath)) {
+                fail('pr-validation.yml: protected workflow must not be removed or renamed');
+              } else {
+                const validation = await readFileAtHead(prValidationPath);
+                if (!hasYamlEvent(validation, 'pull_request')) {
+                  fail('pr-validation.yml: pull request trigger must stay enabled');
+                }
+                for (const workflow of [
+                  'ci.yml',
+                  'aislop.yml',
+                  'codeql.yml',
+                  'policy-guard.yml',
+                  'branch-policy.yml',
+                  'architecture.yml',
+                  'dependabot-policy-tests.yml',
+                ]) {
+                  if (!validation.includes(`uses: ./.github/workflows/${workflow}`)) {
+                    fail(`pr-validation.yml: ${workflow} gate must stay present`);
+                  }
+                }
+              }
+            }
+
             if (changed.has(aislopPath)) {
               if (removedOrRenamed.has(aislopPath)) {
                 fail('aislop.yml: protected workflow must not be removed or renamed');
@@ -415,11 +439,8 @@ jobs:
                 if (!aislop.includes('process.exit(1)')) {
                   fail('aislop.yml: findings gate must fail the job');
                 }
-                if (!aislop.includes('pull_request:')) {
-                  fail('aislop.yml: pull request gate must stay enabled');
-                }
                 if (!aislop.includes('workflow_call:')) {
-                  fail('aislop.yml: main reusable gate must stay enabled');
+                  fail('aislop.yml: reusable gate must stay enabled');
                 }
               }
             }
