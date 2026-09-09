@@ -161,10 +161,10 @@ def test_filler_adjacency_is_clean_but_nonce_padding_is_blocked() -> None:
 
 
 def test_gap_budget_predicate_semantics() -> None:
-    gap_clean = (0, frozenset(), 0, 0)
-    gap_one_junk = (1, frozenset({"zz"}), 0, 3)
-    gap_two_same = (2, frozenset({"zz"}), 0, 6)
-    gap_two_distinct = (2, frozenset({"foo", "bar"}), 0, 9)
+    gap_clean = security_rules._RuleGap(0, frozenset(), 0, 0)
+    gap_one_junk = security_rules._RuleGap(1, frozenset({"zz"}), 0, 3)
+    gap_two_same = security_rules._RuleGap(2, frozenset({"zz"}), 0, 6)
+    gap_two_distinct = security_rules._RuleGap(2, frozenset({"foo", "bar"}), 0, 9)
     assert security_rules._rule_gap_allowed(gap_clean, gap_clean)  # noqa: SLF001
     assert security_rules._rule_gap_allowed(gap_one_junk, gap_clean)  # noqa: SLF001
     assert security_rules._rule_gap_allowed(gap_two_same, gap_clean)  # noqa: SLF001
@@ -199,11 +199,26 @@ def test_openssh_backup_pair_flags_only_within_field_private_key() -> None:
 def test_fail_closed_tier_requires_clear_padding() -> None:
     gap = security_rules._rule_gap_fail_closed  # noqa: SLF001
     filler = frozenset({"the"})
-    assert not gap((0, frozenset(), 0, 0), (2, frozenset({"the", "existing"}), 0, 20))
-    assert gap((2, frozenset({"alpha", "beta"}), 0, 12), (0, frozenset(), 0, 0))
-    assert gap((3, frozenset({"zz"}), 0, 9), (0, frozenset(), 0, 0))
-    assert gap((0, frozenset(), 3, 30), (0, frozenset(), 0, 0))
-    assert not gap((1, frozenset({"existing"}), 0, 9), (1, filler, 0, 4))
+    assert not gap(
+        security_rules._RuleGap(0, frozenset(), 0, 0),
+        security_rules._RuleGap(2, frozenset({"the", "existing"}), 0, 20),
+    )
+    assert gap(
+        security_rules._RuleGap(2, frozenset({"alpha", "beta"}), 0, 12),
+        security_rules._RuleGap(0, frozenset(), 0, 0),
+    )
+    assert gap(
+        security_rules._RuleGap(3, frozenset({"zz"}), 0, 9),
+        security_rules._RuleGap(0, frozenset(), 0, 0),
+    )
+    assert gap(
+        security_rules._RuleGap(0, frozenset(), 3, 30),
+        security_rules._RuleGap(0, frozenset(), 0, 0),
+    )
+    assert not gap(
+        security_rules._RuleGap(1, frozenset({"existing"}), 0, 9),
+        security_rules._RuleGap(1, filler, 0, 4),
+    )
 
 
 def test_single_descriptor_word_attacks_stay_blocked_via_budget() -> None:

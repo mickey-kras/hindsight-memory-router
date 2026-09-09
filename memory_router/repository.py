@@ -8,6 +8,39 @@ from typing import Any
 from .db import Database, Tx
 from .errors import HttpError
 
+PENDING = "pending"
+POSTPONED = "postponed"
+REVIEW_IN_PROGRESS = "review_in_progress"
+REVIEW_SIDE_EFFECT_STARTED = "review_side_effect_started"
+REVIEW_SIDE_EFFECT_COMPLETED = "review_side_effect_completed"
+REVIEWED_ALLOWED = "reviewed_allowed"
+REVIEWED_BLOCKED = "reviewed_blocked"
+REVIEWABLE_STATUSES = frozenset({PENDING, POSTPONED})
+IN_REVIEW_STATUSES = frozenset(
+    {REVIEW_IN_PROGRESS, REVIEW_SIDE_EFFECT_STARTED, REVIEW_SIDE_EFFECT_COMPLETED}
+)
+FINAL_STATUSES = frozenset({REVIEWED_ALLOWED, REVIEWED_BLOCKED})
+CLEANUP_FILTER_SQL = (
+    "status NOT IN ("
+    + ",".join(
+        repr(status)
+        for status in (
+            PENDING,
+            POSTPONED,
+            REVIEW_IN_PROGRESS,
+            REVIEW_SIDE_EFFECT_STARTED,
+            REVIEW_SIDE_EFFECT_COMPLETED,
+            REVIEWED_ALLOWED,
+            REVIEWED_BLOCKED,
+        )
+        if status in IN_REVIEW_STATUSES | FINAL_STATUSES
+    )
+    + ")"
+)
+REVIEWABLE_FILTER_SQL = (
+    "status IN (" + ",".join(repr(status) for status in (PENDING, POSTPONED)) + ")"
+)
+
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
@@ -111,11 +144,7 @@ class QuarantineRepository:
     async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
-            if existing and existing["status"] in {
-                "review_in_progress",
-                "review_side_effect_started",
-                "review_side_effect_completed",
-            }:
+            if existing and existing["status"] in IN_REVIEW_STATUSES:
                 raise HttpError(
                     409,
                     "quarantine_item_in_review",
@@ -126,9 +155,9 @@ class QuarantineRepository:
                 if _expired(existing, at):
                     await self._reopen_expired(tx, existing["quarantine_id"], item)
                     return
-                if mode == "request" and existing["status"] not in {"pending", "postponed"}:
+                if mode == "request" and existing["status"] not in REVIEWABLE_STATUSES:
                     return
-                if mode == "memory" and existing["status"] == "reviewed_allowed":
+                if mode == "memory" and existing["status"] == REVIEWED_ALLOWED:
                     await self._reopen_reviewed_memory(
                         tx,
                         existing["quarantine_id"],
@@ -318,7 +347,7 @@ class QuarantineRepository:
 
 
 def _is_pending(item: dict[str, Any] | None) -> bool:
-    return bool(item and item.get("status") in {"pending", "postponed"})
+    return bool(item and item.get("status") in REVIEWABLE_STATUSES)
 
 
 async def _scoped_pending_count(tx: Tx, item: dict[str, Any], at: str) -> int:
@@ -388,7 +417,7 @@ def is_expired(item: dict[str, Any], at: str) -> bool:
 
 
 def _expired(item: dict[str, Any], at: str) -> bool:
-    return item.get("status") in {"pending", "postponed"} and is_expired(item, at)
+    return item.get("status") in REVIEWABLE_STATUSES and is_expired(item, at)
 
 
 def _same_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:

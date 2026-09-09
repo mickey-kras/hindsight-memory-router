@@ -10,7 +10,7 @@ from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.models import WriterRegistry
 from memory_router.policy import RouterPolicy, recalled_content_digest
-from memory_router.rate_limit import _PostgresSession
+from memory_router.rate_limit import Bucket, _PostgresSession
 from memory_router.review_repository import postpone
 from memory_router.security import scan_recall_body, scan_retain_body
 
@@ -177,7 +177,7 @@ class SweepTx(PostgresTx):
 async def test_postgres_global_sweep_uses_database_max_window() -> None:
     tx = SweepTx()
     session = _PostgresSession(tx, global_sweep=True, max_window_cache=[1_000])
-    await session.consume_many([("hot", 2, 1_000)], at_ms=100_000)
+    await session.consume_many([Bucket("hot", 2, 1_000)], at_ms=100_000)
 
     global_deletes = [
         params

@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from .errors import HttpError
-from .repository import QuarantineRepository, insert_event
+from .repository import (
+    CLEANUP_FILTER_SQL,
+    PENDING,
+    REVIEWABLE_FILTER_SQL,
+    QuarantineRepository,
+    insert_event,
+)
 
 BATCH_LIMIT = 1000
 
@@ -122,21 +128,14 @@ async def prune_events_before(repository: QuarantineRepository, cutoff: str, at:
 def cleanup_params(
     scope: str, reasons: list[str] | None, older_than: str | None
 ) -> tuple[str, list[Any]]:
-    if scope not in {"pending", "all"}:
+    if scope not in {PENDING, "all"}:
         raise HttpError(400, "invalid_cleanup", "cleanup scope must be pending or all")
     if reasons is not None and not isinstance(reasons, list):
         raise HttpError(400, "invalid_cleanup", "cleanup reasons must be an array")
     selected = reasons or []
     if any(not isinstance(reason, str) for reason in selected):
         raise HttpError(400, "invalid_cleanup", "cleanup reasons must contain strings")
-    clauses = [
-        "status IN ('pending','postponed')"
-        if scope == "pending"
-        else (
-            "status NOT IN ('review_in_progress','review_side_effect_started',"
-            "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
-        )
-    ]
+    clauses = [REVIEWABLE_FILTER_SQL if scope == PENDING else CLEANUP_FILTER_SQL]
     params: list[Any] = []
     if selected:
         clauses.append("reason IN (" + ",".join("?" for _ in selected) + ")")

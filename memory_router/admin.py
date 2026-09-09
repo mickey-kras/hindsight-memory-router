@@ -9,7 +9,14 @@ from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .maintenance import cleanup, preview_cleanup
 from .policy import prepare_retain_body
-from .repository import is_expired
+from .repository import (
+    PENDING,
+    POSTPONED,
+    REVIEW_IN_PROGRESS,
+    REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEWABLE_STATUSES,
+    is_expired,
+)
 from .review_repository import (
     REVIEW_STALE_SECONDS,
     claim_review,
@@ -103,7 +110,7 @@ class QuarantineAdminService:
             decision="approved",
         )
         details = {"writer_id": writer_id, "target_bank": writer.write_bank}
-        if item["status"] == "review_side_effect_completed":
+        if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED:
             await finish_approve_retain(
                 self.repository,
                 quarantine_id,
@@ -207,7 +214,7 @@ class QuarantineAdminService:
                 raise HttpError(
                     409, "quarantine_source_missing", "recalled memory source metadata is missing"
                 )
-            if item["status"] == "review_side_effect_completed":
+            if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED:
                 await finish_reject_memory(
                     self.repository,
                     quarantine_id,
@@ -274,7 +281,7 @@ class QuarantineAdminService:
             self.max_postpones,
         )
         return {
-            "postponed": True,
+            POSTPONED: True,
             "quarantine_id": quarantine_id,
             "count": next_item["postpone_count"],
         }
@@ -295,8 +302,8 @@ class QuarantineAdminService:
         }
 
     async def cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
-        scope = body.get("scope", "pending")
-        if scope not in {"pending", "all"}:
+        scope = body.get("scope", PENDING)
+        if scope not in {PENDING, "all"}:
             raise HttpError(400, "invalid_request", "scope must be pending or all")
         reasons = body.get("reasons")
         older_than = body.get("older_than")
@@ -320,7 +327,7 @@ class QuarantineAdminService:
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
-        if item["status"] not in {"pending", "postponed"}:
+        if item["status"] not in REVIEWABLE_STATUSES:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
@@ -330,15 +337,15 @@ class QuarantineAdminService:
     async def _require_claim_candidate(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
         if item["status"] not in {
-            "pending",
-            "postponed",
-            "review_in_progress",
-            "review_side_effect_completed",
+            PENDING,
+            POSTPONED,
+            REVIEW_IN_PROGRESS,
+            REVIEW_SIDE_EFFECT_COMPLETED,
         }:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
-        if item["status"] in {"pending", "postponed"}:
+        if item["status"] in REVIEWABLE_STATUSES:
             self._assert_not_expired(item)
         return item
 

@@ -6,14 +6,27 @@ import time
 import uuid
 from collections import defaultdict, deque
 from collections.abc import Awaitable, Callable
-from typing import Any, NoReturn, Protocol
+from typing import Any, NamedTuple, NoReturn, Protocol
 
 from .errors import HttpError
 from .logging import log_event
 
 ADVISORY_LOCK_SQL = "SELECT pg_advisory_xact_lock(hashtextextended(?,0))"
-Bucket = tuple[str, int, int]
-Distinct = tuple[str, str, int, int]
+
+
+class Bucket(NamedTuple):
+    key: str
+    maximum: int
+    window_ms: int
+
+
+class Distinct(NamedTuple):
+    scope: str
+    identity: str
+    maximum: int
+    window_ms: int
+
+
 _SWEEP_EVERY = 128
 logger = logging.getLogger(__name__)
 
@@ -37,14 +50,18 @@ class RateLimiter(RateLimitConsumer, Protocol):
 def _normalize_buckets(buckets: list[Bucket]) -> list[Bucket]:
     normalized: dict[str, Bucket] = {}
     for bucket in buckets:
-        if bucket[1] > 0 and bucket[2] > 0:
-            normalized[bucket[0]] = bucket
+        if bucket.maximum > 0 and bucket.window_ms > 0:
+            normalized[bucket.key] = bucket
     return sorted(normalized.values())
 
 
 def _normalize_identities(identities: list[Distinct]) -> list[Distinct]:
     return sorted(
-        {(item[0], item[1]): item for item in identities if item[2] > 0 and item[3] > 0}.values()
+        {
+            (item.scope, item.identity): item
+            for item in identities
+            if item.maximum > 0 and item.window_ms > 0
+        }.values()
     )
 
 

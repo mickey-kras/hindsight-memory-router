@@ -56,6 +56,7 @@ from .principals import (
 )
 from .quarantine_store import QuarantineLimits, QuarantineStore
 from .rate_limit import (
+    Bucket,
     ConcurrencyLeaseUnavailable,
     InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
@@ -509,10 +510,22 @@ def _reject_json_constant(raw: str) -> None:
 async def _auth_failure_rate(route_group: str) -> None:
     try:
         await runtime.auth_prefilter.consume_many(
-            [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
+            [
+                Bucket(
+                    f"auth-failure:{route_group}",
+                    runtime.auth_failure_max,
+                    runtime.auth_failure_window,
+                )
+            ]
         )
         await runtime.auth_limiter.consume_many(
-            [(f"auth-failure:{route_group}", runtime.auth_failure_max, runtime.auth_failure_window)]
+            [
+                Bucket(
+                    f"auth-failure:{route_group}",
+                    runtime.auth_failure_max,
+                    runtime.auth_failure_window,
+                )
+            ]
         )
     except HttpError as exc:
         if exc.status != 429:
@@ -551,7 +564,7 @@ async def _principal_rate(session: PrincipalSession, scope: str, route_class: st
     try:
         await runtime.principal_limiter.consume_many(
             [
-                (
+                Bucket(
                     f"principal:{session.principal_id}:{operation}",
                     limit.rate_limit_max,
                     limit.rate_limit_window_ms,
@@ -737,7 +750,7 @@ async def _admin_rate(method: str) -> None:
     maximum = runtime.admin_read_max if request_class == "read" else runtime.admin_write_max
     try:
         await runtime.admin_limiter.consume_many(
-            [(f"admin:{request_class}", maximum, runtime.admin_window)]
+            [Bucket(f"admin:{request_class}", maximum, runtime.admin_window)]
         )
     except HttpError as exc:
         if exc.status != 429:

@@ -15,7 +15,7 @@ from memory_router.envelope import canonical_decrypted
 from memory_router.errors import HttpError
 from memory_router.models import WriterRegistry
 from memory_router.policy import RouterPolicy, recalled_content_digest
-from memory_router.rate_limit import _PostgresSession
+from memory_router.rate_limit import Bucket, _PostgresSession
 from memory_router.repository import Capacity, QuarantineRepository
 from memory_router.review_repository import claim_review, mark_memory_reviewed, postpone, remove
 from memory_router.security import scan_content, scan_retain_body
@@ -369,7 +369,9 @@ class FakePostgresTx(PostgresTx):
 @pytest.mark.asyncio
 async def test_postgres_periodic_sweep_prunes_cold_rate_limit_keys() -> None:
     tx = FakePostgresTx()
-    await _PostgresSession(tx, global_sweep=True).consume_many([("hot", 2, 10_000)], at_ms=100_000)
+    await _PostgresSession(tx, global_sweep=True).consume_many(
+        [Bucket("hot", 2, 10_000)], at_ms=100_000
+    )
     sql = [statement for statement, _ in tx.executed]
     assert "DELETE FROM quarantine_rate_limit_events WHERE occurred_at_ms<=?" in sql
     assert "DELETE FROM quarantine_rate_limit_identities WHERE occurred_at_ms<=?" in sql

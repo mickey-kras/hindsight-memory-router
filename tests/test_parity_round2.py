@@ -12,7 +12,7 @@ from memory_router import app as app_module
 from memory_router.canonical import canonical_json
 from memory_router.errors import HttpError
 from memory_router.models import RecallResponse
-from memory_router.rate_limit import InMemoryRateLimiter
+from memory_router.rate_limit import Bucket, InMemoryRateLimiter
 from memory_router.security import scan_content
 from memory_router.validation import parse_recall_body, parse_retain_body
 from tests.request_helpers import request
@@ -68,9 +68,9 @@ def test_router_rule_public_finding_has_only_ts_keys() -> None:
 @pytest.mark.asyncio
 async def test_in_memory_limiter_periodically_prunes_untouched_keys() -> None:
     limiter = InMemoryRateLimiter()
-    await limiter.consume_many([("stale", 1, 10)], at_ms=0)
+    await limiter.consume_many([Bucket("stale", 1, 10)], at_ms=0)
     for index in range(1, 128):
-        await limiter.consume_many([(f"live-{index}", 1, 10_000)], at_ms=100)
+        await limiter.consume_many([Bucket(f"live-{index}", 1, 10_000)], at_ms=100)
     assert "stale" not in limiter.events
     assert "stale" not in limiter.event_windows
 

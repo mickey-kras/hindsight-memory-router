@@ -10,6 +10,14 @@ from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
+from .repository import (
+    REVIEW_IN_PROGRESS,
+    REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEW_SIDE_EFFECT_STARTED,
+    REVIEWABLE_STATUSES,
+    REVIEWED_ALLOWED,
+    REVIEWED_BLOCKED,
+)
 from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
 from .timestamps import iso_now
 
@@ -328,13 +336,13 @@ class RouterPolicy:
         state = await self.repository.find_memory_state(bank_id, str(result["id"]))
         digest = recalled_content_digest(result)
         if state and state["status"] in {
-            "reviewed_blocked",
-            "review_in_progress",
-            "review_side_effect_started",
-            "review_side_effect_completed",
+            REVIEWED_BLOCKED,
+            REVIEW_IN_PROGRESS,
+            REVIEW_SIDE_EFFECT_STARTED,
+            REVIEW_SIDE_EFFECT_COMPLETED,
         }:
             return False
-        if state and state["status"] == "reviewed_allowed":
+        if state and state["status"] == REVIEWED_ALLOWED:
             if state.get("source_content_sha256") == digest:
                 volatile = {
                     key: value for key, value in result.items() if key not in {"id", "text"}
@@ -348,7 +356,7 @@ class RouterPolicy:
             await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
             return False
         scan = scan_recall_result(result)
-        if state and state["status"] in {"pending", "postponed"}:
+        if state and state["status"] in REVIEWABLE_STATUSES:
             if state.get("source_content_sha256") == digest:
                 return False
             await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)

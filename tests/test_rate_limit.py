@@ -7,6 +7,7 @@ import pytest
 
 from memory_router.errors import HttpError
 from memory_router.rate_limit import (
+    Bucket,
     ConcurrencyLeaseLost,
     ConcurrencyLeaseRefreshFailed,
     PostgresConcurrencyLimiter,
@@ -61,7 +62,7 @@ async def test_postgres_max_window_cache_updates_only_after_commit() -> None:
     cache = limiter.max_window_cache
 
     first = _PostgresSession(tx, max_window_cache=cache)
-    await first.consume_many([("first", 10, 10_000)], at_ms=100_000)
+    await first.consume_many([Bucket("first", 10, 10_000)], at_ms=100_000)
     assert tx.state_reads == 1
     assert cache[0] == 0
     assert first.observed_max_window == 60_000
@@ -71,17 +72,17 @@ async def test_postgres_max_window_cache_updates_only_after_commit() -> None:
     assert cache[0] == 60_000
 
     second = _PostgresSession(tx, max_window_cache=cache)
-    await second.consume_many([("second", 10, 10_000)], at_ms=100_001)
+    await second.consume_many([Bucket("second", 10, 10_000)], at_ms=100_001)
     assert tx.state_reads == 1
 
     rolled_back = _PostgresSession(tx, max_window_cache=cache)
-    await rolled_back.consume_many([("larger", 10, 120_000)], at_ms=100_002)
+    await rolled_back.consume_many([Bucket("larger", 10, 120_000)], at_ms=100_002)
     assert tx.state_reads == 2
     assert cache[0] == 60_000
     assert rolled_back.observed_max_window == 120_000
 
     retried = _PostgresSession(tx, max_window_cache=cache)
-    await retried.consume_many([("larger-retry", 10, 120_000)], at_ms=100_003)
+    await retried.consume_many([Bucket("larger-retry", 10, 120_000)], at_ms=100_003)
     assert tx.state_reads == 3
     assert cache[0] == 60_000
     state_writes = [

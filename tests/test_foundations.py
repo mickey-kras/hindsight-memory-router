@@ -11,7 +11,13 @@ import pytest
 from memory_router import auth, config, dedupe, validation
 from memory_router.errors import HttpError
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
-from memory_router.rate_limit import InMemoryRateLimiter, PostgresRateLimiter, _PostgresSession
+from memory_router.rate_limit import (
+    Bucket,
+    Distinct,
+    InMemoryRateLimiter,
+    PostgresRateLimiter,
+    _PostgresSession,
+)
 
 
 def test_auth_helpers_and_scopes() -> None:
@@ -436,23 +442,25 @@ async def test_hindsight_quota_buckets_and_mapping() -> None:
 @pytest.mark.asyncio
 async def test_in_memory_sliding_window_expiry_and_disabled_buckets() -> None:
     limiter = InMemoryRateLimiter()
-    await limiter.consume_many([("off", 0, 1), ("x", 1, 10)], at_ms=10)
+    await limiter.consume_many([Bucket("off", 0, 1), Bucket("x", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
-        await limiter.consume_many([("x", 1, 10)], at_ms=10)
-    await limiter.consume_many([("x", 1, 10)], at_ms=20)
+        await limiter.consume_many([Bucket("x", 1, 10)], at_ms=10)
+    await limiter.consume_many([Bucket("x", 1, 10)], at_ms=20)
 
 
 @pytest.mark.asyncio
 async def test_in_memory_rate_limiter_count_distinct_expiry_and_lock() -> None:
     limiter = InMemoryRateLimiter()
     await limiter.consume_many_distinct(
-        [("b", 1, 10), ("off", 0, 1)], [("s", "a", 1, 10), ("off", "x", 0, 1)], at_ms=10
+        [Bucket("b", 1, 10), Bucket("off", 0, 1)],
+        [Distinct("s", "a", 1, 10), Distinct("off", "x", 0, 1)],
+        at_ms=10,
     )
     with pytest.raises(HttpError):
-        await limiter.consume_many([("b", 1, 10)], at_ms=10)
+        await limiter.consume_many([Bucket("b", 1, 10)], at_ms=10)
     with pytest.raises(HttpError):
-        await limiter.consume_many_distinct([], [("s", "b", 1, 10)], at_ms=10)
-    await limiter.consume_many_distinct([("b", 1, 10)], [("s", "b", 1, 10)], at_ms=20)
+        await limiter.consume_many_distinct([], [Distinct("s", "b", 1, 10)], at_ms=10)
+    await limiter.consume_many_distinct([Bucket("b", 1, 10)], [Distinct("s", "b", 1, 10)], at_ms=20)
 
     async def operation(session: InMemoryRateLimiter) -> str:
         assert session is limiter
@@ -500,7 +508,9 @@ async def test_postgres_rate_limiter_paths() -> None:
     tx = FakeTx([{"count": 0}, {"count": 0}, None, {"now_ms": 100}])
     session = _PostgresSession(tx)
     await session.consume_many_distinct(
-        [("b", 2, 10), ("b", 2, 10), ("off", 0, 1)], [("s", "a", 2, 10)], at_ms=50
+        [Bucket("b", 2, 10), Bucket("b", 2, 10), Bucket("off", 0, 1)],
+        [Distinct("s", "a", 2, 10)],
+        at_ms=50,
     )
     assert any("advisory_xact_lock" in sql for sql, _ in tx.executed)
 
@@ -509,11 +519,11 @@ async def test_postgres_rate_limiter_paths() -> None:
 
     with pytest.raises(HttpError):
         await _PostgresSession(FakeTx([{"count": 1}])).consume_many_distinct(
-            [("b", 1, 10)], [], at_ms=20
+            [Bucket("b", 1, 10)], [], at_ms=20
         )
     with pytest.raises(HttpError):
         await _PostgresSession(FakeTx([{"count": 1}, None])).consume_many_distinct(
-            [], [("s", "new", 1, 10)], at_ms=20
+            [], [Distinct("s", "new", 1, 10)], at_ms=20
         )
 
     tx2 = FakeTx()
