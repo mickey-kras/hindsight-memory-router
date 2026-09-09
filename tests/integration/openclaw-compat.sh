@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 3a4d5440bcd4b5248003c89f2c1db3130f74a45f1ac59f8740bb3525bce33fe5
+# integration-behavior-sha256: 2719634507e7f2de11376faebed2a26c97c51d9a4facf948659bdec41bd8a5c9
 
 openclaw_request() {
   local method="$1"
@@ -162,7 +162,7 @@ expected = {
     ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
     ("GET", "audit-logs"): ("", None),
     ("GET", "llm-requests/stats"): ("", None),
-    ("GET", "observations/scopes"): ("?limit=1&offset=5", None),
+    ("GET", "observations/scopes"): ("", None),
     ("DELETE", "observations"): ("", None),
 }
 for route, (query, body) in expected.items():

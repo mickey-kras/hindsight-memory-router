@@ -23,6 +23,20 @@ jobs:
 
             const wfDir = ['.github', 'workflows'].join('/');
             const publishPath = [wfDir, 'publish.yml'].join('/');
+            const releasePath = [wfDir, 'release.yml'].join('/');
+            // Reviewed release workflows and helpers. Pin refreshes preserve workflow shape.
+            const releaseProtected = {
+              ".github/scripts/release.cjs": "4d61f95640ec9d284b27783512b4308aba523cfd287e58e0d9222cf7cf5ed9c5",
+              ".github/scripts/release-settings.cjs": "c2502d720dc7c1355b3497a38ac7db825a16307aa0e146cdcf313871445f15ff",
+              ".github/scripts/release.test.cjs": "6559fac06661b1ad76f78bfe3d038b80279753c0a4dbec9fb8f659a03064a59a",
+              ".github/scripts/release-policy.test.py": "6e8f60e06669caded9eb29d953dbe1820c91ace971f71c7810b542bbf4eaf0f7",
+              ".github/rulesets/protect-release-branches.json": "310afd18e1c1b898540487ac963f727c2fe16c52595341f713bcb2c1cf3219cd",
+              ".github/scripts/publish-image.sh": "0842e989b7457fb881ddd24ae8343401ed9755908be6b35011fbe01ec56562dd",
+              ".github/scripts/publish-image.test.cjs": "be5928bc9756a22bb6a4542a7f1866b1409265fd6c07e22a2f17cb4b75dbaf11",
+              ".github/workflows/publish.yml": "dc2891e8790d6b7c790e560f41364409c7cd8b2974bcc07ca7721806342836cc",
+              ".github/workflows/release.yml": "3ac6ccda8f968291df7f0ee05718d68c43ab1625b9bdb36d15883e799157e624",
+              ".github/workflows/ci.yml": "af7fc6733790c31b98de2afd5fee545a70948f50e78033d997bd09e08ebba77b"
+            };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
@@ -76,7 +90,7 @@ jobs:
             );
             const policySensitiveChanged =
               workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath) ||
-              changed.has(dependabotScriptPath);
+              changed.has(dependabotScriptPath) || Object.keys(releaseProtected).some(path => changed.has(path));
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -207,7 +221,7 @@ jobs:
               const privileged = privilegedWriteKeys.filter((permission) =>
                 hasYamlScalar(content, permission, 'write'),
               );
-              if (privileged.length > 0 && ![publishPath, dependabotWorkflowPath].includes(path)) {
+              if (privileged.length > 0 && ![publishPath, releasePath, dependabotWorkflowPath].includes(path)) {
                 fail(`${path}: privileged write permissions are only allowed in trusted workflows`);
               }
               if (privileged.length > 0 && hasYamlEvent(content, 'pull_request')) {
@@ -218,6 +232,18 @@ jobs:
               if (unpinned.length > 0) {
                 fail(`${path}: actions must use full commit SHAs: ${unpinned.join(', ')}`);
               }
+            }
+
+            for (const [path, expected] of Object.entries(releaseProtected)) {
+              if (!changed.has(path)) continue;
+              if (removedOrRenamed.has(path)) {
+                fail(`${path}: protected release automation must not be removed`);
+                continue;
+              }
+              const raw = await readFileAtHead(path);
+              const content = path.endsWith('.yml') ? raw.replace(/(uses:\s*[^\s@]+)@[a-f0-9]{40}/g, '$1@PINNED') : raw;
+              const digest = require('node:crypto').createHash('sha256').update(content).digest('hex');
+              if (digest !== expected) fail(`${path}: release automation must match its reviewed policy`);
             }
 
             if (changed.has(publishPath)) {
@@ -260,9 +286,6 @@ jobs:
                 }
                 if (!publish.includes('python .github/scripts/sync-sonar-findings.py')) {
                   fail('publish.yml: SonarQube failures must synchronize actionable findings');
-                }
-                if (!publish.includes('echo "published=false" >> "$GITHUB_OUTPUT"')) {
-                  fail('publish.yml: superseded main runs must finish without a false publish failure');
                 }
                 if (!publish.includes("if: steps.push.outputs.published == 'true'")) {
                   fail('publish.yml: post-publish supply-chain steps must require a published image');

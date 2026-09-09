@@ -27,7 +27,7 @@ services:
       - internal
 
   hindsight:
-    image: ghcr.io/vectorize-io/hindsight:latest
+    image: ${HINDSIGHT_TEST_IMAGE:?resolve Hindsight version and digest first}
     environment:
       HINDSIGHT_API_DATABASE_URL: postgresql://hindsight:hindsight@postgres:5432/hindsight
       HINDSIGHT_API_AUDIT_LOG_ENABLED: "true"

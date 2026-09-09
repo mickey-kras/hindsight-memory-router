@@ -2,6 +2,13 @@ name: ci
 
 on:
   workflow_call:
+    outputs:
+      hindsight_version:
+        value: ${{ jobs.hindsight.outputs.version }}
+      hindsight_sha:
+        value: ${{ jobs.hindsight.outputs.sha }}
+      hindsight_image:
+        value: ${{ jobs.hindsight.outputs.image }}
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -11,8 +18,26 @@ permissions:
   contents: read
 
 jobs:
+  hindsight:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      image: ${{ steps.resolve.outputs.image }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Resolve Hindsight once
+        id: resolve
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: await require('./.github/scripts/release.cjs').resolve({ github, context, core });
+
   # The required `aislop status` gate runs in aislop.yml on PRs and through publish.yml on main.
   checks:
+    needs: hindsight
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +72,12 @@ jobs:
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
             --output-file requirements.txt pyproject.toml
           diff -u requirements.expected.txt requirements.txt
+
+      - name: Release automation tests
+        run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs
+
+      - name: Release policy tests
+        run: python3 .github/scripts/release-policy.test.py
 
       - name: PR branch updater tests
         run: node --test .github/scripts/pr-branch-updater.test.cjs
@@ -85,7 +116,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: vectorize-io/hindsight
-          ref: main
+          ref: ${{ needs.hindsight.outputs.sha }}
           path: .upstream/hindsight
           persist-credentials: false
 
@@ -165,6 +196,7 @@ jobs:
           dockerfile: Dockerfile
 
   container:
+    needs: hindsight
     name: container
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
@@ -172,6 +204,7 @@ jobs:
       contents: read
       security-events: write
     env:
+      HINDSIGHT_TEST_IMAGE: ${{ needs.hindsight.outputs.image }}
       SOURCE_IMAGE: hindsight-memory-router:ci
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
