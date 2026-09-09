@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import traceback
 from pathlib import Path
+from secrets import token_urlsafe
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -88,11 +89,11 @@ def test_typed_settings_preserve_strict_environment_parsing(
     assert config.load_settings().memory_router_allow_anonymous is False
 
     secrets = {
-        "MEMORY_ROUTER_TOKEN": "router-secret-01234567890123456789",
-        "MEMORY_ROUTER_ADMIN_TOKEN": "admin-secret-012345678901234567890",
-        "MEMORY_ROUTER_ADMIN_READ_TOKEN": "read-secret-0123456789012345678901",
-        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": "review-secret-01234567890123456789",
-        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": "cleanup-secret-0123456789012345678",
+        "MEMORY_ROUTER_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_READ_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_REVIEW_TOKEN": token_urlsafe(24),
+        "MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN": token_urlsafe(24),
         "HINDSIGHT_API_KEY": "hindsight-secret",
     }
     for name, value in secrets.items():
@@ -137,8 +138,8 @@ def test_typed_settings_suppress_secret_validation_context(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     secrets = (
-        "router-secret-01234567890123456789",
-        "admin-secret-012345678901234567890",
+        token_urlsafe(24),
+        token_urlsafe(24),
         "hindsight-secret",
         "database-secret",
     )
@@ -269,7 +270,7 @@ def test_environment_assertions(
     }
     caplog.clear()
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
-    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", "legacy-0123456789012345678901234")
+    monkeypatch.setenv("MEMORY_ROUTER_ADMIN_TOKEN", token_urlsafe(24))
     config.assert_auth_environment(config.load_settings())
     assert {
         record.reason  # type: ignore[attr-defined]

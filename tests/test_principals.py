@@ -7,6 +7,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from secrets import token_urlsafe
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, Mock
@@ -368,7 +369,7 @@ def test_principal_mode_rejects_legacy_token_and_anonymous_at_startup() -> None:
         assert_auth_environment(
             RouterSettings(
                 MEMORY_ROUTER_PRINCIPALS="/app/principals.json",
-                MEMORY_ROUTER_TOKEN="legacy-0123456789012345678901234",  # noqa: S106
+                MEMORY_ROUTER_TOKEN=token_urlsafe(24),
             )
         )
     with pytest.raises(RuntimeError, match="MEMORY_ROUTER_ALLOW_ANONYMOUS must be false"):

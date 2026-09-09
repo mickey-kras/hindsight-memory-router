@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Quarantine envelope field name"
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^ui/src/lib/quarantineCrypto\.ts$''']
+regexes = ['''^wrapped_key_b64$''']
