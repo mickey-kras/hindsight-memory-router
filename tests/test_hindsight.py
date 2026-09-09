@@ -318,3 +318,20 @@ async def test_request_enforces_absolute_stream_deadline() -> None:
         assert exc.value.kind == "timeout"
     finally:
         await gateway.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_number", ["NaN", "Infinity", "-Infinity", "1e999"])
+async def test_hindsight_rejects_non_finite_numbers(raw_number: str) -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=f'{{"value":{raw_number}}}'.encode(), request=request)
+
+    gateway = HindsightGateway("http://hindsight.test", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(HindsightGatewayError) as exc:
+            await gateway._request("test", "GET", "/test")
+        assert exc.value.code == "hindsight_invalid_response"
+    finally:
+        await gateway.close()

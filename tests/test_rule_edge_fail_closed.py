@@ -1,5 +1,3 @@
-"""Round-7 regression tests for split-rule edge matching and junk-word padding."""
-
 from __future__ import annotations
 
 import pytest
@@ -49,7 +47,7 @@ def all_surfaces(a: str, b: str) -> list[SafetyResult]:
         "signal-sandwich",
     ],
 )
-def test_round5_split_evasions_stay_blocked(a: str, b: str) -> None:
+def test_split_instruction_junk_padding_is_blocked(a: str, b: str) -> None:
     for result in all_surfaces(a, b):
         assert "ignore previous instructions" in matches(result)
 

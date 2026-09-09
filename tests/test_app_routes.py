@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
+from urllib.parse import quote
 
 import pytest
+from fastapi import Request
 
 from memory_router import app as app_module
 from memory_router import probes
@@ -513,3 +515,122 @@ async def test_rate_storage_failure_returns_retryable_unavailable(
     event = next(record for record in caplog.records if record.msg == unavailable.value.code)
     assert event.error_kind == "storage"
     assert event.http_status == 503
+
+
+def test_json_depth_is_bounded_before_recursive_security_processing() -> None:
+    value: object = "leaf"
+    for _ in range(app_module._MAX_JSON_DEPTH + 1):
+        value = [value]
+    with pytest.raises(HttpError) as exc:
+        app_module._assert_json_depth(value)
+    assert exc.value.code == "json_too_deep"
+
+
+@pytest.mark.asyncio
+async def test_mis_scoped_valid_admin_token_is_logged_and_rate_limited(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/x",
+            "headers": [(b"authorization", b"Bearer read")],
+        }
+    )
+    monkeypatch.setattr(
+        app_module.runtime,
+        "admin_tokens",
+        {"legacy": None, "read": "read", "review": "review", "cleanup": "cleanup"},
+    )
+    failure_rate = AsyncMock()
+    auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+    monkeypatch.setattr(app_module, "_auth_failure_rate", failure_rate)
+    monkeypatch.setattr(app_module.runtime, "auditor", auditor)
+    assert await app_module._admin_auth(request, "review") is False
+    auditor.log_failure.assert_called_once_with("admin")
+    failure_rate.assert_awaited_once_with("admin")
+    auditor.persist.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_auth_precedes_malformed_path_fallback() -> None:
+    previous_allow = app_module.runtime.allow_anonymous
+    previous_token = app_module.runtime.router_token
+    previous_auditor = app_module.runtime.auditor
+    previous_policy = app_module.runtime.policy
+    try:
+        app_module.runtime.allow_anonymous = False
+        router_token = "sec" + "ret"
+        app_module.runtime.router_token = router_token
+        app_module.runtime.auditor = SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+        app_module.runtime.policy = SimpleNamespace(
+            deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"})
+        )
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+        assert response.status_code == 401
+
+        app_module.runtime.router_token = None
+        app_module.runtime.allow_anonymous = True
+        response = await app_module.dispatch("unused", request("GET", "/bad%ZZ"))
+        assert response.status_code == 404
+        app_module.runtime.policy.deny_endpoint.assert_awaited_with("GET", "/bad%ZZ")
+    finally:
+        app_module.runtime.allow_anonymous = previous_allow
+        app_module.runtime.router_token = previous_token
+        app_module.runtime.auditor = previous_auditor
+        app_module.runtime.policy = previous_policy
+
+
+@pytest.mark.asyncio
+async def test_dot_segments_and_trace_reach_normalized_deny_endpoint() -> None:
+    previous_allow = app_module.runtime.allow_anonymous
+    previous_policy = app_module.runtime.policy
+    try:
+        app_module.runtime.allow_anonymous = True
+        policy = SimpleNamespace(
+            limits=SimpleNamespace(assert_retain_bounds=Mock(), assert_recall_bounds=Mock()),
+            deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+        )
+        app_module.runtime.policy = policy
+        response = await app_module.dispatch("unused", request("TRACE", "/a/../blocked"))
+        assert response.status_code == 404
+        policy.deny_endpoint.assert_awaited_with("TRACE", "/blocked")
+    finally:
+        app_module.runtime.allow_anonymous = previous_allow
+        app_module.runtime.policy = previous_policy
+
+
+def test_matched_segment_decode_remains_strict() -> None:
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        app_module._decode_path_segment("bad%ZZ")
+    with pytest.raises(HttpError, match="malformed percent-encoding"):
+        app_module._decode_path_segment("%FF")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%252e%252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%25252e%25252e")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment("%2525252e%2525252e")
+    assert app_module._decode_path_segment("%25FF") == "%FF"
+    assert app_module._decode_path_segment("item%252ename") == "item%2ename"
+    over_encoded = "%2eitem"
+    for _ in range(10):
+        over_encoded = quote(over_encoded, safe="")
+    with pytest.raises(HttpError, match="excessive nested encoding"):
+        app_module._decode_path_segment(over_encoded)
+    max_depth_dot = "%2e"
+    for _ in range(8):
+        max_depth_dot = quote(max_depth_dot, safe="")
+    with pytest.raises(HttpError, match="dot path segments are not allowed"):
+        app_module._decode_path_segment(max_depth_dot)
+    assert app_module._MAX_PATH_PROBE_DECODES == 8  # noqa: SLF001
+
+
+def test_trailing_dot_segment_preserves_trailing_slash() -> None:
+    assert app_module._normalize_dot_segments("/a/.") == "/a/"
+    assert app_module._normalize_dot_segments("/a/%2e") == "/a/"
+    assert app_module._normalize_dot_segments("/a/./b") == "/a/b"
+    assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
+    assert app_module._normalize_dot_segments("/..") == "/"
+    assert app_module._normalize_dot_segments("../a") == "a"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,12 @@ from memory_router.review_repository import (
     remove,
     require_in_progress,
     require_reviewable,
+)
+from tests.fakes import (
+    QID,
+    FakeDatabase,
+    FakeReviewTx,
+    TxContext,
 )
 
 
@@ -199,3 +206,169 @@ async def test_claim_review_rejects_changed_verified_snapshot(repo: QuarantineRe
             expected_updated_at=str(original["updated_at"]),
         )
     assert changed.value.code == "quarantine_review_changed"
+
+
+@pytest.mark.asyncio
+async def test_postpone_cap_is_rechecked_under_transaction_lock() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "postponed",
+            "kind": "retain_request",
+            "updated_at": "2030-01-01T00:00:00.000Z",
+            "expires_at": "2030-02-01T00:00:00.000Z",
+            "postpone_count": 3,
+        },
+        dialect="postgres",
+    )
+    repository = SimpleNamespace(db=SimpleNamespace(transaction=lambda: TxContext(tx)))
+
+    with pytest.raises(HttpError) as exc:
+        await postpone(
+            repository,
+            QID,
+            "2030-01-02T00:00:00.000Z",
+            max_postpones=3,
+        )
+    assert exc.value.code == "postpone_limit_reached"
+    assert not any(sql.startswith("UPDATE quarantine_items") for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_reject_recovers_stale_request_claim_on_demand() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "review_in_progress",
+            "kind": "retain_request",
+            "updated_at": "2020-01-01T00:00:00.000Z",
+            "expires_at": "2040-01-01T00:00:00.000Z",
+            "encrypted_envelope": None,
+        }
+    )
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+
+    await remove(
+        repository,
+        QID,
+        "rejected",
+        "2030-01-01T00:00:00.000Z",
+        stale_seconds=60,
+    )
+    assert tx.row is None
+    assert any("status='postponed'" in sql for sql, _ in tx.executed)
+    assert any(sql.startswith("DELETE FROM quarantine_items") for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_stale_expired_claim_is_deleted_before_expired_error() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "review_in_progress",
+            "kind": "retain_request",
+            "updated_at": "2020-01-01T00:00:00.000Z",
+            "expires_at": "2020-01-02T00:00:00.000Z",
+            "encrypted_envelope": None,
+        }
+    )
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+
+    with pytest.raises(HttpError) as exc:
+        await claim_review(
+            repository,
+            QID,
+            "retain_request",
+            "2030-01-01T00:00:00.000Z",
+            stale_seconds=60,
+        )
+    assert exc.value.code == "quarantine_expired"
+    assert tx.row is None
+    assert any(sql.startswith("DELETE FROM quarantine_items") for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_side_effect_claim_is_not_stale_recovered() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "pending",
+            "kind": "retain_request",
+            "sha256": "a" * 64,
+            "updated_at": "2026-08-09T00:00:00.000Z",
+            "expires_at": "2040-01-01T00:00:00.000Z",
+            "encrypted_envelope": None,
+        }
+    )
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+
+    await claim_review(
+        repository,
+        QID,
+        "retain_request",
+        "2026-08-10T00:00:00.000Z",
+        60,
+        True,
+        expected_sha256="a" * 64,
+        expected_updated_at="2026-08-09T00:00:00.000Z",
+    )
+    assert tx.row is not None
+    assert tx.row["status"] == "review_side_effect_started"
+
+    with pytest.raises(HttpError) as retry:
+        await claim_review(
+            repository,
+            QID,
+            "retain_request",
+            "2030-01-01T00:00:00.000Z",
+            60,
+            True,
+        )
+    assert retry.value.code == "quarantine_already_finalized"
+    assert tx.row is not None
+    assert tx.row["status"] == "review_side_effect_started"
+
+
+@pytest.mark.asyncio
+async def test_stale_claim_is_not_recovered_by_claim_review() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "review_in_progress",
+            "kind": "retain_request",
+            "updated_at": "2020-01-01T00:00:00.000Z",
+            "encrypted_envelope": None,
+        }
+    )
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+    with pytest.raises(HttpError) as exc:
+        await claim_review(repository, QID, "retain_request", "2030-01-01T00:00:00.000Z")
+    assert exc.value.code == "quarantine_already_finalized"
+    assert not any("status='postponed'" in sql for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_review_mutators_recheck_expiry_inside_transaction() -> None:
+    row = {
+        "quarantine_id": QID,
+        "status": "pending",
+        "kind": "recalled_memory",
+        "updated_at": "2020-01-01T00:00:00.000Z",
+        "expires_at": "2020-01-02T00:00:00.000Z",
+        "postpone_count": 0,
+        "encrypted_envelope": None,
+    }
+    for action in (
+        lambda repo: claim_review(repo, QID, "recalled_memory", "2030-01-01T00:00:00.000Z"),
+        lambda repo: postpone(repo, QID, "2030-01-01T00:00:00.000Z"),
+        lambda repo: mark_memory_reviewed(
+            repo, QID, "reviewed_allowed", "2030-01-01T00:00:00.000Z"
+        ),
+        lambda repo: remove(repo, QID, "rejected", "2030-01-01T00:00:00.000Z"),
+    ):
+        tx = FakeReviewTx(row)
+        repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+        with pytest.raises(HttpError) as exc:
+            await action(repository)
+        assert exc.value.code == "quarantine_expired"
+        assert tx.executed == []

@@ -9,14 +9,20 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memory_router import auth, config, dedupe, rate_limit, validation
+from memory_router.canonical import canonical_json
 from memory_router.errors import HttpError
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
+from memory_router.models import WriterRegistry
 from memory_router.rate_limit import (
     Bucket,
     Distinct,
     InMemoryRateLimiter,
     PostgresRateLimiter,
     _PostgresSession,
+)
+from memory_router.validation import parse_recall_body, parse_retain_body
+from tests.fakes import (
+    FakeDatabase,
 )
 
 
@@ -484,25 +490,6 @@ class FakeTx:
         return self.rows.pop(0) if self.rows else None
 
 
-class TxContext:
-    def __init__(self, tx: FakeTx) -> None:
-        self.tx = tx
-
-    async def __aenter__(self) -> FakeTx:
-        return self.tx
-
-    async def __aexit__(self, *args: object) -> None:
-        return None
-
-
-class FakeDatabase:
-    def __init__(self, tx: FakeTx) -> None:
-        self.tx = tx
-
-    def transaction(self) -> TxContext:
-        return TxContext(self.tx)
-
-
 @pytest.mark.asyncio
 async def test_postgres_rate_limiter_paths() -> None:
     tx = FakeTx([{"count": 0}, {"count": 0}, None, {"now_ms": 100}])
@@ -567,3 +554,52 @@ def test_empty_operator_tokens_remain_fail_closed() -> None:
     }
     for scope in ("read", "review", "cleanup"):
         assert not auth.admin_authorized("Bearer ", scope, tokens)
+
+
+def test_facade_writer_must_be_able_to_read_its_write_bank() -> None:
+    with pytest.raises(ValueError, match="write_bank must be present in read_banks"):
+        WriterRegistry.model_validate(
+            {
+                "writers": {
+                    "write_only": {
+                        "role": "writer",
+                        "source": "application",
+                        "write_bank": "custom",
+                        "read_banks": [],
+                    },
+                    "main": {
+                        "role": "default",
+                        "source": "application",
+                        "write_bank": "main",
+                        "read_banks": ["research"],
+                    },
+                },
+                "defaults": {
+                    "unknown_writer_action": "review_queue",
+                    "suspicious_content_action": "review_queue",
+                },
+            }
+        )
+
+
+@pytest.mark.parametrize("field", ["async", "document_tags"])
+def test_retain_optional_fields_reject_explicit_null(field: str) -> None:
+    with pytest.raises(HttpError):
+        parse_retain_body({"items": [{"content": "x"}], field: None})
+
+
+@pytest.mark.parametrize("field", ["max_tokens", "budget", "tags_match", "trace"])
+def test_recall_optional_fields_reject_explicit_null(field: str) -> None:
+    with pytest.raises(HttpError):
+        parse_recall_body({"query": "x", field: None})
+
+
+def test_recall_types_and_tags_remain_nullable() -> None:
+    parsed = parse_recall_body({"query": "x", "types": None, "tags": None})
+    assert parsed["types"] is None and parsed["tags"] is None
+
+
+def test_canonicalization_rejects_lossy_values() -> None:
+    for value in (2**53, -(2**53), float("inf"), float("-inf"), float("nan"), "\ud800"):
+        with pytest.raises(ValueError, match="JSON values only"):
+            canonical_json(value)

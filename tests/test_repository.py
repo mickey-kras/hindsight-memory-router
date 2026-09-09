@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from memory_router.db import SqliteDatabase, initialize_schema
+from memory_router.db import SqliteDatabase, SqliteTx, initialize_schema
 from memory_router.errors import HttpError
 from memory_router.repository import (
     Capacity,
@@ -14,6 +14,10 @@ from memory_router.repository import (
     _same_scope,
     _summary,
     stored,
+)
+from tests.fakes import (
+    QID,
+    FakeDatabase,
 )
 
 
@@ -242,3 +246,80 @@ async def test_stats_classifies_statuses_and_expiry(repository: QuarantineReposi
     assert stats["expired_items"] == 1
     assert stats["reviewed_allowed_items"] == 1
     assert stats["reviewed_blocked_items"] == 1
+
+
+class FakeStoreTx(SqliteTx):
+    dialect = "sqlite"
+
+    def __init__(self, existing: dict[str, object]) -> None:
+        self.existing = existing
+        self.fetches = 0
+        self.executed: list[tuple[str, object]] = []
+
+    async def fetchone(self, sql: str, params: object = None) -> dict[str, object] | None:
+        self.fetches += 1
+        if self.fetches == 1:
+            return dict(self.existing)
+        if "pending_count" in sql:
+            return {"pending_count": 0, "encrypted_bytes": 0}
+        if "COUNT(*) count" in sql:
+            return {"count": 0}
+        return None
+
+    async def execute(self, sql: str, params: object = None) -> None:
+        self.executed.append((sql, params))
+
+
+@pytest.mark.asyncio
+async def test_expired_existing_item_is_reopened_with_fresh_lifetime() -> None:
+    existing = {
+        "quarantine_id": QID,
+        "status": "postponed",
+        "kind": "retain_request",
+        "reason": "suspicious_content",
+        "writer_id": "main",
+        "dedupe_key": "d",
+        "encrypted_envelope": "{}",
+        "encrypted_bytes": 2,
+        "postpone_count": 2,
+        "requarantine_count": 1,
+        "expires_at": "2020-01-01T00:00:00.000Z",
+    }
+    tx = FakeStoreTx(existing)
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+    item = {
+        "quarantine_id": QID,
+        "created_at": "2030-01-01T00:00:00.000Z",
+        "updated_at": "2030-01-01T00:00:00.000Z",
+        "kind": "retain_request",
+        "reason": "suspicious_content",
+        "writer_id": "main",
+        "source": "http",
+        "source_bank": None,
+        "source_memory_id": None,
+        "source_content_sha256": None,
+        "dedupe_key": "d",
+        "sha256": "a" * 64,
+        "encrypted": {"v": 1},
+        "status": "pending",
+        "postpone_count": 0,
+        "expires_at": "2030-02-01T00:00:00.000Z",
+    }
+    await repository.store(
+        item,
+        Capacity(10, 10, 1_000_000),
+        mode="request",
+        at="2030-01-01T00:00:00.000Z",
+    )
+    update = next(sql for sql, _ in tx.executed if sql.startswith("UPDATE quarantine_items"))
+    assert "created_at=?" in update and "status='pending'" in update and "expires_at=?" in update
+
+
+def test_cleanup_all_deliberately_preserves_reviewed_decisions() -> None:
+    from memory_router.maintenance import cleanup_params
+
+    where, _ = cleanup_params("all", None, None)
+    assert where == (
+        "status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
+    )
