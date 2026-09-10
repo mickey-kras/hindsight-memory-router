@@ -18,8 +18,4 @@ jobs:
           ref: main
           persist-credentials: false
       - name: Update open PR branches
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            const { run } = require('./.github/scripts/pr-branch-updater.cjs');
-            await run({ github, context, core });
+        uses: ./.github/actions/refresh-prs

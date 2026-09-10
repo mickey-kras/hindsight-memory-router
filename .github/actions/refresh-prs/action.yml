@@ -1,0 +1,23 @@
+name: Refresh PR branches
+description: Update regular branches and request verified Dependabot recreation
+inputs:
+  commit-verifier:
+    description: Trusted caller module exporting dependencyCommits for generated artifacts
+    default: ''
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      env:
+        REFRESH_ACTION_PATH: ${{ github.action_path }}
+        REFRESH_COMMIT_VERIFIER: ${{ inputs.commit-verifier }}
+      with:
+        script: |
+          const path = require('node:path');
+          const { run } = require(path.resolve(process.env.REFRESH_ACTION_PATH, '../../scripts/pr-branch-updater.cjs'));
+          const verifier = process.env.REFRESH_COMMIT_VERIFIER;
+          const verifyCommits = verifier
+            ? require(path.resolve(process.env.GITHUB_WORKSPACE, verifier)).dependencyCommits
+            : undefined;
+          if (verifier && typeof verifyCommits !== 'function') throw new Error('Missing dependency commit verifier');
+          await run({ github, context, core, verifyCommits });

@@ -1,6 +1,32 @@
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function updatePull({ github, owner, repo, number, sleep }) {
+async function verifyDependabot(github, repo, pull, commits) {
+  if (!commits.length || !commits.every(commit =>
+    commit.author?.login === 'dependabot[bot]' && commit.author.id === 49699333 &&
+    commit.commit.verification?.verified)) throw new Error('Untrusted commits require manual review');
+}
+
+async function recreatePull({ github, owner, repo, pull, verifyCommits }) {
+  if (!pull.head.ref.startsWith('dependabot/')) return 'ineligible';
+  const params = { owner, repo, pull_number: pull.number };
+  const commits = await github.paginate(github.rest.pulls.listCommits, { ...params, per_page: 100 });
+  await verifyCommits(github, { owner, repo }, pull, commits);
+  const body = `@dependabot recreate\n\n<!-- dependency-refresh:${pull.head.sha} -->`;
+  const issue = { owner, repo, issue_number: pull.number };
+  const comments = await github.paginate(github.rest.issues.listComments, { ...issue, per_page: 100 });
+  if (comments.some(comment => comment.body === body && comment.user.id === 41898282)) {
+    return 'recreation already requested';
+  }
+  const { data: current } = await github.rest.pulls.get(params);
+  if (current.state !== 'open' || current.head.sha !== pull.head.sha ||
+      current.base.ref !== pull.base.ref || current.head.repo?.full_name !== `${owner}/${repo}`) {
+    return 'changed during evaluation';
+  }
+  await github.rest.issues.createComment({ ...issue, body });
+  return 'recreation requested';
+}
+
+async function updatePull({ github, owner, repo, number, sleep, verifyCommits }) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
     if (pull.state !== 'open' || pull.base.ref !== 'main' ||
@@ -15,9 +41,8 @@ async function updatePull({ github, owner, repo, number, sleep }) {
     if (!Number.isInteger(comparison.ahead_by) || comparison.ahead_by < 0) {
       throw new Error('invalid commit comparison');
     }
-    // Scheduled Dependabot runs rebase with Dependabot's own identity.
     if (pull.user?.login === 'dependabot[bot]' && pull.user.id === 49699333) {
-      return 'managed by scheduled Dependabot rebasing';
+      return recreatePull({ github, owner, repo, pull, verifyCommits });
     }
     if (pull.mergeable === false) return 'conflicting';
     if (pull.mergeable === true) {
@@ -31,7 +56,7 @@ async function updatePull({ github, owner, repo, number, sleep }) {
   throw new Error('mergeability remained unknown after 4 attempts');
 }
 
-async function run({ github, context, core, sleep = pause }) {
+async function run({ github, context, core, sleep = pause, verifyCommits = verifyDependabot }) {
   const { owner, repo } = context.repo;
   const pulls = await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', base: 'main', per_page: 100,
@@ -42,7 +67,7 @@ async function run({ github, context, core, sleep = pause }) {
     let status;
     try {
       status = pull.head.repo?.full_name === `${owner}/${repo}`
-        ? await updatePull({ github, owner, repo, number: pull.number, sleep })
+        ? await updatePull({ github, owner, repo, number: pull.number, sleep, verifyCommits })
         : 'ineligible';
     } catch (error) {
       status = `unresolved: ${error.message}`;
