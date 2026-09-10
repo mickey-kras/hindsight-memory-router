@@ -168,14 +168,13 @@ class ProbeResult[T]:
 
 
 async def timed_probe[T](
-    operation: Callable[[], Awaitable[T]], state: ReadinessLogState, timeout: float
+    operation: Callable[[], Awaitable[T]], state: ReadinessLogState
 ) -> ProbeResult[T]:
     started = time.monotonic()
     value: T | None = None
     error: Exception | None = None
     try:
-        async with asyncio.timeout(timeout):
-            value = await operation()
+        value = await operation()
     except Exception as exc:
         error = exc
     duration_ms = round((time.monotonic() - started) * 1000, 3)

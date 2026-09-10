@@ -248,7 +248,7 @@ async def test_readiness_probe_propagates_cancellation_and_finishes_cleanup() ->
         finally:
             cleaned_up.set()
 
-    task = asyncio.create_task(probes.timed_probe(hang, state, timeout=60))
+    task = asyncio.create_task(probes.timed_probe(hang, state))
     await started.wait()
     task.cancel()
 
