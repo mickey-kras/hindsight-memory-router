@@ -709,15 +709,19 @@ async def health_live() -> dict[str, str | float]:
 
 
 async def _database_health(repository: QuarantineRepository) -> probes.ProbeResult[None]:
-    return await probes.timed_probe(
-        repository.ping, probes.storage_readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
-    )
+    async def ping() -> None:
+        async with asyncio.timeout(_DEPENDENCY_PROBE_TIMEOUT_SECONDS):
+            await repository.ping()
+
+    return await probes.timed_probe(ping, probes.storage_readiness_log_state)
 
 
 async def _hindsight_health(hindsight: HindsightGateway) -> probes.ProbeResult[dict[str, object]]:
-    return await probes.timed_probe(
-        hindsight.health, probes.readiness_log_state, _DEPENDENCY_PROBE_TIMEOUT_SECONDS
-    )
+    async def health() -> dict[str, object]:
+        async with asyncio.timeout(_DEPENDENCY_PROBE_TIMEOUT_SECONDS):
+            return await hindsight.health()
+
+    return await probes.timed_probe(health, probes.readiness_log_state)
 
 
 async def _health_ready_response() -> Response:
