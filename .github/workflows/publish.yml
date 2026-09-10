@@ -387,6 +387,8 @@ jobs:
           path: image-digests.txt
           if-no-files-found: error
 
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
       - name: Release App token
         if: startsWith(github.ref, 'refs/heads/release/')
         id: app
@@ -479,6 +481,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
       - name: Release App token
         id: app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349

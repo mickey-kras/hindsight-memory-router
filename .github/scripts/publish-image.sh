@@ -6,7 +6,7 @@ set -euo pipefail
 : "${IMAGE_GHCR:?missing GHCR repository}"
 : "${IMAGE_DOCKERHUB:?missing Docker Hub repository}"
 
-[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+-router\.[1-9][0-9]*$ ]]
+[[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 
 local_config="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
 revision="$(docker image inspect "$SOURCE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"

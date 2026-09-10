@@ -73,6 +73,8 @@ jobs:
             --output-file requirements.txt pyproject.toml
           diff -u requirements.expected.txt requirements.txt
 
+      - name: Audit release tools
+        run: npm audit --prefix .github/scripts --audit-level=moderate
       - name: Release automation tests
         run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs
 

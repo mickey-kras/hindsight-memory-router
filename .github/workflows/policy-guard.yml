@@ -26,16 +26,18 @@ jobs:
             const releasePath = [wfDir, 'release.yml'].join('/');
             // Reviewed release workflows and helpers. Pin refreshes preserve workflow shape.
             const releaseProtected = {
-              ".github/scripts/release.cjs": "4d61f95640ec9d284b27783512b4308aba523cfd287e58e0d9222cf7cf5ed9c5",
+              ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
+              ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
+              ".github/scripts/release.cjs": "9fc225debe872d40718e2a27625301593364d0dffd7bed1b50bb2d4a924e1600",
               ".github/scripts/release-settings.cjs": "c2502d720dc7c1355b3497a38ac7db825a16307aa0e146cdcf313871445f15ff",
-              ".github/scripts/release.test.cjs": "6559fac06661b1ad76f78bfe3d038b80279753c0a4dbec9fb8f659a03064a59a",
+              ".github/scripts/release.test.cjs": "1b7d053e66b1846eed91000e62825a058c519ea71c7441ff4fe7f536e21c85cb",
               ".github/scripts/release-policy.test.py": "8c74868e4fe3ba1d46c1beb28f8bd3202c2fc35df9d5f9abbaa1b9e23d10bd80",
               ".github/rulesets/protect-release-branches.json": "310afd18e1c1b898540487ac963f727c2fe16c52595341f713bcb2c1cf3219cd",
-              ".github/scripts/publish-image.sh": "0842e989b7457fb881ddd24ae8343401ed9755908be6b35011fbe01ec56562dd",
-              ".github/scripts/publish-image.test.cjs": "be5928bc9756a22bb6a4542a7f1866b1409265fd6c07e22a2f17cb4b75dbaf11",
-              ".github/workflows/publish.yml": "dc2891e8790d6b7c790e560f41364409c7cd8b2974bcc07ca7721806342836cc",
+              ".github/scripts/publish-image.sh": "ca47a1fb6488b1563fbfec54a41566b62e456da0eadff78d7a79cdebf826a2aa",
+              ".github/scripts/publish-image.test.cjs": "6944812c2a2848abeaa1bb42be6a912101ffae345c572bc6c8d3d9e9ba1e4571",
+              ".github/workflows/publish.yml": "9f4b67254a8b0b6c75cdcf1d27d95f6e2f789d45cf6eb06908d8bd1f6a67c1eb",
               ".github/workflows/release.yml": "3ac6ccda8f968291df7f0ee05718d68c43ab1625b9bdb36d15883e799157e624",
-              ".github/workflows/ci.yml": "af7fc6733790c31b98de2afd5fee545a70948f50e78033d997bd09e08ebba77b"
+              ".github/workflows/ci.yml": "b62bcbc53d800f60771db2006f815b3c2410d35d80229ffe80e638e149b65890"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');

@@ -35,7 +35,7 @@ if (cmd === 'image') {
 `);
   chmodSync(docker, 0o755);
   const env = { ...process.env, PATH: `${directory}:${process.env.PATH}`, MOCK_STATE: statePath,
-    VERSION: '0.9.2-router.1', SOURCE_IMAGE: 'tested:image', IMAGE_GHCR: 'ghcr.io/example/router',
+    VERSION: '0.1.0', SOURCE_IMAGE: 'tested:image', IMAGE_GHCR: 'ghcr.io/example/router',
     IMAGE_DOCKERHUB: 'docker.io/example/router', GITHUB_SHA: 'a'.repeat(40),
     RUNNER_TEMP: directory, GITHUB_OUTPUT: join(directory, 'outputs') };
   const run = () => spawnSync('bash', [join(__dirname, 'publish-image.sh')], { env, encoding: 'utf8' });
