@@ -5,7 +5,7 @@ const { run } = require('./pr-branch-updater.cjs');
 const bot = { login: 'dependabot[bot]', id: 49699333 };
 
 function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user,
-  commits = [{ author: bot, commit: { verification: { verified: true } } }],
+  commits = [{ sha: 'head', author: bot, commit: { verification: { verified: true } } }],
   comments = [], changed = false } = {}) {
   const calls = { updates: [], sleeps: [], failures: [], comparisons: [], comments: [] };
   let reads = 0;
@@ -107,8 +107,8 @@ test('does not let an unrelated comment suppress recreation', async () => {
   assert.equal(calls.comments.length, 1);
 });
 
-for (const commits of [[], [{ author: bot, commit: { verification: { verified: false } } }],
-  [{ author: { login: 'owner', id: 1 }, commit: { verification: { verified: true } } }]]) {
+for (const commits of [[], [{ sha: 'head', author: bot, commit: { verification: { verified: false } } }],
+  [{ sha: 'head', author: { login: 'owner', id: 1 }, commit: { verification: { verified: true } } }]]) {
   test('refuses recreation of unverified commits', async () => {
     const { args, calls } = fixture({ user: bot, commits });
     await run(args);
@@ -118,7 +118,7 @@ for (const commits of [[], [{ author: bot, commit: { verification: { verified: f
 }
 
 test('uses the caller verifier for prepared dependency commits', async () => {
-  const commits = [{ sha: 'generated' }];
+  const commits = [{ sha: 'head' }];
   const { args, calls } = fixture({ user: bot, commits });
   let verified = false;
   args.verifyCommits = async (_github, repo, pull, actual) => {
@@ -156,5 +156,14 @@ test('recreates verified Dependabot branches even with merge conflicts', async (
 test('reports failed recreation requests', async () => {
   const { args, calls } = fixture({ user: bot, fail: true });
   await run(args);
+  assert.equal(calls.failures.length, 1);
+});
+
+test('does not recreate while the commit list still describes an older head', async () => {
+  const { args, calls } = fixture({ user: bot, commits: [
+    { sha: 'old-head', author: bot, commit: { verification: { verified: true } } },
+  ] });
+  await run(args);
+  assert.deepEqual(calls.comments, []);
   assert.equal(calls.failures.length, 1);
 });

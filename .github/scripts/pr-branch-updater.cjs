@@ -10,6 +10,7 @@ async function recreatePull({ github, owner, repo, pull, verifyCommits }) {
   if (!pull.head.ref.startsWith('dependabot/')) return 'ineligible';
   const params = { owner, repo, pull_number: pull.number };
   const commits = await github.paginate(github.rest.pulls.listCommits, { ...params, per_page: 100 });
+  if (commits.at(-1)?.sha !== pull.head.sha) throw new Error('Commit list does not match the current head');
   await verifyCommits(github, { owner, repo }, pull, commits);
   const body = `@dependabot recreate\n\n<!-- dependency-refresh:${pull.head.sha} -->`;
   const issue = { owner, repo, issue_number: pull.number };
