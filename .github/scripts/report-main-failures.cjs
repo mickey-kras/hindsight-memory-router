@@ -78,7 +78,7 @@ function reportsForJob(run, job, log) {
       const evidence = clean((diagnostic || 'Job logs unavailable.').slice(0,10000));
       return { key, occurrence,
         title: clean(`[ci] ${job.name}: ${detail ? detail.split('\n')[0] : `${step.name} — diagnostics incomplete`}`).slice(0,240),
-        body: `Main publish did not succeed.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
+        body: `Validation failed on ${clean(run.head_branch || 'main')}.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
           `- Commit: ${run.head_sha}\n- Report attempt: ${run.run_attempt}\n- Run: ${run.html_url}\n` +
           `- Job: ${job.html_url}\n- Conclusion: ${job.conclusion}\n\n` +
           (identified ? '' : 'No reliable error signature was available; this issue is scoped to this occurrence.\n\n') +
@@ -89,8 +89,10 @@ function reportsForJob(run, job, log) {
 
 function trustedRun(run, repository, defaultBranch) {
   return run.repository?.full_name === repository && run.head_repository?.full_name === repository &&
-    run.head_branch === defaultBranch && ['push', 'workflow_dispatch'].includes(run.event) &&
-    run.path === '.github/workflows/publish.yml';
+    ((run.head_branch === defaultBranch && ['push', 'workflow_dispatch'].includes(run.event) &&
+      run.path === '.github/workflows/publish.yml') ||
+     (/^release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(run.head_branch) &&
+      run.event === 'push' && run.path === '.github/workflows/release.yml'));
 }
 
 function main(env = process.env, execute = execFileSync) {

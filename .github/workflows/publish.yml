@@ -2,6 +2,21 @@ name: main
 
 on:
   workflow_call:
+    secrets:
+      TAILSCALE_OAUTH_CLIENT_ID:
+        required: false
+      TAILSCALE_AUDIENCE:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
   workflow_dispatch:
     inputs:
       create_release:
@@ -13,7 +28,7 @@ on:
       - main
 
 concurrency:
-  group: main-validation-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release && format('dependabot-auto-merge-{0}', github.repository) || format('main-validation-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions:
@@ -30,7 +45,7 @@ jobs:
 
   update-pr-branches:
     name: update PR branches
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: write
       pull-requests: write
@@ -97,6 +112,7 @@ jobs:
       issues: write
     env:
       RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
       HINDSIGHT_TEST_IMAGE: ${{ needs.quality.outputs.hindsight_image }}
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
@@ -423,20 +439,19 @@ jobs:
         run: python .github/scripts/sync-sonar-findings.py .scannerwork/report-task.txt
 
   report-validation-failure:
-    name: report main failure
+    name: report validation failure
     needs: [quality, aislop, codeql, architecture, publish, pages, update-pr-branches]
     if: >-
       ${{
         always() &&
-        (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.ref == 'refs/heads/main' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
         (
           needs.quality.result != 'success' ||
           needs.aislop.result != 'success' ||
           needs.codeql.result != 'success' ||
           needs.architecture.result != 'success' ||
           needs.publish.result != 'success' ||
-          needs.pages.result != 'success' ||
+          (github.ref == 'refs/heads/main' && needs.pages.result != 'success') ||
           needs.update-pr-branches.result != 'success'
         )
       }}
@@ -473,6 +488,7 @@ jobs:
       contents: read
     env:
       RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
         with:

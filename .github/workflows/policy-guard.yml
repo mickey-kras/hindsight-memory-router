@@ -28,16 +28,16 @@ jobs:
             const releaseProtected = {
               ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
               ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
-              ".github/scripts/release.cjs": "9fc225debe872d40718e2a27625301593364d0dffd7bed1b50bb2d4a924e1600",
-              ".github/scripts/release-settings.cjs": "c2502d720dc7c1355b3497a38ac7db825a16307aa0e146cdcf313871445f15ff",
-              ".github/scripts/release.test.cjs": "1b7d053e66b1846eed91000e62825a058c519ea71c7441ff4fe7f536e21c85cb",
+              ".github/scripts/release.cjs": "cc5a2a99f6572370b38402219bad284e6aca1ab59c0ed924c9b78fa8b6e9b9ec",
+              ".github/scripts/release-settings.cjs": "e278792f1f2588844c85898eed2c3836af49a9576092451ec4dde9559a8983ec",
+              ".github/scripts/release.test.cjs": "c49527091e5d6c54975f3e6e451b6465c092c6c55849d5c5416f1e1ed739fd7c",
               ".github/scripts/release-policy.test.py": "8c74868e4fe3ba1d46c1beb28f8bd3202c2fc35df9d5f9abbaa1b9e23d10bd80",
-              ".github/rulesets/protect-release-branches.json": "310afd18e1c1b898540487ac963f727c2fe16c52595341f713bcb2c1cf3219cd",
+              ".github/rulesets/protect-release-branches.json": "a901f0f1dfb334df05c4c875bb66f2f41f117593c2d841380c9c4c6b90b7fc04",
               ".github/scripts/publish-image.sh": "ca47a1fb6488b1563fbfec54a41566b62e456da0eadff78d7a79cdebf826a2aa",
               ".github/scripts/publish-image.test.cjs": "6944812c2a2848abeaa1bb42be6a912101ffae345c572bc6c8d3d9e9ba1e4571",
-              ".github/workflows/publish.yml": "9f4b67254a8b0b6c75cdcf1d27d95f6e2f789d45cf6eb06908d8bd1f6a67c1eb",
-              ".github/workflows/release.yml": "3ac6ccda8f968291df7f0ee05718d68c43ab1625b9bdb36d15883e799157e624",
-              ".github/workflows/ci.yml": "b62bcbc53d800f60771db2006f815b3c2410d35d80229ffe80e638e149b65890"
+              ".github/workflows/publish.yml": "42dd31aab82fba6669d8b6bda16771e2dad04b834279d41c8214ce459ab0cfc1",
+              ".github/workflows/release.yml": "93a8ffd3a85ddfe6b12dc1cff306e54e2cab3d6a6b7fcbc9d8c559e0cea7e80f",
+              ".github/workflows/ci.yml": "a9656fedca368f31e1bdedd6af6817d21ebc32d0a2ef22659367794c5201106d"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
