@@ -1,15 +1,34 @@
-name: publish
+name: main
 
 on:
+  workflow_call:
+    secrets:
+      TAILSCALE_OAUTH_CLIENT_ID:
+        required: false
+      TAILSCALE_AUDIENCE:
+        required: false
+      SONAR_TOKEN:
+        required: false
+      SONAR_HOST_URL:
+        required: false
+      RELEASE_APP_PRIVATE_KEY:
+        required: false
+      DOCKERHUB_USERNAME:
+        required: false
+      DOCKERHUB_TOKEN:
+        required: false
   workflow_dispatch:
+    inputs:
+      create_release:
+        description: Create a pinned release branch and automatically release after checks
+        type: boolean
+        default: false
   push:
     branches:
       - main
-    tags:
-      - "v*"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release && format('dependabot-auto-merge-{0}', github.repository) || format('main-validation-{0}', github.ref) }}
   cancel-in-progress: false
 
 permissions:
@@ -18,7 +37,7 @@ permissions:
 jobs:
   quality:
     name: quality
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: read
       security-events: write
@@ -26,7 +45,7 @@ jobs:
 
   update-pr-branches:
     name: update PR branches
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: write
       pull-requests: write
@@ -34,7 +53,7 @@ jobs:
 
   aislop:
     name: aislop
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: read
       security-events: write
@@ -42,7 +61,7 @@ jobs:
 
   codeql:
     name: codeql
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: read
       security-events: write
@@ -50,7 +69,7 @@ jobs:
 
   architecture:
     name: architecture
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
       contents: read
     uses: ./.github/workflows/architecture.yml
@@ -72,23 +91,17 @@ jobs:
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   publish:
-    name: publish
+    name: validate image and release
     needs: [quality, aislop, codeql, architecture]
     if: >-
-      ${{
-        always() &&
-        (
-          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) ||
-          (
-            github.ref == 'refs/heads/main' &&
-            needs.quality.result == 'success' &&
-            needs.aislop.result == 'success' &&
-            needs.codeql.result == 'success' &&
-            needs.architecture.result == 'success'
-          )
-        )
-      }}
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
+      needs.quality.result == 'success' && needs.aislop.result == 'success' &&
+      needs.codeql.result == 'success' && needs.architecture.result == 'success'
     runs-on: ubuntu-latest
+    environment: release-automation
+    concurrency:
+      group: image-release-${{ github.repository }}
+      cancel-in-progress: false
     permissions:
       contents: read
       actions: read
@@ -98,6 +111,9 @@ jobs:
       attestations: write
       issues: write
     env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
+      HINDSIGHT_TEST_IMAGE: ${{ needs.quality.outputs.hindsight_image }}
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
       SOURCE_IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
@@ -158,12 +174,47 @@ jobs:
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
+      - name: Release preflight
+        if: startsWith(github.ref, 'refs/heads/release/')
+        id: release
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: await require('./.github/scripts/release.cjs').validate({ github, context, core });
+
+      - name: Find previously tested image
+        if: startsWith(github.ref, 'refs/heads/release/')
+        id: candidate
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo, run_id: context.runId, per_page: 100,
+            });
+            const artifact = artifacts.find(item => item.name === `image-${context.sha}` && !item.expired);
+            core.setOutput('artifact', artifact ? String(artifact.id) : '');
+
+      - name: Restore previously tested image
+        if: steps.candidate.outputs.artifact != ''
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          artifact-ids: ${{ steps.candidate.outputs.artifact }}
+          path: ${{ runner.temp }}/candidate
+          merge-multiple: true
+
+      - name: Load previously tested image
+        if: steps.candidate.outputs.artifact != ''
+        run: |
+          docker load --input "$RUNNER_TEMP/candidate/router-image.tar"
+          docker tag "$SOURCE_IMAGE" hindsight-memory-router:ci
+
       - name: Build image once
+        if: steps.candidate.outputs.artifact == ''
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           load: true
           provenance: false
+          labels: org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.SOURCE_IMAGE }}
             hindsight-memory-router:ci
@@ -247,59 +298,22 @@ jobs:
             --ignore-unfixed \
             "${SOURCE_IMAGE}"
 
-      - name: Select publish tags
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
-        id: release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
+      - name: Save tested image
+        if: startsWith(github.ref, 'refs/heads/release/') && steps.candidate.outputs.artifact == ''
+        run: docker save --output "$RUNNER_TEMP/router-image.tar" "$SOURCE_IMAGE"
 
-          case "${GITHUB_REF}" in
-            refs/heads/main)
-              channel=main
-              version=latest
-              ghcr_tags="${IMAGE_GHCR}:latest ${IMAGE_GHCR}:${GITHUB_SHA}"
-              dockerhub_tags="${IMAGE_DOCKERHUB}:latest ${IMAGE_DOCKERHUB}:${GITHUB_SHA}"
-              ;;
-            refs/tags/v*)
-              version="${GITHUB_REF_NAME}"
-              if [[ ! "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-                echo "Invalid release tag: ${version}" >&2
-                exit 1
-              fi
-              git fetch --no-tags origin main
-              if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-                echo "Tag ${version} is not reachable from main." >&2
-                exit 1
-              fi
-              run_ids="$(gh api \
-                "/repos/${GITHUB_REPOSITORY}/actions/workflows/publish.yml/runs?branch=main&status=success&head_sha=${GITHUB_SHA}&per_page=100" \
-                --jq '.workflow_runs[] | select(.head_sha == env.GITHUB_SHA and (.event == "push" or .event == "workflow_dispatch")) | .id')"
-              if [[ -z "${run_ids}" ]]; then
-                echo "Commit ${GITHUB_SHA} has no successful main publish run." >&2
-                exit 1
-              fi
-              channel=stable-tag
-              ghcr_tags="${IMAGE_GHCR}:${version} ${IMAGE_GHCR}:${GITHUB_SHA}"
-              dockerhub_tags="${IMAGE_DOCKERHUB}:${version} ${IMAGE_DOCKERHUB}:${GITHUB_SHA}"
-              ;;
-            *)
-              echo "Unsupported publishing ref: ${GITHUB_REF}" >&2
-              exit 1
-              ;;
-          esac
-
-          {
-            echo "channel=${channel}"
-            echo "version=${version}"
-            echo "ghcr_tags=${ghcr_tags}"
-            echo "dockerhub_tags=${dockerhub_tags}"
-          } >> "$GITHUB_OUTPUT"
+      - name: Retain tested image for retries
+        if: startsWith(github.ref, 'refs/heads/release/') && steps.candidate.outputs.artifact == ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: image-${{ github.sha }}
+          path: ${{ runner.temp }}/router-image.tar
+          compression-level: 0
+          retention-days: 30
+          if-no-files-found: error
 
       - name: Log in to GHCR
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        if: startsWith(github.ref, 'refs/heads/release/')
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -307,52 +321,24 @@ jobs:
           password: ${{ github.token }}
 
       - name: Log in to Docker Hub
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        if: startsWith(github.ref, 'refs/heads/release/')
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      - name: Recheck release head before publication
+        if: startsWith(github.ref, 'refs/heads/release/')
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: await require('./.github/scripts/release.cjs').validate({ github, context, core });
+
       - name: Push the scanned image
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+        if: startsWith(github.ref, 'refs/heads/release/')
         id: push
         env:
-          CHANNEL: ${{ steps.release.outputs.channel }}
-          GHCR_TAGS: ${{ steps.release.outputs.ghcr_tags }}
-          DOCKERHUB_TAGS: ${{ steps.release.outputs.dockerhub_tags }}
-        run: |
-          set -euo pipefail
-
-          if [[ "${CHANNEL}" == "main" ]]; then
-            git fetch --no-tags origin main
-            if [[ "${GITHUB_SHA}" != "$(git rev-parse origin/main)" ]]; then
-              echo "::notice::Skipping publish because a newer main commit is available."
-              echo "published=false" >> "$GITHUB_OUTPUT"
-              {
-                echo "## Image publish skipped"
-                echo
-                echo "Commit \`${GITHUB_SHA}\` was superseded while validation was running."
-                echo "The queued workflow for the current main tip will publish the image."
-              } >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-          fi
-
-          for tag in ${GHCR_TAGS} ${DOCKERHUB_TAGS}; do
-            docker tag "${SOURCE_IMAGE}" "$tag"
-            docker push "$tag"
-          done
-
-          ghcr_digest="$(docker buildx imagetools inspect "${IMAGE_GHCR}:${GITHUB_SHA}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          dockerhub_digest="$(docker buildx imagetools inspect "${IMAGE_DOCKERHUB}:${GITHUB_SHA}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
-          test -n "$ghcr_digest"
-          test -n "$dockerhub_digest"
-          test "$ghcr_digest" = "$dockerhub_digest"
-          {
-            echo "published=true"
-            echo "ghcr_digest=${ghcr_digest}"
-            echo "dockerhub_digest=${dockerhub_digest}"
-          } >> "$GITHUB_OUTPUT"
+          VERSION: ${{ steps.release.outputs.version }}
+        run: bash .github/scripts/publish-image.sh
 
       - name: Install Cosign
         if: steps.push.outputs.published == 'true'
@@ -388,7 +374,7 @@ jobs:
       - name: Record image digests
         if: steps.push.outputs.published == 'true'
         env:
-          CHANNEL: ${{ steps.release.outputs.channel }}
+          CHANNEL: release
           VERSION: ${{ steps.release.outputs.version }}
           GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
           DOCKERHUB_DIGEST: ${{ steps.push.outputs.dockerhub_digest }}
@@ -413,9 +399,36 @@ jobs:
         if: steps.push.outputs.published == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-digests-${{ github.sha }}
+          name: image-digests-${{ github.sha }}-${{ github.run_attempt }}
           path: image-digests.txt
           if-no-files-found: error
+
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
+      - name: Release App token
+        if: startsWith(github.ref, 'refs/heads/release/')
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Publish immutable release
+        if: steps.push.outputs.published == 'true'
+        id: finalized
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: await require('./.github/scripts/release.cjs').finalize({ github, context, core });
+
+      - name: Promote latest released image
+        if: steps.finalized.outputs.latest == 'true'
+        env:
+          GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
+          DOCKERHUB_DIGEST: ${{ steps.push.outputs.dockerhub_digest }}
+        run: |
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE_GHCR:latest" "$IMAGE_GHCR@$GHCR_DIGEST"
+          docker buildx imagetools create --prefer-index=false --tag "$IMAGE_DOCKERHUB:latest" "$IMAGE_DOCKERHUB@$DOCKERHUB_DIGEST"
 
       - name: Synchronize SonarQube findings
         if: failure() && steps.sonar-quality-gate.outcome == 'failure' && github.ref == 'refs/heads/main'
@@ -426,20 +439,19 @@ jobs:
         run: python .github/scripts/sync-sonar-findings.py .scannerwork/report-task.txt
 
   report-validation-failure:
-    name: report main failure
+    name: report validation failure
     needs: [quality, aislop, codeql, architecture, publish, pages, update-pr-branches]
     if: >-
       ${{
         always() &&
-        (github.event_name == 'push' || github.event_name == 'workflow_dispatch') &&
-        github.ref == 'refs/heads/main' &&
+        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
         (
           needs.quality.result != 'success' ||
           needs.aislop.result != 'success' ||
           needs.codeql.result != 'success' ||
           needs.architecture.result != 'success' ||
           needs.publish.result != 'success' ||
-          needs.pages.result != 'success' ||
+          (github.ref == 'refs/heads/main' && needs.pages.result != 'success') ||
           needs.update-pr-branches.result != 'success'
         )
       }}
@@ -462,3 +474,40 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash .github/scripts/upsert-main-failure-issue.sh
+
+  prepare-release:
+    name: create release branch
+    needs: [quality, aislop, codeql, architecture, publish]
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.create_release
+    runs-on: ubuntu-latest
+    environment: release-automation
+    concurrency:
+      group: release-preparation-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    env:
+      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
+      RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
+      - name: Release App token
+        id: app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Freeze inputs and create release branch
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: await require('./.github/scripts/release.cjs').prepare({ github, context, core });

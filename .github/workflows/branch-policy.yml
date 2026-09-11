@@ -2,15 +2,12 @@ name: branch-policy
 
 on:
   workflow_call:
-  push:
-    tags: ['v*']
 
 permissions:
   contents: read
 
 env:
   WORK_BRANCH_RE: '^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$'
-  RELEASE_TAG_RE: '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
 
 jobs:
   branch-name:
@@ -38,44 +35,5 @@ jobs:
 
           if [[ ! "$HEAD_REF" =~ $WORK_BRANCH_RE ]]; then
             echo "Branch must match: $WORK_BRANCH_RE" >&2
-            exit 1
-          fi
-
-  validate-release-tag:
-    name: validate release tag
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Validate release tag
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REF_NAME: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ ! "$REF_NAME" =~ $RELEASE_TAG_RE ]]; then
-            echo "Release tag must match SemVer: $REF_NAME" >&2
-            exit 1
-          fi
-
-          object="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${REF_NAME}")"
-          object_sha="$(jq -r '.object.sha' <<<"$object")"
-          object_type="$(jq -r '.object.type' <<<"$object")"
-
-          while [[ "$object_type" == "tag" ]]; do
-            object="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${object_sha}")"
-            object_sha="$(jq -r '.object.sha' <<<"$object")"
-            object_type="$(jq -r '.object.type' <<<"$object")"
-          done
-
-          if [[ "$object_type" != "commit" ]]; then
-            echo "Release tag must resolve to a commit: $REF_NAME" >&2
-            exit 1
-          fi
-
-          status="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${object_sha}...main" --jq '.status')"
-          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
-            echo "Release tag must point to a commit reachable from main: $REF_NAME" >&2
             exit 1
           fi

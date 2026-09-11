@@ -23,6 +23,22 @@ jobs:
 
             const wfDir = ['.github', 'workflows'].join('/');
             const publishPath = [wfDir, 'publish.yml'].join('/');
+            const releasePath = [wfDir, 'release.yml'].join('/');
+            // Reviewed release workflows and helpers. Pin refreshes preserve workflow shape.
+            const releaseProtected = {
+              ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
+              ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
+              ".github/scripts/release.cjs": "cc5a2a99f6572370b38402219bad284e6aca1ab59c0ed924c9b78fa8b6e9b9ec",
+              ".github/scripts/release-settings.cjs": "e278792f1f2588844c85898eed2c3836af49a9576092451ec4dde9559a8983ec",
+              ".github/scripts/release.test.cjs": "c49527091e5d6c54975f3e6e451b6465c092c6c55849d5c5416f1e1ed739fd7c",
+              ".github/scripts/release-policy.test.py": "8c74868e4fe3ba1d46c1beb28f8bd3202c2fc35df9d5f9abbaa1b9e23d10bd80",
+              ".github/rulesets/protect-release-branches.json": "a901f0f1dfb334df05c4c875bb66f2f41f117593c2d841380c9c4c6b90b7fc04",
+              ".github/scripts/publish-image.sh": "ca47a1fb6488b1563fbfec54a41566b62e456da0eadff78d7a79cdebf826a2aa",
+              ".github/scripts/publish-image.test.cjs": "6944812c2a2848abeaa1bb42be6a912101ffae345c572bc6c8d3d9e9ba1e4571",
+              ".github/workflows/publish.yml": "42dd31aab82fba6669d8b6bda16771e2dad04b834279d41c8214ce459ab0cfc1",
+              ".github/workflows/release.yml": "93a8ffd3a85ddfe6b12dc1cff306e54e2cab3d6a6b7fcbc9d8c559e0cea7e80f",
+              ".github/workflows/ci.yml": "a9656fedca368f31e1bdedd6af6817d21ebc32d0a2ef22659367794c5201106d"
+            };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
             const codeqlPath = [wfDir, 'codeql.yml'].join('/');
@@ -76,7 +92,7 @@ jobs:
             );
             const policySensitiveChanged =
               workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath) ||
-              changed.has(dependabotScriptPath);
+              changed.has(dependabotScriptPath) || Object.keys(releaseProtected).some(path => changed.has(path));
             const failures = [];
 
             async function readFileAtHead(path) {
@@ -207,7 +223,7 @@ jobs:
               const privileged = privilegedWriteKeys.filter((permission) =>
                 hasYamlScalar(content, permission, 'write'),
               );
-              if (privileged.length > 0 && ![publishPath, dependabotWorkflowPath].includes(path)) {
+              if (privileged.length > 0 && ![publishPath, releasePath, dependabotWorkflowPath].includes(path)) {
                 fail(`${path}: privileged write permissions are only allowed in trusted workflows`);
               }
               if (privileged.length > 0 && hasYamlEvent(content, 'pull_request')) {
@@ -218,6 +234,18 @@ jobs:
               if (unpinned.length > 0) {
                 fail(`${path}: actions must use full commit SHAs: ${unpinned.join(', ')}`);
               }
+            }
+
+            for (const [path, expected] of Object.entries(releaseProtected)) {
+              if (!changed.has(path)) continue;
+              if (removedOrRenamed.has(path)) {
+                fail(`${path}: protected release automation must not be removed`);
+                continue;
+              }
+              const raw = await readFileAtHead(path);
+              const content = path.endsWith('.yml') ? raw.replace(/(uses:\s*[^\s@]+)@[a-f0-9]{40}/g, '$1@PINNED') : raw;
+              const digest = require('node:crypto').createHash('sha256').update(content).digest('hex');
+              if (digest !== expected) fail(`${path}: release automation must match its reviewed policy`);
             }
 
             if (changed.has(publishPath)) {
@@ -260,9 +288,6 @@ jobs:
                 }
                 if (!publish.includes('python .github/scripts/sync-sonar-findings.py')) {
                   fail('publish.yml: SonarQube failures must synchronize actionable findings');
-                }
-                if (!publish.includes('echo "published=false" >> "$GITHUB_OUTPUT"')) {
-                  fail('publish.yml: superseded main runs must finish without a false publish failure');
                 }
                 if (!publish.includes("if: steps.push.outputs.published == 'true'")) {
                   fail('publish.yml: post-publish supply-chain steps must require a published image');

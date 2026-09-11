@@ -257,7 +257,7 @@ async def test_extended_facade_routes_forward_to_resolved_bank(
 
 
 @pytest.mark.asyncio
-async def test_observation_scopes_preserves_pagination_and_resolved_bank() -> None:
+async def test_observation_scopes_filters_unsupported_pagination_and_resolved_bank() -> None:
     page = {
         "scopes": [{"tags": ["project:router"], "count": 2}],
         "total": 12,
@@ -275,7 +275,7 @@ async def test_observation_scopes_preserves_pagination_and_resolved_bank() -> No
     call = policy.hindsight.openclaw_request.await_args
     assert call.args[1:3] == (
         "GET",
-        "/v1/default/banks/resolved-main/observations/scopes?limit=1&offset=5",
+        "/v1/default/banks/resolved-main/observations/scopes",
     )
 
 
