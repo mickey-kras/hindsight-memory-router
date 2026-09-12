@@ -10,7 +10,7 @@ requires-python = ">=3.12"
 dependencies = [
   "agent-memory-guard==0.3.1",
   "aiosqlite==0.22.1",
-  "Pebble==5.2.1",
+  "Pebble==5.2.2",
   "cryptography==50.0.1",
   "fastapi==0.141.1",
   "httpx==0.28.1",
