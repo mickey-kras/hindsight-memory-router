@@ -1,23 +1,10 @@
 const { spawnSync } = require('node:child_process');
 
 const SEVERITY = { low: 1, moderate: 2, high: 3, critical: 4 };
-const ADVISORY = 'https://github.com/advisories/GHSA-vwc7-r8mq-g2x9';
-
-function waived(name, vulnerability) {
-  if (vulnerability.fixAvailable !== false) return false;
-  if (name === 'adm-zip') {
-    return vulnerability.isDirect === false &&
-      vulnerability.effects?.length === 1 && vulnerability.effects[0] === 'aislop' &&
-      vulnerability.via?.length > 0 && vulnerability.via.every(item => item.url === ADVISORY);
-  }
-  return name === 'aislop' && vulnerability.isDirect === true &&
-    vulnerability.effects?.length === 0 &&
-    vulnerability.via?.length === 1 && vulnerability.via[0] === 'adm-zip';
-}
 
 function findings(report) {
-  return Object.entries(report.vulnerabilities || {}).filter(([name, vulnerability]) =>
-    SEVERITY[vulnerability.severity] >= SEVERITY.moderate && !waived(name, vulnerability));
+  return Object.entries(report.vulnerabilities || {}).filter(([, vulnerability]) =>
+    SEVERITY[vulnerability.severity] >= SEVERITY.moderate);
 }
 
 function audit(directory = '.') {
@@ -30,11 +17,6 @@ function audit(directory = '.') {
     try { report = JSON.parse(result.stdout); } catch { /* Retry registry or npm failures. */ }
     if (report && !report.error) {
       const failures = findings(report);
-      for (const [name, vulnerability] of Object.entries(report.vulnerabilities || {})) {
-        if (waived(name, vulnerability)) {
-          console.warn(`${name}: temporarily accepted ${ADVISORY}; no upstream fix is available`);
-        }
-      }
       if (!failures.length) return;
       console.error(JSON.stringify(Object.fromEntries(failures), null, 2));
       process.exitCode = 1;
@@ -49,5 +31,5 @@ function audit(directory = '.') {
   }
 }
 
-module.exports = { findings, waived };
+module.exports = { findings };
 if (require.main === module) audit(process.argv[2]);
