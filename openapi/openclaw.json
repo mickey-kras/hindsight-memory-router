@@ -4339,6 +4339,27 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
           }
         ],
         "responses": {
