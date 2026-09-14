@@ -73,3 +73,5 @@ private-network addresses or service tokens
 ```
 
 Keep them in your private deployment environment.
+
+Release branch/tag creation also requires the dedicated App and `release-automation` environment described in [Releasing](RELEASING.md). Registry publishing runs only on release branches.

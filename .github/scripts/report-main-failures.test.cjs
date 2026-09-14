@@ -152,3 +152,10 @@ test('captures fractional timestamps in the final step second', () => {
   assert.equal(first.key, reportsForJob({ ...run, id: 43 }, job, text)[0].key);
   assert.doesNotMatch(first.body, /diagnostics incomplete/);
 });
+
+ test('reports release pushes only through the protected release workflow', () => {
+  const release = { ...run, head_branch: 'release/0.1.0', path: '.github/workflows/release.yml' };
+  assert.equal(trustedRun(release, 'owner/repo', 'main'), true);
+  assert.equal(trustedRun({ ...release, event: 'pull_request' }, 'owner/repo', 'main'), false);
+  assert.equal(trustedRun({ ...release, path: '.github/workflows/other.yml' }, 'owner/repo', 'main'), false);
+ });

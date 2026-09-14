@@ -14,7 +14,11 @@
     "client": "c5ca541070d0fc597a0728c8e87f58aa67ab45a8",
     "facade_spec": "3ed047ad60b9ae59a9d921c9dfaf5fff66d65d23"
   },
-  "plugin_client_methods": ["createBank", "recall", "retain"],
+  "plugin_client_methods": [
+    "createBank",
+    "recall",
+    "retain"
+  ],
   "agent_sdk_methods": [
     "createMentalModel",
     "deleteMentalModel",
