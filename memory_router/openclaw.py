@@ -6,7 +6,7 @@ import logging
 import multiprocessing
 from contextlib import suppress
 from threading import BoundedSemaphore, Lock
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, urlencode
 
 from pebble import ProcessExpired, ProcessPool
@@ -45,7 +45,7 @@ _RESPONSE_SCANNER_SHUT_DOWN = "response safety scanner is shut down"
 def _new_facade_scan_executor() -> ProcessPool:
     return ProcessPool(
         max_workers=FACADE_SCAN_WORKERS,
-        context=multiprocessing.get_context("spawn"),
+        context=cast(Any, multiprocessing.get_context("spawn")),
     )
 
 
