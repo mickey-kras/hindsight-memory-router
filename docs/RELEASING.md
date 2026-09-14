@@ -54,6 +54,8 @@ Docker publication. `latest` tracks the highest released version; older-line fix
 4. In **Settings → Rules → Rulesets**, import/update all four generated rulesets. Only the two creation
    rules permit the App bypass. Release branch/tag protections have no bypass. Keep main protections
    and **Enforce release tag names** accepting `vX.Y.Z`; exclude `refs/heads/release/*` from work-branch naming.
+   After import, confirm every rule shows in Settings; the template uses preview rule types like
+   copilot_code_review, so re-import or adjust before relying on this runbook.
 5. Enable **immutable releases**. Review all bypass actors in Settings, then use your owner `gh` login:
 
    ```sh

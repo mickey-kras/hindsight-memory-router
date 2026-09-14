@@ -21,7 +21,11 @@ if (cmd === 'image') {
 } else if (cmd === 'manifest') {
   if (state.denied) { process.stderr.write('unauthorized'); process.exit(1); }
   if (state.different || state.existing.includes(rest[0])) {
-    process.stdout.write(JSON.stringify({config: {digest: state.different ? 'wrong' : config}}));
+    if (state.index) {
+      process.stdout.write(JSON.stringify({mediaType: 'application/vnd.oci.image.index.v1+json', manifests: []}));
+    } else {
+      process.stdout.write(JSON.stringify({config: {digest: state.different ? 'wrong' : config}}));
+    }
   } else { process.stderr.write('no such manifest'); process.exit(1); }
 } else if (cmd === 'push') {
   state.pushes.push(sub);
@@ -49,6 +53,12 @@ test('scan-to-push promotion refuses different existing images and registry erro
     assert.notEqual(run().status, 0);
     assert.deepEqual(get().pushes, []);
   }
+}));
+
+test('scan-to-push promotion refuses existing multi-arch index manifests before any push', () => fixture(({ run, put, get, env }) => {
+  put({ existing: [`${env.IMAGE_GHCR}:${env.VERSION}`], pushes: [], index: true });
+  assert.notEqual(run().status, 0);
+  assert.deepEqual(get().pushes, []);
 }));
 
 test('partial registry publication resumes only missing tags without overwriting existing ones', () => fixture(({ run, put, get, env }) => {

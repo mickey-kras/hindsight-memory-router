@@ -16,6 +16,11 @@ tags=("$IMAGE_GHCR:$VERSION" "$IMAGE_GHCR:$GITHUB_SHA" "$IMAGE_DOCKERHUB:$VERSIO
 missing=()
 for tag in "${tags[@]}"; do
   if docker manifest inspect "$tag" > "$RUNNER_TEMP/release-manifest.json" 2> "$RUNNER_TEMP/release-manifest.err"; then
+    media_type="$(jq -r '.mediaType // ""' "$RUNNER_TEMP/release-manifest.json")"
+    if [[ "$media_type" == *image.index* || "$media_type" == *manifest.list* ]]; then
+      echo "Refusing to replace a multi-arch manifest list: $tag ($media_type)" >&2
+      exit 1
+    fi
     remote_config="$(jq -er '.config.digest' "$RUNNER_TEMP/release-manifest.json")"
     if [[ "$remote_config" != "$local_config" ]]; then
       echo "Refusing to replace an existing image: $tag" >&2
