@@ -126,8 +126,17 @@ class ReleasePolicyTests(unittest.TestCase):
                 "Release App token",
             ]:
                 self.assertEqual(steps[name]["if"], "startsWith(github.ref, 'refs/heads/release/')")
-            for name in ["SonarQube analysis", "SonarQube quality gate"]:
-                self.assertIn("github.ref == 'refs/heads/main'", steps[name]["if"])
+            sonar = main["jobs"]["sonar"]
+            self.assertEqual(
+                sonar["if"],
+                "(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'",
+            )
+            self.assertNotIn("environment", sonar)
+            self.assertIn("sonar", prepare["needs"])
+            self.assertNotIn("SonarQube analysis", steps)
+            sonar_steps = {step.get("name"): step for step in sonar["steps"]}
+            for name in ["SonarQube analysis", "SonarQube quality gate", "Synchronize SonarQube findings"]:
+                self.assertIn(name, sonar_steps)
             self.assertEqual(
                 steps["Publish immutable release"]["if"], "steps.push.outputs.published == 'true'"
             )

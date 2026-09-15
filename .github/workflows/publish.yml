@@ -90,6 +90,72 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
+  sonar:
+    name: sonar
+    needs: [quality, aislop, codeql, architecture]
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Connect to the tailnet
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          audience: ${{ secrets.TAILSCALE_AUDIENCE }}
+          tags: tag:github-sonar
+          use-cache: 'true'
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Generate coverage for SonarQube
+        run: |
+          python -m pip install 'pip==26.1.2'
+          python -m pip install -r requirements.txt
+          python -m pip install -e '.[dev]'
+          coverage run -m pytest
+          coverage xml
+
+      - name: SonarQube analysis
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: SonarQube quality gate
+        id: sonar-quality-gate
+        timeout-minutes: 6
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
+        with:
+          pollingTimeoutSec: 270
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+
+      - name: Synchronize SonarQube findings
+        if: failure() && steps.sonar-quality-gate.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+        run: python .github/scripts/sync-sonar-findings.py .scannerwork/report-task.txt
+
   publish:
     name: validate image and release
     needs: [quality, aislop, codeql, architecture]
@@ -127,50 +193,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Connect to the tailnet
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
-        with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          audience: ${{ secrets.TAILSCALE_AUDIENCE }}
-          tags: tag:github-sonar
-          use-cache: 'true'
-
-      - name: Set up Python
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: requirements.txt
-
-      - name: Generate coverage for SonarQube
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-        run: |
-          python -m pip install 'pip==26.1.2'
-          python -m pip install -r requirements.txt
-          python -m pip install -e '.[dev]'
-          coverage run -m pytest
-          coverage xml
-
-      - name: SonarQube analysis
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8.2.1
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-      - name: SonarQube quality gate
-        id: sonar-quality-gate
-        if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
-        timeout-minutes: 6
-        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa # v1
-        with:
-          pollingTimeoutSec: 270
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
 
@@ -430,17 +452,9 @@ jobs:
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE_GHCR:latest" "$IMAGE_GHCR@$GHCR_DIGEST"
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE_DOCKERHUB:latest" "$IMAGE_DOCKERHUB@$DOCKERHUB_DIGEST"
 
-      - name: Synchronize SonarQube findings
-        if: failure() && steps.sonar-quality-gate.outcome == 'failure' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-        run: python .github/scripts/sync-sonar-findings.py .scannerwork/report-task.txt
-
   report-validation-failure:
     name: report validation failure
-    needs: [quality, aislop, codeql, architecture, publish, pages, update-pr-branches]
+    needs: [quality, aislop, codeql, architecture, publish, sonar, pages, update-pr-branches]
     if: >-
       ${{
         always() &&
@@ -451,6 +465,7 @@ jobs:
           needs.codeql.result != 'success' ||
           needs.architecture.result != 'success' ||
           needs.publish.result != 'success' ||
+          (github.ref == 'refs/heads/main' && needs.sonar.result != 'success') ||
           (github.ref == 'refs/heads/main' && needs.pages.result != 'success') ||
           needs.update-pr-branches.result != 'success'
         )
@@ -477,7 +492,7 @@ jobs:
 
   prepare-release:
     name: create release branch
-    needs: [quality, aislop, codeql, architecture, publish]
+    needs: [quality, aislop, codeql, architecture, publish, sonar]
     if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.create_release
     runs-on: ubuntu-latest
     environment: release-automation

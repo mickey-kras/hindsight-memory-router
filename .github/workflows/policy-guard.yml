@@ -31,11 +31,11 @@ jobs:
               ".github/scripts/release.cjs": "cc5a2a99f6572370b38402219bad284e6aca1ab59c0ed924c9b78fa8b6e9b9ec",
               ".github/scripts/release-settings.cjs": "e278792f1f2588844c85898eed2c3836af49a9576092451ec4dde9559a8983ec",
               ".github/scripts/release.test.cjs": "c49527091e5d6c54975f3e6e451b6465c092c6c55849d5c5416f1e1ed739fd7c",
-              ".github/scripts/release-policy.test.py": "8c74868e4fe3ba1d46c1beb28f8bd3202c2fc35df9d5f9abbaa1b9e23d10bd80",
+              ".github/scripts/release-policy.test.py": "65120615fe0795bc432ab1f2f81d4f62f6018f9dc57a4dd66e89f7d104c037de",
               ".github/rulesets/protect-release-branches.json": "a901f0f1dfb334df05c4c875bb66f2f41f117593c2d841380c9c4c6b90b7fc04",
               ".github/scripts/publish-image.sh": "68c4f798e7d211e61f200305a3bd25df6b129e1fc8602af9028240e75e60166c",
               ".github/scripts/publish-image.test.cjs": "f3eaefa3e7e82fc4924a5e04b4c1aead756b18f882ea0990f3cd11d22595c568",
-              ".github/workflows/publish.yml": "42dd31aab82fba6669d8b6bda16771e2dad04b834279d41c8214ce459ab0cfc1",
+              ".github/workflows/publish.yml": "e2ab44595d2886b35c823ca37ad8edee2dfe18ce33f28a3065e0a9170b05f48a",
               ".github/workflows/release.yml": "c3ff4009f35330a6c416647f65e74b5b11a9a8b1c519deeafbaab723689fe94d",
               ".github/workflows/ci.yml": "a9656fedca368f31e1bdedd6af6817d21ebc32d0a2ef22659367794c5201106d"
             };
