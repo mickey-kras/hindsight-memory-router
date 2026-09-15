@@ -789,15 +789,19 @@ def _scan_encoded(  # NOSONAR
             result.add(SafetyFinding("span_limit", "encoded_payload"))
             return
         hard_signal = _hard_base64_signal(candidate)
+        # Fail closed only on explicit trailing padding. Bare '+'/'/' runs are
+        # common in ordinary prose (paths, URLs, dates, "commit/PR", model
+        # names) and must not convict on a failed decode alone.
+        fail_closed = fail_closed_invalid and candidate.endswith("=")
         padded = _padded_base64(candidate)
         if padded is None:
-            if hard_signal and fail_closed_invalid:
+            if fail_closed:
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
             continue
         try:
             decoded = base64.b64decode(padded, validate=True)
         except binascii.Error:
-            if hard_signal and fail_closed_invalid:
+            if fail_closed:
                 result.add(SafetyFinding("invalid_base64", "encoded_payload"))
             continue
         if (
@@ -812,7 +816,7 @@ def _scan_encoded(  # NOSONAR
         try:
             decoded_text = decoded.decode("utf-8", errors="strict")
         except UnicodeDecodeError:
-            if hard_signal and fail_closed_invalid:
+            if fail_closed:
                 result.add(SafetyFinding("invalid_utf8", "encoded_payload"))
                 continue
             lossy_text = _lossy_ascii_decoded_text(decoded)

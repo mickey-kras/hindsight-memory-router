@@ -2056,9 +2056,29 @@ def test_scanner_field_budget_fails_closed(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_binary_base64_strong_signal_fails_closed() -> None:
-    payload = base64.b64encode(b"\xff\xfe\xfd\xfc\xfb\xfa").decode()
+    payload = base64.b64encode(b"\xff\xfe\xfd\xfc\xfb").decode()
+    assert payload.endswith("=")
     result = scan_content(payload)
     assert any(finding.matched == "invalid_utf8" for finding in result.findings)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "see commit/PR/issue ids in the changelog",
+        "read the docs and/or the runbook",
+        "green on CI/CD after the fix",
+        "model name ollama/ci-fake in logs",
+        "released on 2026/09/15 upstream",
+        "edited src/core/inject.ts today",
+        "fetch https://example.com/docs/guide for details",
+        "set DEBUG=true before running",
+        "notes on C++ and C-- compilers",
+    ],
+)
+def test_benign_prose_with_in_alphabet_separators_stays_safe(text: str) -> None:
+    results = _all_surfaces_single(text)
+    assert all(result.safe for result in results), text
 
 
 def test_split_base64_tolerates_short_chunks_decoy_and_separators() -> None:
