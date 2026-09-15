@@ -74,7 +74,7 @@ function minimalInstance(schema, root, depth = 0) {
     while (value.length < min) value += "i";
     return value;
   }
-  if (type === "integer" || resolved.type === "number") {
+  if (type === "integer" || type === "number") {
     if (typeof resolved.minimum === "number") return resolved.minimum;
     if (typeof resolved.exclusiveMinimum === "number") return resolved.exclusiveMinimum + 1;
     return 1;
