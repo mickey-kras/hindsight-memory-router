@@ -74,7 +74,7 @@ function minimalInstance(schema, root, depth = 0) {
     while (value.length < min) value += "i";
     return value;
   }
-  if (type === "integer" || type === "number") {
+  if (type === "integer" || resolved.type === "number") {
     if (typeof resolved.minimum === "number") return resolved.minimum;
     if (typeof resolved.exclusiveMinimum === "number") return resolved.exclusiveMinimum + 1;
     return 1;
@@ -102,6 +102,13 @@ function minimalInstance(schema, root, depth = 0) {
 function schemaContent(schema) {
   return JSON.stringify(minimalInstance(schema ?? { type: "object" }));
 }
+
+// Free-form answers are a fixed benign fact, never a prompt echo. Hindsight's
+// own prompts carry meta-instructions (for example the phrase "system prompt"
+// in the reflect final-synthesis instructions) that the router response
+// scanner must keep blocking; a parroting fake would trip that gate and block
+// every reflect response in CI. Real models do not recite their prompts.
+const CI_FACT = "CI extracted fact: the release test project uses Python and TypeScript.";
 
 function toolArguments(definition, messages) {
   const parameters = definition?.parameters && typeof definition.parameters === "object" ? definition.parameters : {};
@@ -187,7 +194,6 @@ createServer(async (req, res) => {
           ],
         });
       }
-      const text = textFromMessages(body.messages);
       return send(res, 200, {
         id: "ci-chat",
         object: "chat.completion",
@@ -196,7 +202,7 @@ createServer(async (req, res) => {
             index: 0,
             message: {
               role: "assistant",
-              content: `CI extracted fact: ${text}`,
+              content: CI_FACT,
             },
             finish_reason: "stop",
           },
@@ -231,9 +237,7 @@ createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/api/chat") {
       const body = await readJson(req);
-      const content = body.format
-        ? schemaContent(body.format)
-        : `CI extracted fact: ${textFromMessages(body.messages)}`;
+      const content = body.format ? schemaContent(body.format) : CI_FACT;
       return send(res, 200, {
         model: body.model ?? "ci-fake",
         done: true,
@@ -249,7 +253,7 @@ createServer(async (req, res) => {
       return send(res, 200, {
         model: body.model ?? "ci-fake",
         done: true,
-        response: `CI extracted fact: ${body.prompt ?? "memory"}`,
+        response: CI_FACT,
       });
     }
 
