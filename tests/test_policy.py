@@ -42,10 +42,19 @@ async def test_safe_retain_reaches_provider_with_router_metadata() -> None:
     assert bank == "main"
     assert body["items"][0]["metadata"] == {
         "router_writer_id": "main",
-        "router_source": "openclaw",
+        "router_source": "application",
         "router_decision": "allowed",
         "router_target_bank": "main",
     }
+
+
+@pytest.mark.asyncio
+async def test_explicit_source_overrides_writer_rule() -> None:
+    hindsight = FakeHindsight()
+    router, _, _, _ = policy(hindsight)
+    await router.retain("main", {"items": [{"content": "note"}]}, source="mcp")
+    _, body = hindsight.retain_calls[0]
+    assert body["items"][0]["metadata"]["router_source"] == "mcp"
 
 
 @pytest.mark.asyncio
@@ -91,6 +100,16 @@ async def test_unknown_writer_is_quarantined_without_consuming_provider_quota() 
     assert hindsight.retain_calls == []
     assert limits.retain == []
     assert store.items[0]["reason"] == "unknown_writer"
+    assert store.items[0]["source"] == "openclaw"
+
+
+@pytest.mark.asyncio
+async def test_unknown_writer_recall_quarantine_keeps_openclaw_source() -> None:
+    hindsight = FakeHindsight()
+    router, _, store, _ = policy(hindsight)
+    assert await router.recall("missing", {"query": "status"}) == {"results": []}
+    assert store.items[0]["reason"] == "unknown_writer"
+    assert store.items[0]["source"] == "openclaw"
 
 
 @pytest.mark.asyncio
@@ -116,6 +135,7 @@ async def test_malicious_recalled_memory_never_reaches_caller() -> None:
     assert len(hindsight.recall_calls) == 1
     assert store.items[0]["kind"] == "recalled_memory"
     assert store.items[0]["reason"] == "recalled_suspicious_memory"
+    assert store.items[0]["source"] == "application"
 
 
 @pytest.mark.asyncio

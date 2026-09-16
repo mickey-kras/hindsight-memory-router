@@ -106,14 +106,17 @@ class RouterPolicy:
         self.repository = repository
         self.security_event_identities = SecurityEventIdentityCap()
 
-    async def retain(self, writer_id: str, body: dict[str, Any], source: str = "openclaw") -> Any:
+    async def retain(self, writer_id: str, body: dict[str, Any], source: str | None = None) -> Any:
         writer = self.registry.writers.get(writer_id)
         if writer is None:
-            return await self._quarantine_retain(writer_id, source, "unknown_writer", body)
-        return await self._retain_to_bank(writer_id, writer.write_bank, body, source)
+            return await self._quarantine_retain(
+                writer_id, source if source is not None else "openclaw", "unknown_writer", body
+            )
+        resolved = source if source is not None else str(writer.source)
+        return await self._retain_to_bank(writer_id, writer.write_bank, body, resolved)
 
     async def retain_bank(
-        self, principal_id: str, bank: str, body: dict[str, Any], source: str = "openclaw"
+        self, principal_id: str, bank: str, body: dict[str, Any], source: str
     ) -> Any:
         return await self._retain_to_bank(principal_id, bank, body, source)
 
@@ -130,16 +133,21 @@ class RouterPolicy:
         return await self.hindsight.retain(target_bank, rewritten)
 
     async def recall(
-        self, writer_id: str, body: dict[str, Any], source: str = "openclaw"
+        self, writer_id: str, body: dict[str, Any], source: str | None = None
     ) -> dict[str, Any]:
         writer = self.registry.writers.get(writer_id)
         if writer is None:
-            await self._quarantine_recall_or_degrade(writer_id, source, "unknown_writer", body)
+            await self._quarantine_recall_or_degrade(
+                writer_id, source if source is not None else "openclaw", "unknown_writer", body
+            )
             return {"results": []}
-        return await self._recall_from_read_banks(writer_id, list(writer.read_banks), body, source)
+        resolved = source if source is not None else str(writer.source)
+        return await self._recall_from_read_banks(
+            writer_id, list(writer.read_banks), body, resolved
+        )
 
     async def recall_bank(
-        self, principal_id: str, bank: str, body: dict[str, Any], source: str = "openclaw"
+        self, principal_id: str, bank: str, body: dict[str, Any], source: str
     ) -> dict[str, Any]:
         return await self._recall_from_read_banks(principal_id, [bank], body, source)
 
