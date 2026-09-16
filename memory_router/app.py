@@ -831,6 +831,9 @@ async def _admin_item_response(
             return JSONResponse(await admin.reject(item_id))
         if action == "postpone":
             return JSONResponse(await admin.postpone(item_id))
+        if action == "reconcile":
+            body = await _admin_body(request, "reconcile")
+            return JSONResponse(await admin.reconcile(item_id, body))
     return None
 
 
@@ -847,7 +850,7 @@ async def _authorized_admin_response(
     if method == "POST" and pathname == "/admin/quarantine/cleanup":
         return JSONResponse(await admin.cleanup(await _admin_body(request, "cleanup")))
     match = re.fullmatch(
-        r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?", pathname
+        r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?", pathname
     )
     if match is not None:
         response = await _admin_item_response(request, admin, method, match)

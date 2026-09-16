@@ -14,7 +14,10 @@ from .repository import (
     POSTPONED,
     REVIEW_IN_PROGRESS,
     REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEW_SIDE_EFFECT_STARTED,
     REVIEWABLE_STATUSES,
+    REVIEWED_ALLOWED,
+    REVIEWED_BLOCKED,
     STAT_KEYS,
     is_expired,
 )
@@ -22,6 +25,8 @@ from .review_repository import (
     REVIEW_STALE_SECONDS,
     claim_review,
     complete_side_effect,
+    confirm_side_effect_applied,
+    confirm_side_effect_not_applied,
     finish_approve_memory,
     finish_approve_retain,
     finish_reject_memory,
@@ -286,6 +291,123 @@ class QuarantineAdminService:
             "quarantine_id": quarantine_id,
             "count": next_item["postpone_count"],
         }
+
+    async def reconcile(self, quarantine_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        action = body.get("action")
+        if action not in {"confirmed_applied", "confirmed_not_applied"}:
+            raise HttpError(
+                400,
+                "invalid_request",
+                "action must be confirmed_applied or confirmed_not_applied",
+            )
+        expected_sha256 = body.get("expected_sha256")
+        expected_updated_at = body.get("expected_updated_at")
+        if (
+            not isinstance(expected_sha256, str)
+            or not expected_sha256
+            or not isinstance(expected_updated_at, str)
+            or not expected_updated_at
+        ):
+            raise HttpError(
+                400, "invalid_request", "expected_sha256 and expected_updated_at are required"
+            )
+        item = await self._require_item(quarantine_id)
+        if item["status"] != REVIEW_SIDE_EFFECT_STARTED:
+            raise HttpError(
+                409,
+                "invalid_review_action",
+                "quarantine item is not awaiting side-effect reconciliation",
+            )
+        at = iso_now()
+        if action == "confirmed_not_applied":
+            await confirm_side_effect_not_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
+            )
+            return {
+                "reconciled": True,
+                "action": action,
+                "quarantine_id": quarantine_id,
+                "status": POSTPONED,
+            }
+        status = await self._reconcile_applied(
+            quarantine_id, item, body.get("decision"), at, expected_sha256, expected_updated_at
+        )
+        return {
+            "reconciled": True,
+            "action": action,
+            "quarantine_id": quarantine_id,
+            "status": status,
+        }
+
+    async def _reconcile_applied(
+        self,
+        quarantine_id: str,
+        item: dict[str, Any],
+        decision: Any,
+        at: str,
+        expected_sha256: str,
+        expected_updated_at: str,
+    ) -> str:
+        if item["kind"] == "retain_request":
+            if decision not in (None, "approve"):
+                raise HttpError(
+                    409,
+                    "invalid_review_action",
+                    "only an approve side effect can be reconciled for a retain request",
+                )
+            await confirm_side_effect_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                REVIEW_SIDE_EFFECT_COMPLETED,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
+            )
+            writer_id = _optional_str(item.get("writer_id"))
+            writer = self.registry.writers.get(writer_id) if writer_id else None
+            details = {
+                "writer_id": writer_id,
+                "target_bank": writer.write_bank if writer else None,
+            }
+            await finish_approve_retain(
+                self.repository, quarantine_id, at, details, expected_sha256=expected_sha256
+            )
+            return "approved"
+        if item["kind"] == "recalled_memory":
+            if decision == "approve":
+                await confirm_side_effect_applied(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    REVIEW_IN_PROGRESS,
+                    expected_sha256=expected_sha256,
+                    expected_updated_at=expected_updated_at,
+                )
+                await finish_approve_memory(
+                    self.repository, quarantine_id, at, expected_sha256=expected_sha256
+                )
+                return REVIEWED_ALLOWED
+            if decision == "reject":
+                await confirm_side_effect_applied(
+                    self.repository,
+                    quarantine_id,
+                    at,
+                    REVIEW_SIDE_EFFECT_COMPLETED,
+                    expected_sha256=expected_sha256,
+                    expected_updated_at=expected_updated_at,
+                )
+                await finish_reject_memory(
+                    self.repository, quarantine_id, at, expected_sha256=expected_sha256
+                )
+                return REVIEWED_BLOCKED
+            raise HttpError(
+                400, "invalid_request", "decision must be approve or reject for a recalled memory"
+            )
+        raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
 
     async def stats(self) -> dict[str, int]:
         stats = await self.repository.stats(iso_now())

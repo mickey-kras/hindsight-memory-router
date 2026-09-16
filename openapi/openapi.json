@@ -276,6 +276,63 @@
         }
       }
     },
+    "/admin/quarantine/items/{quarantine_id}/reconcile": {
+      "post": {
+        "operationId": "reconcileQuarantineItem",
+        "summary": "Reconcile an ambiguous review side effect",
+        "description": "Resolves an item stuck in review_side_effect_started after a timeout, network failure, or crash with a possible upstream commit. confirmed_applied finalizes the original review decision without re-triggering the upstream side effect; confirmed_not_applied returns the item to postponed for normal retry. Both actions require the expected content hash and update snapshot and use transactional compare-and-set; neither calls Hindsight.",
+        "tags": [
+          "Quarantine administration"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Reconciled quarantine item state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconcileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
+          }
+        }
+      }
+    },
     "/admin/quarantine/queue": {
       "get": {
         "operationId": "listQuarantineQueue",
@@ -1628,6 +1685,76 @@
           "count": {
             "type": "integer",
             "minimum": 1
+          }
+        }
+      },
+      "ReconcileRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "expected_sha256",
+          "expected_updated_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "confirmed_applied",
+              "confirmed_not_applied"
+            ]
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ],
+            "description": "Original review decision being confirmed as applied. Required for recalled memories; retain requests only accept approve."
+          },
+          "expected_sha256": {
+            "type": "string",
+            "description": "SHA-256 digest of the quarantined content observed when the operator decided to reconcile."
+          },
+          "expected_updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "updated_at snapshot observed when the operator decided to reconcile."
+          }
+        }
+      },
+      "ReconcileResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reconciled",
+          "action",
+          "quarantine_id",
+          "status"
+        ],
+        "properties": {
+          "reconciled": {
+            "type": "boolean",
+            "const": true
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "confirmed_applied",
+              "confirmed_not_applied"
+            ]
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "postponed",
+              "reviewed_allowed",
+              "reviewed_blocked"
+            ]
           }
         }
       },

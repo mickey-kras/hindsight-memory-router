@@ -285,6 +285,74 @@ async def remove(
     await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
 
 
+async def _require_side_effect_started(
+    tx: Tx,
+    quarantine_id: str,
+    expected_sha256: str,
+    expected_updated_at: str,
+) -> dict[str, Any]:
+    item = stored(await tx.fetchone(tx.select_for_update(_SELECT_ITEM), (quarantine_id,)))
+    if not item:
+        raise HttpError(404, "quarantine_not_found", _NOT_FOUND_MESSAGE)
+    if item["status"] != REVIEW_SIDE_EFFECT_STARTED:
+        raise HttpError(
+            409,
+            "invalid_review_action",
+            "quarantine item is not awaiting side-effect reconciliation",
+        )
+    _assert_snapshot(item, expected_sha256, expected_updated_at)
+    return item
+
+
+async def confirm_side_effect_applied(
+    repository: QuarantineRepository,
+    quarantine_id: str,
+    at: str,
+    resume_status: str,
+    *,
+    expected_sha256: str,
+    expected_updated_at: str,
+) -> None:
+    if resume_status not in {REVIEW_IN_PROGRESS, REVIEW_SIDE_EFFECT_COMPLETED}:
+        raise ValueError(f"cannot resume reconciled review as {resume_status}")
+    async with repository.db.transaction() as tx:
+        await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
+        await tx.execute(
+            "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+            (resume_status, at, quarantine_id),
+        )
+        await insert_event(
+            tx,
+            quarantine_id,
+            "review_reconciled",
+            at,
+            {"action": "confirmed_applied", "previous_status": REVIEW_SIDE_EFFECT_STARTED},
+        )
+
+
+async def confirm_side_effect_not_applied(
+    repository: QuarantineRepository,
+    quarantine_id: str,
+    at: str,
+    *,
+    expected_sha256: str,
+    expected_updated_at: str,
+) -> None:
+    async with repository.db.transaction() as tx:
+        await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
+        await tx.execute(
+            "UPDATE quarantine_items SET status='postponed',updated_at=? WHERE quarantine_id=?",
+            (at, quarantine_id),
+        )
+        await insert_event(
+            tx,
+            quarantine_id,
+            "review_reconciled",
+            at,
+            {"action": "confirmed_not_applied", "previous_status": REVIEW_SIDE_EFFECT_STARTED},
+        )
+
+
 async def recover_interrupted(
     repository: QuarantineRepository, at: str, stale_seconds: int = REVIEW_STALE_SECONDS
 ) -> None:
