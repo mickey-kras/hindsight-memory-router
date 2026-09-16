@@ -21,9 +21,18 @@ async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
     }
     if (pull.mergeable === false) return 'conflicting';
     if (pull.mergeable === true) {
-      await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
-        owner, repo, pull_number: number, expected_head_sha: pull.head.sha,
-      });
+      try {
+        await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+          owner, repo, pull_number: number, expected_head_sha: pull.head.sha,
+        });
+      } catch (error) {
+        // GITHUB_TOKEN can never update branches that change workflow
+        // files; a human (or Dependabot's own rebase) has to move those.
+        if (error.status === 403 && /workflow/.test(error.message)) {
+          return 'skipped: updates workflow files, manual rebase required';
+        }
+        throw error;
+      }
       return 'update requested';
     }
     if (attempt < 3) await sleep(5000);
