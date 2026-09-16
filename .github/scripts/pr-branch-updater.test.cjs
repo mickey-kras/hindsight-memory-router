@@ -57,6 +57,17 @@ test('API failure is not reported as success', async () => {
   const { args, calls } = fixture({ fail: true }); await run(args);
   assert.equal(calls.failures.length, 1);
 });
+test('workflow-permission 403 skips instead of failing the job', async () => {
+  const { args, calls } = fixture();
+  args.github.request = async () => {
+    const error = new Error('refusing to allow a GitHub App to create or update workflow `.github/workflows/x.yml` without `workflows` permission');
+    error.status = 403;
+    throw error;
+  };
+  await run(args);
+  assert.equal(calls.updates.length, 0);
+  assert.equal(calls.failures.length, 0);
+});
 
 test('leaves stale Dependabot branches to scheduled native rebasing', async () => {
   const { args, calls } = fixture({ user: { login: 'dependabot[bot]', id: 49699333 } });
