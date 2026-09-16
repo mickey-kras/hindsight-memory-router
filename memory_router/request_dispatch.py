@@ -212,6 +212,7 @@ class AuthenticatedRequestDispatcher:
                 body=body,
                 query=list(request.query_params.multi_items()) or None,
                 bank_override=bank if principal is not None else None,
+                source=principal.source if principal is not None else "openclaw",
             )
 
         payload = (

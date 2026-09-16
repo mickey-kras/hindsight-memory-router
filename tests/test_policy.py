@@ -104,6 +104,15 @@ async def test_unknown_writer_is_quarantined_without_consuming_provider_quota() 
 
 
 @pytest.mark.asyncio
+async def test_unknown_writer_recall_quarantine_keeps_openclaw_source() -> None:
+    hindsight = FakeHindsight()
+    router, _, store, _ = policy(hindsight)
+    assert await router.recall("missing", {"query": "status"}) == {"results": []}
+    assert store.items[0]["reason"] == "unknown_writer"
+    assert store.items[0]["source"] == "openclaw"
+
+
+@pytest.mark.asyncio
 async def test_all_recall_request_strings_are_scanned() -> None:
     hindsight = FakeHindsight()
     router, limits, store, _ = policy(hindsight)
