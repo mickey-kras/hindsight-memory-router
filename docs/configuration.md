@@ -24,6 +24,8 @@ Leave `MEMORY_ROUTER_REGISTRY` unset for the minimal default. Copy the example w
 
 Every writer's `write_bank` must also appear in its `read_banks`; invalid registries fail startup.
 
+A writer's `source` is stamped into retain/recall provenance and quarantine audit metadata. When upgrading, keep `source: "openclaw"` on OpenClaw writer entries to preserve existing audit filters.
+
 Writer IDs use `[A-Za-z0-9._:-]{1,128}`; `.` and `..` are rejected.
 
 ## Storage

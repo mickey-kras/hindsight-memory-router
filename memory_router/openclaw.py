@@ -261,8 +261,9 @@ class OpenClawFacade:
         body: dict[str, Any] | None = None,
         query: list[tuple[str, str]] | None = None,
         bank_override: str | None = None,
+        source: str = "openclaw",
     ) -> Any:
-        target_bank = await self._target_bank(route, writer_id, bank_override)
+        target_bank = await self._target_bank(route, writer_id, bank_override, source)
 
         forwarded_query = [
             (key, value) for key, value in (query or []) if key in route.query_params
@@ -287,7 +288,9 @@ class OpenClawFacade:
 
         # Route metadata and free-text query values are not persisted payload. Query
         # values decode valid Base64 but do not fail closed on ordinary URL syntax.
-        await self._validate_safe_request(route, writer_id, request_evidence, forwarded_query)
+        await self._validate_safe_request(
+            route, writer_id, source, request_evidence, forwarded_query
+        )
         path = _facade_path(route, target_bank, params, forwarded_query)
 
         value = await self.policy.hindsight.openclaw_request(
@@ -299,7 +302,7 @@ class OpenClawFacade:
             allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
-            await self._validate_safe_response(route, writer_id, value)
+            await self._validate_safe_response(route, writer_id, source, value)
         try:
             if route.strict_contract:
                 validate_openclaw_response(
@@ -319,6 +322,7 @@ class OpenClawFacade:
         self,
         route: FacadeRoute,
         writer_id: str,
+        source: str,
         evidence: dict[str, Any],
         query: list[tuple[str, str]],
     ) -> None:
@@ -333,10 +337,12 @@ class OpenClawFacade:
         scan.extend(scan_query_values(query))
         if scan.safe:
             return
-        await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan)
+        await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source)
         raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
-    async def _target_bank(self, route: FacadeRoute, writer_id: str, override: str | None) -> str:
+    async def _target_bank(
+        self, route: FacadeRoute, writer_id: str, override: str | None, source: str
+    ) -> str:
         if override is not None:
             return override
         writer = self.policy.registry.writers.get(writer_id)
@@ -347,6 +353,7 @@ class OpenClawFacade:
             "openclaw_unknown_writer",
             {"method": route.method, "resource": route.resource},
             None,
+            source,
         )
         raise HttpError(404, "unknown_writer", "writer is not registered")
 
@@ -361,7 +368,9 @@ class OpenClawFacade:
             raise HttpError(400, "invalid_request", "items must be an array")
         self.policy.limits.assert_retain_bounds(body)
 
-    async def _validate_safe_response(self, route: FacadeRoute, writer_id: str, value: Any) -> None:
+    async def _validate_safe_response(
+        self, route: FacadeRoute, writer_id: str, source: str, value: Any
+    ) -> None:
         response_scan = await _scan_facade_response(value, writer_id=writer_id)
         if _only_scan_limit_findings(response_scan):
             error_kind = (
@@ -381,6 +390,7 @@ class OpenClawFacade:
             "openclaw_suspicious_provider_response",
             {"resource": route.resource, "response": value},
             response_scan,
+            source,
         )
         raise HttpError(
             502,
@@ -394,6 +404,7 @@ class OpenClawFacade:
         reason: str,
         value: Any,
         scan: SafetyResult | None,
+        source: str = "openclaw",
     ) -> None:
         try:
             digest = sha256_hex(canonical_json(value))
@@ -404,7 +415,7 @@ class OpenClawFacade:
             await self.policy.quarantine_security_event(
                 {
                     "writerId": writer_id,
-                    "source": "openclaw",
+                    "source": source,
                     "kind": "security_event",
                     "reason": reason,
                     "dedupeKey": f"{reason}:{writer_id}:{digest}",
