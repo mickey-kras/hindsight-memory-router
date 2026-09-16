@@ -51,8 +51,9 @@ Docker publication. `latest` tracks the highest released version; older-line fix
    node .github/scripts/release-settings.cjs YOUR_NUMERIC_APP_ID /tmp/release-rulesets
    ```
 
-4. In **Settings → Rules → Rulesets**, import/update all four generated rulesets. Only the two creation
-   rules permit the App bypass. Release branch/tag protections have no bypass. Keep main protections
+4. In **Settings → Rules → Rulesets**, import/update all five generated rulesets. Only the creation
+   rules and the deletion-only **Release branch deletion** rule permit the App bypass. Release
+   branch/tag protections have no bypass. Keep main protections
    and **Enforce release tag names** accepting `vX.Y.Z`; exclude `refs/heads/release/*` from work-branch naming.
    After import, confirm every rule shows in Settings; the template uses preview rule types like
    copilot_code_review, so re-import or adjust before relying on this runbook.
