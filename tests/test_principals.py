@@ -51,6 +51,7 @@ def _registry_value() -> dict[str, object]:
                     _key("alpha-old", OLD_ALPHA_SECRET),
                     _key("alpha-1", ALPHA_SECRET),
                 ],
+                "source": "coding-agent",
                 "grants": [
                     {
                         "bank": "shared",
@@ -149,6 +150,7 @@ def test_example_registry_loads_and_authenticates() -> None:
     session = result.session
     assert session is not None
     assert session.principal_id == "service-writer"
+    assert session.source == "application"
     assert resolver.list_banks(session) == ["project"]
     assert resolver.authorize(session, "memory.retain", "project")
     assert not resolver.authorize(session, "bank.admin", "project")
@@ -241,6 +243,8 @@ def test_example_registry_loads_and_authenticates() -> None:
             }
         },
         {"principals": {"a": {"keys": [], "grants": []}}},
+        {"principals": {"a": {"keys": [_key("k", "a" * 64)], "source": ""}}},
+        {"principals": {"a": {"keys": [_key("k", "a" * 64)], "unknown": "field"}}},
         {"extra": {}},
     ],
 )
@@ -446,6 +450,7 @@ async def test_retain_and_recall_follow_grants() -> None:
     app_module.runtime.policy.retain_bank.assert_awaited_once()
     identity, bank = app_module.runtime.policy.retain_bank.await_args.args[:2]
     assert (identity, bank) == ("agent-alpha", "shared")
+    assert app_module.runtime.policy.retain_bank.await_args.kwargs["source"] == "coding-agent"
 
     recall = await app_module.dispatch(
         "x",
@@ -460,6 +465,7 @@ async def test_retain_and_recall_follow_grants() -> None:
     app_module.runtime.policy.recall_bank.assert_awaited_once()
     identity, bank = app_module.runtime.policy.recall_bank.await_args.args[:2]
     assert (identity, bank) == ("agent-reader", "shared")
+    assert app_module.runtime.policy.recall_bank.await_args.kwargs["source"] == "application"
 
 
 @pytest.mark.asyncio
@@ -915,13 +921,18 @@ async def test_policy_bank_paths_use_principal_identity() -> None:
         SimpleNamespace(put=AsyncMock(return_value={"quarantine_id": "q1"})),
         SimpleNamespace(),
     )
-    retained = await policy.retain_bank("agent-alpha", "shared", {"items": [{"content": "note"}]})
+    retained = await policy.retain_bank(
+        "agent-alpha", "shared", {"items": [{"content": "note"}]}, source="coding-agent"
+    )
     assert retained == {"success": True}
     bank, body = policy.hindsight.retain.await_args.args
     assert bank == "shared"
     assert body["items"][0]["metadata"]["router_writer_id"] == "agent-alpha"
     assert body["items"][0]["metadata"]["router_target_bank"] == "shared"
-    assert await policy.recall_bank("agent-alpha", "shared", {"query": "note"}) == {"results": []}
+    assert body["items"][0]["metadata"]["router_source"] == "coding-agent"
+    assert await policy.recall_bank(
+        "agent-alpha", "shared", {"query": "note"}, source="coding-agent"
+    ) == {"results": []}
     policy.hindsight.recall.assert_awaited_once()
 
 

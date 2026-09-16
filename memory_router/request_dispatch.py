@@ -153,7 +153,9 @@ class AuthenticatedRequestDispatcher:
                     request,
                     principal,
                     scope,
-                    lambda: self.deps.policy.recall_bank(principal.principal_id, writer_id, body),
+                    lambda: self.deps.policy.recall_bank(
+                        principal.principal_id, writer_id, body, source=principal.source
+                    ),
                 )
             else:
                 body = parse_retain_body(await self.deps.json_body(request, max_bytes=body_limit))
@@ -162,7 +164,9 @@ class AuthenticatedRequestDispatcher:
                     request,
                     principal,
                     scope,
-                    lambda: self.deps.policy.retain_bank(principal.principal_id, writer_id, body),
+                    lambda: self.deps.policy.retain_bank(
+                        principal.principal_id, writer_id, body, source=principal.source
+                    ),
                 )
             return JSONResponse(payload)
         return None

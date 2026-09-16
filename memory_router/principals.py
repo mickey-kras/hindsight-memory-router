@@ -146,6 +146,7 @@ class Principal(BaseModel):
     keys: list[PrincipalKey] = Field(min_length=1)
     grants: list[PrincipalGrant] = Field(default_factory=list)
     limits: PrincipalLimits = Field(default_factory=PrincipalLimits)
+    source: str = Field(default="application", min_length=1)
 
 
 class PrincipalRegistry(BaseModel):
@@ -178,6 +179,7 @@ class PrincipalSession:
     key_id: str
     grants: tuple[PrincipalGrant, ...]
     limits: dict[LimitOperation, ResolvedPrincipalLimit]
+    source: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -333,6 +335,7 @@ class PrincipalResolver:
                 key_id,
                 tuple(principal.grants),
                 self._limits_for(principal),
+                principal.source,
             ),
         )
 
