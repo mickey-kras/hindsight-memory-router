@@ -433,7 +433,7 @@ async function finalize({ github, context, core }) {
   const paths = [
     "release.json",
     ...manifest.packages.map((pkg) => pkg.path),
-    ...(manifest.packages.length ? ["PACKAGE_SHA256", "PACKAGE_NIX_HASHES"] : ["image-digests.txt"]),
+    ...(manifest.packages.length ? ["PACKAGE_SHA256", "PACKAGE_NIX_HASHES"] : ["image-digests.txt", "sbom.cdx.json"]),
   ];
   const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
     ...context.repo,
