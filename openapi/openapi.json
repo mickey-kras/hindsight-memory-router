@@ -1461,7 +1461,30 @@
           },
           "key_wrap": {
             "type": "string",
-            "const": "RSA-OAEP-SHA256"
+            "enum": [
+              "RSA-OAEP-SHA256",
+              "WRAP-SIDECAR"
+            ],
+            "description": "DEK wrap identifier. RSA-OAEP-SHA256 is the in-process default; WRAP-SIDECAR is used with an HTTPS wrap sidecar and requires the provider block."
+          },
+          "provider": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "version"
+            ],
+            "description": "Wrap provider identity for non-default envelopes; bound into the AES-GCM AAD. Absent on RSA-OAEP-SHA256 default envelopes. The review tool selects the unwrap path from this block; the router never unwraps.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "version": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
           },
           "wrapped_key_b64": {
             "type": "string",
