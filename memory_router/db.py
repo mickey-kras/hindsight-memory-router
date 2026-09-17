@@ -30,7 +30,7 @@ SCHEMA = [
  source_bank TEXT, source_memory_id TEXT, source_content_sha256 TEXT, dedupe_key TEXT,
  sha256 TEXT NOT NULL, encrypted_envelope TEXT, encrypted_bytes INTEGER NOT NULL DEFAULT 0,
  status TEXT NOT NULL, postpone_count INTEGER NOT NULL DEFAULT 0,
- requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT)""",
+ requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT, bank_id TEXT)""",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_review ON quarantine_items(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason ON quarantine_items(reason, status, created_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory ON quarantine_items(source_bank, source_memory_id) WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL",
@@ -41,7 +41,13 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_quarantine_events_type ON quarantine_events(event_type, occurred_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_items_bank ON quarantine_items(bank_id, status, created_at) WHERE bank_id IS NOT NULL",
 ]
+
+_BANK_ID_BACKFILL = (
+    "UPDATE quarantine_items SET bank_id=source_bank "
+    "WHERE bank_id IS NULL AND kind='recalled_memory' AND source_bank IS NOT NULL"
+)
 
 
 def is_postgres(url: str) -> bool:
@@ -302,9 +308,12 @@ async def initialize_schema(db: Database) -> None:
             ("dedupe_key", "dedupe_key TEXT"),
             ("requarantine_count", "requarantine_count INTEGER NOT NULL DEFAULT 0"),
             ("expires_at", "expires_at TEXT"),
+            ("bank_id", "bank_id TEXT"),
         ):
             if not await tx.column_exists("quarantine_items", name):
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")
+                if name == "bank_id":
+                    await tx.execute(_BANK_ID_BACKFILL)
         for statement in SCHEMA[1:]:
             await tx.execute(statement)
 

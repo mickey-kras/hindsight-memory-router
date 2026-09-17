@@ -18,6 +18,7 @@ from .repository import (
     REVIEWABLE_STATUSES,
     REVIEWED_BLOCKED,
     STAT_KEYS,
+    QueueFilter,
     is_expired,
 )
 from .review_repository import (
@@ -55,16 +56,21 @@ class QuarantineAdminService:
         self.max_postpones = max_postpones
         self.review_stale_seconds = review_stale_seconds
 
-    async def list_queue(self, limit: int, offset: int) -> dict[str, Any]:
+    async def list_queue(
+        self, limit: int, offset: int, filter_: QueueFilter | None = None
+    ) -> dict[str, Any]:
         at = iso_now()
-        items = await self.repository.list_reviewable(limit, offset, at)
-        stats = await self.repository.stats(at)
-        return {
-            "items": items,
-            "total": stats["pending_items"]
-            + stats["postponed_items"]
-            + stats["review_side_effect_started_items"],
-        }
+        items = await self.repository.list_reviewable(limit, offset, at, filter_)
+        if filter_ is not None and filter_.active():
+            total = await self.repository.count_reviewable(at, filter_)
+        else:
+            stats = await self.repository.stats(at)
+            total = (
+                stats["pending_items"]
+                + stats["postponed_items"]
+                + stats["review_side_effect_started_items"]
+            )
+        return {"items": items, "total": total}
 
     async def read_item(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_reviewable(quarantine_id)
@@ -400,9 +406,16 @@ class QuarantineAdminService:
             return REVIEWED_BLOCKED
         raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
 
-    async def stats(self) -> dict[str, int]:
-        stats = await self.repository.stats(iso_now())
-        return {key: stats[key] for key in STAT_KEYS if key != "expired_items"}
+    async def stats(self, bank_ids: tuple[str, ...] | None = None) -> dict[str, Any]:
+        at = iso_now()
+        stats = await self.repository.stats(at)
+        banks = await self.repository.bank_stats(at, bank_ids)
+        result: dict[str, Any] = {key: stats[key] for key in STAT_KEYS if key != "expired_items"}
+        result["banks"] = banks
+        return result
+
+    async def bank_stats(self, bank_ids: tuple[str, ...]) -> dict[str, Any]:
+        return {"banks": await self.repository.bank_stats(iso_now(), bank_ids)}
 
     async def cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
         scope = body.get("scope", PENDING)

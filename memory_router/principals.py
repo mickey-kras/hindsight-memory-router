@@ -15,9 +15,9 @@ from .facade_routes import FacadeRoute
 
 # Authorization scope vocabulary. Every authenticated surface maps to exactly
 # one scope; grants are per (principal, bank) and evaluation is default deny.
-# The authorizer supports all nine scopes generically; quarantine scopes are
-# grantable but not wired to endpoints (quarantine administration keeps its
-# separate admin tokens).
+# The authorizer supports all nine scopes generically; quarantine.review is
+# wired to metadata-only queue/stats listing, while quarantine.decide stays
+# grantable but unwired (review actions keep their separate admin tokens).
 SCOPE_BANK_LIST = "bank.list"
 SCOPE_MEMORY_RECALL = "memory.recall"
 SCOPE_MEMORY_RETAIN = "memory.retain"
@@ -347,6 +347,12 @@ class PrincipalResolver:
     def list_banks(session: PrincipalSession) -> list[str]:
         return sorted({grant.bank for grant in session.grants if SCOPE_BANK_LIST in grant.scopes})
 
+    @staticmethod
+    def quarantine_review_banks(session: PrincipalSession) -> list[str]:
+        return sorted(
+            {grant.bank for grant in session.grants if SCOPE_QUARANTINE_REVIEW in grant.scopes}
+        )
+
 
 def scope_limit_operation(scope: str) -> LimitOperation:
     if scope == SCOPE_MEMORY_RECALL:
@@ -355,7 +361,7 @@ def scope_limit_operation(scope: str) -> LimitOperation:
         return "retain"
     if scope == SCOPE_MEMORY_REFLECT:
         return "reflect"
-    if scope == SCOPE_BANK_ADMIN:
+    if scope in {SCOPE_BANK_ADMIN, SCOPE_QUARANTINE_REVIEW}:
         return "admin"
     return "config"
 

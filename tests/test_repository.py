@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from memory_router.db import SqliteDatabase, SqliteTx, initialize_schema
+from memory_router.db import SqliteDatabase, SqliteTx, create_database, initialize_schema
 from memory_router.errors import HttpError
 from memory_router.repository import (
     Capacity,
     QuarantineRepository,
+    QueueFilter,
     _expired,
     _same_scope,
     _summary,
@@ -346,3 +348,130 @@ def test_cleanup_all_deliberately_preserves_reviewed_decisions() -> None:
         "status NOT IN ('review_in_progress','review_side_effect_started',"
         "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
     )
+
+
+@pytest.mark.asyncio
+async def test_queue_filters_narrow_listing_and_count(repository: QuarantineRepository) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(10, 0, 100_000)
+    first = {**item("q_f1", writer="main"), "bank_id": "bank-a"}
+    second = {**item("q_f2", writer="main"), "bank_id": "bank-b"}
+    third = item("q_f3", writer=None, reason="unknown_writer")
+    for value in (first, second, third):
+        await repository.store(value, capacity, mode="id", at=at)
+
+    rows = await repository.list_reviewable(10, 0, at)
+    assert [row["quarantine_id"] for row in rows] == ["q_f1", "q_f2", "q_f3"]
+    assert rows[0]["bank_id"] == "bank-a" and "bank_id" not in rows[2]
+
+    by_bank = QueueFilter(bank_id="bank-a")
+    rows = await repository.list_reviewable(10, 0, at, by_bank)
+    assert [row["quarantine_id"] for row in rows] == ["q_f1"]
+    assert await repository.count_reviewable(at, by_bank) == 1
+    by_banks = QueueFilter(bank_ids=("bank-a", "bank-b"))
+    assert await repository.count_reviewable(at, by_banks) == 2
+    assert await repository.count_reviewable(at, QueueFilter(writer_id="main")) == 2
+    assert await repository.count_reviewable(at, QueueFilter(principal_id="main")) == 2
+    assert await repository.count_reviewable(at, QueueFilter(kind="recall_request")) == 0
+    assert await repository.count_reviewable(at, QueueFilter(status="postponed")) == 0
+    assert await repository.count_reviewable(at, QueueFilter(status="pending")) == 3
+    assert await repository.count_reviewable(at, QueueFilter(bank_ids=())) == 0
+
+
+@pytest.mark.asyncio
+async def test_bank_stats_count_only_rows_with_a_real_bank(
+    repository: QuarantineRepository,
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(10, 0, 100_000)
+    await repository.store({**item("q_s1"), "bank_id": "bank-b"}, capacity, mode="id", at=at)
+    await repository.store({**item("q_s2"), "bank_id": "bank-a"}, capacity, mode="id", at=at)
+    await repository.store({**item("q_s3"), "bank_id": "bank-a"}, capacity, mode="id", at=at)
+    await repository.store(
+        item("q_s4", writer=None, reason="unknown_writer"), capacity, mode="id", at=at
+    )
+
+    banks = await repository.bank_stats(at)
+    assert [entry["bank_id"] for entry in banks] == ["bank-a", "bank-b"]
+    bank_a = banks[0]
+    assert bank_a["total_items"] == 2 and bank_a["pending_items"] == 2
+    assert bank_a["postponed_items"] == 0 and bank_a["encrypted_bytes"] > 0
+    scoped = await repository.bank_stats(at, ("bank-b",))
+    assert [entry["bank_id"] for entry in scoped] == ["bank-b"]
+    assert await repository.bank_stats(at, ()) == []
+
+
+@pytest.mark.asyncio
+async def test_per_bank_capacity_limits_only_that_bank(repository: QuarantineRepository) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(10, 0, 100_000, 1)
+    await repository.store({**item("q_b1"), "bank_id": "bank-a"}, capacity, mode="id", at=at)
+    with pytest.raises(HttpError) as exhausted:
+        await repository.store({**item("q_b2"), "bank_id": "bank-a"}, capacity, mode="id", at=at)
+    assert exhausted.value.status == 507
+    assert exhausted.value.code == "quarantine_bank_capacity_exceeded"
+    await repository.store({**item("q_b3"), "bank_id": "bank-b"}, capacity, mode="id", at=at)
+    await repository.store(item("q_b4"), capacity, mode="id", at=at)
+    unlimited = Capacity(10, 0, 100_000)
+    await repository.store({**item("q_b5"), "bank_id": "bank-a"}, unlimited, mode="id", at=at)
+
+
+@pytest.mark.asyncio
+async def test_bank_id_migration_backfills_recalled_memory_only(tmp_path: Path) -> None:
+    database_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(database_path)
+    connection.executescript(
+        """
+        CREATE TABLE quarantine_items (
+          quarantine_id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          kind TEXT NOT NULL, reason TEXT NOT NULL, writer_id TEXT, source TEXT,
+          source_bank TEXT, source_memory_id TEXT, source_content_sha256 TEXT, dedupe_key TEXT,
+          sha256 TEXT NOT NULL, encrypted_envelope TEXT, encrypted_bytes INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL, postpone_count INTEGER NOT NULL DEFAULT 0,
+          requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT
+        );
+        CREATE TABLE quarantine_events (
+          event_id TEXT PRIMARY KEY, quarantine_id TEXT NOT NULL, occurred_at TEXT NOT NULL,
+          event_type TEXT NOT NULL, details TEXT NOT NULL
+        );
+        """
+    )
+    for row in (
+        ("q_legacy_mem", "recalled_memory", "recalled_suspicious_memory", "main", "bank-a", "m1"),
+        ("q_legacy_retain", "retain_request", "suspicious_content", "main", None, None),
+    ):
+        connection.execute(
+            "INSERT INTO quarantine_items VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                row[0],
+                "2026-01-01T00:00:00.000Z",
+                "2026-01-01T00:00:00.000Z",
+                row[1],
+                row[2],
+                row[3],
+                "openclaw",
+                row[4],
+                row[5],
+                None,
+                None,
+                "a" * 64,
+                json.dumps({"version": 1}),
+                13,
+                "pending",
+                0,
+                0,
+                None,
+            ),
+        )
+    connection.commit()
+    connection.close()
+
+    database = await create_database(f"sqlite:{database_path}")
+    try:
+        repository = QuarantineRepository(database)
+        recalled = await repository.get("q_legacy_mem")
+        assert recalled and recalled["bank_id"] == "bank-a"
+        retain = await repository.get("q_legacy_retain")
+        assert retain and retain["bank_id"] is None
+    finally:
+        await database.close()

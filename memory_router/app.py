@@ -42,7 +42,12 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
-from .principal_gate import authenticate_principal
+from .principal_gate import (
+    PrincipalAdminDeps,
+    authenticate_principal,
+    principal_admin_metadata_response,
+    principal_token_present,
+)
 from .principals import (
     PrincipalResolver,
     PrincipalSession,
@@ -58,7 +63,7 @@ from .rate_limit import (
     InMemoryRateLimiter,
     RateLimiter,
 )
-from .repository import QuarantineRepository
+from .repository import QuarantineRepository, parse_queue_filter
 from .request_dispatch import (
     EMPTY_BODY,
     MEMORY_ROUTE,
@@ -277,6 +282,7 @@ class Runtime:
             max_item_bytes=settings.quarantine_max_item_bytes,
             max_pending_items=settings.quarantine_max_pending_items,
             max_pending_items_per_writer=settings.quarantine_max_pending_items_per_writer,
+            max_pending_items_per_bank=settings.quarantine_max_pending_items_per_bank,
             max_encrypted_bytes=settings.quarantine_max_encrypted_bytes,
             rate_limit_max=settings.quarantine_rate_limit_max,
             rate_limit_window_ms=settings.quarantine_rate_limit_window_ms,
@@ -814,7 +820,9 @@ def _version_failure(error: HindsightGatewayError) -> Response:
     return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
-async def _admin_queue_response(request: Request, admin: QuarantineAdminService) -> Response:
+async def _admin_queue_response(
+    request: Request, admin: QuarantineAdminService, scoped_banks: tuple[str, ...] | None = None
+) -> Response:
     params = request.query_params
     if len(params.getlist("limit")) > 1 or len(params.getlist("offset")) > 1:
         raise HttpError(400, "invalid_query", "limit or offset is invalid")
@@ -825,7 +833,12 @@ async def _admin_queue_response(request: Request, admin: QuarantineAdminService)
         raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
     if not 1 <= limit <= 500 or offset < 0:
         raise HttpError(400, "invalid_query", "integer query parameter out of range")
-    return JSONResponse(await admin.list_queue(limit, offset))
+    filter_ = parse_queue_filter(params)
+    if scoped_banks is not None:
+        filter_ = filter_.with_bank_scope(scoped_banks)
+    return JSONResponse(
+        await admin.list_queue(limit, offset, filter_ if filter_.active() else None)
+    )
 
 
 async def _admin_body(request: Request, action: str) -> dict[str, Any]:
@@ -908,11 +921,27 @@ async def _authorized_admin_response(
     return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
 
 
+async def _principal_admin_response(request: Request, pathname: str, method: str) -> Response:
+    deps = PrincipalAdminDeps(
+        resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+        admin=_require_runtime(runtime.admin, "admin service"),
+        on_auth_failure=lambda: _auth_failure_rate("admin"),
+        principal_rate=_principal_rate,
+        queue_response=_admin_queue_response,
+    )
+    return await principal_admin_metadata_response(request, pathname, method, deps)
+
+
 async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
     if not pathname.startswith("/admin/"):
         return None
-    if not await _admin_auth(request, _scope(method, pathname)):
-        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    authorization = request.headers.get("authorization")
+    if not admin_authorized(authorization, _scope(method, pathname), runtime.admin_tokens):
+        if runtime.principal_resolver is not None and principal_token_present(authorization):
+            return await _principal_admin_response(request, pathname, method)
+        if not await _admin_auth(request, _scope(method, pathname)):
+            return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     await _admin_rate(method)
     admin = _require_runtime(runtime.admin, "admin service")
     return await _authorized_admin_response(request, admin, pathname, method)

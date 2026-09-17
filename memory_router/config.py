@@ -152,6 +152,9 @@ class RouterSettings(BaseSettings):
     quarantine_max_pending_items_per_writer: NonNegativeInt = Field(
         50, validation_alias="QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER"
     )
+    quarantine_max_pending_items_per_bank: NonNegativeInt = Field(
+        0, validation_alias="QUARANTINE_MAX_PENDING_ITEMS_PER_BANK"
+    )
     quarantine_max_encrypted_bytes: NonNegativeInt = Field(
         104_857_600, validation_alias="QUARANTINE_MAX_ENCRYPTED_BYTES"
     )

@@ -11,6 +11,7 @@ from memory_router.canonical import sha256_hex
 from memory_router.envelope import canonical_decrypted
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.repository import QueueFilter
 from tests.fakes import (
     QID,
     registry,
@@ -54,6 +55,8 @@ def service(
     repository = SimpleNamespace(
         get=AsyncMock(return_value=item),
         list_reviewable=AsyncMock(return_value=[]),
+        count_reviewable=AsyncMock(return_value=0),
+        bank_stats=AsyncMock(return_value=[]),
         stats=AsyncMock(
             return_value={
                 "total_items": 1,
@@ -83,7 +86,7 @@ async def test_list_read_stats_and_require_reviewable() -> None:
     svc, repo, _, _ = service(item)
     assert (await svc.list_queue(10, 0))["total"] == 10
     repo.list_reviewable.assert_awaited_once()
-    assert len(repo.list_reviewable.await_args.args) == 3
+    assert len(repo.list_reviewable.await_args.args) == 4
     read = await svc.read_item(QID)
     assert (
         "encrypted" in read
@@ -880,3 +883,35 @@ async def test_read_item_exposes_side_effect_started_snapshot_for_reconciliation
     repo.get.return_value = {**item, "expires_at": "2020-01-01T00:00:00.000Z"}
     expired_read = await svc.read_item(QID)
     assert expired_read["record"]["status"] == "review_side_effect_started"
+
+
+@pytest.mark.asyncio
+async def test_filtered_queue_counts_matching_items() -> None:
+    svc, repo, _, _ = service(None)
+    repo.count_reviewable.return_value = 2
+    filter_ = QueueFilter(bank_id="bank-a")
+    result = await svc.list_queue(10, 0, filter_)
+    assert result == {"items": [], "total": 2}
+    assert repo.list_reviewable.await_args.args[3] is filter_
+    repo.count_reviewable.assert_awaited_once()
+    repo.stats.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_stats_adds_per_bank_breakdown() -> None:
+    svc, repo, _, _ = service(None)
+    entry = {
+        "bank_id": "bank-a",
+        "total_items": 2,
+        "pending_items": 1,
+        "postponed_items": 1,
+        "encrypted_bytes": 42,
+    }
+    repo.bank_stats.return_value = [entry]
+    stats = await svc.stats()
+    assert stats["banks"] == [entry]
+    assert stats["event_count"] == 6 and "expired_items" not in stats
+    assert repo.bank_stats.await_args.args[1] is None
+    scoped = await svc.bank_stats(("bank-a",))
+    assert scoped == {"banks": [entry]}
+    assert repo.bank_stats.await_args.args[1] == ("bank-a",)

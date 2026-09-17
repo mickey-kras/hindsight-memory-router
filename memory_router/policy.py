@@ -227,7 +227,11 @@ class RouterPolicy:
                 merged[key] = entry
 
     async def deny_endpoint(
-        self, method: str, path: str, writer_id: str | None = None
+        self,
+        method: str,
+        path: str,
+        writer_id: str | None = None,
+        bank_id: str | None = None,
     ) -> dict[str, str]:
         dedupe = self.security_event_identities.resolve(
             writer_id, security_event_dedupe_key(method, path)
@@ -238,6 +242,7 @@ class RouterPolicy:
                 "source": "http",
                 "kind": "security_event",
                 "reason": "denied_endpoint",
+                "bankId": bank_id,
                 "dedupeKey": dedupe,
                 "payload": {"action": "denied_endpoint", "method": method, "path": path},
             }
@@ -284,6 +289,7 @@ class RouterPolicy:
                     "source": source,
                     "kind": "security_event",
                     "reason": "recalled_suspicious_supplemental",
+                    "bankId": bank_id,
                     "dedupeKey": f"recalled-supplemental:{bank_id}:{field}:{key or '-'}:{digest}",
                     "payload": {
                         "action": "recalled_supplemental_blocked",
@@ -409,6 +415,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "recalled_memory",
                 "reason": "recalled_suspicious_memory",
+                "bankId": bank_id,
                 "sourceBank": bank_id,
                 "sourceMemoryId": result["id"],
                 "sourceContentSha256": digest,
@@ -428,6 +435,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "security_event",
                 "reason": "recalled_suspicious_memory",
+                "bankId": bank_id,
                 "dedupeKey": f"oversized-recalled:{bank_id}:{memory_id}:{digest}",
                 "payload": {
                     "action": "recalled_memory_too_large",
@@ -446,6 +454,7 @@ class RouterPolicy:
         reason: str,
         body: dict[str, Any],
         scan: SafetyResult | None,
+        bank_id: str | None = None,
     ) -> None:
         digest = _audit_digest(body)
         findings = [] if scan is None else [finding.public() for finding in scan.findings]
@@ -455,6 +464,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "security_event",
                 "reason": reason,
+                "bankId": bank_id,
                 "dedupeKey": f"oversized-recall:{writer_id}:{reason}:{digest}",
                 "payload": {
                     "action": "recall_request_too_large",
@@ -482,6 +492,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "retain_request",
                 "reason": reason,
+                "bankId": target_bank,
                 "dedupeKey": request_dedupe_key(
                     "retain_request",
                     writer_id,
@@ -519,6 +530,7 @@ class RouterPolicy:
                     "source": source,
                     "kind": "recall_request",
                     "reason": reason,
+                    "bankId": target_banks[0] if target_banks and len(target_banks) == 1 else None,
                     "dedupeKey": request_dedupe_key(
                         "recall_request",
                         writer_id,
@@ -532,7 +544,12 @@ class RouterPolicy:
             if exc.status == 413 and exc.code == "quarantine_item_too_large":
                 try:
                     await self._quarantine_oversized_recall_request(
-                        writer_id, source, reason, body, scan
+                        writer_id,
+                        source,
+                        reason,
+                        body,
+                        scan,
+                        target_banks[0] if target_banks and len(target_banks) == 1 else None,
                     )
                 except HttpError as placeholder_exc:
                     if not self._quarantine_unavailable(placeholder_exc):

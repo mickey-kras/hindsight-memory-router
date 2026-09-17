@@ -365,3 +365,23 @@ async def test_postgres_rate_charge_survives_failed_quarantine_write() -> None:
         await store.put(base_input())
     assert limited.value.code == "quarantine_rate_limited"
     assert repository.store.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_put_persists_canonical_bank_id() -> None:
+    store, repository, _ = store_fixture()
+    await store.put(base_input(bankId="main", dedupeKey="d"))
+    assert repository.store.await_args.args[0]["bank_id"] == "main"
+    await store.put(base_input(dedupeKey="e"))
+    assert repository.store.await_args.args[0]["bank_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_per_bank_capacity_is_opt_in_and_skipped_for_security_events() -> None:
+    store, repository, _ = store_fixture(QuarantineLimits(max_pending_items_per_bank=7))
+    await store.put(base_input(bankId="main", dedupeKey="d"))
+    assert repository.store.await_args.args[1].max_pending_items_per_bank == 7
+    await store.put(
+        base_input("security_event", reason="denied_endpoint", bankId="main", dedupeKey="s")
+    )
+    assert repository.store.await_args.args[1].max_pending_items_per_bank == 0

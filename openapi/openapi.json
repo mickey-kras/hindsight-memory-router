@@ -337,13 +337,16 @@
       "get": {
         "operationId": "listQuarantineQueue",
         "summary": "List items awaiting review",
-        "description": "Returns metadata only, including items stuck in review_side_effect_started that await reconciliation. Encrypted payloads are fetched one item at a time.",
+        "description": "Returns metadata only, including items stuck in review_side_effect_started that await reconciliation. Encrypted payloads are fetched one item at a time. A principal token with a quarantine.review grant may list metadata for the granted banks only; ciphertext fetch and review actions keep admin-token auth.",
         "tags": [
           "Quarantine administration"
         ],
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -367,6 +370,46 @@
               "minimum": 0,
               "default": 0
             }
+          },
+          {
+            "name": "bank_id",
+            "in": "query",
+            "description": "Only items whose canonical bank_id matches. Principal callers must hold a quarantine.review grant for this bank; without the parameter a principal sees its granted banks.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "writer_id",
+            "in": "query",
+            "description": "Only items stored for this writer identity.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "principal_id",
+            "in": "query",
+            "description": "Only items stored for this principal identity (stored in the writer identity column).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only items of this kind.",
+            "schema": {
+              "$ref": "#/components/schemas/QuarantineKind"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only items in this status, within the reviewable queue.",
+            "schema": {
+              "$ref": "#/components/schemas/QuarantineStatus"
+            }
           }
         ],
         "responses": {
@@ -386,6 +429,9 @@
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
           },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
           "429": {
             "$ref": "#/components/responses/AdminRateLimited"
           }
@@ -396,27 +442,41 @@
       "get": {
         "operationId": "getQuarantineStats",
         "summary": "Get quarantine storage statistics",
+        "description": "Admin tokens receive global counts plus the per-bank breakdown. A principal token with a quarantine.review grant receives only the per-bank breakdown for its granted banks.",
         "tags": [
           "Quarantine administration"
         ],
         "security": [
           {
             "AdminToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "responses": {
           "200": {
-            "description": "Current item, ciphertext, and append-only event counts.",
+            "description": "Current item, ciphertext, and append-only event counts. Principal callers receive only the grant-scoped bank breakdown.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/QuarantineStats"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/QuarantineStats"
+                    },
+                    {
+                      "$ref": "#/components/schemas/QuarantineBankList"
+                    }
+                  ]
                 }
               }
             }
           },
           "401": {
             "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           },
           "429": {
             "$ref": "#/components/responses/AdminRateLimited"
@@ -1419,6 +1479,10 @@
           "expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "bank_id": {
+            "type": "string",
+            "description": "Canonical bank the item is scoped to: the writer's write_bank snapshot for known-writer retains, the source bank for single-bank recalls and suppressed recalled memories, or the path bank for security events that named one. Absent for unknown-writer rows, multi-bank recall fan-outs, and bank-less security events."
           }
         }
       },
@@ -1792,7 +1856,8 @@
           "reviewed_allowed_items",
           "reviewed_blocked_items",
           "encrypted_bytes",
-          "event_count"
+          "event_count",
+          "banks"
         ],
         "properties": {
           "total_items": {
@@ -1824,6 +1889,61 @@
             "minimum": 0
           },
           "event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "banks": {
+            "type": "array",
+            "description": "Per-bank breakdown of held items. Only rows with a canonical bank_id are counted; unknown-writer and multi-bank rows appear in the global totals only.",
+            "items": {
+              "$ref": "#/components/schemas/QuarantineBankStats"
+            }
+          }
+        }
+      },
+      "QuarantineBankList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "banks"
+        ],
+        "properties": {
+          "banks": {
+            "type": "array",
+            "description": "Grant-scoped per-bank breakdown returned to quarantine.review principals.",
+            "items": {
+              "$ref": "#/components/schemas/QuarantineBankStats"
+            }
+          }
+        }
+      },
+      "QuarantineBankStats": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bank_id",
+          "total_items",
+          "pending_items",
+          "postponed_items",
+          "encrypted_bytes"
+        ],
+        "properties": {
+          "bank_id": {
+            "type": "string"
+          },
+          "total_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pending_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "postponed_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "encrypted_bytes": {
             "type": "integer",
             "minimum": 0
           }
