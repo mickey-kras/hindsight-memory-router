@@ -298,8 +298,7 @@ class RouterSettings(BaseSettings):
 def _validate_sidecar_settings(settings: RouterSettings) -> None:
     if not settings.quarantine_wrap_sidecar_url:
         raise ValueError(
-            "QUARANTINE_WRAP_SIDECAR_URL is required when "
-            "QUARANTINE_WRAP_PROVIDER=https-sidecar"
+            "QUARANTINE_WRAP_SIDECAR_URL is required when QUARANTINE_WRAP_PROVIDER=https-sidecar"
         )
     try:
         assert_sidecar_url(settings.quarantine_wrap_sidecar_url)
