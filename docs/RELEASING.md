@@ -35,8 +35,15 @@ Release runs keep frozen pins. Ordinary integration PRs use the reviewed router/
 packaged OpenClaw retain/recall and the packaged Codex hook against real router/Hindsight and a test LLM.
 
 Router publishes the tested Linux amd64 image to GHCR/Docker Hub, signs/attests its digest and records
-`image-digests.txt`. Integrations publishes tarballs, checksums and provenance to GitHub, without npm or
+`image-digests.txt`. It then builds a CycloneDX SBOM from the pushed digest, normalizes it for
+reproducible bytes, attests it to both registries as an OCI referrer, attaches it to the GitHub release
+as `sbom.cdx.json`, and records its checksum as `sbom=` in `image-digests.txt`. Integrations publishes
+tarballs, checksums and provenance to GitHub, without npm or
 Docker publication. `latest` tracks the highest released version; older-line fixes cannot move it backwards.
+
+Pull requests run dependency review. Dependencies a PR adds or updates fail the check on HIGH or CRITICAL
+advisories or on a forbidden license (`.github/dependency-review-config.yml`). Existing dependencies are
+grandfathered; reviewed exceptions go into `allow-dependencies-licenses` as exact package URLs.
 
 ## One-time setup, both repositories
 
@@ -66,7 +73,8 @@ Docker publication. `latest` tracks the highest released version; older-line fix
    Save the JSON as environment variable `RELEASE_SETTINGS_REVIEW` in **release-automation**.
    The flag confirms your manual immutable-setting check. Preflight rejects redacted bypass actors
    without this review, and rejects changed ruleset revisions. Recheck settings and regenerate after changes.
-6. Router: confirm `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and Actions access to GHCR. Protect registry
+6. Router: confirm `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and Actions access to GHCR. Enable the
+   Dependency graph (Settings → Code security) so PR dependency review works. Protect registry
    version/commit tags where supported; leave `latest` mutable. Git tag rules do not protect registry tags.
 7. Run main, release router, then integrations. Verify manifests, immutable releases and registry digests.
 
