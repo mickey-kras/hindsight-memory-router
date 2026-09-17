@@ -78,10 +78,10 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
         "/admin/quarantine/stats": 'pathname == "/admin/quarantine/stats"',
         "/admin/quarantine/cleanup": 'pathname == "/admin/quarantine/cleanup"',
         "/admin/quarantine/items/{quarantine_id}": r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?",
-        "/admin/quarantine/items/{quarantine_id}/approve": 'action == "approve"',
-        "/admin/quarantine/items/{quarantine_id}/reject": 'action == "reject"',
-        "/admin/quarantine/items/{quarantine_id}/postpone": 'action == "postpone"',
-        "/admin/quarantine/items/{quarantine_id}/reconcile": 'action == "reconcile"',
+        "/admin/quarantine/items/{quarantine_id}/approve": '"approve": _approve_item_response',
+        "/admin/quarantine/items/{quarantine_id}/reject": '"reject": _reject_item_response',
+        "/admin/quarantine/items/{quarantine_id}/postpone": '"postpone": _postpone_item_response',
+        "/admin/quarantine/items/{quarantine_id}/reconcile": '"reconcile": _reconcile_item_response',
     }
     assert set(markers) == set(EXPECTED_ROUTES)
     for path, marker in markers.items():

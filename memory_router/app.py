@@ -813,6 +813,42 @@ async def _admin_body(request: Request, action: str) -> dict[str, Any]:
     return body
 
 
+async def _approve_item_response(
+    request: Request, admin: QuarantineAdminService, item_id: str
+) -> Response:
+    body = await _admin_body(request, "approve")
+    return JSONResponse(await admin.approve(item_id, body))
+
+
+async def _reject_item_response(
+    request: Request, admin: QuarantineAdminService, item_id: str
+) -> Response:
+    return JSONResponse(await admin.reject(item_id))
+
+
+async def _postpone_item_response(
+    request: Request, admin: QuarantineAdminService, item_id: str
+) -> Response:
+    return JSONResponse(await admin.postpone(item_id))
+
+
+async def _reconcile_item_response(
+    request: Request, admin: QuarantineAdminService, item_id: str
+) -> Response:
+    body = await _admin_body(request, "reconcile")
+    return JSONResponse(await admin.reconcile(item_id, body))
+
+
+_ADMIN_ITEM_ACTIONS: dict[
+    str, Callable[[Request, QuarantineAdminService, str], Awaitable[Response]]
+] = {
+    "approve": _approve_item_response,
+    "reject": _reject_item_response,
+    "postpone": _postpone_item_response,
+    "reconcile": _reconcile_item_response,
+}
+
+
 async def _admin_item_response(
     request: Request,
     admin: QuarantineAdminService,
@@ -823,17 +859,8 @@ async def _admin_item_response(
     action = match.group(2)
     if method == "GET" and action is None:
         return JSONResponse(await admin.read_item(item_id))
-    if method == "POST":
-        if action == "approve":
-            body = await _admin_body(request, "approve")
-            return JSONResponse(await admin.approve(item_id, body))
-        if action == "reject":
-            return JSONResponse(await admin.reject(item_id))
-        if action == "postpone":
-            return JSONResponse(await admin.postpone(item_id))
-        if action == "reconcile":
-            body = await _admin_body(request, "reconcile")
-            return JSONResponse(await admin.reconcile(item_id, body))
+    if method == "POST" and action in {"approve", "reject", "postpone", "reconcile"}:
+        return await _ADMIN_ITEM_ACTIONS[action](request, admin, item_id)
     return None
 
 
