@@ -128,6 +128,7 @@ describe("key wrap provider fail-closed", () => {
     ["a provider with a zero version", { provider: { name: "sidecar", version: 0 } }],
     ["a provider with a float version", { provider: { name: "sidecar", version: 1.5 } }],
     ["a provider with a string version", { provider: { name: "sidecar", version: "1" } }],
+    ["a provider with a boolean version", { provider: { name: "sidecar", version: true } }],
   ])("fails closed on %s", async (_label, encryption) => {
     const key = await importDecryptionKeyPem(privatePem);
     await expect(decryptEnvelope(withProvider(encryption), key)).rejects.toThrow(
@@ -147,6 +148,16 @@ describe("key wrap provider fail-closed", () => {
     await expect(
       decryptEnvelope(
         withProvider({ key_wrap: "not a token", provider: { name: "sidecar", version: 1 } }),
+        key,
+      ),
+    ).rejects.toThrow("unsupported quarantine key wrapping algorithm");
+  });
+
+  it("rejects a numeric key_wrap without regex coercion, like Python", async () => {
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(
+      decryptEnvelope(
+        withProvider({ key_wrap: 123, provider: { name: "sidecar", version: 1 } }),
         key,
       ),
     ).rejects.toThrow("unsupported quarantine key wrapping algorithm");

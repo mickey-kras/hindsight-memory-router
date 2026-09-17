@@ -27,25 +27,40 @@ Default is same-origin (the nginx deployment below) and needs no configuration.
 A host product may inject configuration before the app script loads:
 
 ```html
-<script>
-  window.__MEMORY_ROUTER_UI_CONFIG__ = {
-    baseUrl: "https://router.internal.example", // opt-in; default is same-origin
-    productName: "Acme Memory",                 // opt-in header title
-  };
-</script>
+<script src="/memory-router-ui.config.js"></script>
 ```
 
-`baseUrl` must be an absolute http(s) URL without credentials, query, or
-fragment; anything malformed fails closed at startup. Cross-origin use puts
-CORS and the admin session boundary on the host; the router stays unchanged.
-Unknown config keys are rejected. Admin tokens still live in sessionStorage
-only; the package never bundles or persists credentials.
+```js
+// memory-router-ui.config.js
+window.__MEMORY_ROUTER_UI_CONFIG__ = {
+  baseUrl: "https://router.internal.example", // opt-in; default is same-origin
+  productName: "Acme Memory",                 // opt-in header title
+  theme: { accent: "#38bdf8" },               // opt-in hex overrides: accent, background, foreground
+  chrome: { header: true, branding: false },  // opt-in embedding flags (default: both true)
+};
+```
+
+The documented CSP is `script-src 'self'`: serve the config as an external
+file like above (or pin an inline snippet with a CSP hash) — an inline
+`<script>` is blocked.
+
+- `baseUrl`: absolute http(s) URL without credentials, query, or fragment.
+  Cross-origin use puts CORS and the admin session boundary on the host; the
+  router stays unchanged.
+- `theme`: hex-color overrides mapped to CSS variables (`accent` →
+  `--mr-accent`, `background` → `--mr-bg`, `foreground` → `--mr-fg`).
+- `chrome`: `header: false` hides the whole header bar (host renders its own
+  chrome; queue actions then need host wiring), `branding: false` hides only
+  the product name and status dot.
+
+Unknown keys and malformed values fail closed at startup. Admin tokens still
+live in sessionStorage only; the package never bundles or persists credentials.
 
 ### Version and crypto contract
 
 Package semver tracks the router admin API contract it consumes: bump minor
 when the consumed contract grows, patch for UI-only fixes. The console consumes
-`/version`, `/health`, and the `/admin/quarantine/*` endpoints.
+`/version` and the `/admin/quarantine/*` endpoints.
 
 | UI package | Router admin API | Consumed contract |
 | --- | --- | --- |

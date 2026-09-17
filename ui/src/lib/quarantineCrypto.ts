@@ -119,7 +119,8 @@ function canonicalDecrypted(value: DecryptedQuarantineObject): string {
 // version. This package unwraps RSA-OAEP-SHA256 only, so any well-formed
 // provider block is rejected in decryptEnvelope.
 function validateWrapProvider(enc: EncryptedQuarantineEnvelope["encryption"]): void {
-  if (!KEY_WRAP_TOKEN_RE.test(enc.key_wrap)) {
+  // Python requires str: a numeric key_wrap must not regex-coerce into a match.
+  if (typeof enc.key_wrap !== "string" || !KEY_WRAP_TOKEN_RE.test(enc.key_wrap)) {
     throw new DecryptError("unsupported quarantine key wrapping algorithm");
   }
   const provider: unknown = enc.provider;
@@ -134,7 +135,9 @@ function validateWrapProvider(enc: EncryptedQuarantineEnvelope["encryption"]): v
   if (typeof name !== "string" || !KEY_WRAP_TOKEN_RE.test(name)) {
     throw new DecryptError(INVALID_WRAP_PROVIDER);
   }
-  if (typeof version !== "number" || !Number.isInteger(version) || version < 1) {
+  // Python requires an int and rejects bool/float. JSON numbers cannot
+  // distinguish 1 from 1.0; reject everything non-integral here.
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
     throw new DecryptError(INVALID_WRAP_PROVIDER);
   }
 }

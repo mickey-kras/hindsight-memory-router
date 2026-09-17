@@ -6,7 +6,7 @@ import {
   type AdminTokens,
 } from "./lib/api";
 import { clearTokens, loadTokens, saveTokens } from "./lib/session";
-import { ConfigError, resolveUiConfig, type ResolvedUiConfig } from "./lib/config";
+import { ConfigError, resolveUiConfig, THEME_VARS, type ResolvedUiConfig, type UiTheme } from "./lib/config";
 import type { QuarantineItemSummary, QuarantineStats } from "./lib/types";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { StatsBar } from "./components/StatsBar";
@@ -38,6 +38,14 @@ export default function App() {
   const [showCleanup, setShowCleanup] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+
+  useEffect(() => {
+    if (!host.config) return;
+    for (const [key, cssVar] of Object.entries(THEME_VARS)) {
+      const value = host.config.theme[key as keyof UiTheme];
+      if (value !== undefined) document.documentElement.style.setProperty(cssVar, value);
+    }
+  }, [host.config]);
 
   const refresh = useCallback(async () => {
     if (!tokens) return;
@@ -116,38 +124,45 @@ export default function App() {
 
   return (
     <div className="mx-auto flex min-h-dvh max-w-6xl flex-col gap-4 px-3 py-4 sm:px-5 sm:py-6">
-      <header className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2">
-          <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-400" />
-          <h1 className="text-base font-semibold tracking-tight">{host.config.productName} - Quarantine</h1>
-        </div>
-        <div className="ml-auto flex items-center gap-2">
-          <button
-            onClick={() => setShowCleanup((v) => !v)}
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
-              showCleanup
-                ? "border-sky-500/50 bg-sky-500/15 text-sky-200"
-                : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
-            }`}
-          >
-            Cleanup
-          </button>
-          <button
-            onClick={() => void refresh()}
-            disabled={loading}
-            data-testid="refresh"
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
-          >
-            {loading ? "loading..." : "Refresh"}
-          </button>
-          <button
-            onClick={disconnect}
-            className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
-          >
-            Disconnect
-          </button>
-        </div>
-      </header>
+      {host.config.chrome.header && (
+        <header className="flex flex-wrap items-center gap-2">
+          {host.config.chrome.branding && (
+            <div className="flex items-center gap-2">
+              <span
+                className="inline-block h-2.5 w-2.5 rounded-full"
+                style={{ backgroundColor: "var(--mr-accent)" }}
+              />
+              <h1 className="text-base font-semibold tracking-tight">{host.config.productName} - Quarantine</h1>
+            </div>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={() => setShowCleanup((v) => !v)}
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium transition ${
+                showCleanup
+                  ? "border-sky-500/50 bg-sky-500/15 text-sky-200"
+                  : "border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+              }`}
+            >
+              Cleanup
+            </button>
+            <button
+              onClick={() => void refresh()}
+              disabled={loading}
+              data-testid="refresh"
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              {loading ? "loading..." : "Refresh"}
+            </button>
+            <button
+              onClick={disconnect}
+              className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
+            >
+              Disconnect
+            </button>
+          </div>
+        </header>
+      )}
 
       {error && <Banner kind="error" text={error} onDismiss={() => setError(null)} />}
       {notice && <Banner kind="ok" text={notice} onDismiss={() => setNotice(null)} />}

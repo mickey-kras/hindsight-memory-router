@@ -4,10 +4,16 @@
 
 :root {
   color-scheme: dark;
+  /* Host-overridable theme hooks (see lib/config.ts). Defaults match zinc/emerald. */
+  --mr-bg: #09090b;
+  --mr-fg: #f4f4f5;
+  --mr-accent: #34d399;
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  @apply antialiased;
+  background-color: var(--mr-bg);
+  color: var(--mr-fg);
   font-family:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
