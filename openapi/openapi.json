@@ -337,7 +337,7 @@
       "get": {
         "operationId": "listQuarantineQueue",
         "summary": "List items awaiting review",
-        "description": "Returns metadata only. Encrypted payloads are fetched one item at a time.",
+        "description": "Returns metadata only, including items stuck in review_side_effect_started that await reconciliation. Encrypted payloads are fetched one item at a time.",
         "tags": [
           "Quarantine administration"
         ],
@@ -1339,6 +1339,7 @@
         "enum": [
           "pending",
           "postponed",
+          "review_side_effect_started",
           "reviewed_allowed",
           "reviewed_blocked"
         ]
@@ -1710,7 +1711,7 @@
               "approve",
               "reject"
             ],
-            "description": "Original review decision being confirmed as applied. Required for recalled memories; retain requests only accept approve."
+            "description": "Original review decision being confirmed as applied. Optional and constrained per kind: retain requests only accept approve, recalled memories only accept reject (the sole side-effecting action for each kind)."
           },
           "expected_sha256": {
             "type": "string",
@@ -1752,7 +1753,6 @@
             "enum": [
               "approved",
               "postponed",
-              "reviewed_allowed",
               "reviewed_blocked"
             ]
           }
@@ -1765,6 +1765,7 @@
           "total_items",
           "pending_items",
           "postponed_items",
+          "review_side_effect_started_items",
           "reviewed_allowed_items",
           "reviewed_blocked_items",
           "encrypted_bytes",
@@ -1780,6 +1781,10 @@
             "minimum": 0
           },
           "postponed_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "review_side_effect_started_items": {
             "type": "integer",
             "minimum": 0
           },

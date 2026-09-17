@@ -6,7 +6,12 @@ export type QuarantineKind =
   | "recalled_memory"
   | "security_event";
 
-export type QuarantineStatus = "pending" | "postponed" | "reviewed_allowed" | "reviewed_blocked";
+export type QuarantineStatus =
+  | "pending"
+  | "postponed"
+  | "review_side_effect_started"
+  | "reviewed_allowed"
+  | "reviewed_blocked";
 
 export const REASONS = [
   "unknown_writer",
@@ -87,10 +92,27 @@ export interface QuarantineStats {
   total_items: number;
   pending_items: number;
   postponed_items: number;
+  review_side_effect_started_items: number;
   reviewed_allowed_items: number;
   reviewed_blocked_items: number;
   encrypted_bytes: number;
   event_count: number;
+}
+
+export type ReconcileAction = "confirmed_applied" | "confirmed_not_applied";
+
+export interface ReconcileRequest {
+  action: ReconcileAction;
+  decision?: "approve" | "reject";
+  expected_sha256: string;
+  expected_updated_at: string;
+}
+
+export interface ReconcileResponse {
+  reconciled: boolean;
+  action: ReconcileAction;
+  quarantine_id: string;
+  status: "approved" | "postponed" | "reviewed_blocked";
 }
 
 export interface CleanupRequest {

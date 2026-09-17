@@ -308,18 +308,15 @@ async def confirm_side_effect_applied(
     repository: QuarantineRepository,
     quarantine_id: str,
     at: str,
-    resume_status: str,
     *,
     expected_sha256: str,
     expected_updated_at: str,
 ) -> None:
-    if resume_status not in {REVIEW_IN_PROGRESS, REVIEW_SIDE_EFFECT_COMPLETED}:
-        raise ValueError(f"cannot resume reconciled review as {resume_status}")
     async with repository.db.transaction() as tx:
         await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
         await tx.execute(
             "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
-            (resume_status, at, quarantine_id),
+            (REVIEW_SIDE_EFFECT_COMPLETED, at, quarantine_id),
         )
         await insert_event(
             tx,

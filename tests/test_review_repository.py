@@ -8,12 +8,7 @@ import pytest
 
 from memory_router.db import SqliteDatabase, initialize_schema
 from memory_router.errors import HttpError
-from memory_router.repository import (
-    REVIEW_IN_PROGRESS,
-    REVIEW_SIDE_EFFECT_COMPLETED,
-    Capacity,
-    QuarantineRepository,
-)
+from memory_router.repository import Capacity, QuarantineRepository
 from memory_router.review_repository import (
     claim_review,
     complete_side_effect,
@@ -179,10 +174,10 @@ async def test_confirmed_applied_finalizes_through_existing_finish_paths(
         repo,
         "a",
         "reconciled",
-        REVIEW_SIDE_EFFECT_COMPLETED,
         expected_sha256="hash",
         expected_updated_at="claim",
     )
+    assert (await repo.get("a"))["status"] == "review_side_effect_completed"  # type: ignore[index]
     await finish_approve_retain(repo, "a", "reconciled", {"writer_id": "main"})
     assert await repo.get("a") is None
     assert [event for event, _ in await events(repo, "a")] == [
@@ -198,27 +193,11 @@ async def test_confirmed_applied_finalizes_through_existing_finish_paths(
         repo,
         "m",
         "reconciled",
-        REVIEW_SIDE_EFFECT_COMPLETED,
         expected_sha256="hash",
         expected_updated_at="claim",
     )
     await finish_reject_memory(repo, "m", "reconciled")
     assert (await repo.get("m"))["status"] == "reviewed_blocked"  # type: ignore[index]
-
-    allowed = value("allowed", kind="recalled_memory")
-    allowed["source_memory_id"] = "m2"
-    await add(repo, allowed)
-    await claim_review(repo, "allowed", "recalled_memory", "claim", side_effect=True)
-    await confirm_side_effect_applied(
-        repo,
-        "allowed",
-        "reconciled",
-        REVIEW_IN_PROGRESS,
-        expected_sha256="hash",
-        expected_updated_at="claim",
-    )
-    await finish_approve_memory(repo, "allowed", "reconciled")
-    assert (await repo.get("allowed"))["status"] == "reviewed_allowed"  # type: ignore[index]
 
 
 @pytest.mark.asyncio
@@ -242,7 +221,6 @@ async def test_confirm_side_effect_rejects_stale_snapshot_and_wrong_state(
             repo,
             "missing",
             "reconciled",
-            REVIEW_SIDE_EFFECT_COMPLETED,
             expected_sha256="hash",
             expected_updated_at="claim",
         )
@@ -254,16 +232,6 @@ async def test_confirm_side_effect_rejects_stale_snapshot_and_wrong_state(
             repo, "p", "reconciled", expected_sha256="hash", expected_updated_at="claim"
         )
     assert invalid.value.code == "invalid_review_action"
-
-    with pytest.raises(ValueError, match="cannot resume"):
-        await confirm_side_effect_applied(
-            repo,
-            "a",
-            "reconciled",
-            "postponed",
-            expected_sha256="hash",
-            expected_updated_at="claim",
-        )
 
 
 @pytest.mark.asyncio
@@ -286,7 +254,6 @@ async def test_confirm_side_effect_rechecks_snapshot_under_row_lock() -> None:
             repository,
             QID,
             "reconciled",
-            REVIEW_SIDE_EFFECT_COMPLETED,
             expected_sha256="hash",
             expected_updated_at="changed",
         )

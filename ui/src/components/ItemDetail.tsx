@@ -4,6 +4,7 @@ import {
   approveItem,
   fetchItem,
   postponeItem,
+  reconcileItem,
   rejectItem,
   type AdminTokens,
 } from "../lib/api";
@@ -16,6 +17,7 @@ import type {
   DecryptedQuarantineObject,
   QuarantineItemResponse,
   QuarantineItemSummary,
+  ReconcileAction,
 } from "../lib/types";
 import { formatBytes, formatTime, KIND_LABEL, REASON_STYLE, STATUS_STYLE } from "../lib/format";
 import { Banner } from "./Banner";
@@ -27,7 +29,7 @@ interface Props {
   onClose: () => void;
 }
 
-type PendingAction = "approve" | "reject" | null;
+type PendingAction = "approve" | "reject" | ReconcileAction | null;
 
 export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
   const [detail, setDetail] = useState<QuarantineItemResponse | null>(null);
@@ -84,7 +86,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
   }, [detail]);
 
   const runAction = useCallback(
-    async (action: "approve" | "reject" | "postpone") => {
+    async (action: "approve" | "reject" | "postpone" | ReconcileAction) => {
       setBusy(true);
       try {
         if (action === "approve") {
@@ -94,9 +96,22 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
         } else if (action === "reject") {
           await rejectItem(tokens, item.quarantine_id);
           onAction(`rejected ${item.quarantine_id}`);
-        } else {
+        } else if (action === "postpone") {
           await postponeItem(tokens, item.quarantine_id);
           onAction(`postponed ${item.quarantine_id}`);
+        } else {
+          const current = detail?.record ?? item;
+          await reconcileItem(tokens, item.quarantine_id, {
+            action,
+            ...(item.kind === "retain_request"
+              ? { decision: "approve" as const }
+              : item.kind === "recalled_memory"
+                ? { decision: "reject" as const }
+                : {}),
+            expected_sha256: current.sha256,
+            expected_updated_at: current.updated_at,
+          });
+          onAction(`reconciled ${item.quarantine_id} (${action})`);
         }
       } catch (error) {
         setBusy(false);
@@ -107,7 +122,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
         return;
       }
     },
-    [decrypted, item.quarantine_id, tokens, onAction],
+    [decrypted, detail, item, tokens, onAction],
   );
 
   const record = detail?.record ?? item;
@@ -128,6 +143,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
   if (record.expires_at) meta.push(["Expires", formatTime(record.expires_at)]);
 
   const canReview = item.status === "pending" || item.status === "postponed";
+  const canReconcile = item.status === "review_side_effect_started";
 
   return (
     <section
@@ -222,35 +238,70 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
         </div>
       )}
 
-      {canReview && (
+      {canReconcile && (
+        <Banner
+          kind="info"
+          text="The review side effect may or may not have reached Hindsight. Reconcile explicitly; nothing is replayed automatically."
+        />
+      )}
+
+      {(canReview || canReconcile) && (
         <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-zinc-800 bg-zinc-900/95 px-4 py-3 backdrop-blur">
           {pendingAction === null && (
             <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => setPendingAction("approve")}
-                disabled={!decrypted || busy || !tokens.review}
-                data-testid="approve-open"
-                title={!decrypted ? "decrypt first" : !tokens.review ? "review token required" : ""}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => setPendingAction("reject")}
-                disabled={busy || !tokens.review}
-                data-testid="reject-open"
-                className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
-              >
-                Reject
-              </button>
-              <button
-                onClick={() => void runAction("postpone")}
-                disabled={busy || !tokens.review}
-                data-testid="postpone"
-                className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-              >
-                Postpone
-              </button>
+              {canReview && (
+                <>
+                  <button
+                    onClick={() => setPendingAction("approve")}
+                    disabled={!decrypted || busy || !tokens.review}
+                    data-testid="approve-open"
+                    title={
+                      !decrypted ? "decrypt first" : !tokens.review ? "review token required" : ""
+                    }
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => setPendingAction("reject")}
+                    disabled={busy || !tokens.review}
+                    data-testid="reject-open"
+                    className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
+                  >
+                    Reject
+                  </button>
+                  <button
+                    onClick={() => void runAction("postpone")}
+                    disabled={busy || !tokens.review}
+                    data-testid="postpone"
+                    className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    Postpone
+                  </button>
+                </>
+              )}
+              {canReconcile && (
+                <>
+                  <button
+                    onClick={() => setPendingAction("confirmed_applied")}
+                    disabled={busy || !tokens.review}
+                    data-testid="reconcile-applied-open"
+                    title={!tokens.review ? "review token required" : ""}
+                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    Confirm applied
+                  </button>
+                  <button
+                    onClick={() => setPendingAction("confirmed_not_applied")}
+                    disabled={busy || !tokens.review}
+                    data-testid="reconcile-not-applied-open"
+                    title={!tokens.review ? "review token required" : ""}
+                    className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                  >
+                    Confirm not applied
+                  </button>
+                </>
+              )}
             </div>
           )}
           {pendingAction !== null && (
@@ -258,19 +309,29 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
               <span className="text-sm text-zinc-300">
                 {pendingAction === "approve"
                   ? "Approve into memory? The exact decrypted object is submitted for hash verification."
-                  : "Reject this item?"}
+                  : pendingAction === "reject"
+                    ? "Reject this item?"
+                    : pendingAction === "confirmed_applied"
+                      ? "Confirm the side effect reached Hindsight? The original decision is finalized without re-calling Hindsight."
+                      : "Confirm the side effect never reached Hindsight? The item returns to postponed for normal retry."}
               </span>
               <button
                 onClick={() => void runAction(pendingAction)}
                 disabled={busy}
                 data-testid="confirm-action"
                 className={`rounded-lg px-4 py-2 text-sm font-medium text-white ${
-                  pendingAction === "approve"
+                  pendingAction === "approve" || pendingAction === "confirmed_applied"
                     ? "bg-emerald-600 hover:bg-emerald-500"
-                    : "bg-red-600 hover:bg-red-500"
+                    : pendingAction === "reject"
+                      ? "bg-red-600 hover:bg-red-500"
+                      : "bg-zinc-600 hover:bg-zinc-500"
                 } disabled:opacity-40`}
               >
-                {busy ? "working..." : `Confirm ${pendingAction}`}
+                {busy
+                  ? "working..."
+                  : pendingAction === "approve" || pendingAction === "reject"
+                    ? `Confirm ${pendingAction}`
+                    : "Confirm reconcile"}
               </button>
               <button
                 onClick={() => setPendingAction(null)}

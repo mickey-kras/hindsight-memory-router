@@ -16,7 +16,6 @@ from .repository import (
     REVIEW_SIDE_EFFECT_COMPLETED,
     REVIEW_SIDE_EFFECT_STARTED,
     REVIEWABLE_STATUSES,
-    REVIEWED_ALLOWED,
     REVIEWED_BLOCKED,
     STAT_KEYS,
     is_expired,
@@ -60,7 +59,12 @@ class QuarantineAdminService:
         at = iso_now()
         items = await self.repository.list_reviewable(limit, offset, at)
         stats = await self.repository.stats(at)
-        return {"items": items, "total": stats["pending_items"] + stats["postponed_items"]}
+        return {
+            "items": items,
+            "total": stats["pending_items"]
+            + stats["postponed_items"]
+            + stats["review_side_effect_started_items"],
+        }
 
     async def read_item(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_reviewable(quarantine_id)
@@ -363,7 +367,6 @@ class QuarantineAdminService:
                 self.repository,
                 quarantine_id,
                 at,
-                REVIEW_SIDE_EFFECT_COMPLETED,
                 expected_sha256=expected_sha256,
                 expected_updated_at=expected_updated_at,
             )
@@ -378,35 +381,23 @@ class QuarantineAdminService:
             )
             return "approved"
         if item["kind"] == "recalled_memory":
-            if decision == "approve":
-                await confirm_side_effect_applied(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    REVIEW_IN_PROGRESS,
-                    expected_sha256=expected_sha256,
-                    expected_updated_at=expected_updated_at,
+            if decision not in (None, "reject"):
+                raise HttpError(
+                    409,
+                    "invalid_review_action",
+                    "only a reject side effect can be reconciled for a recalled memory",
                 )
-                await finish_approve_memory(
-                    self.repository, quarantine_id, at, expected_sha256=expected_sha256
-                )
-                return REVIEWED_ALLOWED
-            if decision == "reject":
-                await confirm_side_effect_applied(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    REVIEW_SIDE_EFFECT_COMPLETED,
-                    expected_sha256=expected_sha256,
-                    expected_updated_at=expected_updated_at,
-                )
-                await finish_reject_memory(
-                    self.repository, quarantine_id, at, expected_sha256=expected_sha256
-                )
-                return REVIEWED_BLOCKED
-            raise HttpError(
-                400, "invalid_request", "decision must be approve or reject for a recalled memory"
+            await confirm_side_effect_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
             )
+            await finish_reject_memory(
+                self.repository, quarantine_id, at, expected_sha256=expected_sha256
+            )
+            return REVIEWED_BLOCKED
         raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
 
     async def stats(self) -> dict[str, int]:
@@ -439,11 +430,12 @@ class QuarantineAdminService:
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
-        if item["status"] not in REVIEWABLE_STATUSES:
+        if item["status"] not in REVIEWABLE_STATUSES | {REVIEW_SIDE_EFFECT_STARTED}:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
-        self._assert_not_expired(item)
+        if item["status"] in REVIEWABLE_STATUSES:
+            self._assert_not_expired(item)
         return item
 
     async def _require_claim_candidate(self, quarantine_id: str) -> dict[str, Any]:
