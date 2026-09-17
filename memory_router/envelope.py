@@ -35,6 +35,7 @@ QuarantineReason = Literal[
     "openclaw_suspicious_provider_response",
 ]
 _REASONS = frozenset(get_args(QuarantineReason))
+_INVALID_WRAP_PROVIDER = "invalid quarantine key wrap provider"
 
 
 class DecryptedQuarantine(BaseModel):
@@ -334,12 +335,12 @@ def _validate_wrap_provider(encryption: dict[str, Any]) -> None:
         raise ValueError("unsupported quarantine key wrapping algorithm")
     provider = encryption["provider"]
     if not isinstance(provider, dict) or set(provider) != {"name", "version"}:
-        raise ValueError("invalid quarantine key wrap provider")
+        raise ValueError(_INVALID_WRAP_PROVIDER)
     if not isinstance(provider["name"], str) or not KEY_WRAP_TOKEN_RE.fullmatch(provider["name"]):
-        raise ValueError("invalid quarantine key wrap provider")
+        raise ValueError(_INVALID_WRAP_PROVIDER)
     version = provider["version"]
     if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-        raise ValueError("invalid quarantine key wrap provider")
+        raise ValueError(_INVALID_WRAP_PROVIDER)
 
 
 def _validate_base64_field(encryption: dict[str, Any], field: str) -> None:
