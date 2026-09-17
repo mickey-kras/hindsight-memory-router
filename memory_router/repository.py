@@ -93,6 +93,43 @@ class QueueFilter:
             )
         )
 
+    def with_bank_scope(self, bank_ids: tuple[str, ...]) -> QueueFilter:
+        return QueueFilter(
+            bank_ids=bank_ids,
+            writer_id=self.writer_id,
+            principal_id=self.principal_id,
+            kind=self.kind,
+            status=self.status,
+        )
+
+
+QUEUE_FILTER_PARAMS = ("bank_id", "writer_id", "principal_id", "kind", "status")
+QUEUE_KINDS = frozenset({"retain_request", "recall_request", "recalled_memory", "security_event"})
+QUEUE_STATUSES = frozenset(
+    {PENDING, POSTPONED, REVIEW_SIDE_EFFECT_STARTED, REVIEWED_ALLOWED, REVIEWED_BLOCKED}
+)
+
+
+def parse_queue_filter(params: Any) -> QueueFilter:
+    values: dict[str, str] = {}
+    for name in QUEUE_FILTER_PARAMS:
+        entries = params.getlist(name)
+        if len(entries) > 1:
+            raise HttpError(400, "invalid_query", f"{name} is invalid")
+        if entries:
+            values[name] = entries[0]
+    if values.get("kind") is not None and values["kind"] not in QUEUE_KINDS:
+        raise HttpError(400, "invalid_query", "kind is invalid")
+    if values.get("status") is not None and values["status"] not in QUEUE_STATUSES:
+        raise HttpError(400, "invalid_query", "status is invalid")
+    return QueueFilter(
+        bank_id=values.get("bank_id"),
+        writer_id=values.get("writer_id"),
+        principal_id=values.get("principal_id"),
+        kind=values.get("kind"),
+        status=values.get("status"),
+    )
+
 
 def _filter_clause(filter_: QueueFilter) -> tuple[str, list[Any]]:
     clause = ""
@@ -466,6 +503,8 @@ class QuarantineRepository:
         bank_id = item.get("bank_id")
         if capacity.max_pending_items_per_bank <= 0 or bank_id is None:
             return
+        # Count-then-insert mirrors the global and per-writer checks above: limits are
+        # best-effort under concurrency, not a hard invariant, matching existing semantics.
         row = await tx.fetchone(
             _PENDING_SCOPE_PREFIX + "bank_id=?",
             (at, bank_id),

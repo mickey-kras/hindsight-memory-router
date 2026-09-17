@@ -927,6 +927,7 @@ async def test_unmatched_paths_keep_policy_denial_with_principal_identity() -> N
     assert response.status_code == 404
     app_module.runtime.policy.deny_endpoint.assert_awaited_once()
     assert app_module.runtime.policy.deny_endpoint.await_args.kwargs["writer_id"] == "agent-alpha"
+    assert app_module.runtime.policy.deny_endpoint.await_args.kwargs["bank_id"] == "shared"
 
 
 @pytest.mark.asyncio

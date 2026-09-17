@@ -289,7 +289,7 @@ class OpenClawFacade:
         # Route metadata and free-text query values are not persisted payload. Query
         # values decode valid Base64 but do not fail closed on ordinary URL syntax.
         await self._validate_safe_request(
-            route, writer_id, source, request_evidence, forwarded_query
+            route, writer_id, source, request_evidence, forwarded_query, bank_override
         )
         path = _facade_path(route, target_bank, params, forwarded_query)
 
@@ -302,7 +302,7 @@ class OpenClawFacade:
             allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
-            await self._validate_safe_response(route, writer_id, source, value)
+            await self._validate_safe_response(route, writer_id, source, value, bank_override)
         try:
             if route.strict_contract:
                 validate_openclaw_response(
@@ -325,6 +325,7 @@ class OpenClawFacade:
         source: str,
         evidence: dict[str, Any],
         query: list[tuple[str, str]],
+        bank_id: str | None = None,
     ) -> None:
         scan_input = {
             key: value for key, value in evidence.items() if key not in {"resource", "query"}
@@ -337,7 +338,7 @@ class OpenClawFacade:
         scan.extend(scan_query_values(query))
         if scan.safe:
             return
-        await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source)
+        await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source, bank_id)
         raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
     async def _target_bank(
@@ -369,7 +370,12 @@ class OpenClawFacade:
         self.policy.limits.assert_retain_bounds(body)
 
     async def _validate_safe_response(
-        self, route: FacadeRoute, writer_id: str, source: str, value: Any
+        self,
+        route: FacadeRoute,
+        writer_id: str,
+        source: str,
+        value: Any,
+        bank_id: str | None = None,
     ) -> None:
         response_scan = await _scan_facade_response(value, writer_id=writer_id)
         if _only_scan_limit_findings(response_scan):
@@ -391,6 +397,7 @@ class OpenClawFacade:
             {"resource": route.resource, "response": value},
             response_scan,
             source,
+            bank_id,
         )
         raise HttpError(
             502,
@@ -405,6 +412,7 @@ class OpenClawFacade:
         value: Any,
         scan: SafetyResult | None,
         source: str = "openclaw",
+        bank_id: str | None = None,
     ) -> None:
         try:
             digest = sha256_hex(canonical_json(value))
@@ -418,6 +426,7 @@ class OpenClawFacade:
                     "source": source,
                     "kind": "security_event",
                     "reason": reason,
+                    "bankId": bank_id,
                     "dedupeKey": f"{reason}:{writer_id}:{digest}",
                     "payload": {
                         "action": reason,

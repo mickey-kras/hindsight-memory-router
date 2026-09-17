@@ -271,13 +271,16 @@ class AuthenticatedRequestDispatcher:
         principal: PrincipalSession | None,
         route_class: str,
     ) -> Response:
-        denied_writer_id = self._known_denied_bank(pathname)
         if principal is not None:
             await self.deps.principal_rate(principal, SCOPE_BANK_ADMIN, route_class)
             denied = await self.deps.policy.deny_endpoint(
-                method, pathname, writer_id=principal.principal_id
+                method,
+                pathname,
+                writer_id=principal.principal_id,
+                bank_id=self._bank_path_segment(pathname),
             )
         else:
+            denied_writer_id = self._known_denied_bank(pathname)
             denied = (
                 await self.deps.policy.deny_endpoint(method, pathname)
                 if denied_writer_id is None
@@ -287,13 +290,18 @@ class AuthenticatedRequestDispatcher:
             )
         return JSONResponse(denied, status_code=404)
 
-    def _known_denied_bank(self, pathname: str) -> str | None:
+    def _bank_path_segment(self, pathname: str) -> str | None:
         match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)
         if match is None:
             return None
         try:
-            candidate = self.deps.decode_path_segment(match.group(1))
+            return self.deps.decode_path_segment(match.group(1))
         except HttpError:
+            return None
+
+    def _known_denied_bank(self, pathname: str) -> str | None:
+        candidate = self._bank_path_segment(pathname)
+        if candidate is None:
             return None
         writers = getattr(getattr(self.deps.policy, "registry", None), "writers", {})
         return candidate if candidate in writers else None

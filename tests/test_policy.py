@@ -390,8 +390,8 @@ async def test_quarantine_bank_id_follows_the_canonical_kind_matrix() -> None:
 
 
 @pytest.mark.asyncio
-async def test_multi_bank_recall_fan_out_has_no_canonical_bank() -> None:
-    fan_out = WriterRegistry.model_validate(
+def fan_out_registry() -> WriterRegistry:
+    return WriterRegistry.model_validate(
         {
             "writers": {
                 "multi": {
@@ -407,8 +407,46 @@ async def test_multi_bank_recall_fan_out_has_no_canonical_bank() -> None:
             },
         }
     )
+
+
+@pytest.mark.asyncio
+async def test_multi_bank_recall_fan_out_has_no_canonical_bank() -> None:
     store = FakeStore()
-    router = RouterPolicy(fan_out, FakeHindsight(), FakeLimits(), store, FakeRepository())
+    router = RouterPolicy(
+        fan_out_registry(), FakeHindsight(), FakeLimits(), store, FakeRepository()
+    )
     await router.recall("multi", {"query": "status", "tags": ["system prompt"]})
     assert store.items[0]["kind"] == "recall_request"
     assert store.items[0]["bankId"] is None
+
+
+@pytest.mark.asyncio
+async def test_denied_endpoint_stamps_path_bank_only_when_named() -> None:
+    router, _, store, _ = policy(FakeHindsight())
+    await router.deny_endpoint(
+        "POST", "/v1/default/banks/bank-b/memories", writer_id="agent", bank_id="bank-b"
+    )
+    await router.deny_endpoint("GET", "/v1/default/banks/main/memories", writer_id="main")
+    assert store.items[0]["reason"] == "denied_endpoint"
+    assert store.items[0]["bankId"] == "bank-b"
+    assert store.items[1]["bankId"] is None
+
+
+@pytest.mark.asyncio
+async def test_oversized_recall_placeholder_follows_the_recall_bank_scope() -> None:
+    too_large = HttpError(413, "quarantine_item_too_large", "too large")
+    body = {"query": "system prompt", "padding": "x" * 1024}
+
+    single = FakeStore([too_large, None])
+    router = RouterPolicy(registry(), FakeHindsight(), FakeLimits(), single, FakeRepository())
+    assert await router.recall_bank("agent", "bank-a", body, "http") == {"results": []}
+    assert single.items[0]["bankId"] == "bank-a"
+    assert single.items[1]["kind"] == "security_event"
+    assert single.items[1]["bankId"] == "bank-a"
+
+    multi = FakeStore([HttpError(413, "quarantine_item_too_large", "too large"), None])
+    fan_out = RouterPolicy(
+        fan_out_registry(), FakeHindsight(), FakeLimits(), multi, FakeRepository()
+    )
+    assert await fan_out.recall("multi", body) == {"results": []}
+    assert multi.items[1]["bankId"] is None

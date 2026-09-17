@@ -472,3 +472,46 @@ def test_exact_current_openclaw_auto_and_knowledge_recall_shapes() -> None:
         }
     )
     assert not scan_recall_body(malicious).safe
+
+
+@pytest.mark.asyncio
+async def test_facade_request_audit_stamps_path_bank_in_principal_mode_only() -> None:
+    policy = make_policy({"text": "safe"})
+    with pytest.raises(HttpError) as blocked:
+        await OpenClawFacade(policy).forward(
+            route=facade_route("POST", "reflect"),
+            writer_id="agent-alpha",
+            params={},
+            body={"query": INJECTION},
+            bank_override="shared",
+            source="agent-runtime",
+        )
+    assert blocked.value.code == "suspicious_content"
+    assert policy.quarantine_security_event.await_args.args[0]["bankId"] == "shared"
+
+    legacy = make_policy({"text": "safe"})
+    with pytest.raises(HttpError):
+        await OpenClawFacade(legacy).forward(
+            route=facade_route("POST", "reflect"),
+            writer_id="openclaw",
+            params={},
+            body={"query": INJECTION},
+        )
+    assert legacy.quarantine_security_event.await_args.args[0]["bankId"] is None
+
+
+@pytest.mark.asyncio
+async def test_facade_response_audit_stamps_path_bank_in_principal_mode() -> None:
+    policy = make_policy({"text": INJECTION})
+    with pytest.raises(HttpError) as blocked:
+        await OpenClawFacade(policy).forward(
+            route=facade_route("POST", "reflect"),
+            writer_id="agent-alpha",
+            params={},
+            body={"query": "safe question"},
+            bank_override="shared",
+        )
+    assert blocked.value.code == "hindsight_unsafe_response"
+    event = policy.quarantine_security_event.await_args.args[0]
+    assert event["reason"] == "openclaw_suspicious_provider_response"
+    assert event["bankId"] == "shared"
