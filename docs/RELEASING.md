@@ -99,3 +99,28 @@ self-approval. Sonar stays main-only by design; release tests, CodeQL, Aislop an
 
 Avoid merging release fixes during publication. GitHub and the registries do not publish atomically;
 use recorded digests while recovering a partial publication.
+
+### Failed release cleanup
+
+When a release run fails before the immutable release is finalized, the **clean up failed release** job
+removes the run's leftovers automatically and posts a summary of what it deleted:
+
+- the GHCR and Docker Hub tags the run pushed — exactly the version tag and the commit-sha tag, plus the
+  cosign signature/attestation artifacts of this run's digest. `latest` and every other version are never
+  touched. If the run's digest is known, tags that meanwhile moved to another digest (a newer attempt)
+  are left alone;
+- the `release/X.Y.Z` branch, deleted with the release App token (the App is the only bypass actor on the
+  deletion ruleset). The branch is kept when it advanced past the failed run or when `vX.Y.Z` already
+  exists — in that case re-run the failed jobs to finish the release instead.
+
+Cleanup is idempotent, runs only on release branches after a failure, never on main or on success, and its
+own failures cannot mask the original failure. Abandon a failed release by simply not re-running it; the
+version stays reserved, so the next release uses a new version number.
+
+Manual edge cases that still need the owner:
+
+- **Startup failures:** when the caller workflow itself fails to start (no jobs execute, e.g. an invalid
+  workflow or unresolvable secret), no cleanup job can run. Delete the orphaned branch with the release
+  App and any pushed registry tags by hand.
+- **Cleanup job failures** (e.g. a registry API outage): the job summary names what remains; delete it
+  manually, then re-run the failed release jobs if the release should proceed.

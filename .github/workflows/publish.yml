@@ -164,6 +164,9 @@ jobs:
       needs.quality.result == 'success' && needs.aislop.result == 'success' &&
       needs.codeql.result == 'success' && needs.architecture.result == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.finalized.outputs.latest }}
+      ghcr_digest: ${{ steps.push.outputs.ghcr_digest }}
     environment: release-automation
     concurrency:
       group: image-release-${{ github.repository }}
@@ -518,6 +521,65 @@ jobs:
         run: |
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE_GHCR:latest" "$IMAGE_GHCR@$GHCR_DIGEST"
           docker buildx imagetools create --prefer-index=false --tag "$IMAGE_DOCKERHUB:latest" "$IMAGE_DOCKERHUB@$DOCKERHUB_DIGEST"
+
+  cleanup:
+    name: clean up failed release
+    needs: [quality, aislop, codeql, architecture, publish]
+    if: >-
+      ${{
+        always() &&
+        startsWith(github.ref, 'refs/heads/release/') &&
+        needs.publish.outputs.released == '' &&
+        (
+          needs.quality.result == 'failure' ||
+          needs.aislop.result == 'failure' ||
+          needs.codeql.result == 'failure' ||
+          needs.architecture.result == 'failure' ||
+          needs.publish.result == 'failure'
+        )
+      }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    environment: release-automation
+    concurrency:
+      group: image-release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE_GHCR: ghcr.io/${{ github.repository }}
+      IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
+      CLEANUP_DIGEST: ${{ needs.publish.outputs.ghcr_digest }}
+    steps:
+      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Release App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Remove orphaned registry tags
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        with:
+          script: await require('./.github/scripts/release-cleanup.cjs').registries({ github, context, core });
+      - name: Delete the failed release branch
+        if: always()
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          github-token: ${{ steps.app.outputs.token }}
+          script: await require('./.github/scripts/release-cleanup.cjs').branch({ github, context, core });
 
   report-validation-failure:
     name: report validation failure
