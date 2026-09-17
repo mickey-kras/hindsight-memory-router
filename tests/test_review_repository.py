@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,8 @@ from memory_router.repository import Capacity, QuarantineRepository
 from memory_router.review_repository import (
     claim_review,
     complete_side_effect,
+    confirm_side_effect_applied,
+    confirm_side_effect_not_applied,
     finish_approve_memory,
     finish_approve_retain,
     finish_reject_memory,
@@ -128,6 +131,134 @@ async def test_claim_interrupt_finish_approve_and_finish_reject(repo: Quarantine
     assert (await repo.get("m"))["status"] == "review_side_effect_completed"  # type: ignore[index]
     await finish_reject_memory(repo, "m", "claim")
     assert (await repo.get("m"))["status"] == "reviewed_blocked"  # type: ignore[index]
+
+
+async def events(repo: QuarantineRepository, qid: str) -> list[tuple[str, dict[str, object]]]:
+    async with repo.db.transaction() as tx:
+        rows = await tx.fetchall(
+            "SELECT event_type,details FROM quarantine_events WHERE quarantine_id=? ORDER BY occurred_at",
+            (qid,),
+        )
+    return [(str(row["event_type"]), json.loads(str(row["details"]))) for row in rows]
+
+
+@pytest.mark.asyncio
+async def test_confirmed_not_applied_restores_postponed_with_prior_state_audit(
+    repo: QuarantineRepository,
+) -> None:
+    await add(repo, value("a"))
+    await claim_review(repo, "a", "retain_request", "claim", side_effect=True)
+
+    await confirm_side_effect_not_applied(
+        repo, "a", "reconciled", expected_sha256="hash", expected_updated_at="claim"
+    )
+
+    item = await repo.get("a")
+    assert item and item["status"] == "postponed" and item["updated_at"] == "reconciled"
+    assert (
+        "review_reconciled",
+        {
+            "action": "confirmed_not_applied",
+            "previous_status": "review_side_effect_started",
+        },
+    ) in await events(repo, "a")
+
+
+@pytest.mark.asyncio
+async def test_confirmed_applied_finalizes_through_existing_finish_paths(
+    repo: QuarantineRepository,
+) -> None:
+    await add(repo, value("a"))
+    await claim_review(repo, "a", "retain_request", "claim", side_effect=True)
+    await confirm_side_effect_applied(
+        repo,
+        "a",
+        "reconciled",
+        expected_sha256="hash",
+        expected_updated_at="claim",
+    )
+    assert (await repo.get("a"))["status"] == "review_side_effect_completed"  # type: ignore[index]
+    await finish_approve_retain(repo, "a", "reconciled", {"writer_id": "main"})
+    assert await repo.get("a") is None
+    assert [event for event, _ in await events(repo, "a")] == [
+        "quarantined",
+        "review_side_effect_started",
+        "review_reconciled",
+        "approved",
+    ]
+
+    await add(repo, value("m", kind="recalled_memory"))
+    await claim_review(repo, "m", "recalled_memory", "claim", side_effect=True)
+    await confirm_side_effect_applied(
+        repo,
+        "m",
+        "reconciled",
+        expected_sha256="hash",
+        expected_updated_at="claim",
+    )
+    await finish_reject_memory(repo, "m", "reconciled")
+    assert (await repo.get("m"))["status"] == "reviewed_blocked"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_confirm_side_effect_rejects_stale_snapshot_and_wrong_state(
+    repo: QuarantineRepository,
+) -> None:
+    await add(repo, value("a"))
+    await claim_review(repo, "a", "retain_request", "claim", side_effect=True)
+
+    for expected in (
+        {"expected_sha256": "changed", "expected_updated_at": "claim"},
+        {"expected_sha256": "hash", "expected_updated_at": "changed"},
+    ):
+        with pytest.raises(HttpError) as changed:
+            await confirm_side_effect_not_applied(repo, "a", "reconciled", **expected)  # type: ignore[arg-type]
+        assert changed.value.code == "quarantine_review_changed"
+        assert (await repo.get("a"))["status"] == "review_side_effect_started"  # type: ignore[index]
+
+    with pytest.raises(HttpError) as missing:
+        await confirm_side_effect_applied(
+            repo,
+            "missing",
+            "reconciled",
+            expected_sha256="hash",
+            expected_updated_at="claim",
+        )
+    assert missing.value.status == 404
+
+    await add(repo, value("p"))
+    with pytest.raises(HttpError) as invalid:
+        await confirm_side_effect_not_applied(
+            repo, "p", "reconciled", expected_sha256="hash", expected_updated_at="claim"
+        )
+    assert invalid.value.code == "invalid_review_action"
+
+
+@pytest.mark.asyncio
+async def test_confirm_side_effect_rechecks_snapshot_under_row_lock() -> None:
+    tx = FakeReviewTx(
+        {
+            "quarantine_id": QID,
+            "status": "review_side_effect_started",
+            "kind": "retain_request",
+            "sha256": "hash",
+            "updated_at": "claim",
+            "expires_at": None,
+        },
+        dialect="postgres",
+    )
+    repository = QuarantineRepository(FakeDatabase(tx))  # type: ignore[arg-type]
+
+    with pytest.raises(HttpError) as changed:
+        await confirm_side_effect_applied(
+            repository,
+            QID,
+            "reconciled",
+            expected_sha256="hash",
+            expected_updated_at="changed",
+        )
+    assert changed.value.code == "quarantine_review_changed"
+    assert not any(sql.startswith("UPDATE quarantine_items") for sql, _ in tx.executed)
 
 
 @pytest.mark.asyncio

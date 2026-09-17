@@ -45,6 +45,7 @@ STAT_KEYS = (
     "total_items",
     "pending_items",
     "postponed_items",
+    "review_side_effect_started_items",
     "expired_items",
     "reviewed_allowed_items",
     "reviewed_blocked_items",
@@ -116,7 +117,7 @@ class QuarantineRepository:
     async def list_reviewable(self, limit: int, offset: int, at: str) -> list[dict[str, Any]]:
         async with self.db.transaction() as tx:
             rows = await tx.fetchall(
-                "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed') "
+                "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "
                 "AND NOT(expires_at IS NOT NULL AND expires_at<=?) "
                 "ORDER BY created_at ASC, quarantine_id ASC LIMIT ? OFFSET ?",
                 (at, limit, offset),
@@ -130,11 +131,12 @@ class QuarantineRepository:
                     """SELECT COUNT(*) total_items,
               SUM(CASE WHEN status='pending' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) pending_items,
               SUM(CASE WHEN status='postponed' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) postponed_items,
+              SUM(CASE WHEN status='review_side_effect_started' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) review_side_effect_started_items,
               SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 1 ELSE 0 END) expired_items,
               SUM(CASE WHEN status='reviewed_allowed' THEN 1 ELSE 0 END) reviewed_allowed_items,
               SUM(CASE WHEN status='reviewed_blocked' THEN 1 ELSE 0 END) reviewed_blocked_items,
               COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes FROM quarantine_items""",
-                    (at, at, at, at),
+                    (at, at, at, at, at),
                 )
                 or {}
             )

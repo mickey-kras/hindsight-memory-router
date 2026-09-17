@@ -59,6 +59,7 @@ def service(
                 "total_items": 1,
                 "pending_items": 1,
                 "postponed_items": 2,
+                "review_side_effect_started_items": 7,
                 "reviewed_allowed_items": 3,
                 "reviewed_blocked_items": 4,
                 "encrypted_bytes": 5,
@@ -80,7 +81,7 @@ def service(
 async def test_list_read_stats_and_require_reviewable() -> None:
     item, _ = exact_item("retain_request", {})
     svc, repo, _, _ = service(item)
-    assert (await svc.list_queue(10, 0))["total"] == 3
+    assert (await svc.list_queue(10, 0))["total"] == 10
     repo.list_reviewable.assert_awaited_once()
     assert len(repo.list_reviewable.await_args.args) == 3
     read = await svc.read_item(QID)
@@ -696,3 +697,186 @@ async def test_reject_finish_failure_retries_without_replaying_invalidation(
     assert complete.await_count == 1
     assert finish.await_count == 2
     interrupt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_confirmed_not_applied_returns_item_to_postponed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item, _ = retain_item(status="review_side_effect_started")
+    svc, _, hindsight, _ = service(item)
+    confirm = AsyncMock()
+    monkeypatch.setattr(admin_module, "confirm_side_effect_not_applied", confirm)
+
+    result = await svc.reconcile(
+        QID,
+        {
+            "action": "confirmed_not_applied",
+            "expected_sha256": "sha",
+            "expected_updated_at": "claim",
+        },
+    )
+
+    assert result == {
+        "reconciled": True,
+        "action": "confirmed_not_applied",
+        "quarantine_id": QID,
+        "status": "postponed",
+    }
+    assert confirm.await_args.kwargs == {
+        "expected_sha256": "sha",
+        "expected_updated_at": "claim",
+    }
+    hindsight.retain.assert_not_awaited()
+    hindsight.invalidate_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_confirmed_applied_finalizes_each_kind_without_replaying_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    confirm = AsyncMock()
+    finish_retain = AsyncMock()
+    finish_block = AsyncMock()
+    monkeypatch.setattr(admin_module, "confirm_side_effect_applied", confirm)
+    monkeypatch.setattr(admin_module, "finish_approve_retain", finish_retain)
+    monkeypatch.setattr(admin_module, "finish_reject_memory", finish_block)
+
+    item, _ = retain_item(status="review_side_effect_started")
+    svc, _, hindsight, _ = service(item)
+    result = await svc.reconcile(
+        QID,
+        {"action": "confirmed_applied", "expected_sha256": "sha", "expected_updated_at": "claim"},
+    )
+    assert result["status"] == "approved"
+    assert confirm.await_args.kwargs == {
+        "expected_sha256": "sha",
+        "expected_updated_at": "claim",
+    }
+    finish_retain.assert_awaited_once()
+    assert finish_retain.await_args.args[3] == {"writer_id": "main", "target_bank": "main"}
+    assert finish_retain.await_args.kwargs == {"expected_sha256": "sha"}
+
+    svc, _, _, _ = service(recalled_item(status="review_side_effect_started"))
+    result = await svc.reconcile(
+        QID,
+        {
+            "action": "confirmed_applied",
+            "decision": "reject",
+            "expected_sha256": "sha",
+            "expected_updated_at": "claim",
+        },
+    )
+    assert result["status"] == "reviewed_blocked"
+    finish_block.assert_awaited_once()
+
+    svc, _, _, _ = service(recalled_item(status="review_side_effect_started"))
+    result = await svc.reconcile(
+        QID,
+        {"action": "confirmed_applied", "expected_sha256": "sha", "expected_updated_at": "claim"},
+    )
+    assert result["status"] == "reviewed_blocked"
+    assert finish_block.await_count == 2
+
+    hindsight.retain.assert_not_awaited()
+    hindsight.invalidate_memory.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item, _ = retain_item(status="review_side_effect_started")
+    svc, repository, _, _ = service(item)
+    confirm = AsyncMock()
+    monkeypatch.setattr(admin_module, "confirm_side_effect_applied", confirm)
+
+    for body in (
+        {},
+        {"action": "rejected"},
+        {"action": "confirmed_applied"},
+        {"action": "confirmed_applied", "expected_sha256": "sha"},
+        {"action": "confirmed_applied", "expected_sha256": 1, "expected_updated_at": "claim"},
+    ):
+        with pytest.raises(HttpError) as bad:
+            await svc.reconcile(QID, body)
+        assert bad.value.code == "invalid_request"
+    confirm.assert_not_awaited()
+
+    repository.get.return_value = {**item, "status": "pending"}
+    with pytest.raises(HttpError) as state:
+        await svc.reconcile(
+            QID,
+            {
+                "action": "confirmed_applied",
+                "expected_sha256": "sha",
+                "expected_updated_at": "claim",
+            },
+        )
+    assert state.value.code == "invalid_review_action"
+
+    repository.get.return_value = item
+    with pytest.raises(HttpError) as decision:
+        await svc.reconcile(
+            QID,
+            {
+                "action": "confirmed_applied",
+                "decision": "reject",
+                "expected_sha256": "sha",
+                "expected_updated_at": "claim",
+            },
+        )
+    assert decision.value.code == "invalid_review_action"
+
+    repository.get.return_value = recalled_item(status="review_side_effect_started")
+    with pytest.raises(HttpError) as approve_memory:
+        await svc.reconcile(
+            QID,
+            {
+                "action": "confirmed_applied",
+                "decision": "approve",
+                "expected_sha256": "sha",
+                "expected_updated_at": "claim",
+            },
+        )
+    assert approve_memory.value.code == "invalid_review_action"
+
+    repository.get.return_value = {**item, "kind": "security_event"}
+    with pytest.raises(HttpError) as kind:
+        await svc.reconcile(
+            QID,
+            {
+                "action": "confirmed_applied",
+                "expected_sha256": "sha",
+                "expected_updated_at": "claim",
+            },
+        )
+    assert kind.value.code == "invalid_review_action"
+
+    repository.get.return_value = item
+    confirm.side_effect = HttpError(409, "quarantine_review_changed", "changed")
+    with pytest.raises(HttpError) as stale:
+        await svc.reconcile(
+            QID,
+            {
+                "action": "confirmed_applied",
+                "expected_sha256": "sha",
+                "expected_updated_at": "claim",
+            },
+        )
+    assert stale.value.code == "quarantine_review_changed"
+
+
+@pytest.mark.asyncio
+async def test_read_item_exposes_side_effect_started_snapshot_for_reconciliation() -> None:
+    item, _ = exact_item("retain_request", {}, status="review_side_effect_started")
+    svc, repo, _, _ = service(item)
+    read = await svc.read_item(QID)
+    assert read["record"]["status"] == "review_side_effect_started"
+    assert read["record"]["sha256"] == item["sha256"]
+    assert read["record"]["updated_at"] == item["updated_at"]
+    assert read["encrypted"] == item["encrypted"]
+
+    repo.get.return_value = {**item, "expires_at": "2020-01-01T00:00:00.000Z"}
+    expired_read = await svc.read_item(QID)
+    assert expired_read["record"]["status"] == "review_side_effect_started"

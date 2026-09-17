@@ -335,6 +335,15 @@ tamper_status="$(curl --max-time 5 -sS -o "$tamper_output" -w '%{http_code}' -H 
 grep -q 'quarantine_hash_mismatch' "$tamper_output" || fail_check "altered approval did not report hash mismatch"
 pass_check
 
+begin_check "ambiguous review side effects reconcile only from a verified snapshot"
+reconcile_read_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/reconcile" -d '{"action":"confirmed_not_applied","expected_sha256":"stale","expected_updated_at":"stale"}')"
+[[ "$reconcile_read_status" == "401" ]] || fail_check "reconcile accepted the read token: ${reconcile_read_status}"
+reconcile_output="${root}/${tmp_dir}/reconcile-response.json"
+reconcile_status="$(curl --max-time 5 -sS -o "$reconcile_output" -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/reconcile" -d '{"action":"confirmed_not_applied","expected_sha256":"stale","expected_updated_at":"stale"}')"
+[[ "$reconcile_status" == "409" ]] || fail_check "reconcile of a pending item returned ${reconcile_status}"
+grep -q 'invalid_review_action' "$reconcile_output" || fail_check "reconcile of a pending item did not report invalid_review_action"
+pass_check
+
 begin_check "unsupported router and admin endpoints fail closed"
 denied_output="${root}/${tmp_dir}/denied-response.json"
 denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/export")"

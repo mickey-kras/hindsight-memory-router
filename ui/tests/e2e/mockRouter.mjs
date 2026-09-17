@@ -67,7 +67,9 @@ export function startMockRouter(port = 8899) {
     item.record.expires_at <= new Date().toISOString();
   const reviewable = () =>
     [...items.values()].filter(
-      (i) => ["pending", "postponed"].includes(i.record.status) && !expired(i),
+      (i) =>
+        ["pending", "postponed", "review_side_effect_started"].includes(i.record.status) &&
+        !expired(i),
     );
 
   const stats = () => {
@@ -76,6 +78,9 @@ export function startMockRouter(port = 8899) {
       total_items: all.length,
       pending_items: all.filter((i) => i.record.status === "pending").length,
       postponed_items: all.filter((i) => i.record.status === "postponed").length,
+      review_side_effect_started_items: all.filter(
+        (i) => i.record.status === "review_side_effect_started",
+      ).length,
       reviewed_allowed_items: all.filter((i) => i.record.status === "reviewed_allowed").length,
       reviewed_blocked_items: all.filter((i) => i.record.status === "reviewed_blocked").length,
       encrypted_bytes: all.reduce((sum, i) => sum + (i.record.encrypted_bytes ?? 0), 0),
@@ -106,6 +111,12 @@ export function startMockRouter(port = 8899) {
     if (url.pathname === "/__reset" && req.method === "POST") {
       reset();
       return finish(200, { reset: true });
+    }
+    if (url.pathname === "/__seed-stuck" && req.method === "POST") {
+      const target = items.get("q_retain_0123456789abcdef");
+      target.record.status = "review_side_effect_started";
+      target.record.updated_at = new Date().toISOString();
+      return finish(200, { seeded: "review_side_effect_started" });
     }
     if (url.pathname === "/__seed-more" && req.method === "POST") {
       const template = items.values().next().value;
@@ -222,7 +233,7 @@ export function startMockRouter(port = 8899) {
     }
 
     const match = url.pathname.match(
-      /^\/admin\/quarantine\/items\/([^/]+)(\/(approve|reject|postpone))?$/,
+      /^\/admin\/quarantine\/items\/([^/]+)(\/(approve|reject|postpone|reconcile))?$/,
     );
     if (!match) return finish(404, { error: "not_found", message: "not found" });
     if (!/^q_[0-9A-Za-z]+_[0-9a-f]{16}$/.test(match[1])) {
@@ -233,6 +244,141 @@ export function startMockRouter(port = 8899) {
       return finish(404, { error: "quarantine_not_found", message: "quarantine item not found" });
     }
     const action = match[3];
+
+    if (req.method === "GET" && !action) {
+      if (item.record.status !== "review_side_effect_started") {
+        if (FINAL_STATUSES.has(item.record.status)) {
+          return finish(409, {
+            error: "quarantine_already_finalized",
+            message: "quarantine item is not pending review",
+          });
+        }
+        if (expired(item)) {
+          return finish(409, {
+            error: "quarantine_expired",
+            message: "quarantine item has expired",
+          });
+        }
+      }
+      if (!item.encrypted) {
+        return finish(409, {
+          error: "quarantine_payload_unavailable",
+          message: "quarantine payload is no longer available",
+        });
+      }
+      return finish(200, { record: item.record, encrypted: item.encrypted });
+    }
+
+    if (req.method === "POST" && action === "reconcile") {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        let parsed;
+        try {
+          parsed = JSON.parse(body);
+        } catch {
+          return finish(400, { error: "invalid_request", message: "reconcile body must be JSON" });
+        }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return finish(400, { error: "invalid_request", message: "reconcile body must be an object" });
+        }
+        if (!["confirmed_applied", "confirmed_not_applied"].includes(parsed.action)) {
+          return finish(400, {
+            error: "invalid_request",
+            message: "action must be confirmed_applied or confirmed_not_applied",
+          });
+        }
+        if (
+          typeof parsed.expected_sha256 !== "string" ||
+          !parsed.expected_sha256 ||
+          typeof parsed.expected_updated_at !== "string" ||
+          !parsed.expected_updated_at
+        ) {
+          return finish(400, {
+            error: "invalid_request",
+            message: "expected_sha256 and expected_updated_at are required",
+          });
+        }
+        if (item.record.status !== "review_side_effect_started") {
+          return finish(409, {
+            error: "invalid_review_action",
+            message: "quarantine item is not awaiting side-effect reconciliation",
+          });
+        }
+        if (
+          parsed.expected_sha256 !== item.record.sha256 ||
+          parsed.expected_updated_at !== item.record.updated_at
+        ) {
+          return finish(409, {
+            error: "quarantine_review_changed",
+            message: "quarantine item changed before review could be claimed",
+          });
+        }
+        if (parsed.action === "confirmed_not_applied") {
+          item.record.status = "postponed";
+          item.record.updated_at = new Date().toISOString();
+          eventCount += 1;
+          actions.push({
+            action: "reconcile",
+            reconcile: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+          });
+          return finish(200, {
+            reconciled: true,
+            action: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+            status: "postponed",
+          });
+        }
+        if (item.record.kind === "retain_request") {
+          if (parsed.decision !== undefined && parsed.decision !== "approve") {
+            return finish(409, {
+              error: "invalid_review_action",
+              message: "only an approve side effect can be reconciled for a retain request",
+            });
+          }
+          items.delete(item.record.quarantine_id);
+          eventCount += 1;
+          actions.push({
+            action: "reconcile",
+            reconcile: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+          });
+          return finish(200, {
+            reconciled: true,
+            action: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+            status: "approved",
+          });
+        }
+        if (item.record.kind === "recalled_memory") {
+          if (parsed.decision !== undefined && parsed.decision !== "reject") {
+            return finish(409, {
+              error: "invalid_review_action",
+              message: "only a reject side effect can be reconciled for a recalled memory",
+            });
+          }
+          item.record.status = "reviewed_blocked";
+          eventCount += 1;
+          actions.push({
+            action: "reconcile",
+            reconcile: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+          });
+          return finish(200, {
+            reconciled: true,
+            action: parsed.action,
+            quarantine_id: item.record.quarantine_id,
+            status: "reviewed_blocked",
+          });
+        }
+        return finish(409, {
+          error: "invalid_review_action",
+          message: "this quarantine item cannot be reconciled",
+        });
+      });
+      return;
+    }
 
     if (FINAL_STATUSES.has(item.record.status)) {
       return finish(409, {
@@ -248,10 +394,6 @@ export function startMockRouter(port = 8899) {
         error: "quarantine_payload_unavailable",
         message: "quarantine payload is no longer available",
       });
-    }
-
-    if (req.method === "GET" && !action) {
-      return finish(200, { record: item.record, encrypted: item.encrypted });
     }
 
     if (req.method === "POST" && action === "approve") {
