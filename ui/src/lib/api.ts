@@ -1,5 +1,9 @@
-// Typed client for the router admin API. Same-origin only (nginx proxies
-// /admin to the router). Tokens are supplied per request, never stored here.
+// Typed client for the router admin API. Same-origin by default (nginx
+// proxies /admin to the router); a host may inject a base URL via
+// window.__MEMORY_ROUTER_UI_CONFIG__ (see lib/config.ts). Tokens are supplied
+// per request, never stored here.
+
+import { apiUrl } from "./config";
 
 import type {
   CleanupRequest,
@@ -42,7 +46,7 @@ async function request<T>(
   if (!token) throw new ApiError(0, "token_missing", `no ${scope} token configured`);
   let response: Response;
   try {
-    response = await fetch(path, {
+    response = await fetch(apiUrl(path), {
       ...init,
       headers: {
         Authorization: `Bearer ${token}`,
@@ -69,7 +73,7 @@ async function request<T>(
 
 export function fetchVersion(): Promise<VersionResponse> {
   // Unauthenticated probe used to show router presence on the connect screen.
-  return fetch("/version").then((r) => (r.ok ? r.json() : Promise.reject(new Error("offline"))));
+  return fetch(apiUrl("/version")).then((r) => (r.ok ? r.json() : Promise.reject(new Error("offline"))));
 }
 
 export function listQueue(

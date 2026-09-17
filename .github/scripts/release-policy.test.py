@@ -202,6 +202,26 @@ class ReleasePolicyTests(unittest.TestCase):
         script = (ROOT / ".github/scripts/release.cjs").read_text()
         self.assertIn('"sbom.cdx.json"', script)
 
+    def test_release_ui_package_contract(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        gate = "steps.push.outputs.published == 'true'"
+        for name in ["Build and pack the UI package", "Sign the UI package"]:
+            self.assertEqual(steps[name]["if"], gate)
+        build = steps["Build and pack the UI package"]["run"]
+        self.assertIn("npm ci --prefix ui", build)
+        self.assertIn("npm pack ./ui", build)
+        sign = steps["Sign the UI package"]
+        self.assertIn("cosign sign-blob --yes", sign["run"])
+        self.assertIn("--bundle", sign["run"])
+        self.assertIn(".sigstore.json", sign["run"])
+        self.assertIn("ui-package=sha256:", steps["Record image digests"]["run"])
+        script = (ROOT / ".github/scripts/release.cjs").read_text()
+        self.assertIn("uiPackageAssets", script)
+        self.assertIn(".sigstore.json", script)
+
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])
 

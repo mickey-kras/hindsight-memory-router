@@ -1,11 +1,20 @@
 {
   "name": "memory-router-ui",
-  "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
+  "description": "Quarantine review console for hindsight-memory-router. Static SPA; decrypts locally, never in the router.",
+  "license": "MIT",
   "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    "./dist/*": "./dist/*"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "prepack": "npm run build",
     "fixtures": "python3 tests/gen_fixtures.py",
     "fixtures:clean": "python3 tests/gen_fixtures.py --clean",
     "pretest": "npm run fixtures",
@@ -13,7 +22,8 @@
     "posttest": "npm run fixtures:clean",
     "pretest:e2e": "npm run fixtures",
     "test:e2e": "playwright test",
-    "posttest:e2e": "npm run fixtures:clean"
+    "posttest:e2e": "npm run fixtures:clean",
+    "test:package": "node tests/package-consumer.mjs"
   },
   "dependencies": {
     "react": "^19.1.0",

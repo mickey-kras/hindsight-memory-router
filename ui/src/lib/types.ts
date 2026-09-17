@@ -54,6 +54,11 @@ export interface QuarantineQueueResponse {
   total: number;
 }
 
+export interface WrapProviderMetadata {
+  name: string;
+  version: number;
+}
+
 export interface EncryptionMetadata {
   algorithm: string;
   key_wrap: string;
@@ -61,6 +66,7 @@ export interface EncryptionMetadata {
   wrapped_key_b64: string;
   iv_b64: string;
   tag_b64: string;
+  provider?: WrapProviderMetadata;
 }
 
 export interface EncryptedQuarantineEnvelope {

@@ -95,6 +95,9 @@ jobs:
       - name: UI unit, crypto, and build checks
         run: npm test --prefix ui && npm run build --prefix ui
 
+      - name: UI package consumer check
+        run: npm run test:package --prefix ui
+
       - name: Install Playwright Chromium
         run: npx --prefix ui playwright install --with-deps chromium
 

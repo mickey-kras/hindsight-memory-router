@@ -425,6 +425,32 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
+      - name: Set up Node for the UI package
+        if: steps.push.outputs.published == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build and pack the UI package
+        # npm pack runs the ui prepack build; the tarball name is derived from
+        # ui/package.json and must match release.cjs uiPackageAssets().
+        if: steps.push.outputs.published == 'true'
+        id: ui-package
+        run: |
+          npm ci --prefix ui
+          npm pack ./ui --pack-destination .
+          tarball="$(node -p "const p = require('./ui/package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")"
+          test -s "$tarball"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the UI package
+        if: steps.push.outputs.published == 'true'
+        env:
+          UI_TARBALL: ${{ steps.ui-package.outputs.tarball }}
+        run: cosign sign-blob --yes --bundle "${UI_TARBALL}.sigstore.json" "${UI_TARBALL}"
+
       - name: Record image digests
         if: steps.push.outputs.published == 'true'
         env:
@@ -432,6 +458,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
           DOCKERHUB_DIGEST: ${{ steps.push.outputs.dockerhub_digest }}
+          UI_TARBALL: ${{ steps.ui-package.outputs.tarball }}
         run: |
           {
             echo "commit=${GITHUB_SHA}"
@@ -440,6 +467,7 @@ jobs:
             echo "ghcr=${IMAGE_GHCR}@${GHCR_DIGEST}"
             echo "dockerhub=${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}"
             echo "sbom=sha256:$(sha256sum sbom.cdx.json | cut -d' ' -f1)"
+            echo "ui-package=sha256:$(sha256sum "${UI_TARBALL}" | cut -d' ' -f1)"
           } | tee image-digests.txt
           {
             echo "## Published image digests"
@@ -449,6 +477,7 @@ jobs:
             echo "- \`${IMAGE_GHCR}@${GHCR_DIGEST}\`"
             echo "- \`${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}\`"
             echo "- CycloneDX SBOM: \`sbom.cdx.json\`, attested to both registries"
+            echo "- UI package: \`${UI_TARBALL}\` (cosign bundle \`${UI_TARBALL}.sigstore.json\`), attached to the release"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image digests
@@ -459,6 +488,8 @@ jobs:
           path: |
             image-digests.txt
             sbom.cdx.json
+            ${{ steps.ui-package.outputs.tarball }}
+            ${{ steps.ui-package.outputs.tarball }}.sigstore.json
           if-no-files-found: error
 
       - name: Install release tools

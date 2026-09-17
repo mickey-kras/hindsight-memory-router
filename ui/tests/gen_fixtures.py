@@ -8,6 +8,7 @@ RSA keypair for synthetic data. Passing test lifecycle hooks remove them; failed
 runs can leave the gitignored files for local cleanup or diagnosis.
 """
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -32,9 +33,11 @@ from memory_router.envelope import (  # noqa: E402
     QuarantineReason,
     canonical_decrypted,
     create_envelope,
+    create_provider_envelope,
     decrypt_envelope,
     sha256_hex,
 )
+from memory_router.key_wrap import RsaOaepWrapProvider, WrapProviderInfo  # noqa: E402
 
 FIXTURE_DIR.mkdir(exist_ok=True)
 
@@ -185,4 +188,33 @@ for reason in get_args(QuarantineReason):
     assert decrypt_envelope(envelope, private_pem) == value
     reason_envelopes[reason] = envelope
 (FIXTURE_DIR / "reasons.json").write_text(json.dumps(reason_envelopes, indent=2))
+
+
+class _InertProvider(RsaOaepWrapProvider):
+    """RSA-OAEP wrap that still tags the envelope with a provider block."""
+
+    def envelope_provider(self) -> WrapProviderInfo:
+        return WrapProviderInfo(name="fixture-inert", version=1)
+
+
+provider_value = {
+    "quarantine_id": "q_provider_0123456789abcdef",
+    "created_at": "2026-09-16T18:25:46.000000+00:00",
+    "reason": "suspicious_content",
+    "payload": {"action": "security_event"},
+}
+provider_envelope = asyncio.run(
+    create_provider_envelope(provider_value, _InertProvider(public_pem))
+)
+# The router's own decrypt rejects provider envelopes; the UI must fail closed
+# on this fixture too (RSA-OAEP-only support).
+try:
+    decrypt_envelope(provider_envelope, private_pem)
+except ValueError:
+    pass
+else:
+    raise SystemExit("router decrypt accepted a provider envelope")
+(FIXTURE_DIR / "q_provider_0123456789abcdef.envelope.json").write_text(
+    json.dumps(provider_envelope, indent=2)
+)
 print("fixtures:", [i["record"]["quarantine_id"] for i in items])

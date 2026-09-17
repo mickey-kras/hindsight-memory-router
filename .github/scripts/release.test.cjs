@@ -163,6 +163,10 @@ function prepared(m) {
   writeFileSync("pyproject.toml", '[project]\nversion = "0.1.0"\n');
   writeFileSync("image-digests.txt", `ghcr=${digest}\ndockerhub=${digest}\n`);
   writeFileSync("sbom.cdx.json", '{"bomFormat":"CycloneDX"}\n');
+  mkdirSync("ui", { recursive: true });
+  put("ui/package.json", { name: "memory-router-ui", version: "0.2.0" });
+  writeFileSync("memory-router-ui-0.2.0.tgz", "tgz\n");
+  writeFileSync("memory-router-ui-0.2.0.tgz.sigstore.json", "{}\n");
   return manifest;
 }
 
@@ -307,6 +311,8 @@ test("finalization publishes only after uploading assets and never moves or recr
       "asset:release.json",
       "asset:image-digests.txt",
       "asset:sbom.cdx.json",
+      "asset:memory-router-ui-0.2.0.tgz",
+      "asset:memory-router-ui-0.2.0.tgz.sigstore.json",
       "publish",
     ]);
     assert.equal(m.outputs.latest, "true");
