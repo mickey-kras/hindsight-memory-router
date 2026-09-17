@@ -29,6 +29,9 @@ jobs:
   branch-policy:
     uses: ./.github/workflows/branch-policy.yml
 
+  dependency-review:
+    uses: ./.github/workflows/dependency-review.yml
+
   architecture:
     uses: ./.github/workflows/architecture.yml
 

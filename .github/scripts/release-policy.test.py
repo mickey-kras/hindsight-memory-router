@@ -19,6 +19,7 @@ PATHS = [
     MAIN,
     ".github/workflows/release.yml",
     ".github/workflows/ci.yml",
+    ".github/workflows/dependency-review.yml",
     ".github/scripts/release.cjs",
     ".github/scripts/release-settings.cjs",
     ".github/rulesets/protect-release-branches.json",
@@ -155,6 +156,51 @@ class ReleasePolicyTests(unittest.TestCase):
             self.assertIn("sonar", prepare["needs"])
             self.assertEqual(publish["if"], "startsWith(github.ref, 'refs/heads/release/')")
             self.assertEqual(main["jobs"]["sonar"]["if"], "github.ref == 'refs/heads/main'")
+
+    def test_dependency_review_contract(self):
+        validation = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
+        self.assertEqual(
+            validation["jobs"]["dependency-review"]["uses"],
+            "./.github/workflows/dependency-review.yml",
+        )
+        workflow = yaml.safe_load((ROOT / ".github/workflows/dependency-review.yml").read_text())
+        events = workflow.get("on", workflow.get(True))
+        self.assertEqual(set(events), {"workflow_call"})
+        self.assertEqual(workflow["permissions"], {"contents": "read"})
+        review = next(
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("actions/dependency-review-action@")
+        )
+        self.assertRegex(review["uses"], r"@[0-9a-f]{40}$")
+        config_path = ROOT / review["with"]["config-file"].removeprefix("./")
+        config = yaml.safe_load(config_path.read_text())
+        self.assertEqual(config["fail-on-severity"], "high")
+        self.assertGreaterEqual(len(config["deny-licenses"]), 1)
+        self.assertIn("allow-dependencies-licenses", config)
+
+    def test_release_sbom_contract(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        gate = "steps.push.outputs.published == 'true'"
+        for name in ["Generate CycloneDX SBOM", "Attest GHCR SBOM", "Attest Docker Hub SBOM"]:
+            self.assertEqual(steps[name]["if"], gate)
+        generate = steps["Generate CycloneDX SBOM"]["run"]
+        self.assertIn("--format cyclonedx", generate)
+        self.assertIn("normalize-sbom.py", generate)
+        self.assertIn("@${GHCR_DIGEST}", generate)
+        for name, registry in [("Attest GHCR SBOM", "IMAGE_GHCR"), ("Attest Docker Hub SBOM", "IMAGE_DOCKERHUB")]:
+            step = steps[name]
+            self.assertRegex(step["uses"], r"^actions/attest@[0-9a-f]{40}$")
+            self.assertEqual(step["with"]["sbom-path"], "sbom.cdx.json")
+            self.assertIs(step["with"]["push-to-registry"], True)
+            self.assertEqual(step["with"]["subject-name"], f"${{{{ env.{registry} }}}}")
+        self.assertIn("sbom=sha256:", steps["Record image digests"]["run"])
+        script = (ROOT / ".github/scripts/release.cjs").read_text()
+        self.assertIn('"sbom.cdx.json"', script)
 
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])

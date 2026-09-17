@@ -162,6 +162,7 @@ function prepared(m) {
   put("compat/hindsight.json", { channel: "release", ...pin });
   writeFileSync("pyproject.toml", '[project]\nversion = "0.1.0"\n');
   writeFileSync("image-digests.txt", `ghcr=${digest}\ndockerhub=${digest}\n`);
+  writeFileSync("sbom.cdx.json", '{"bomFormat":"CycloneDX"}\n');
   return manifest;
 }
 
@@ -305,6 +306,7 @@ test("finalization publishes only after uploading assets and never moves or recr
       "draft",
       "asset:release.json",
       "asset:image-digests.txt",
+      "asset:sbom.cdx.json",
       "publish",
     ]);
     assert.equal(m.outputs.latest, "true");
