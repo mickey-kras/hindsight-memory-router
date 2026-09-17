@@ -20,6 +20,14 @@ from pydantic import (
 from pydantic_core import PydanticUseDefault
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from .envelope import KEY_WRAP_TOKEN_RE
+from .key_wrap import (
+    DEFAULT_SIDECAR_NAME,
+    DEFAULT_SIDECAR_TIMEOUT_MS,
+    DEFAULT_SIDECAR_WRAPPED_KEY_BYTES,
+    MAX_SIDECAR_TIMEOUT_MS,
+    assert_sidecar_url,
+)
 from .logging import log_event
 from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
@@ -172,6 +180,25 @@ class RouterSettings(BaseSettings):
     quarantine_event_retention_days: NonNegativeInt = Field(
         90, validation_alias="QUARANTINE_EVENT_RETENTION_DAYS"
     )
+    quarantine_wrap_provider: Literal["rsa-oaep", "https-sidecar"] = Field(
+        "rsa-oaep", validation_alias="QUARANTINE_WRAP_PROVIDER"
+    )
+    quarantine_wrap_sidecar_url: str = Field("", validation_alias="QUARANTINE_WRAP_SIDECAR_URL")
+    quarantine_wrap_sidecar_token: SecretStr | None = Field(
+        None, validation_alias="QUARANTINE_WRAP_SIDECAR_TOKEN", exclude=True, repr=False
+    )
+    quarantine_wrap_sidecar_timeout_ms: Annotated[
+        int, BeforeValidator(_exact_integer), Field(ge=1, le=MAX_SIDECAR_TIMEOUT_MS)
+    ] = Field(5_000, validation_alias="QUARANTINE_WRAP_SIDECAR_TIMEOUT_MS")
+    quarantine_wrap_sidecar_name: str = Field(
+        DEFAULT_SIDECAR_NAME, validation_alias="QUARANTINE_WRAP_SIDECAR_NAME"
+    )
+    quarantine_wrap_sidecar_version: PositiveInt = Field(
+        1, validation_alias="QUARANTINE_WRAP_SIDECAR_VERSION"
+    )
+    quarantine_wrap_sidecar_wrapped_key_bytes: PositiveInt = Field(
+        512, validation_alias="QUARANTINE_WRAP_SIDECAR_WRAPPED_KEY_BYTES"
+    )
 
     hindsight_base_url: str = Field("http://hindsight:8888", validation_alias="HINDSIGHT_BASE_URL")
     hindsight_api_key: SecretStr | None = Field(None, validation_alias="HINDSIGHT_API_KEY")
@@ -234,6 +261,47 @@ class RouterSettings(BaseSettings):
             raise ValueError(
                 "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
             )
+        if self.quarantine_wrap_provider == "https-sidecar":
+            if not self.quarantine_wrap_sidecar_url:
+                raise ValueError(
+                    "QUARANTINE_WRAP_SIDECAR_URL is required when "
+                    "QUARANTINE_WRAP_PROVIDER=https-sidecar"
+                )
+            try:
+                assert_sidecar_url(self.quarantine_wrap_sidecar_url)
+            except RuntimeError as exc:
+                raise ValueError(str(exc)) from None
+            if not KEY_WRAP_TOKEN_RE.fullmatch(self.quarantine_wrap_sidecar_name):
+                raise ValueError("QUARANTINE_WRAP_SIDECAR_NAME must match [A-Za-z0-9._-]{1,64}")
+            return self
+        sidecar_overrides = {
+            "QUARANTINE_WRAP_SIDECAR_URL": self.quarantine_wrap_sidecar_url,
+            "QUARANTINE_WRAP_SIDECAR_TOKEN": secret_value(self.quarantine_wrap_sidecar_token),
+            "QUARANTINE_WRAP_SIDECAR_TIMEOUT_MS": (
+                None
+                if self.quarantine_wrap_sidecar_timeout_ms == DEFAULT_SIDECAR_TIMEOUT_MS
+                else self.quarantine_wrap_sidecar_timeout_ms
+            ),
+            "QUARANTINE_WRAP_SIDECAR_NAME": (
+                None
+                if self.quarantine_wrap_sidecar_name == DEFAULT_SIDECAR_NAME
+                else self.quarantine_wrap_sidecar_name
+            ),
+            "QUARANTINE_WRAP_SIDECAR_VERSION": (
+                None
+                if self.quarantine_wrap_sidecar_version == 1
+                else self.quarantine_wrap_sidecar_version
+            ),
+            "QUARANTINE_WRAP_SIDECAR_WRAPPED_KEY_BYTES": (
+                None
+                if self.quarantine_wrap_sidecar_wrapped_key_bytes
+                == DEFAULT_SIDECAR_WRAPPED_KEY_BYTES
+                else self.quarantine_wrap_sidecar_wrapped_key_bytes
+            ),
+        }
+        injected = next((name for name, value in sidecar_overrides.items() if value), None)
+        if injected:
+            raise ValueError(f"{injected} requires QUARANTINE_WRAP_PROVIDER=https-sidecar")
         return self
 
 
@@ -295,11 +363,15 @@ def load_registry(path: str | None = None) -> WriterRegistry:
 
 
 def assert_no_private_key_environment() -> None:
-    injected = next(
-        (name for name in os.environ if name.startswith("QUARANTINE_PRIVATE_KEY")), None
-    )
+    injected = next((name for name in os.environ if _forbidden_quarantine_variable(name)), None)
     if injected:
         raise RuntimeError(f"{injected} must not be available to the memory-router process")
+
+
+def _forbidden_quarantine_variable(name: str) -> bool:
+    if name.startswith("QUARANTINE_PRIVATE_KEY"):
+        return True
+    return name.startswith("QUARANTINE") and "UNWRAP" in name
 
 
 def _loopback_host(host: str | None) -> bool:

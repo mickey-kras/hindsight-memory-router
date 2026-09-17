@@ -46,9 +46,16 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
+| `QUARANTINE_WRAP_PROVIDER`                 |                    `rsa-oaep` | DEK wrap provider: `rsa-oaep` or `https-sidecar`                |
+| `QUARANTINE_WRAP_SIDECAR_URL`              |                       unset | Wrap sidecar base URL; https required (loopback http allowed)   |
+| `QUARANTINE_WRAP_SIDECAR_TOKEN`            |                       unset | Optional bearer token for the wrap sidecar                      |
+| `QUARANTINE_WRAP_SIDECAR_TIMEOUT_MS`       |                        `5000` | Single-attempt wrap timeout; max `60000`                        |
+| `QUARANTINE_WRAP_SIDECAR_NAME`             |               `https-sidecar` | Provider name in envelope metadata; `[A-Za-z0-9._-]{1,64}`      |
+| `QUARANTINE_WRAP_SIDECAR_VERSION`          |                           `1` | Provider version recorded in envelope metadata                  |
+| `QUARANTINE_WRAP_SIDECAR_WRAPPED_KEY_BYTES` |                        `512` | Maximum wrapped-DEK size; drives 413 size charging              |
 
 Boolean overrides accept only `true` or `false`. Integer settings are validated as non-negative or positive according to their semantics.
 
 `QUARANTINE_PUBLIC_KEY` is required at startup and accepts PEM or base64-encoded PEM. For `.env`/Compose, use base64-encoded PEM; raw multi-line PEM is suitable only when injecting the value directly into a non-Compose process environment. Generate its matching private key on a trusted admin machine and never copy that private key to the router host.
 
-Any environment variable beginning with `QUARANTINE_PRIVATE_KEY` is forbidden in the running router and causes startup to fail.
+Any environment variable beginning with `QUARANTINE_PRIVATE_KEY`, and any `QUARANTINE*` variable containing `UNWRAP`, is forbidden in the running router and causes startup to fail. Unwrap endpoints and private-key material must never reach the router process; unwrap happens only in the offline review tool.

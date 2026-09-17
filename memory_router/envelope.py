@@ -5,7 +5,10 @@ import hmac
 import json
 import os
 import re
-from typing import Any, Literal, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
+
+if TYPE_CHECKING:
+    from .key_wrap import WrapProvider
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -16,6 +19,8 @@ from .canonical import canonical_json, sha256_hex
 
 AAD_FORMAT = "metadata-v1"
 ENVELOPE_WRAPPED_FIELD = "wrapped_key_b64"
+DEFAULT_KEY_WRAP = "RSA-OAEP-SHA256"
+KEY_WRAP_TOKEN_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 QUARANTINE_ID_RE = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
 QuarantineReason = Literal[
     "unknown_writer",
@@ -163,6 +168,8 @@ def _aad(envelope: dict[str, Any]) -> bytes:
         ENVELOPE_WRAPPED_FIELD: encryption[ENVELOPE_WRAPPED_FIELD],
         "iv_b64": encryption["iv_b64"],
     }
+    if "provider" in encryption:
+        result["encryption"]["provider"] = encryption["provider"]
     return canonical_json(result).encode("utf-8")
 
 
@@ -171,7 +178,13 @@ def _base64_length(byte_length: int) -> int:
 
 
 def _envelope_metadata(
-    parsed: dict[str, Any], digest: str, wrapped_key_b64: str, iv_b64: str
+    parsed: dict[str, Any],
+    digest: str,
+    wrapped_key_b64: str,
+    iv_b64: str,
+    *,
+    key_wrap: str = DEFAULT_KEY_WRAP,
+    provider: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     envelope: dict[str, Any] = {
         "version": 1,
@@ -184,18 +197,27 @@ def _envelope_metadata(
     if "source" in parsed:
         envelope["source"] = parsed["source"]
     envelope["sha256"] = digest
-    envelope["encryption"] = {
+    encryption: dict[str, Any] = {
         "algorithm": "AES-256-GCM",
-        "key_wrap": "RSA-OAEP-SHA256",
+        "key_wrap": key_wrap,
         "aad": AAD_FORMAT,
         ENVELOPE_WRAPPED_FIELD: wrapped_key_b64,
         "iv_b64": iv_b64,
     }
+    if provider is not None:
+        encryption["provider"] = provider
+    envelope["encryption"] = encryption
     return envelope
 
 
-def estimate_envelope_size(value: dict[str, Any], wrapped_key_bytes: int) -> int:
-    """Return the exact serialized byte size of a v1 envelope without encrypting."""
+def estimate_envelope_size(
+    value: dict[str, Any],
+    wrapped_key_bytes: int,
+    *,
+    key_wrap: str = DEFAULT_KEY_WRAP,
+    provider: dict[str, Any] | None = None,
+) -> int:
+    """Return the exact serialized size of a v1 envelope (upper bound for provider envelopes)."""
     if wrapped_key_bytes <= 0:
         raise ValueError("wrapped key size must be positive")
     parsed = parse_decrypted(value)
@@ -205,6 +227,8 @@ def estimate_envelope_size(value: dict[str, Any], wrapped_key_bytes: int) -> int
         "0" * 64,
         "A" * _base64_length(wrapped_key_bytes),
         "A" * _base64_length(12),
+        key_wrap=key_wrap,
+        provider=provider,
     )
     envelope["encryption"]["tag_b64"] = "A" * _base64_length(16)
     envelope["ciphertext_b64"] = "A" * _base64_length(plaintext_bytes)
@@ -226,6 +250,30 @@ def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, A
         base64.b64encode(wrapped).decode("ascii"),
         base64.b64encode(iv).decode("ascii"),
     )
+    return _seal_envelope(envelope, key, iv, plaintext)
+
+
+async def create_provider_envelope(value: dict[str, Any], provider: WrapProvider) -> dict[str, Any]:
+    parsed = parse_decrypted(value)
+    plaintext = canonical_decrypted(parsed).encode("utf-8")
+    key = AESGCM.generate_key(bit_length=256)
+    iv = os.urandom(12)
+    wrapped = await provider.wrap(key)
+    info = provider.envelope_provider()
+    envelope = _envelope_metadata(
+        parsed,
+        sha256_hex(plaintext.decode("utf-8")),
+        base64.b64encode(wrapped).decode("ascii"),
+        base64.b64encode(iv).decode("ascii"),
+        key_wrap=provider.key_wrap,
+        provider=({"name": info.name, "version": info.version} if info is not None else None),
+    )
+    return _seal_envelope(envelope, key, iv, plaintext)
+
+
+def _seal_envelope(
+    envelope: dict[str, Any], key: bytes, iv: bytes, plaintext: bytes
+) -> dict[str, Any]:
     ciphertext_tag = AESGCM(key).encrypt(iv, plaintext, _aad(envelope))
     envelope["encryption"]["tag_b64"] = base64.b64encode(ciphertext_tag[-16:]).decode("ascii")
     envelope["ciphertext_b64"] = base64.b64encode(ciphertext_tag[:-16]).decode("ascii")
@@ -268,17 +316,30 @@ def _validate_encryption_metadata(envelope: dict[str, Any], encryption: dict[str
             "AES-256-GCM",
             "unsupported quarantine encryption algorithm",
         ),
-        "key_wrap": (
-            encryption.get("key_wrap"),
-            "RSA-OAEP-SHA256",
-            "unsupported quarantine key wrapping algorithm",
-        ),
     }
     for actual, wanted, message in expected.values():
         if actual != wanted:
             raise ValueError(message)
+    if "provider" in encryption:
+        _validate_wrap_provider(encryption)
+    elif encryption.get("key_wrap") != DEFAULT_KEY_WRAP:
+        raise ValueError("unsupported quarantine key wrapping algorithm")
     if encryption.get("aad") not in (None, AAD_FORMAT):
         raise ValueError("unsupported quarantine AAD format")
+
+
+def _validate_wrap_provider(encryption: dict[str, Any]) -> None:
+    key_wrap = encryption.get("key_wrap")
+    if not isinstance(key_wrap, str) or not KEY_WRAP_TOKEN_RE.fullmatch(key_wrap):
+        raise ValueError("unsupported quarantine key wrapping algorithm")
+    provider = encryption["provider"]
+    if not isinstance(provider, dict) or set(provider) != {"name", "version"}:
+        raise ValueError("invalid quarantine key wrap provider")
+    if not isinstance(provider["name"], str) or not KEY_WRAP_TOKEN_RE.fullmatch(provider["name"]):
+        raise ValueError("invalid quarantine key wrap provider")
+    version = provider["version"]
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise ValueError("invalid quarantine key wrap provider")
 
 
 def _validate_base64_field(encryption: dict[str, Any], field: str) -> None:
@@ -290,6 +351,11 @@ def _validate_base64_field(encryption: dict[str, Any], field: str) -> None:
 def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:
     envelope = parse_envelope(value)
     encryption = envelope["encryption"]
+    if "provider" in encryption:
+        raise ValueError(
+            "unsupported quarantine key wrap provider: unwrap requires the matching "
+            "review-tool provider"
+        )
     key = _load_private_key(private_key_input).decrypt(
         base64.b64decode(encryption[ENVELOPE_WRAPPED_FIELD]),
         padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
