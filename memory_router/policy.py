@@ -284,6 +284,7 @@ class RouterPolicy:
                     "source": source,
                     "kind": "security_event",
                     "reason": "recalled_suspicious_supplemental",
+                    "bankId": bank_id,
                     "dedupeKey": f"recalled-supplemental:{bank_id}:{field}:{key or '-'}:{digest}",
                     "payload": {
                         "action": "recalled_supplemental_blocked",
@@ -409,6 +410,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "recalled_memory",
                 "reason": "recalled_suspicious_memory",
+                "bankId": bank_id,
                 "sourceBank": bank_id,
                 "sourceMemoryId": result["id"],
                 "sourceContentSha256": digest,
@@ -428,6 +430,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "security_event",
                 "reason": "recalled_suspicious_memory",
+                "bankId": bank_id,
                 "dedupeKey": f"oversized-recalled:{bank_id}:{memory_id}:{digest}",
                 "payload": {
                     "action": "recalled_memory_too_large",
@@ -482,6 +485,7 @@ class RouterPolicy:
                 "source": source,
                 "kind": "retain_request",
                 "reason": reason,
+                "bankId": target_bank,
                 "dedupeKey": request_dedupe_key(
                     "retain_request",
                     writer_id,
@@ -519,6 +523,7 @@ class RouterPolicy:
                     "source": source,
                     "kind": "recall_request",
                     "reason": reason,
+                    "bankId": target_banks[0] if target_banks and len(target_banks) == 1 else None,
                     "dedupeKey": request_dedupe_key(
                         "recall_request",
                         writer_id,

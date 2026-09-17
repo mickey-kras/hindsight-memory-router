@@ -42,8 +42,10 @@ from .openclaw import (
     start_facade_scan_executor,
 )
 from .policy import RouterPolicy
-from .principal_gate import authenticate_principal
+from .principal_gate import authenticate_principal, require_grant
 from .principals import (
+    SCOPE_QUARANTINE_REVIEW,
+    TOKEN_PREFIX,
     PrincipalResolver,
     PrincipalSession,
     load_principal_registry,
@@ -58,7 +60,15 @@ from .rate_limit import (
     InMemoryRateLimiter,
     RateLimiter,
 )
-from .repository import QuarantineRepository
+from .repository import (
+    PENDING,
+    POSTPONED,
+    REVIEW_SIDE_EFFECT_STARTED,
+    REVIEWED_ALLOWED,
+    REVIEWED_BLOCKED,
+    QuarantineRepository,
+    QueueFilter,
+)
 from .request_dispatch import (
     EMPTY_BODY,
     MEMORY_ROUTE,
@@ -277,6 +287,7 @@ class Runtime:
             max_item_bytes=settings.quarantine_max_item_bytes,
             max_pending_items=settings.quarantine_max_pending_items,
             max_pending_items_per_writer=settings.quarantine_max_pending_items_per_writer,
+            max_pending_items_per_bank=settings.quarantine_max_pending_items_per_bank,
             max_encrypted_bytes=settings.quarantine_max_encrypted_bytes,
             rate_limit_max=settings.quarantine_rate_limit_max,
             rate_limit_window_ms=settings.quarantine_rate_limit_window_ms,
@@ -814,7 +825,43 @@ def _version_failure(error: HindsightGatewayError) -> Response:
     return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
 
 
-async def _admin_queue_response(request: Request, admin: QuarantineAdminService) -> Response:
+_QUEUE_FILTER_PARAMS = ("bank_id", "writer_id", "principal_id", "kind", "status")
+_QUEUE_KINDS = frozenset({"retain_request", "recall_request", "recalled_memory", "security_event"})
+_QUEUE_STATUSES = frozenset(
+    {
+        PENDING,
+        POSTPONED,
+        REVIEW_SIDE_EFFECT_STARTED,
+        REVIEWED_ALLOWED,
+        REVIEWED_BLOCKED,
+    }
+)
+
+
+def _queue_filter(params: Any) -> QueueFilter:
+    values: dict[str, str] = {}
+    for name in _QUEUE_FILTER_PARAMS:
+        entries = params.getlist(name)
+        if len(entries) > 1:
+            raise HttpError(400, "invalid_query", f"{name} is invalid")
+        if entries:
+            values[name] = entries[0]
+    if values.get("kind") is not None and values["kind"] not in _QUEUE_KINDS:
+        raise HttpError(400, "invalid_query", "kind is invalid")
+    if values.get("status") is not None and values["status"] not in _QUEUE_STATUSES:
+        raise HttpError(400, "invalid_query", "status is invalid")
+    return QueueFilter(
+        bank_id=values.get("bank_id"),
+        writer_id=values.get("writer_id"),
+        principal_id=values.get("principal_id"),
+        kind=values.get("kind"),
+        status=values.get("status"),
+    )
+
+
+async def _admin_queue_response(
+    request: Request, admin: QuarantineAdminService, scoped_banks: tuple[str, ...] | None = None
+) -> Response:
     params = request.query_params
     if len(params.getlist("limit")) > 1 or len(params.getlist("offset")) > 1:
         raise HttpError(400, "invalid_query", "limit or offset is invalid")
@@ -825,7 +872,18 @@ async def _admin_queue_response(request: Request, admin: QuarantineAdminService)
         raise HttpError(400, "invalid_query", "invalid integer query parameter") from exc
     if not 1 <= limit <= 500 or offset < 0:
         raise HttpError(400, "invalid_query", "integer query parameter out of range")
-    return JSONResponse(await admin.list_queue(limit, offset))
+    filter_ = _queue_filter(params)
+    if scoped_banks is not None:
+        filter_ = QueueFilter(
+            bank_ids=scoped_banks,
+            writer_id=filter_.writer_id,
+            principal_id=filter_.principal_id,
+            kind=filter_.kind,
+            status=filter_.status,
+        )
+    return JSONResponse(
+        await admin.list_queue(limit, offset, filter_ if filter_.active() else None)
+    )
 
 
 async def _admin_body(request: Request, action: str) -> dict[str, Any]:
@@ -908,11 +966,62 @@ async def _authorized_admin_response(
     return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
 
 
+_PRINCIPAL_ADMIN_METADATA_PATHS = frozenset({"/admin/quarantine/queue", "/admin/quarantine/stats"})
+
+
+def _principal_token_present(authorization: str | None) -> bool:
+    return authorization is not None and authorization.startswith(f"Bearer {TOKEN_PREFIX}")
+
+
+async def _principal_admin_response(request: Request, pathname: str, method: str) -> Response:
+    route_class = "admin"
+    principal = await authenticate_principal(
+        request,
+        resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+        route_class=route_class,
+        on_failure=lambda: _auth_failure_rate("admin"),
+    )
+    if principal is None:
+        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    if method != "GET" or pathname not in _PRINCIPAL_ADMIN_METADATA_PATHS:
+        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    banks = PrincipalResolver.quarantine_review_banks(principal)
+    bank_id = request.query_params.get("bank_id")
+    scoped: tuple[str, ...]
+    if bank_id is not None:
+        require_grant(
+            session=principal,
+            scope=SCOPE_QUARANTINE_REVIEW,
+            bank=bank_id,
+            route_class=route_class,
+        )
+        scoped = (bank_id,)
+    else:
+        if not banks:
+            require_grant(
+                session=principal,
+                scope=SCOPE_QUARANTINE_REVIEW,
+                bank="-",
+                route_class=route_class,
+            )
+        scoped = tuple(banks)
+    await _principal_rate(principal, SCOPE_QUARANTINE_REVIEW, route_class)
+    admin = _require_runtime(runtime.admin, "admin service")
+    if pathname == "/admin/quarantine/stats":
+        return JSONResponse(await admin.bank_stats(scoped))
+    return await _admin_queue_response(request, admin, scoped)
+
+
 async def _dispatch_admin(request: Request, pathname: str, method: str) -> Response | None:
     if not pathname.startswith("/admin/"):
         return None
-    if not await _admin_auth(request, _scope(method, pathname)):
-        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    authorization = request.headers.get("authorization")
+    if not admin_authorized(authorization, _scope(method, pathname), runtime.admin_tokens):
+        if runtime.principal_resolver is not None and _principal_token_present(authorization):
+            return await _principal_admin_response(request, pathname, method)
+        if not await _admin_auth(request, _scope(method, pathname)):
+            return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     await _admin_rate(method)
     admin = _require_runtime(runtime.admin, "admin service")
     return await _authorized_admin_response(request, admin, pathname, method)

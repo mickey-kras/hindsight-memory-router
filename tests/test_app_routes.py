@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -12,6 +13,7 @@ from memory_router import app as app_module
 from memory_router import probes
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.principals import PrincipalRegistry, PrincipalResolver
 from memory_router.rate_limit import InMemoryRateLimiter
 from tests.request_helpers import request
 
@@ -343,7 +345,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         request("GET", "/admin/quarantine/queue", headers=auth, query="limit=5&offset=1"),
     )
     assert payload(response) == {"items": []}
-    admin.list_queue.assert_awaited_with(5, 1)
+    admin.list_queue.assert_awaited_with(5, 1, None)
     with pytest.raises(HttpError) as invalid_int:
         await app_module.dispatch(
             "admin/quarantine/queue",
@@ -680,3 +682,154 @@ def test_trailing_dot_segment_preserves_trailing_slash() -> None:
     assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
     assert app_module._normalize_dot_segments("/..") == "/"
     assert app_module._normalize_dot_segments("../a") == "a"
+
+
+def _review_resolver() -> PrincipalResolver:
+    registry = PrincipalRegistry.model_validate(
+        {
+            "principals": {
+                "agent-reviewer": {
+                    "keys": [
+                        {
+                            "id": "review-1",
+                            "sha256": hashlib.sha256(b"ab" * 32).hexdigest(),
+                            "created_at": "2026-09-01T00:00:00Z",
+                        }
+                    ],
+                    "grants": [{"bank": "bank-a", "scopes": ["quarantine.review"]}],
+                },
+                "agent-plain": {
+                    "keys": [
+                        {
+                            "id": "plain-1",
+                            "sha256": hashlib.sha256(b"cd" * 32).hexdigest(),
+                            "created_at": "2026-09-01T00:00:00Z",
+                        }
+                    ],
+                    "grants": [{"bank": "bank-a", "scopes": ["bank.list"]}],
+                },
+            }
+        }
+    )
+    return PrincipalResolver(registry)
+
+
+@pytest.mark.asyncio
+async def test_principal_review_scope_lists_grant_scoped_metadata_only() -> None:
+    app_module.runtime.principal_resolver = _review_resolver()
+    app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+    admin = SimpleNamespace(
+        list_queue=AsyncMock(return_value={"items": [], "total": 0}),
+        bank_stats=AsyncMock(return_value={"banks": []}),
+    )
+    app_module.runtime.admin = admin
+    auth = {"authorization": "Bearer mr_review-1_" + "ab" * 32}
+
+    response = await app_module.dispatch(
+        "admin/quarantine/queue", request("GET", "/admin/quarantine/queue", headers=auth)
+    )
+    assert response.status_code == 200
+    assert payload(response) == {"items": [], "total": 0}
+    assert "encrypted" not in payload(response)
+    filter_ = admin.list_queue.await_args.args[2]
+    assert filter_.bank_ids == ("bank-a",)
+
+    response = await app_module.dispatch(
+        "admin/quarantine/queue",
+        request("GET", "/admin/quarantine/queue", headers=auth, query="bank_id=bank-a"),
+    )
+    assert response.status_code == 200
+    assert admin.list_queue.await_args.args[2].bank_ids == ("bank-a",)
+
+    with pytest.raises(HttpError) as denied:
+        await app_module.dispatch(
+            "admin/quarantine/queue",
+            request("GET", "/admin/quarantine/queue", headers=auth, query="bank_id=bank-b"),
+        )
+    assert denied.value.status == 403 and denied.value.code == "authorization_denied"
+
+    response = await app_module.dispatch(
+        "admin/quarantine/stats", request("GET", "/admin/quarantine/stats", headers=auth)
+    )
+    assert response.status_code == 200
+    assert payload(response) == {"banks": []}
+    admin.bank_stats.assert_awaited_once()
+    assert admin.bank_stats.await_args.args[0] == ("bank-a",)
+
+
+@pytest.mark.asyncio
+async def test_principal_review_scope_never_reaches_ciphertext_or_review_actions() -> None:
+    app_module.runtime.principal_resolver = _review_resolver()
+    app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+    app_module.runtime.admin = SimpleNamespace(
+        read_item=AsyncMock(),
+        approve=AsyncMock(),
+        cleanup=AsyncMock(),
+    )
+    auth = {"authorization": "Bearer mr_review-1_" + "ab" * 32}
+
+    for method, path in (
+        ("GET", "/admin/quarantine/items/q_abc"),
+        ("POST", "/admin/quarantine/items/q_abc/approve"),
+        ("POST", "/admin/quarantine/items/q_abc/reject"),
+        ("POST", "/admin/quarantine/items/q_abc/postpone"),
+        ("POST", "/admin/quarantine/items/q_abc/reconcile"),
+        ("POST", "/admin/quarantine/cleanup"),
+    ):
+        response = await app_module.dispatch("x", request(method, path, headers=auth))
+        assert response.status_code == 401, (method, path)
+    app_module.runtime.admin.read_item.assert_not_awaited()
+    app_module.runtime.admin.approve.assert_not_awaited()
+    app_module.runtime.admin.cleanup.assert_not_awaited()
+
+    no_grant = {"authorization": "Bearer mr_plain-1_" + "cd" * 32}
+    with pytest.raises(HttpError) as denied:
+        await app_module.dispatch(
+            "admin/quarantine/queue", request("GET", "/admin/quarantine/queue", headers=no_grant)
+        )
+    assert denied.value.status == 403 and denied.value.code == "authorization_denied"
+
+    response = await app_module.dispatch(
+        "admin/quarantine/queue",
+        request(
+            "GET",
+            "/admin/quarantine/queue",
+            headers={"authorization": "Bearer mr_review-1_" + "ef" * 32},
+        ),
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_queue_filter_validation_and_passthrough() -> None:
+    admin = SimpleNamespace(list_queue=AsyncMock(return_value={"items": [], "total": 0}))
+    app_module.runtime.admin = admin
+    auth = {"authorization": "Bearer admin"}
+
+    for query in ("kind=bogus", "status=bogus", "bank_id=a&bank_id=b"):
+        with pytest.raises(HttpError) as invalid:
+            await app_module.dispatch(
+                "admin/quarantine/queue",
+                request("GET", "/admin/quarantine/queue", headers=auth, query=query),
+            )
+        assert invalid.value.code == "invalid_query", query
+
+    response = await app_module.dispatch(
+        "admin/quarantine/queue",
+        request(
+            "GET",
+            "/admin/quarantine/queue",
+            headers=auth,
+            query="bank_id=bank-a&writer_id=w1&principal_id=p1&kind=retain_request&status=pending",
+        ),
+    )
+    assert response.status_code == 200
+    filter_ = admin.list_queue.await_args.args[2]
+    assert filter_ is not None
+    assert (
+        filter_.bank_id,
+        filter_.writer_id,
+        filter_.principal_id,
+        filter_.kind,
+        filter_.status,
+    ) == ("bank-a", "w1", "p1", "retain_request", "pending")

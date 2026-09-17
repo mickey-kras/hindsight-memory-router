@@ -85,6 +85,7 @@ export function startMockRouter(port = 8899) {
       reviewed_blocked_items: all.filter((i) => i.record.status === "reviewed_blocked").length,
       encrypted_bytes: all.reduce((sum, i) => sum + (i.record.encrypted_bytes ?? 0), 0),
       event_count: eventCount,
+      banks: [],
     };
   };
 

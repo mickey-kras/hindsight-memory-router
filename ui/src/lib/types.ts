@@ -46,6 +46,7 @@ export interface QuarantineItemSummary {
   requarantine_count: number;
   encrypted_bytes?: number;
   expires_at?: string;
+  bank_id?: string;
 }
 
 export interface QuarantineQueueResponse {
@@ -88,6 +89,14 @@ export interface DecryptedQuarantineObject {
   payload: unknown;
 }
 
+export interface QuarantineBankStats {
+  bank_id: string;
+  total_items: number;
+  pending_items: number;
+  postponed_items: number;
+  encrypted_bytes: number;
+}
+
 export interface QuarantineStats {
   total_items: number;
   pending_items: number;
@@ -97,6 +106,7 @@ export interface QuarantineStats {
   reviewed_blocked_items: number;
   encrypted_bytes: number;
   event_count: number;
+  banks: QuarantineBankStats[];
 }
 
 export type ReconcileAction = "confirmed_applied" | "confirmed_not_applied";

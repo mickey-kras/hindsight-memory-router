@@ -36,6 +36,7 @@ class QuarantineLimits:
     max_item_bytes: int = 1_048_576
     max_pending_items: int = 1_000
     max_pending_items_per_writer: int = 50
+    max_pending_items_per_bank: int = 0
     max_encrypted_bytes: int = 104_857_600
     rate_limit_max: int = 30
     rate_limit_window_ms: int = 60_000
@@ -60,7 +61,10 @@ class QuarantineStore:
         self.limits = limits
         self.rate_limiter = rate_limiter
         self.capacity = Capacity(
-            limits.max_pending_items, _effective_writer_limit(limits), limits.max_encrypted_bytes
+            limits.max_pending_items,
+            _effective_writer_limit(limits),
+            limits.max_encrypted_bytes,
+            limits.max_pending_items_per_bank,
         )
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
@@ -99,7 +103,7 @@ class QuarantineStore:
                 mode = "request"
             capacity = self.capacity
             if input_["kind"] == "security_event":
-                capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes)
+                capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
             await self.repository.store(item, capacity, mode=mode, at=input_["timestamp"])
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
@@ -155,6 +159,7 @@ class QuarantineStore:
             "source_memory_id": input_.get("sourceMemoryId"),
             "source_content_sha256": input_.get("sourceContentSha256"),
             "dedupe_key": input_.get("dedupeKey"),
+            "bank_id": input_.get("bankId"),
             "sha256": encrypted["sha256"],
             "encrypted": encrypted,
             "status": PENDING,
