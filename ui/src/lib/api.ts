@@ -8,6 +8,8 @@ import type {
   QuarantineItemResponse,
   QuarantineQueueResponse,
   QuarantineStats,
+  ReconcileRequest,
+  ReconcileResponse,
   RouterError,
   VersionResponse,
 } from "./types";
@@ -124,6 +126,19 @@ export function postponeItem(
   quarantineId: string,
 ): Promise<Record<string, unknown>> {
   return reviewItem(tokens, quarantineId, "postpone");
+}
+
+export function reconcileItem(
+  tokens: AdminTokens,
+  quarantineId: string,
+  body: ReconcileRequest,
+): Promise<ReconcileResponse> {
+  return request(
+    `/admin/quarantine/items/${encodeURIComponent(quarantineId)}/reconcile`,
+    "review",
+    tokens,
+    { method: "POST", body: JSON.stringify(body) },
+  );
 }
 
 export function runCleanup(tokens: AdminTokens, body: CleanupRequest): Promise<CleanupResponse> {

@@ -426,6 +426,27 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         )["postponed"]
         is True
     )
+    admin.reconcile = AsyncMock(return_value={"reconciled": True})
+    assert (
+        payload(
+            await app_module.dispatch(
+                "admin/quarantine/items/q/reconcile",
+                request(
+                    "POST",
+                    "/admin/quarantine/items/q/reconcile",
+                    headers=auth,
+                    body={"action": "confirmed_not_applied"},
+                ),
+            )
+        )["reconciled"]
+        is True
+    )
+    admin.reconcile.assert_awaited_once_with("q", {"action": "confirmed_not_applied"})
+    with pytest.raises(HttpError):
+        await app_module.dispatch(
+            "admin/quarantine/items/q/reconcile",
+            request("POST", "/admin/quarantine/items/q/reconcile", headers=auth, body=[]),
+        )
     response = await app_module.dispatch("admin/nope", request("GET", "/admin/nope", headers=auth))
     assert response.status_code == 404 and payload(response)["error"] == "admin_endpoint_not_found"
 
@@ -524,6 +545,31 @@ def test_json_depth_is_bounded_before_recursive_security_processing() -> None:
     with pytest.raises(HttpError) as exc:
         app_module._assert_json_depth(value)
     assert exc.value.code == "json_too_deep"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_is_unreachable_with_read_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app_module.runtime,
+        "admin_tokens",
+        {"legacy": None, "read": "read", "review": "review", "cleanup": None},
+    )
+    app_module.runtime.admin = SimpleNamespace(reconcile=AsyncMock())
+
+    response = await app_module.dispatch(
+        "admin/quarantine/items/q/reconcile",
+        request(
+            "POST",
+            "/admin/quarantine/items/q/reconcile",
+            headers={"authorization": "Bearer read"},
+            body={"action": "confirmed_not_applied"},
+        ),
+    )
+
+    assert response.status_code == 401
+    app_module.runtime.admin.reconcile.assert_not_awaited()
 
 
 @pytest.mark.asyncio

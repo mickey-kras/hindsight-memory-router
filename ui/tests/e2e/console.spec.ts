@@ -122,6 +122,63 @@ test("postpone keeps the item and increments the count", async ({ page }, testIn
   expect(actions.some((a) => a["action"] === "postpone")).toBe(true);
 });
 
+test("reconcile returns a stuck side-effect item to postponed", async ({ page }, testInfo) => {
+  await page.request.post(`${MOCK_ORIGIN}/__seed-stuck`);
+  await connect(page);
+  await expect(page.getByTestId("stats")).toContainText("Stuck");
+  await page
+    .getByTestId(`${testInfo.project.name === "phone" ? "card" : "row"}-${RETAIN_ID}`)
+    .click();
+  await expect(page.getByTestId("approve-open")).toHaveCount(0);
+  await page.getByTestId("reconcile-not-applied-open").click();
+  await page.getByTestId("confirm-action").click();
+  await expect(page.getByText(`reconciled ${RETAIN_ID} (confirmed_not_applied)`)).toBeVisible();
+  const actions = await mockActions(page);
+  const reconcile = actions.find((a) => a["action"] === "reconcile");
+  expect(reconcile?.["reconcile"]).toBe("confirmed_not_applied");
+  await page
+    .getByTestId(`${testInfo.project.name === "phone" ? "card" : "row"}-${RETAIN_ID}`)
+    .click();
+  await expect(page.getByTestId("postpone")).toBeVisible();
+});
+
+test("mock reconcile guards snapshot, state, and review scope", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === "phone", "API contract pin is viewport-independent");
+  await page.request.post(`${MOCK_ORIGIN}/__seed-stuck`);
+  const stale = await page.request.post(
+    `${MOCK_ORIGIN}/admin/quarantine/items/${RETAIN_ID}/reconcile`,
+    {
+      headers: { authorization: `Bearer ${REVIEW}` },
+      data: {
+        action: "confirmed_not_applied",
+        expected_sha256: "stale",
+        expected_updated_at: "stale",
+      },
+    },
+  );
+  expect(stale.status()).toBe(409);
+  expect((await stale.json()).error).toBe("quarantine_review_changed");
+
+  const wrongState = await page.request.post(
+    `${MOCK_ORIGIN}/admin/quarantine/items/${RECALL_ID}/reconcile`,
+    {
+      headers: { authorization: `Bearer ${REVIEW}` },
+      data: { action: "confirmed_not_applied", expected_sha256: "x", expected_updated_at: "y" },
+    },
+  );
+  expect(wrongState.status()).toBe(409);
+  expect((await wrongState.json()).error).toBe("invalid_review_action");
+
+  const readOnly = await page.request.post(
+    `${MOCK_ORIGIN}/admin/quarantine/items/${RETAIN_ID}/reconcile`,
+    {
+      headers: { authorization: `Bearer ${READ}` },
+      data: { action: "confirmed_not_applied", expected_sha256: "x", expected_updated_at: "y" },
+    },
+  );
+  expect(readOnly.status()).toBe(401);
+});
+
 test("approve stays disabled until the item is decrypted", async ({ page }, testInfo) => {
   await connect(page);
   await page

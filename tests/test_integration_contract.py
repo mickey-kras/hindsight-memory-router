@@ -52,7 +52,7 @@ DIRECT_ROUTE_COVERAGE = {
     ("GET", "/ready"): "router readiness and internal Hindsight become reachable",
 }
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
-ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone))?"
+ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?"
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
@@ -68,14 +68,8 @@ DISPATCH_BRANCH_COVERAGE = {
         {"method=='GET'", "action is None"}
     ): "admin queue and item expose metadata plus ciphertext only",
     frozenset(
-        {"method=='POST'", "action=='approve'"}
-    ): "exact unchanged suspicious retain can be approved",
-    frozenset(
-        {"method=='POST'", "action=='reject'"}
-    ): "unknown item can be rejected without a Hindsight write",
-    frozenset(
-        {"method=='POST'", "action=='postpone'"}
-    ): "unknown-writer recall degrades to empty results and can be postponed",
+        {"method=='POST'", "action in {'approve','postpone','reconcile','reject'}"}
+    ): "ambiguous review side effects reconcile only from a verified snapshot",
     frozenset(
         {"method=='GET'", "pathname=='/version'"}
     ): "authentication and network boundaries hold",

@@ -248,6 +248,29 @@ async def test_stats_classifies_statuses_and_expiry(repository: QuarantineReposi
     assert stats["reviewed_blocked_items"] == 1
 
 
+@pytest.mark.asyncio
+async def test_queue_lists_and_counts_side_effect_started_items(
+    repository: QuarantineRepository,
+) -> None:
+    cap = Capacity(20, 20, 100_000)
+    await repository.store(item("p"), cap, mode="id", at="2026-01-01T00:00:00.000Z")
+    stuck = item("stuck")
+    await repository.store(stuck, cap, mode="id", at="2026-01-01T00:00:01.000Z")
+    async with repository.db.transaction() as tx:
+        await tx.execute(
+            "UPDATE quarantine_items SET status='review_side_effect_started' WHERE quarantine_id='stuck'"
+        )
+
+    rows = await repository.list_reviewable(10, 0, "2026-01-01T00:00:02.000Z")
+    assert [row["quarantine_id"] for row in rows] == ["p", "stuck"]
+    assert rows[1]["status"] == "review_side_effect_started"
+    assert rows[1]["sha256"] == stuck["sha256"] and "updated_at" in rows[1]
+
+    stats = await repository.stats("2026-01-01T00:00:02.000Z")
+    assert stats["review_side_effect_started_items"] == 1
+    assert stats["pending_items"] == 1
+
+
 class FakeStoreTx(SqliteTx):
     dialect = "sqlite"
 

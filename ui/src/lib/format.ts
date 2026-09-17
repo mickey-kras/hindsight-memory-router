@@ -43,6 +43,7 @@ export const REASON_STYLE: Record<ReviewReason, string> = {
 export const STATUS_STYLE: Record<QuarantineStatus, string> = {
   pending: "bg-sky-500/15 text-sky-300 border-sky-500/30",
   postponed: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",
+  review_side_effect_started: "bg-amber-500/15 text-amber-300 border-amber-500/30",
   reviewed_allowed: "bg-emerald-500/15 text-emerald-300 border-emerald-500/30",
   reviewed_blocked: "bg-red-500/15 text-red-300 border-red-500/30",
 };

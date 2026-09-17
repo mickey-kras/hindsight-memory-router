@@ -9,6 +9,11 @@ export function StatsBar({ stats }: Props) {
   const cards: Array<{ label: string; value: string; tone?: string }> = [
     { label: "Pending", value: String(stats.pending_items), tone: "text-sky-300" },
     { label: "Postponed", value: String(stats.postponed_items), tone: "text-zinc-300" },
+    {
+      label: "Stuck",
+      value: String(stats.review_side_effect_started_items),
+      tone: "text-amber-300",
+    },
     { label: "Total", value: String(stats.total_items) },
     { label: "Allowed", value: String(stats.reviewed_allowed_items), tone: "text-emerald-300" },
     { label: "Blocked", value: String(stats.reviewed_blocked_items), tone: "text-red-300" },
@@ -16,7 +21,7 @@ export function StatsBar({ stats }: Props) {
     { label: "Events", value: String(stats.event_count) },
   ];
   return (
-    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7" data-testid="stats">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8" data-testid="stats">
       {cards.map((card) => (
         <div
           key={card.label}

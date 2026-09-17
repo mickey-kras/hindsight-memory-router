@@ -14,7 +14,9 @@ from .repository import (
     POSTPONED,
     REVIEW_IN_PROGRESS,
     REVIEW_SIDE_EFFECT_COMPLETED,
+    REVIEW_SIDE_EFFECT_STARTED,
     REVIEWABLE_STATUSES,
+    REVIEWED_BLOCKED,
     STAT_KEYS,
     is_expired,
 )
@@ -22,6 +24,8 @@ from .review_repository import (
     REVIEW_STALE_SECONDS,
     claim_review,
     complete_side_effect,
+    confirm_side_effect_applied,
+    confirm_side_effect_not_applied,
     finish_approve_memory,
     finish_approve_retain,
     finish_reject_memory,
@@ -55,7 +59,12 @@ class QuarantineAdminService:
         at = iso_now()
         items = await self.repository.list_reviewable(limit, offset, at)
         stats = await self.repository.stats(at)
-        return {"items": items, "total": stats["pending_items"] + stats["postponed_items"]}
+        return {
+            "items": items,
+            "total": stats["pending_items"]
+            + stats["postponed_items"]
+            + stats["review_side_effect_started_items"],
+        }
 
     async def read_item(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_reviewable(quarantine_id)
@@ -287,6 +296,110 @@ class QuarantineAdminService:
             "count": next_item["postpone_count"],
         }
 
+    async def reconcile(self, quarantine_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        action = body.get("action")
+        if action not in {"confirmed_applied", "confirmed_not_applied"}:
+            raise HttpError(
+                400,
+                "invalid_request",
+                "action must be confirmed_applied or confirmed_not_applied",
+            )
+        expected_sha256 = body.get("expected_sha256")
+        expected_updated_at = body.get("expected_updated_at")
+        if (
+            not isinstance(expected_sha256, str)
+            or not expected_sha256
+            or not isinstance(expected_updated_at, str)
+            or not expected_updated_at
+        ):
+            raise HttpError(
+                400, "invalid_request", "expected_sha256 and expected_updated_at are required"
+            )
+        item = await self._require_item(quarantine_id)
+        if item["status"] != REVIEW_SIDE_EFFECT_STARTED:
+            raise HttpError(
+                409,
+                "invalid_review_action",
+                "quarantine item is not awaiting side-effect reconciliation",
+            )
+        at = iso_now()
+        if action == "confirmed_not_applied":
+            await confirm_side_effect_not_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
+            )
+            return {
+                "reconciled": True,
+                "action": action,
+                "quarantine_id": quarantine_id,
+                "status": POSTPONED,
+            }
+        status = await self._reconcile_applied(
+            quarantine_id, item, body.get("decision"), at, expected_sha256, expected_updated_at
+        )
+        return {
+            "reconciled": True,
+            "action": action,
+            "quarantine_id": quarantine_id,
+            "status": status,
+        }
+
+    async def _reconcile_applied(
+        self,
+        quarantine_id: str,
+        item: dict[str, Any],
+        decision: Any,
+        at: str,
+        expected_sha256: str,
+        expected_updated_at: str,
+    ) -> str:
+        if item["kind"] == "retain_request":
+            if decision not in (None, "approve"):
+                raise HttpError(
+                    409,
+                    "invalid_review_action",
+                    "only an approve side effect can be reconciled for a retain request",
+                )
+            await confirm_side_effect_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
+            )
+            writer_id = _optional_str(item.get("writer_id"))
+            writer = self.registry.writers.get(writer_id) if writer_id else None
+            details = {
+                "writer_id": writer_id,
+                "target_bank": writer.write_bank if writer else None,
+            }
+            await finish_approve_retain(
+                self.repository, quarantine_id, at, details, expected_sha256=expected_sha256
+            )
+            return "approved"
+        if item["kind"] == "recalled_memory":
+            if decision not in (None, "reject"):
+                raise HttpError(
+                    409,
+                    "invalid_review_action",
+                    "only a reject side effect can be reconciled for a recalled memory",
+                )
+            await confirm_side_effect_applied(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                expected_updated_at=expected_updated_at,
+            )
+            await finish_reject_memory(
+                self.repository, quarantine_id, at, expected_sha256=expected_sha256
+            )
+            return REVIEWED_BLOCKED
+        raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
+
     async def stats(self) -> dict[str, int]:
         stats = await self.repository.stats(iso_now())
         return {key: stats[key] for key in STAT_KEYS if key != "expired_items"}
@@ -317,11 +430,12 @@ class QuarantineAdminService:
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
-        if item["status"] not in REVIEWABLE_STATUSES:
+        if item["status"] not in REVIEWABLE_STATUSES | {REVIEW_SIDE_EFFECT_STARTED}:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )
-        self._assert_not_expired(item)
+        if item["status"] in REVIEWABLE_STATUSES:
+            self._assert_not_expired(item)
         return item
 
     async def _require_claim_candidate(self, quarantine_id: str) -> dict[str, Any]:
