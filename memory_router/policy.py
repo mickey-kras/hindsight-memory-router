@@ -542,33 +542,42 @@ class RouterPolicy:
             )
         except HttpError as exc:
             if exc.status == 413 and exc.code == "quarantine_item_too_large":
-                try:
-                    await self._quarantine_oversized_recall_request(
-                        writer_id,
-                        source,
-                        reason,
-                        body,
-                        scan,
-                        target_banks[0] if target_banks and len(target_banks) == 1 else None,
-                    )
-                except HttpError as placeholder_exc:
-                    if not self._quarantine_unavailable(placeholder_exc):
-                        raise
-                    self._log_degradation(
-                        "quarantine_placeholder_unavailable",
-                        {
-                            "writer_id": writer_id,
-                            "reason": reason,
-                            "status": placeholder_exc.status,
-                            "code": placeholder_exc.code,
-                        },
-                    )
+                await self._quarantine_oversized_recall_or_degrade(
+                    writer_id, source, reason, body, target_banks, scan
+                )
                 return
             if not self._quarantine_unavailable(exc):
                 raise
             self._log_degradation(
                 "quarantine_write_unavailable",
                 {"writer_id": writer_id, "reason": reason, "status": exc.status, "code": exc.code},
+            )
+
+    async def _quarantine_oversized_recall_or_degrade(
+        self,
+        writer_id: str,
+        source: str,
+        reason: str,
+        body: dict[str, Any],
+        target_banks: list[str] | None,
+        scan: SafetyResult | None,
+    ) -> None:
+        target_bank = target_banks[0] if target_banks and len(target_banks) == 1 else None
+        try:
+            await self._quarantine_oversized_recall_request(
+                writer_id, source, reason, body, scan, target_bank
+            )
+        except HttpError as exc:
+            if not self._quarantine_unavailable(exc):
+                raise
+            self._log_degradation(
+                "quarantine_placeholder_unavailable",
+                {
+                    "writer_id": writer_id,
+                    "reason": reason,
+                    "status": exc.status,
+                    "code": exc.code,
+                },
             )
 
     async def quarantine_security_event(self, values: dict[str, Any]) -> dict[str, str]:
