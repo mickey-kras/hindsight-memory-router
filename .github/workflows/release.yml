@@ -22,6 +22,7 @@ jobs:
       issues: write
       actions: read
       pull-requests: write
+      pages: write
     uses: ./.github/workflows/publish.yml
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
