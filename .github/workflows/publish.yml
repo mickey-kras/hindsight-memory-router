@@ -411,8 +411,11 @@ jobs:
           subject-digest: ${{ steps.push.outputs.ghcr_digest }}
           sbom-path: sbom.cdx.json
           push-to-registry: true
+          create-storage-record: false
 
       - name: Attest Docker Hub SBOM
+        # Same SBOM bytes cover both subjects: publish-image.sh asserts the
+        # GHCR and Docker Hub digests are identical.
         if: steps.push.outputs.published == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -420,6 +423,7 @@ jobs:
           subject-digest: ${{ steps.push.outputs.dockerhub_digest }}
           sbom-path: sbom.cdx.json
           push-to-registry: true
+          create-storage-record: false
 
       - name: Record image digests
         if: steps.push.outputs.published == 'true'

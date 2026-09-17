@@ -17,7 +17,6 @@ deny-licenses:
   - LGPL-3.0-only
   - LGPL-3.0-or-later
   - SSPL-1.0
-  - Commons-Clause
   - LicenseRef-clearlydefined-OTHER
 # Grandfathered license exceptions as exact purls (e.g. pkg:npm/example@1.2.3).
 allow-dependencies-licenses: []
