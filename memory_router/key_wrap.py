@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import binascii
 import json
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from ipaddress import ip_address
 from typing import Literal, Protocol
@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 import httpx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
-from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictStr
 
 from .envelope import KEY_WRAP_TOKEN_RE, decode_public_key
 from .errors import HttpError
@@ -39,9 +39,9 @@ class WrapProvider(Protocol):
 
     def envelope_provider(self) -> WrapProviderInfo | None: ...
 
-    async def wrap(self, dek: bytes) -> bytes: ...
+    def wrap(self, dek: bytes) -> Awaitable[bytes]: ...
 
-    async def close(self) -> None: ...
+    def close(self) -> Awaitable[None]: ...
 
 
 def provider_envelope_metadata(info: WrapProviderInfo | None) -> dict[str, object] | None:
@@ -60,14 +60,16 @@ class RsaOaepWrapProvider:
     def envelope_provider(self) -> WrapProviderInfo | None:
         return None
 
-    async def wrap(self, dek: bytes) -> bytes:
-        return self._key.encrypt(
-            dek,
-            padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+    def wrap(self, dek: bytes) -> Awaitable[bytes]:
+        algorithm = padding.OAEP(
+            mgf=padding.MGF1(hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None,
         )
+        return asyncio.to_thread(self._key.encrypt, dek, algorithm)
 
-    async def close(self) -> None:
-        return None
+    def close(self) -> Awaitable[None]:
+        return asyncio.sleep(0)
 
 
 class WrapSidecarError(HttpError):
@@ -160,7 +162,7 @@ class SidecarWrapProvider:
         try:
             parsed = _WrapSidecarResponse.model_validate(json.loads(raw))
             wrapped = base64.b64decode(parsed.wrapped_key_b64, validate=True)
-        except (ValidationError, ValueError, binascii.Error) as exc:
+        except ValueError as exc:
             raise WrapSidecarError("invalid-response") from exc
         if not wrapped or len(wrapped) > self.wrapped_key_bytes:
             raise WrapSidecarError("invalid-response")
