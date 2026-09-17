@@ -8,8 +8,9 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity
-from .envelope import create_envelope, decode_public_key, estimate_envelope_size
+from .envelope import create_provider_envelope, estimate_envelope_size
 from .errors import HttpError
+from .key_wrap import RsaOaepWrapProvider, WrapProvider, provider_envelope_metadata
 from .rate_limit import Bucket, Distinct, RateLimitConsumer, RateLimiter
 from .repository import (
     PENDING,
@@ -51,10 +52,10 @@ class QuarantineStore:
         repository: QuarantineRepository,
         limits: QuarantineLimits,
         rate_limiter: RateLimiter,
+        wrap_provider: WrapProvider | None = None,
     ) -> None:
-        key = decode_public_key(public_key)
         self.public_key = public_key
-        self.public_key_bytes = key.key_size // 8
+        self.wrap_provider = wrap_provider or RsaOaepWrapProvider(public_key)
         self.repository = repository
         self.limits = limits
         self.rate_limiter = rate_limiter
@@ -89,7 +90,7 @@ class QuarantineStore:
                     "matching quarantine item is already being reviewed",
                 )
 
-            encrypted = self._encrypt(input_, quarantine_id)
+            encrypted = await self._encrypt(input_, quarantine_id)
             item = self._build_item(input_, quarantine_id, encrypted)
             mode = "id"
             if input_["kind"] == "recalled_memory":
@@ -121,7 +122,12 @@ class QuarantineStore:
 
     def _assert_item_size(self, input_: dict[str, Any], quarantine_id: str) -> None:
         decrypted = self._decrypted(input_, quarantine_id)
-        encrypted_bytes = estimate_envelope_size(decrypted, self.public_key_bytes)
+        encrypted_bytes = estimate_envelope_size(
+            decrypted,
+            self.wrap_provider.wrapped_key_bytes,
+            key_wrap=self.wrap_provider.key_wrap,
+            provider=provider_envelope_metadata(self.wrap_provider.envelope_provider()),
+        )
         if encrypted_bytes > self.limits.max_item_bytes:
             raise HttpError(
                 413,
@@ -129,8 +135,10 @@ class QuarantineStore:
                 "encrypted quarantine item exceeds configured size limit",
             )
 
-    def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
-        return create_envelope(self._decrypted(input_, quarantine_id), self.public_key)
+    async def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
+        return await create_provider_envelope(
+            self._decrypted(input_, quarantine_id), self.wrap_provider
+        )
 
     def _build_item(
         self, input_: dict[str, Any], quarantine_id: str, encrypted: dict[str, Any]

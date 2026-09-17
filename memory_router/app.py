@@ -32,6 +32,7 @@ from .config import (
 from .db import Database, PostgresDatabase, create_backend, validate_storage
 from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
+from .key_wrap import SidecarWrapProvider, WrapProvider
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
@@ -177,6 +178,19 @@ def _decode_path_segment(value: str) -> str:
     return decoded
 
 
+def _build_wrap_provider(settings: RouterSettings) -> WrapProvider | None:
+    if settings.quarantine_wrap_provider == "https-sidecar":
+        return SidecarWrapProvider(
+            settings.quarantine_wrap_sidecar_url,
+            secret_value(settings.quarantine_wrap_sidecar_token),
+            settings.quarantine_wrap_sidecar_timeout_ms,
+            settings.quarantine_wrap_sidecar_name,
+            settings.quarantine_wrap_sidecar_version,
+            settings.quarantine_wrap_sidecar_wrapped_key_bytes,
+        )
+    return None
+
+
 def _assert_json_depth(value: Any) -> None:
     try:
         assert_json_depth(value, max_depth=_MAX_JSON_DEPTH)
@@ -190,6 +204,7 @@ class Runtime:
         self.rate_limit_database: PostgresDatabase | None = None
         self.repository: QuarantineRepository | None = None
         self.hindsight: HindsightGateway | None = None
+        self.wrap_provider: WrapProvider | None = None
         self.policy: RouterPolicy | None = None
         self.admin: QuarantineAdminService | None = None
         self.auditor: AuthFailureAuditor | None = None
@@ -270,8 +285,13 @@ class Runtime:
             requarantine_ops_max=settings.quarantine_requarantine_ops_max,
             item_ttl_days=settings.quarantine_item_ttl_days,
         )
+        self.wrap_provider = _build_wrap_provider(settings)
         store = QuarantineStore(
-            settings.quarantine_public_key, self.repository, limits, self.quarantine_limiter
+            settings.quarantine_public_key,
+            self.repository,
+            limits,
+            self.quarantine_limiter,
+            self.wrap_provider,
         )
         hindsight = HindsightGateway(
             settings.hindsight_base_url,
@@ -319,6 +339,8 @@ class Runtime:
                 raise sweeper_result
         if self.hindsight:
             await self.hindsight.close()
+        if self.wrap_provider:
+            await self.wrap_provider.close()
         if self.rate_limit_database:
             await self.rate_limit_database.close()
         if self.repository:
