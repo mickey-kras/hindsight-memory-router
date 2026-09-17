@@ -26,6 +26,7 @@ _EXPIRED_MESSAGE = "quarantine item has expired"
 _NOT_FOUND_MESSAGE = "quarantine item not found"
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
+_UPDATE_STATUS = "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?"
 
 
 def _stale(updated_at: str, at: str, stale_seconds: int = REVIEW_STALE_SECONDS) -> bool:
@@ -151,7 +152,7 @@ async def claim_review(
             raise HttpError(409, "invalid_review_action", "invalid quarantine review action")
         status = REVIEW_SIDE_EFFECT_STARTED if side_effect else REVIEW_IN_PROGRESS
         await tx.execute(
-            "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+            _UPDATE_STATUS,
             (status, at, quarantine_id),
         )
         if side_effect:
@@ -208,7 +209,7 @@ async def interrupt_review(
         if status not in REVIEWABLE_STATUSES:
             raise RuntimeError(f"cannot restore review to {status}")
         await tx.execute(
-            "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+            _UPDATE_STATUS,
             (status, at, claimed["quarantine_id"]),
         )
         error_kind = error.kind if isinstance(error, HindsightGatewayError) else "unknown"
@@ -315,7 +316,7 @@ async def confirm_side_effect_applied(
     async with repository.db.transaction() as tx:
         await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
         await tx.execute(
-            "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?",
+            _UPDATE_STATUS,
             (REVIEW_SIDE_EFFECT_COMPLETED, at, quarantine_id),
         )
         await insert_event(
