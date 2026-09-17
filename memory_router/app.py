@@ -178,7 +178,7 @@ def _decode_path_segment(value: str) -> str:
     return decoded
 
 
-def _build_wrap_provider(settings: RouterSettings) -> WrapProvider | None:
+def _build_wrap_provider(settings: RouterSettings) -> SidecarWrapProvider | None:
     if settings.quarantine_wrap_provider == "https-sidecar":
         return SidecarWrapProvider(
             settings.quarantine_wrap_sidecar_url,

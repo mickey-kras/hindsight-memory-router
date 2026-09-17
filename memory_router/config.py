@@ -262,17 +262,7 @@ class RouterSettings(BaseSettings):
                 "cluster deployment requires MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true"
             )
         if self.quarantine_wrap_provider == "https-sidecar":
-            if not self.quarantine_wrap_sidecar_url:
-                raise ValueError(
-                    "QUARANTINE_WRAP_SIDECAR_URL is required when "
-                    "QUARANTINE_WRAP_PROVIDER=https-sidecar"
-                )
-            try:
-                assert_sidecar_url(self.quarantine_wrap_sidecar_url)
-            except RuntimeError as exc:
-                raise ValueError(str(exc)) from None
-            if not KEY_WRAP_TOKEN_RE.fullmatch(self.quarantine_wrap_sidecar_name):
-                raise ValueError("QUARANTINE_WRAP_SIDECAR_NAME must match [A-Za-z0-9._-]{1,64}")
+            _validate_sidecar_settings(self)
             return self
         sidecar_overrides = {
             "QUARANTINE_WRAP_SIDECAR_URL": self.quarantine_wrap_sidecar_url,
@@ -303,6 +293,19 @@ class RouterSettings(BaseSettings):
         if injected:
             raise ValueError(f"{injected} requires QUARANTINE_WRAP_PROVIDER=https-sidecar")
         return self
+
+
+def _validate_sidecar_settings(settings: RouterSettings) -> None:
+    if not settings.quarantine_wrap_sidecar_url:
+        raise ValueError(
+            "QUARANTINE_WRAP_SIDECAR_URL is required when QUARANTINE_WRAP_PROVIDER=https-sidecar"
+        )
+    try:
+        assert_sidecar_url(settings.quarantine_wrap_sidecar_url)
+    except RuntimeError as exc:
+        raise ValueError(str(exc)) from None
+    if not KEY_WRAP_TOKEN_RE.fullmatch(settings.quarantine_wrap_sidecar_name):
+        raise ValueError("QUARANTINE_WRAP_SIDECAR_NAME must match [A-Za-z0-9._-]{1,64}")
 
 
 def _settings_error_message(exc: ValidationError) -> str:
