@@ -37,7 +37,7 @@ jobs:
               ".github/scripts/publish-image.sh": "68c4f798e7d211e61f200305a3bd25df6b129e1fc8602af9028240e75e60166c",
               ".github/scripts/publish-image.test.cjs": "f3eaefa3e7e82fc4924a5e04b4c1aead756b18f882ea0990f3cd11d22595c568",
               ".github/workflows/publish.yml": "998ac110e372395c22f0ad9536bd3465cf3a21a504b14f129519085c86bd918d",
-              ".github/workflows/release.yml": "c3ff4009f35330a6c416647f65e74b5b11a9a8b1c519deeafbaab723689fe94d",
+              ".github/workflows/release.yml": "93a8ffd3a85ddfe6b12dc1cff306e54e2cab3d6a6b7fcbc9d8c559e0cea7e80f",
               ".github/workflows/ci.yml": "b5f5759d007ef3aeea7c0d5f0fb292e5e1389bc14182d11e4cfc43507e9dcb54"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
