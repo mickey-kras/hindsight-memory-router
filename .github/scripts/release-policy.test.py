@@ -26,6 +26,8 @@ PATHS = [
 ]
 if ROUTER:
     PATHS.append(".github/scripts/publish-image.sh")
+    PATHS.append(".github/scripts/release-cleanup.cjs")
+    PATHS.append(".github/scripts/release-cleanup.test.cjs")
 
 
 def policy(overrides=None):
@@ -221,6 +223,38 @@ class ReleasePolicyTests(unittest.TestCase):
         script = (ROOT / ".github/scripts/release.cjs").read_text()
         self.assertIn("uiPackageAssets", script)
         self.assertIn(".sigstore.json", script)
+
+    def test_release_cleanup_contract(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        publish = main["jobs"]["publish"]
+        self.assertEqual(publish["outputs"]["released"], "${{ steps.finalized.outputs.latest }}")
+        self.assertEqual(publish["outputs"]["ghcr_digest"], "${{ steps.push.outputs.ghcr_digest }}")
+        cleanup = main["jobs"]["cleanup"]
+        self.assertTrue({"quality", "aislop", "codeql", "architecture", "publish"} <= set(cleanup["needs"]))
+        self.assertIs(cleanup["continue-on-error"], True)
+        condition = cleanup["if"]
+        for guard in [
+            "always()",
+            "startsWith(github.ref, 'refs/heads/release/')",
+            "needs.publish.outputs.released == ''",
+            "needs.publish.result == 'failure'",
+            "needs.quality.result == 'failure'",
+        ]:
+            self.assertIn(guard, condition)
+        self.assertEqual(cleanup["environment"], "release-automation")
+        self.assertEqual(cleanup["permissions"], {"contents": "read", "packages": "write"})
+        steps = {step.get("name"): step for step in cleanup["steps"]}
+        self.assertEqual(
+            steps["Release App token"]["with"]["private-key"], "${{ secrets.RELEASE_APP_PRIVATE_KEY }}"
+        )
+        registries = steps["Remove orphaned registry tags"]
+        self.assertIn("release-cleanup.cjs').registries(", registries["with"]["script"])
+        branch = steps["Delete the failed release branch"]
+        self.assertEqual(branch["if"], "always()")
+        self.assertEqual(branch["with"]["github-token"], "${{ steps.app.outputs.token }}")
+        self.assertIn("release-cleanup.cjs').branch(", branch["with"]["script"])
 
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])

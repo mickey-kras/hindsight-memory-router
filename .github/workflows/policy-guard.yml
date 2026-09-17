@@ -32,13 +32,15 @@ jobs:
               ".github/scripts/release.cjs": "0ff1a212592d5dfa93b3bbb14708e8f6b2daeb3dbaee78aa790f5c22aefdc268",
               ".github/scripts/release-settings.cjs": "e485de848409942ca37d32a4caea8a93cd4bac5e93048e7b24bf57d848372a57",
               ".github/scripts/release.test.cjs": "2274291cb7d2524c398e6616f89172e9a161297d628ca4f15232de3909e8ebf3",
-              ".github/scripts/release-policy.test.py": "2b1d82dd8b90e1b6ef0112796977d5ba87427934fa7b097156eb53fb84959c02",
+              ".github/scripts/release-cleanup.cjs": "aa987dfe300ed0d4f432d52e3089cfbbaedf3e6d71342cd60a3450540f3ef178",
+              ".github/scripts/release-cleanup.test.cjs": "8e63872e6cd84401200059e3d724a2afa253769af90f3df3272acff99dec8a61",
+              ".github/scripts/release-policy.test.py": "7c50679c19abd39c4b9d65aff08a1b8e593ffce69770da07f10d596d4e1b8c79",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "68c4f798e7d211e61f200305a3bd25df6b129e1fc8602af9028240e75e60166c",
               ".github/scripts/publish-image.test.cjs": "f3eaefa3e7e82fc4924a5e04b4c1aead756b18f882ea0990f3cd11d22595c568",
-              ".github/workflows/publish.yml": "998ac110e372395c22f0ad9536bd3465cf3a21a504b14f129519085c86bd918d",
+              ".github/workflows/publish.yml": "1d2336df2efaa03d8bf58aa579db2807c33b2e2c22bd1dc1331055fcf4c3276e",
               ".github/workflows/release.yml": "abbf2aad80a014dd01fa518a2a2d1160c8d7ca7038d5367aba8369e11c44b6ff",
-              ".github/workflows/ci.yml": "b5f5759d007ef3aeea7c0d5f0fb292e5e1389bc14182d11e4cfc43507e9dcb54"
+              ".github/workflows/ci.yml": "a5b6d314e8472af044be81255b1fa0f9f5554b7c6c58ad12a2233cc14cbe100f"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
