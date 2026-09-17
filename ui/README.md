@@ -5,6 +5,73 @@ Quarantine review console for hindsight-memory-router. Static export, no backend
 - Same-origin with the router: nginx serves the static files and proxies `/admin`, `/health`, `/version` to the router. No CORS, no router changes.
 - Admin tokens live in sessionStorage only. Decryption is local (WebCrypto, RSA-OAEP-SHA-256 + AES-256-GCM, RFC 8785 canonical JSON); the decryption key is imported as a non-extractable CryptoKey and never leaves the tab.
 
+## Package
+
+`memory-router-ui` ships as a signed tarball (`memory-router-ui-<version>.tgz`
+plus a cosign sign-blob bundle) attached to each router GitHub release; it is
+not on npm. Packaging is registry-agnostic: the same `npm pack` artifact can be
+republished to npm or GitHub Packages later without changes. The tarball
+contains only `dist/` plus `README.md`/`LICENSE`; verify with
+`npm run test:package` or:
+
+```bash
+cosign verify-blob --bundle memory-router-ui-<version>.tgz.sigstore.json \
+  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  memory-router-ui-<version>.tgz
+```
+
+### Embedding
+
+Default is same-origin (the nginx deployment below) and needs no configuration.
+A host product may inject configuration before the app script loads:
+
+```html
+<script src="/memory-router-ui.config.js"></script>
+```
+
+```js
+// memory-router-ui.config.js
+window.__MEMORY_ROUTER_UI_CONFIG__ = {
+  baseUrl: "https://router.internal.example", // opt-in; default is same-origin
+  productName: "Acme Memory",                 // opt-in header title
+  theme: { accent: "#38bdf8" },               // opt-in hex overrides: accent, background, foreground
+  chrome: { header: true, branding: false },  // opt-in embedding flags (default: both true)
+};
+```
+
+The documented CSP is `script-src 'self'`: serve the config as an external
+file like above (or pin an inline snippet with a CSP hash) — an inline
+`<script>` is blocked.
+
+- `baseUrl`: absolute http(s) URL without credentials, query, or fragment.
+  Cross-origin use puts CORS and the admin session boundary on the host; the
+  router stays unchanged.
+- `theme`: hex-color overrides mapped to CSS variables (`accent` →
+  `--mr-accent`, `background` → `--mr-bg`, `foreground` → `--mr-fg`).
+- `chrome`: `header: false` hides the whole header bar (host renders its own
+  chrome; queue actions then need host wiring), `branding: false` hides only
+  the product name and status dot.
+
+Unknown keys and malformed values fail closed at startup. Admin tokens still
+live in sessionStorage only; the package never bundles or persists credentials.
+
+### Version and crypto contract
+
+Package semver tracks the router admin API contract it consumes: bump minor
+when the consumed contract grows, patch for UI-only fixes. The console consumes
+`/version` and the `/admin/quarantine/*` endpoints.
+
+| UI package | Router admin API | Consumed contract |
+| --- | --- | --- |
+| 0.2.x | main after #278/#280/#281 (first router release carrying them) | per-bank queue/stats filters, reconcile actions, provider-versioned envelope metadata |
+| 0.1.x | 0.1.x releases | internal only, never published |
+
+Decryption support is RSA-OAEP-SHA256 key wrap only. Envelopes carrying a
+`provider` block (pluggable key wrap) are refused before any key unwrap,
+matching the router's own `decrypt_envelope`; unwrapping those requires the
+matching review-tool provider.
+
 ## Develop
 
 ```bash

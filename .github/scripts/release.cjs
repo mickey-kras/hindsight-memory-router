@@ -264,6 +264,15 @@ function packageAssets() {
   });
 }
 
+function uiPackageAssets() {
+  if (!existsSync("ui/package.json")) return [];
+  const pkg = readJson("ui/package.json");
+  requireValue(releaseTag.test(`v${pkg.version}`), "Invalid UI package version");
+  const filename = `${pkg.name.replace(/^@/, "").replace("/", "-")}-${pkg.version}.tgz`;
+  requireValue(/^[a-z0-9.-]+\.tgz$/.test(filename), "Invalid UI package filename");
+  return [filename, `${filename}.sigstore.json`];
+}
+
 async function prepare({ github, context, core, inspect }) {
   requireValue(
     context.eventName === "workflow_dispatch" && context.ref === "refs/heads/main",
@@ -433,7 +442,7 @@ async function finalize({ github, context, core }) {
   const paths = [
     "release.json",
     ...manifest.packages.map((pkg) => pkg.path),
-    ...(manifest.packages.length ? ["PACKAGE_SHA256", "PACKAGE_NIX_HASHES"] : ["image-digests.txt", "sbom.cdx.json"]),
+    ...(manifest.packages.length ? ["PACKAGE_SHA256", "PACKAGE_NIX_HASHES"] : ["image-digests.txt", "sbom.cdx.json", ...uiPackageAssets()]),
   ];
   const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
     ...context.repo,
@@ -488,4 +497,5 @@ module.exports = {
   finalize,
   checkRules,
   packageAssets,
+  uiPackageAssets,
 };

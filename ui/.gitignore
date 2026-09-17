@@ -2,6 +2,7 @@ node_modules/
 dist/
 test-results/
 playwright-report/
+.pack-test-*/
 shots.mjs
 *.tsbuildinfo
 tests/fixtures/*

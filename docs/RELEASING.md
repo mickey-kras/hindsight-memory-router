@@ -37,7 +37,11 @@ packaged OpenClaw retain/recall and the packaged Codex hook against real router/
 Router publishes the tested Linux amd64 image to GHCR/Docker Hub, signs/attests its digest and records
 `image-digests.txt`. It then builds a CycloneDX SBOM from the pushed digest, normalizes it for
 reproducible bytes, attests it to both registries as an OCI referrer, attaches it to the GitHub release
-as `sbom.cdx.json`, and records its checksum as `sbom=` in `image-digests.txt`. Integrations publishes
+as `sbom.cdx.json`, and records its checksum as `sbom=` in `image-digests.txt`. It also builds the
+quarantine UI package (`npm pack` in `ui/`), signs the tarball keyless with cosign sign-blob, attaches
+`memory-router-ui-<version>.tgz` and its `.sigstore.json` bundle to the release, and records the tarball
+checksum as `ui-package=` in `image-digests.txt`. The UI version comes from `ui/package.json`; bump it
+when the consumed admin API contract changes. Integrations publishes
 tarballs, checksums and provenance to GitHub, without npm or
 Docker publication. `latest` tracks the highest released version; older-line fixes cannot move it backwards.
 

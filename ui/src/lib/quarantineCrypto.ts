@@ -12,6 +12,8 @@ import type {
 const AAD_FORMAT = "metadata-v1";
 const PKCS8_LABEL = "PRIVATE KEY";
 const QUARANTINE_ID_RE = /^q_[0-9A-Za-z]+_[0-9a-f]{16}$/;
+const KEY_WRAP_TOKEN_RE = /^[A-Za-z0-9._-]{1,64}$/;
+const INVALID_WRAP_PROVIDER = "invalid quarantine key wrap provider";
 
 export class DecryptError extends Error {}
 
@@ -112,13 +114,43 @@ function canonicalDecrypted(value: DecryptedQuarantineObject): string {
   return canonicalJson(result);
 }
 
+// Mirrors _validate_wrap_provider: a provider block declares a pluggable
+// key-wrap and must be exactly {name, version} with a positive integer
+// version. This package unwraps RSA-OAEP-SHA256 only, so any well-formed
+// provider block is rejected in decryptEnvelope.
+function validateWrapProvider(enc: EncryptedQuarantineEnvelope["encryption"]): void {
+  // Python requires str: a numeric key_wrap must not regex-coerce into a match.
+  if (typeof enc.key_wrap !== "string" || !KEY_WRAP_TOKEN_RE.test(enc.key_wrap)) {
+    throw new DecryptError("unsupported quarantine key wrapping algorithm");
+  }
+  const provider: unknown = enc.provider;
+  if (typeof provider !== "object" || provider === null || Array.isArray(provider)) {
+    throw new DecryptError(INVALID_WRAP_PROVIDER);
+  }
+  const keys = Object.keys(provider);
+  if (keys.length !== 2 || !keys.includes("name") || !keys.includes("version")) {
+    throw new DecryptError(INVALID_WRAP_PROVIDER);
+  }
+  const { name, version } = provider as Record<string, unknown>;
+  if (typeof name !== "string" || !KEY_WRAP_TOKEN_RE.test(name)) {
+    throw new DecryptError(INVALID_WRAP_PROVIDER);
+  }
+  // Python requires an int and rejects bool/float. JSON numbers cannot
+  // distinguish 1 from 1.0; reject everything non-integral here.
+  if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) {
+    throw new DecryptError(INVALID_WRAP_PROVIDER);
+  }
+}
+
 export function validateEnvelope(envelope: EncryptedQuarantineEnvelope): void {
   const enc = envelope.encryption;
   if (envelope.version !== 1) throw new DecryptError("unsupported quarantine envelope version");
   if (enc.algorithm !== "AES-256-GCM") {
     throw new DecryptError("unsupported quarantine encryption algorithm");
   }
-  if (enc.key_wrap !== "RSA-OAEP-SHA256") {
+  if (enc.provider !== undefined) {
+    validateWrapProvider(enc);
+  } else if (enc.key_wrap !== "RSA-OAEP-SHA256") {
     throw new DecryptError("unsupported quarantine key wrapping algorithm");
   }
   if (enc.aad !== undefined && enc.aad !== AAD_FORMAT) {
@@ -147,6 +179,13 @@ export async function decryptEnvelope(
 ): Promise<DecryptedQuarantineObject> {
   validateEnvelope(envelope);
   const enc = envelope.encryption;
+  if (enc.provider !== undefined) {
+    // Fail closed like decrypt_envelope: provider-wrapped keys require the
+    // matching review-tool provider; this package unwraps RSA-OAEP-SHA256 only.
+    throw new DecryptError(
+      "unsupported quarantine key wrap provider: unwrap requires the matching review-tool provider",
+    );
+  }
 
   let aesKey: ArrayBuffer;
   try {

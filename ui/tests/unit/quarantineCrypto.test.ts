@@ -83,6 +83,87 @@ describe("decryptEnvelope conformance", () => {
   });
 });
 
+describe("key wrap provider fail-closed", () => {
+  function withProvider(
+    encryption: Record<string, unknown>,
+  ): EncryptedQuarantineEnvelope {
+    const envelope = fixture<EncryptedQuarantineEnvelope>(
+      "q_retain_0123456789abcdef.envelope.json",
+    );
+    return { ...envelope, encryption: { ...envelope.encryption, ...encryption } };
+  }
+
+  it("rejects an RSA envelope carrying an inert provider block", async () => {
+    // Golden fixture from create_provider_envelope: valid RSA-OAEP wrap, but
+    // the provider block means unwrap requires the matching review-tool
+    // provider. Python decrypt_envelope rejects it; the UI must too.
+    const envelope = fixture<EncryptedQuarantineEnvelope>(
+      "q_provider_0123456789abcdef.envelope.json",
+    );
+    expect(envelope.encryption.key_wrap).toBe("RSA-OAEP-SHA256");
+    expect(envelope.encryption.provider).toEqual({ name: "fixture-inert", version: 1 });
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(decryptEnvelope(envelope, key)).rejects.toThrow(
+      "unsupported quarantine key wrap provider",
+    );
+  });
+
+  it("rejects a provider envelope before touching the key", async () => {
+    const envelope = withProvider({ provider: { name: "sidecar", version: 2 } });
+    const wrongKey = crypto.subtle.generateKey(
+      { name: "RSA-OAEP", hash: "SHA-256", modulusLength: 4096, publicExponent: new Uint8Array([1, 0, 1]) },
+      false,
+      ["decrypt"],
+    );
+    await expect(decryptEnvelope(envelope, (await wrongKey).privateKey)).rejects.toThrow(
+      "unsupported quarantine key wrap provider",
+    );
+  });
+
+  it.each([
+    ["a non-object provider", { provider: "sidecar" }],
+    ["a provider missing version", { provider: { name: "sidecar" } }],
+    ["a provider with extra fields", { provider: { name: "sidecar", version: 1, url: "https://x" } }],
+    ["a provider with a bad name", { provider: { name: "bad name!", version: 1 } }],
+    ["a provider with a zero version", { provider: { name: "sidecar", version: 0 } }],
+    ["a provider with a float version", { provider: { name: "sidecar", version: 1.5 } }],
+    ["a provider with a string version", { provider: { name: "sidecar", version: "1" } }],
+    ["a provider with a boolean version", { provider: { name: "sidecar", version: true } }],
+  ])("fails closed on %s", async (_label, encryption) => {
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(decryptEnvelope(withProvider(encryption), key)).rejects.toThrow(
+      "invalid quarantine key wrap provider",
+    );
+  });
+
+  it("rejects an unknown key_wrap without a provider block", async () => {
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(
+      decryptEnvelope(withProvider({ key_wrap: "WRAP-SIDECAR" }), key),
+    ).rejects.toThrow("unsupported quarantine key wrapping algorithm");
+  });
+
+  it("rejects a malformed key_wrap token alongside a provider block", async () => {
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(
+      decryptEnvelope(
+        withProvider({ key_wrap: "not a token", provider: { name: "sidecar", version: 1 } }),
+        key,
+      ),
+    ).rejects.toThrow("unsupported quarantine key wrapping algorithm");
+  });
+
+  it("rejects a numeric key_wrap without regex coercion, like Python", async () => {
+    const key = await importDecryptionKeyPem(privatePem);
+    await expect(
+      decryptEnvelope(
+        withProvider({ key_wrap: 123, provider: { name: "sidecar", version: 1 } }),
+        key,
+      ),
+    ).rejects.toThrow("unsupported quarantine key wrapping algorithm");
+  });
+});
+
 describe("importDecryptionKeyPem", () => {
   it("imports as non-extractable", async () => {
     const key = await importDecryptionKeyPem(privatePem);
