@@ -114,8 +114,10 @@ removes the run's leftovers automatically and posts a summary of what it deleted
   exists — in that case re-run the failed jobs to finish the release instead.
 
 Cleanup is idempotent, runs only on release branches after a failure, never on main or on success, and its
-own failures cannot mask the original failure. Abandon a failed release by simply not re-running it; the
-version stays reserved, so the next release uses a new version number.
+own failures cannot mask the original failure. It assumes the single-arch (Linux amd64) image the publish
+job pushes; a multi-arch image would also leave the untagged per-arch child manifests behind. Abandon a
+failed release by simply not re-running it; the version stays reserved, so the next release uses a new
+version number.
 
 Manual edge cases that still need the owner:
 
@@ -124,3 +126,6 @@ Manual edge cases that still need the owner:
   App and any pushed registry tags by hand.
 - **Cleanup job failures** (e.g. a registry API outage): the job summary names what remains; delete it
   manually, then re-run the failed release jobs if the release should proceed.
+- **Manual cancellation:** cancelling a run after it pushed and signed registry tags but before finalize
+  leaves signed orphans behind. Cleanup intentionally skips `cancelled` runs (it triggers on `failure`
+  results only), so delete the orphaned tags and the release branch by hand.

@@ -58,7 +58,9 @@ function resolveTheme(raw: unknown): UiTheme {
   }
   const theme: UiTheme = {};
   for (const [key, value] of Object.entries(raw)) {
-    if (!(key in THEME_VARS)) {
+    // Own keys only: `in` would also accept Object.prototype members such as
+    // "constructor" or "toString" as theme overrides.
+    if (!Object.hasOwn(THEME_VARS, key)) {
       throw new ConfigError(`${CONFIG_KEY}.theme.${key} is not a supported override`);
     }
     if (typeof value !== "string" || !HEX_COLOR_RE.test(value)) {

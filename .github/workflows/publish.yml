@@ -528,6 +528,7 @@ jobs:
     if: >-
       ${{
         always() &&
+        github.event_name == 'push' &&
         startsWith(github.ref, 'refs/heads/release/') &&
         needs.publish.outputs.released == '' &&
         (

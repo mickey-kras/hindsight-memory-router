@@ -13,6 +13,7 @@ from pebble import ProcessExpired, ProcessPool
 
 from memory_router import app as app_module
 from memory_router import openclaw as openclaw_module
+from memory_router import security as security_module
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES, facade_route, match_facade_route
 from memory_router.limits import HindsightLimitConfig, HindsightLimits
@@ -345,7 +346,12 @@ async def test_read_routes_consume_recall_quota_and_write_routes_retain_quota() 
 
 
 @pytest.mark.asyncio
-async def test_dry_run_extract_uses_batched_retain_request_scan() -> None:
+async def test_dry_run_extract_uses_batched_retain_request_scan(monkeypatch) -> None:
+    # Scanning this body costs ~1.5s (~2.5s under coverage) of the 5s
+    # MAX_CORE_SCAN_SECONDS wall-clock deadline; on a loaded runner the deadline
+    # intermittently tripped mid-scan and failed the route with a spurious 422.
+    # Pin the budget like the other scan tests so the assertion is deterministic.
+    monkeypatch.setattr(security_module, "MAX_CORE_SCAN_SECONDS", 30.0)
     policy = _policy({})
     app_module.runtime.policy = policy
     body = {
