@@ -85,6 +85,8 @@ describe("resolveUiConfig", () => {
     ["a non-object config", "https://router.example.com"],
     ["a non-object theme", { theme: "dark" }],
     ["an unknown theme key", { theme: { linkColor: "#fff" } }],
+    ["a prototype-chain theme key (constructor)", { theme: { constructor: "#fff" } }],
+    ["a prototype-chain theme key (toString)", { theme: { toString: "#fff" } }],
     ["a non-hex theme color", { theme: { accent: "url(https://evil.example)" } }],
     ["a named theme color", { theme: { accent: "red" } }],
     ["a non-string theme color", { theme: { accent: 123 } }],

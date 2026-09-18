@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 import tempfile
 import subprocess
@@ -180,6 +181,14 @@ class ReleasePolicyTests(unittest.TestCase):
         config = yaml.safe_load(config_path.read_text())
         self.assertEqual(config["fail-on-severity"], "high")
         self.assertGreaterEqual(len(config["deny-licenses"]), 1)
+        # Copyleft policy: every denied entry is a valid SPDX expression and the
+        # weak-copyleft LGPL families are denied in both -only and -or-later forms.
+        spdx_id = re.compile(r"^[A-Za-z0-9.-]+$")
+        for entry in config["deny-licenses"]:
+            self.assertRegex(entry, spdx_id)
+        for family in ["LGPL-2.1", "LGPL-3.0"]:
+            self.assertIn(f"{family}-only", config["deny-licenses"])
+            self.assertIn(f"{family}-or-later", config["deny-licenses"])
         self.assertIn("allow-dependencies-licenses", config)
 
     def test_release_sbom_contract(self):
@@ -237,12 +246,18 @@ class ReleasePolicyTests(unittest.TestCase):
         condition = cleanup["if"]
         for guard in [
             "always()",
+            "github.event_name == 'push'",
             "startsWith(github.ref, 'refs/heads/release/')",
             "needs.publish.outputs.released == ''",
             "needs.publish.result == 'failure'",
             "needs.quality.result == 'failure'",
         ]:
             self.assertIn(guard, condition)
+        # Cleanup triggers strictly on failed jobs; a cancelled release run
+        # never matches, so manual cancellations cannot delete orphaned state.
+        for need in ["quality", "aislop", "codeql", "architecture", "publish"]:
+            self.assertIn(f"needs.{need}.result == 'failure'", condition)
+        self.assertNotIn("cancelled", condition)
         self.assertEqual(cleanup["environment"], "release-automation")
         self.assertEqual(cleanup["permissions"], {"contents": "read", "packages": "write"})
         steps = {step.get("name"): step for step in cleanup["steps"]}

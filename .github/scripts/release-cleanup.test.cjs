@@ -147,6 +147,63 @@ test("cleanupGhcr refuses tags that moved to another digest", async () => {
   });
 });
 
+test("cleanupDockerHub refuses tags that moved to another digest", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push(`${options.method ?? "GET"} ${url}`);
+    if (url === "https://hub.docker.com/v2/users/login") return response(200, { token: "jwt" });
+    if (url.endsWith("/tags/0.1.0")) return response(200, { digest: otherDigest });
+    if (url.endsWith(`/tags/${sha}`)) return response(404);
+    if (url.includes("auth.docker.io/token")) return response(200, { token: "registry-token" });
+    if (options.method === "DELETE") throw new Error("moved tags must never be deleted");
+    return response(404);
+  };
+  await withEnv({ ...registryEnv, CLEANUP_DIGEST: digest }, async () => {
+    const { core, state } = fakeCore();
+    const removed = await cleanup.cleanupDockerHub(core, "0.1.0", sha, fetchImpl);
+    assert.deepEqual(removed, []);
+    assert.equal(state.warnings.length, 1);
+    assert.match(state.warnings[0], /0\.1\.0 now resolves to another digest/);
+    assert.equal(calls.filter((call) => call.startsWith("DELETE")).length, 0);
+  });
+});
+
+test("attempt records failures in the summary instead of throwing", async () => {
+  const { core, state } = fakeCore();
+  await cleanup.attempt(core, core.summary, "Broken", async () => {
+    throw new Error("boom");
+  });
+  await cleanup.attempt(core, core.summary, "Empty", async () => []);
+  await cleanup.attempt(core, core.summary, "Removed", async () => ["0.1.0"]);
+  assert.deepEqual(state.errors, ["Broken cleanup failed: boom"]);
+  assert.match(state.summary, /Broken: \*\*failed\*\* \(boom\); remove the orphaned tags manually/);
+  assert.match(state.summary, /Empty: nothing left to delete/);
+  assert.match(state.summary, /Removed: deleted `0\.1\.0`/);
+});
+
+test("registries aborts without deleting when the published probe errors", async () => {
+  const { core, state } = fakeCore();
+  const github = {
+    paginate: async () => {
+      throw new Error("package versions must not be listed after a failed probe");
+    },
+    rest: {
+      git: {
+        getRef: async () => {
+          throw Object.assign(new Error("API outage"), { status: 500 });
+        },
+      },
+      repos: { getReleaseByTag: async () => ({ data: {} }) },
+      packages: {},
+    },
+  };
+  const fetchImpl = async () => {
+    throw new Error("registries must not be queried after a failed probe");
+  };
+  await assert.rejects(cleanup.registries({ github, context: fakeContext(), core, fetchImpl }), /API outage/);
+  assert.match(state.summary, /Aborted before any deletion: API outage/);
+});
+
 test("cleanupDockerHub deletes scoped tags and tolerates missing ones", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {

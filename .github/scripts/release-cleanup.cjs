@@ -218,19 +218,25 @@ async function cleanupDockerHub(core, version, sha, fetchImpl) {
 }
 
 async function registries({ github, context, core, fetchImpl = fetch }) {
-  const { version, sha } = targets(context);
-  const summary = core.summary
-    .addHeading("Failed release cleanup: registry tags", 3)
-    .addRaw(`Version \`${version}\`, commit \`${context.sha}\`.\n\n`);
-  if (await published(github, context.repo, version)) {
-    await summary
-      .addRaw(`\`v${version}\` already has a git tag or release; keeping every registry tag. Re-run failed jobs to finish the release.\n`)
-      .write();
-    return;
+  // Fail-safe entry guards (targets(), the published() probe) throw before any
+  // deletion; still leave a summary line so the run page shows why nothing ran.
+  const summary = core.summary.addHeading("Failed release cleanup: registry tags", 3);
+  try {
+    const { version, sha } = targets(context);
+    summary.addRaw(`Version \`${version}\`, commit \`${context.sha}\`.\n\n`);
+    if (await published(github, context.repo, version)) {
+      await summary
+        .addRaw(`\`v${version}\` already has a git tag or release; keeping every registry tag. Re-run failed jobs to finish the release.\n`)
+        .write();
+      return;
+    }
+    await attempt(core, summary, "GHCR", () => cleanupGhcr(github, context, core, version, sha, fetchImpl));
+    await attempt(core, summary, "Docker Hub", () => cleanupDockerHub(core, version, sha, fetchImpl));
+    await summary.write();
+  } catch (error) {
+    await summary.addRaw(`Aborted before any deletion: ${error.message}\n`).write();
+    throw error;
   }
-  await attempt(core, summary, "GHCR", () => cleanupGhcr(github, context, core, version, sha, fetchImpl));
-  await attempt(core, summary, "Docker Hub", () => cleanupDockerHub(core, version, sha, fetchImpl));
-  await summary.write();
 }
 
 async function branch({ github, context, core }) {
@@ -272,6 +278,7 @@ module.exports = {
   targets,
   published,
   artifactTags,
+  attempt,
   cleanupGhcr,
   cleanupDockerHub,
   registries,
