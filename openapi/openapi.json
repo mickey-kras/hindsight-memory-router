@@ -488,14 +488,14 @@
       "get": {
         "operationId": "getHealth",
         "summary": "Check router readiness",
-        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
+        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
         "tags": [
           "Service"
         ],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -548,14 +548,14 @@
       "get": {
         "operationId": "getHealthReadiness",
         "summary": "Check router readiness",
-        "description": "Checks router quarantine storage and Hindsight health without requiring authentication. A successful response contains Hindsight's validated supported health fields.",
+        "description": "Checks router quarantine storage and Hindsight health. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
         "tags": [
           "Service"
         ],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -582,7 +582,7 @@
       "get": {
         "operationId": "getLegacyReadiness",
         "summary": "Check router readiness (deprecated)",
-        "description": "Deprecated compatibility alias for /health/ready.",
+        "description": "Deprecated compatibility alias for /health/ready. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
         "deprecated": true,
         "tags": [
           "Service"
@@ -590,7 +590,7 @@
         "security": [],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Validated supported Hindsight health fields are returned.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -812,11 +812,18 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Get Hindsight API version and features",
-        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
+        "description": "Returns a Hindsight-compatible /version response. Requires router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Hindsight API version and facade-exposed capabilities.",
@@ -827,6 +834,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "502": {
             "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
@@ -1043,21 +1053,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "status",
-          "version",
-          "uptime_seconds"
+          "status"
         ],
         "properties": {
           "status": {
             "type": "string",
             "const": "alive"
-          },
-          "version": {
-            "type": "string"
-          },
-          "uptime_seconds": {
-            "type": "number",
-            "minimum": 0
           }
         }
       },

@@ -14,6 +14,7 @@ from memory_router import probes
 from memory_router.admin import AdminActor
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.paths import _MAX_PATH_PROBE_DECODES, _normalize_dot_segments
 from memory_router.principals import PrincipalRegistry, PrincipalResolver
 from memory_router.rate_limit import InMemoryRateLimiter
 from tests.request_helpers import request
@@ -63,39 +64,49 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     app_module.runtime.hindsight = hindsight
 
     live = await app_module.health_live()
-    assert live["status"] == "alive"
-    assert isinstance(live["version"], str) and live["version"]
-    assert isinstance(live["uptime_seconds"], float) and live["uptime_seconds"] >= 0
+    assert live == {"status": "alive"}
     repository.ping.assert_not_awaited()
     hindsight.health.assert_not_awaited()
 
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 200
     assert payload(response) == upstream_health
     repository.ping.assert_awaited_once()
     hindsight.health.assert_awaited_once()
 
-    response = await app_module.ready()
+    response = await app_module.ready(request("GET", "/ready"))
     assert response.status_code == 200
     assert payload(response) == upstream_health
     cached = probes.readiness.cache
     assert cached is not None and isinstance(cached.body, bytes)
     assert probes.readiness.cache is cached
 
+    app_module.runtime.allow_anonymous = False
+    response = await app_module.health_ready(request("GET", "/health/ready"))
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+    app_module.runtime.allow_anonymous = True
+
     repository.ping.side_effect = RuntimeError("database down")
     hindsight.health.reset_mock()
     probes.readiness.cache = None
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
     hindsight.health.assert_awaited_once()
+
+    app_module.runtime.allow_anonymous = False
+    response = await app_module.health_ready(request("GET", "/health"))
+    assert response.status_code == 503
+    assert payload(response) == {"status": "unhealthy"}
+    app_module.runtime.allow_anonymous = True
 
     repository.ping.side_effect = None
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
     probes.readiness.cache = None
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
 
@@ -111,6 +122,36 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     response = await app_module.unhandled_handler(request("GET", "/"), RuntimeError("failure"))
     assert response.status_code == 500 and payload(response) == {"error": "internal error"}
     assert "request_failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_principal_mode_readiness_payload_requires_valid_principal() -> None:
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.router_token = None
+    app_module.runtime.principal_resolver = _review_resolver()
+    app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
+    upstream_health = {"status": "healthy", "database": "connected", "db_acquire_ms": 0.4}
+    app_module.runtime.hindsight = SimpleNamespace(health=AsyncMock(return_value=upstream_health))
+
+    response = await app_module.health_ready(request("GET", "/health/ready"))
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+
+    auth = {"authorization": "Bearer mr_review-1_" + "ab" * 32}
+    probes.readiness.cache = None
+    response = await app_module.health_ready(request("GET", "/health/ready", headers=auth))
+    assert response.status_code == 200
+    assert payload(response) == upstream_health
+
+    probes.readiness.cache = None
+    response = await app_module.health_ready(
+        request(
+            "GET", "/health/ready", headers={"authorization": "Bearer mr_review-1_" + "ff" * 32}
+        )
+    )
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+    app_module.runtime.auditor.log_failure.assert_called_with("readiness", reason="wrong-secret")
 
 
 @pytest.mark.asyncio
@@ -225,7 +266,13 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
     auth_value = "route" + "r"
     app_module.runtime.router_token = auth_value
     response = await app_module.dispatch("version", request("GET", "/version"))
+    assert response.status_code == 401
+    response = await app_module.dispatch(
+        "version",
+        request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"}),
+    )
     assert response.status_code == 200 and payload(response) == version_response
+    assert response.headers["Deprecation"] == "true"
     hindsight.version.assert_awaited_once()
 
     app_module.runtime.allow_anonymous = True
@@ -235,6 +282,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
     )
     assert payload(response) == {"retained": True}
+    assert "Deprecation" not in response.headers
     limits.assert_retain_bounds.assert_called_once()
     policy.retain.assert_awaited_once()
 
@@ -263,6 +311,19 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         "error": "unauthorized",
         "message": "authentication required",
     }
+
+    app_module.runtime.router_token = auth_value
+    response = await app_module.dispatch(
+        "v1/default/banks/main/memories",
+        request(
+            "POST",
+            "/v1/default/banks/main/memories",
+            headers={"authorization": f"Bearer {auth_value}"},
+            body={"items": [{"content": "ok"}]},
+        ),
+    )
+    assert payload(response) == {"retained": True}
+    assert response.headers["Deprecation"] == "true"
 
 
 @pytest.mark.asyncio
@@ -347,6 +408,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         request("GET", "/admin/quarantine/queue", headers=auth, query="limit=5&offset=1"),
     )
     assert payload(response) == {"items": []}
+    assert response.headers["Deprecation"] == "true"
     admin.list_queue.assert_awaited_with(5, 1, None)
     with pytest.raises(HttpError) as invalid_int:
         await app_module.dispatch(
@@ -603,6 +665,7 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
         ),
     )
     assert response.status_code == 200
+    assert "Deprecation" not in response.headers
     admin.postpone.assert_awaited_once_with("q", AdminActor(token_scope="review"))  # noqa: S106 - label, not a secret
 
     response = await app_module.dispatch(
@@ -737,16 +800,16 @@ def test_matched_segment_decode_remains_strict() -> None:
         max_depth_dot = quote(max_depth_dot, safe="")
     with pytest.raises(HttpError, match="dot path segments are not allowed"):
         app_module._decode_path_segment(max_depth_dot)
-    assert app_module._MAX_PATH_PROBE_DECODES == 8  # noqa: SLF001
+    assert _MAX_PATH_PROBE_DECODES == 8
 
 
 def test_trailing_dot_segment_preserves_trailing_slash() -> None:
-    assert app_module._normalize_dot_segments("/a/.") == "/a/"
-    assert app_module._normalize_dot_segments("/a/%2e") == "/a/"
-    assert app_module._normalize_dot_segments("/a/./b") == "/a/b"
-    assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
-    assert app_module._normalize_dot_segments("/..") == "/"
-    assert app_module._normalize_dot_segments("../a") == "a"
+    assert _normalize_dot_segments("/a/.") == "/a/"
+    assert _normalize_dot_segments("/a/%2e") == "/a/"
+    assert _normalize_dot_segments("/a/./b") == "/a/b"
+    assert _normalize_dot_segments("/a/b/..") == "/a/"
+    assert _normalize_dot_segments("/..") == "/"
+    assert _normalize_dot_segments("../a") == "a"
 
 
 def _review_resolver() -> PrincipalResolver:

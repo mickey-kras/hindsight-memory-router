@@ -140,7 +140,7 @@ pass_check
 
 begin_check "router liveness is dependency independent"
 live_response="$(curl --max-time 5 -fsS "${router_url}/health/live")"
-printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "alive"; assert isinstance(data["version"], str) and data["version"]; assert isinstance(data["uptime_seconds"], (int, float)) and data["uptime_seconds"] >= 0' || fail_check "router /health/live response was unexpected"
+printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data == {"status": "alive"}' || fail_check "router /health/live response was unexpected"
 pass_check
 
 begin_check "router readiness and internal Hindsight become reachable"
@@ -154,7 +154,10 @@ docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 
 pass_check
 
 begin_check "authentication and network boundaries hold"
-version="$(curl --max-time 5 -fsS "${router_url}/version")"
+anonymous_version_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/version")"
+[[ "$anonymous_version_status" == "401" ]] || fail_check "expected unauthenticated /version 401, got ${anonymous_version_status}"
+version="$(curl --max-time 5 -fsS -D "${tmp_dir}/version.headers" -H "Authorization: Bearer ${router_token}" "${router_url}/version")"
+grep -qi '^Deprecation: true' "${tmp_dir}/version.headers" || fail_check "legacy token mode /version response missed the Deprecation header"
 upstream_version="$(docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; print(urllib.request.urlopen('http://hindsight:8888/version', timeout=2).read().decode())")"
 python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","bank_config_api","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==set(upstream["features"]); assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose Hindsight-compatible facade capabilities"
 retain_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
