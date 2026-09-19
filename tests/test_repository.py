@@ -214,6 +214,25 @@ async def test_unknown_writer_rows_do_not_consume_registered_writer_scope(
 
 
 @pytest.mark.asyncio
+async def test_invented_writers_share_one_unknown_writer_capacity_scope(
+    repository: QuarantineRepository,
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(10, 1, 100_000)
+    await repository.store(
+        item("unknown-a", writer="invented-a", reason="unknown_writer"), capacity, mode="id", at=at
+    )
+    with pytest.raises(HttpError) as writer_cap:
+        await repository.store(
+            item("unknown-b", writer="invented-b", reason="unknown_writer"),
+            capacity,
+            mode="id",
+            at=at,
+        )
+    assert writer_cap.value.code == "quarantine_writer_capacity_exceeded"
+
+
+@pytest.mark.asyncio
 async def test_encrypted_bytes_use_unescaped_utf8(repository: QuarantineRepository) -> None:
     value = item("unicode")
     value["encrypted"] = {"v": 1, "data": "é"}

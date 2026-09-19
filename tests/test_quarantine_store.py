@@ -269,6 +269,11 @@ async def test_charge_known_disabled_auth_and_family() -> None:
     buckets, identities = session.distinct_calls[-1]
     assert "writer:main" in str(buckets) and identities
 
+    await store._charge(base_input(reason="unknown_writer", writerId="invented"), False, session)
+    buckets, identities = session.distinct_calls[-1]
+    assert "writer:unknown-writer" in str(buckets) and "invented" not in str(buckets)
+    assert "unknown-writer" in str(identities) and "invented" not in str(identities)
+
 
 @pytest.mark.asyncio
 async def test_rate_limit_failure_happens_before_encryption(
