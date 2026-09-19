@@ -443,7 +443,7 @@ def _warn_configuration(conditions: Iterable[tuple[bool, str]]) -> None:
             )
 
 
-def assert_auth_environment(settings: RouterSettings) -> None:
+def _assert_hindsight_transport(settings: RouterSettings) -> None:
     hindsight_url = urlsplit(settings.hindsight_base_url)
     if hindsight_url.scheme == "http":
         if settings.hindsight_require_secure_transport:
@@ -463,6 +463,10 @@ def assert_auth_environment(settings: RouterSettings) -> None:
             )
         ]
     )
+
+
+def assert_auth_environment(settings: RouterSettings) -> None:
+    _assert_hindsight_transport(settings)
     if settings.memory_router_principals:
         if secret_value(settings.memory_router_token):
             raise RuntimeError(
