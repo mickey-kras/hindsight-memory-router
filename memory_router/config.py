@@ -419,6 +419,7 @@ def is_private_upstream_host(host: str | None) -> bool:
     try:
         return ip_address(host).is_private
     except ValueError:
+        # host is a DNS name rather than an IP literal; apply hostname rules.
         pass
     if _OBFUSCATED_IPV4_HOST_RE.fullmatch(host):
         return False
