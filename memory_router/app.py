@@ -960,14 +960,16 @@ async def _dispatch_metrics(request: Request, pathname: str, method: str) -> Res
         return None
     return await metrics_http.metrics_endpoint_response(
         request,
-        admin_tokens=runtime.admin_tokens,
-        resolver=runtime.principal_resolver,
-        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
-        repository=_require_runtime(runtime.repository, "repository"),
-        admin_auth=_admin_auth,
-        admin_rate=_admin_rate,
-        principal_rate=_principal_rate,
-        auth_failure_rate=_auth_failure_rate,
+        metrics_http.MetricsDeps(
+            admin_tokens=runtime.admin_tokens,
+            resolver=runtime.principal_resolver,
+            auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+            repository=_require_runtime(runtime.repository, "repository"),
+            admin_auth=_admin_auth,
+            admin_rate=_admin_rate,
+            principal_rate=_principal_rate,
+            auth_failure_rate=_auth_failure_rate,
+        ),
     )
 
 
