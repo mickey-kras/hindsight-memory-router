@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     environment:
       POSTGRES_DB: quarantine
       POSTGRES_USER: quarantine
@@ -14,7 +14,7 @@ services:
       - internal
 
   hindsight:
-    image: node:26-alpine
+    image: node:26-alpine@sha256:dbaa92e5758cbbcf85d65d5403fdb530fe3442cbe8c6dbfb7ef23365450d5070
     working_dir: /workspace
     command: ["node", "fake-hindsight.js"]
     environment:
