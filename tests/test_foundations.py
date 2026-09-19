@@ -577,7 +577,12 @@ async def test_postgres_rate_limiter_paths() -> None:
 def test_plaintext_upstream_transport_fails_closed_outside_private_hosts(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    for url in ("http://8.8.8.8:8888", "http://hindsight.example.com"):
+    for url in (
+        "http://8.8.8.8:8888",
+        "http://hindsight.example.com",
+        "http://134744072:8888",
+        "http://0x08080808:8888",
+    ):
         settings = config.RouterSettings(HINDSIGHT_BASE_URL=url)
         with pytest.raises(RuntimeError, match="must use https"):
             config.assert_auth_environment(settings)

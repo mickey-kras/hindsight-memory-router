@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable
 from ipaddress import ip_address
 from pathlib import Path
@@ -407,6 +408,9 @@ def is_loopback_host(host: str | None) -> bool:
         return False
 
 
+_OBFUSCATED_IPV4_HOST_RE = re.compile(r"\d+|0[xX][0-9a-fA-F]+")
+
+
 def is_private_upstream_host(host: str | None) -> bool:
     if is_loopback_host(host):
         return True
@@ -416,6 +420,8 @@ def is_private_upstream_host(host: str | None) -> bool:
         return ip_address(host).is_private
     except ValueError:
         pass
+    if _OBFUSCATED_IPV4_HOST_RE.fullmatch(host):
+        return False
     return host.endswith(".internal") or "." not in host
 
 
