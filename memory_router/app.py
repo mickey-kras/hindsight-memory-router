@@ -332,8 +332,9 @@ class Runtime:
         self.auditor = AuthFailureAuditor(store)
         interval = settings.quarantine_sweep_interval_seconds
         retention = settings.quarantine_event_retention_days
+        export_path = settings.quarantine_event_export_path or None
         if interval > 0:
-            self.sweeper = asyncio.create_task(self._sweep_loop(interval, retention))
+            self.sweeper = asyncio.create_task(self._sweep_loop(interval, retention, export_path))
 
     async def stop(self) -> None:
         if self.sweeper:
@@ -352,7 +353,9 @@ class Runtime:
         if self.repository:
             await self.repository.close()
 
-    async def _sweep_loop(self, interval: int, retention_days: int) -> None:
+    async def _sweep_loop(
+        self, interval: int, retention_days: int, export_path: str | None = None
+    ) -> None:
         repository = _require_runtime(self.repository, "repository")
         while True:
             await asyncio.sleep(interval)
@@ -362,7 +365,7 @@ class Runtime:
                 await sweep_expired(repository, at)
                 if retention_days > 0:
                     cutoff = iso_format(datetime.now(UTC) - timedelta(days=retention_days))
-                    await prune_events_before(repository, cutoff, at)
+                    await prune_events_before(repository, cutoff, at, export_path)
             except Exception as exc:
                 log_event(
                     logger,

@@ -195,6 +195,7 @@ class RouterSettings(BaseSettings):
     quarantine_event_retention_days: NonNegativeInt = Field(
         90, validation_alias="QUARANTINE_EVENT_RETENTION_DAYS"
     )
+    quarantine_event_export_path: str = Field("", validation_alias="QUARANTINE_EVENT_EXPORT_PATH")
     quarantine_wrap_provider: Literal["rsa-oaep", "https-sidecar"] = Field(
         "rsa-oaep", validation_alias="QUARANTINE_WRAP_PROVIDER"
     )
