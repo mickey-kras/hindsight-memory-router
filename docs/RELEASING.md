@@ -10,6 +10,9 @@ The checkbox authorizes publication; there is no second button. Normal main runs
 Preparation pauses Dependabot auto-merge for the full run. Avoid manual merges until it finishes.
 The release includes the main SHA selected at dispatch, shown in the run summary. If main advances
 before branch creation, rerun from current main. Only automation creates release branches and tags.
+Release tags are lightweight and unsigned by design. Their trust basis is the immutable GitHub
+release plus cosign signatures and Rekor attestation records on the published digests; verify
+artifacts by recorded digest, not by tag.
 
 ## Versions and inputs
 

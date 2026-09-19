@@ -160,14 +160,37 @@ async def test_safe_recalled_memory_reaches_caller() -> None:
 
 
 @pytest.mark.asyncio
-async def test_provider_failure_degrades_recall_per_existing_semantics() -> None:
+async def test_provider_failure_marks_recall_partial() -> None:
     hindsight = FakeHindsight()
     hindsight.recall_error = HindsightGatewayError("network", operation="recall", method="POST")
     router, limits, store, _ = policy(hindsight)
     response = await router.recall("main", {"query": "status"})
-    assert response == {"results": []}
+    assert response == {"results": [], "partial": True, "failed_banks": 1}
     assert limits.recall == ["main"]
     assert store.items == []
+
+
+@pytest.mark.asyncio
+async def test_multi_bank_recall_reports_partial_when_one_bank_fails() -> None:
+    class OneBankDown(FakeHindsight):
+        async def recall(self, bank: str, body: dict[str, object]) -> dict[str, object]:
+            if bank == "bank-b":
+                raise HindsightGatewayError("network", operation="recall", method="POST")
+            return await super().recall(bank, body)
+
+    router = RouterPolicy(
+        fan_out_registry(),
+        OneBankDown([{"id": "m1", "text": "safe text"}]),
+        FakeLimits(),
+        FakeStore(),
+        FakeRepository(),
+    )
+    response = await router.recall("multi", {"query": "status"})
+    assert response == {
+        "results": [{"id": "m1", "text": "safe text"}],
+        "partial": True,
+        "failed_banks": 1,
+    }
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ Optional fields: `request_id`, `operation`, `request_method`, `upstream_method`,
 
 Text caps: request and writer IDs 128, logger 128, operation 64, methods 16. `request_id` accepts client-provided `[A-Za-z0-9._:-]`; clients must not put secrets in it. Invalid request IDs are replaced by generated IDs. Writer registry IDs must match `[A-Za-z0-9._:-]{1,128}` and cannot be `.` or `..`; invalid registries fail startup. Other invalid writer IDs and logger names are fingerprinted. `error_fingerprint` is an allowlisted exception class or opaque raise-site hash.
 
-Unknown fields and invalid numbers are dropped. Invalid enums use their safe fallback. Records that cannot be safely formatted are dropped; logging never fails application flow.
+Unknown fields and invalid numbers are dropped. Invalid enums use their safe fallback. Records that cannot be safely formatted are dropped; logging never fails application flow. If the pipeline itself fails to emit a record, a bounded marker `{"event":"logging_write_failed","count":N}` is written to stderr with a monotonic per-process count instead; it carries no event fields.
 
 ## Values
 
