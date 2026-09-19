@@ -621,9 +621,7 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
 async def test_authorized_admin_without_matching_token_slot_fails_loud(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def no_slot(
-        authorization: str | None, scope: str, tokens: dict[str, str | None]
-    ) -> str | None:
+    def no_slot(authorization: str | None, scope: str, tokens: dict[str, str | None]) -> str | None:
         return None
 
     monkeypatch.setattr(app_module, "admin_token_scope", no_slot)

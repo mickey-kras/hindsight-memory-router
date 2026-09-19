@@ -25,7 +25,9 @@ def router_authorized(authorization: str | None, token: str | None, allow_anonym
     return bearer_matches(authorization, token) if token else allow_anonymous
 
 
-def _admin_slot_candidates(scope: str, tokens: dict[str, str | None]) -> list[tuple[str, str | None]]:
+def _admin_slot_candidates(
+    scope: str, tokens: dict[str, str | None]
+) -> list[tuple[str, str | None]]:
     candidates: list[tuple[str, str | None]] = [("legacy", tokens.get("legacy"))]
     if scope == "read":
         candidates.extend([("read", tokens.get("read")), ("review", tokens.get("review"))])

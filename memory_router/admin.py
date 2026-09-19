@@ -57,6 +57,15 @@ class AdminActor:
         return self.principal or self.token_scope or "unknown"
 
 
+@dataclass(frozen=True, slots=True)
+class ReconcileContext:
+    item: dict[str, Any]
+    decision: Any
+    expected_sha256: str
+    expected_updated_at: str
+    actor: str
+
+
 def _log_admin_action(action: str, actor: AdminActor, quarantine_id: str | None = None) -> None:
     log_event(
         logger,
@@ -399,12 +408,14 @@ class QuarantineAdminService:
         else:
             status = await self._reconcile_applied(
                 quarantine_id,
-                item,
-                body.get("decision"),
                 at,
-                expected_sha256,
-                expected_updated_at,
-                actor.label,
+                ReconcileContext(
+                    item=item,
+                    decision=body.get("decision"),
+                    expected_sha256=expected_sha256,
+                    expected_updated_at=expected_updated_at,
+                    actor=actor.label,
+                ),
             )
         _log_admin_action("reconcile", actor, quarantine_id)
         return {
@@ -415,17 +426,10 @@ class QuarantineAdminService:
         }
 
     async def _reconcile_applied(
-        self,
-        quarantine_id: str,
-        item: dict[str, Any],
-        decision: Any,
-        at: str,
-        expected_sha256: str,
-        expected_updated_at: str,
-        actor: str,
+        self, quarantine_id: str, at: str, context: ReconcileContext
     ) -> str:
-        if item["kind"] == "retain_request":
-            if decision not in (None, "approve"):
+        if context.item["kind"] == "retain_request":
+            if context.decision not in (None, "approve"):
                 raise HttpError(
                     409,
                     "invalid_review_action",
@@ -435,23 +439,23 @@ class QuarantineAdminService:
                 self.repository,
                 quarantine_id,
                 at,
-                expected_sha256=expected_sha256,
-                expected_updated_at=expected_updated_at,
-                actor=actor,
+                expected_sha256=context.expected_sha256,
+                expected_updated_at=context.expected_updated_at,
+                actor=context.actor,
             )
-            writer_id = _optional_str(item.get("writer_id"))
+            writer_id = _optional_str(context.item.get("writer_id"))
             writer = self.registry.writers.get(writer_id) if writer_id else None
             details = {
                 "writer_id": writer_id,
                 "target_bank": writer.write_bank if writer else None,
-                "actor": actor,
+                "actor": context.actor,
             }
             await finish_approve_retain(
-                self.repository, quarantine_id, at, details, expected_sha256=expected_sha256
+                self.repository, quarantine_id, at, details, expected_sha256=context.expected_sha256
             )
             return "approved"
-        if item["kind"] == "recalled_memory":
-            if decision not in (None, "reject"):
+        if context.item["kind"] == "recalled_memory":
+            if context.decision not in (None, "reject"):
                 raise HttpError(
                     409,
                     "invalid_review_action",
@@ -461,16 +465,16 @@ class QuarantineAdminService:
                 self.repository,
                 quarantine_id,
                 at,
-                expected_sha256=expected_sha256,
-                expected_updated_at=expected_updated_at,
-                actor=actor,
+                expected_sha256=context.expected_sha256,
+                expected_updated_at=context.expected_updated_at,
+                actor=context.actor,
             )
             await finish_reject_memory(
                 self.repository,
                 quarantine_id,
                 at,
-                expected_sha256=expected_sha256,
-                actor=actor,
+                expected_sha256=context.expected_sha256,
+                actor=context.actor,
             )
             return REVIEWED_BLOCKED
         raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
