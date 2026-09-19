@@ -73,7 +73,7 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /tests/integration
     schedule:
       interval: cron
@@ -87,7 +87,7 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /docs
     schedule:
       interval: cron
