@@ -42,6 +42,14 @@ def test_auth_helpers_and_scopes() -> None:
     assert auth.admin_authorized("Bearer clean", "cleanup", tokens)
     assert not auth.admin_authorized("Bearer read", "review", tokens)
     assert not auth.admin_authorized("Bearer x", "unknown", tokens)
+    assert auth.admin_token_scope("Bearer legacy", "read", tokens) == "legacy"
+    assert auth.admin_token_scope("Bearer read", "read", tokens) == "read"
+    assert auth.admin_token_scope("Bearer review", "read", tokens) == "review"
+    assert auth.admin_token_scope("Bearer review", "review", tokens) == "review"
+    assert auth.admin_token_scope("Bearer clean", "cleanup", tokens) == "cleanup"
+    assert auth.admin_token_scope("Bearer read", "review", tokens) is None
+    assert auth.admin_token_scope("Bearer x", "unknown", tokens) is None
+    assert auth.admin_token_scope(None, "read", tokens) is None
 
 
 @pytest.mark.asyncio
