@@ -17,8 +17,14 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
 from . import probes
-from .admin import QuarantineAdminService
-from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
+from .admin import AdminActor, QuarantineAdminService
+from .auth import (
+    AuthFailureAuditor,
+    admin_authorized,
+    admin_token_recognized,
+    admin_token_scope,
+    router_authorized,
+)
 from .canonical import assert_json_depth
 from .config import (
     RouterSettings,
@@ -315,7 +321,7 @@ class Runtime:
             max_retain_items=settings.hindsight_retain_max_items,
             max_retain_content_bytes=settings.hindsight_retain_max_content_bytes,
             max_recall_query_bytes=settings.hindsight_recall_max_query_bytes,
-            max_recall_max_tokens=settings.hindsight_recall_max_tokens,
+            max_recall_max_tokens=settings.hindsight_recall_max_max_tokens,
         )
         registry = load_registry(settings.memory_router_registry)
         hindsight_limiter = backend.create_limiter()
@@ -849,33 +855,33 @@ async def _admin_body(request: Request, action: str) -> dict[str, Any]:
 
 
 async def _approve_item_response(
-    request: Request, admin: QuarantineAdminService, item_id: str
+    request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
 ) -> Response:
     body = await _admin_body(request, "approve")
-    return JSONResponse(await admin.approve(item_id, body))
+    return JSONResponse(await admin.approve(item_id, body, actor))
 
 
 async def _reject_item_response(
-    request: Request, admin: QuarantineAdminService, item_id: str
+    request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
 ) -> Response:
-    return JSONResponse(await admin.reject(item_id))
+    return JSONResponse(await admin.reject(item_id, actor))
 
 
 async def _postpone_item_response(
-    request: Request, admin: QuarantineAdminService, item_id: str
+    request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
 ) -> Response:
-    return JSONResponse(await admin.postpone(item_id))
+    return JSONResponse(await admin.postpone(item_id, actor))
 
 
 async def _reconcile_item_response(
-    request: Request, admin: QuarantineAdminService, item_id: str
+    request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
 ) -> Response:
     body = await _admin_body(request, "reconcile")
-    return JSONResponse(await admin.reconcile(item_id, body))
+    return JSONResponse(await admin.reconcile(item_id, body, actor))
 
 
 _ADMIN_ITEM_ACTIONS: dict[
-    str, Callable[[Request, QuarantineAdminService, str], Awaitable[Response]]
+    str, Callable[[Request, QuarantineAdminService, str, AdminActor], Awaitable[Response]]
 ] = {
     "approve": _approve_item_response,
     "reject": _reject_item_response,
@@ -889,13 +895,14 @@ async def _admin_item_response(
     admin: QuarantineAdminService,
     method: str,
     match: re.Match[str],
+    actor: AdminActor,
 ) -> Response | None:
     item_id = _decode_path_segment(match.group(1))
     action = match.group(2)
     if method == "GET" and action is None:
         return JSONResponse(await admin.read_item(item_id))
     if method == "POST" and action in {"approve", "reject", "postpone", "reconcile"}:
-        return await _ADMIN_ITEM_ACTIONS[action](request, admin, item_id)
+        return await _ADMIN_ITEM_ACTIONS[action](request, admin, item_id, actor)
     return None
 
 
@@ -904,18 +911,19 @@ async def _authorized_admin_response(
     admin: QuarantineAdminService,
     pathname: str,
     method: str,
+    actor: AdminActor,
 ) -> Response:
     if method == "GET" and pathname == "/admin/quarantine/queue":
         return await _admin_queue_response(request, admin)
     if method == "GET" and pathname == "/admin/quarantine/stats":
         return JSONResponse(await admin.stats())
     if method == "POST" and pathname == "/admin/quarantine/cleanup":
-        return JSONResponse(await admin.cleanup(await _admin_body(request, "cleanup")))
+        return JSONResponse(await admin.cleanup(await _admin_body(request, "cleanup"), actor))
     match = re.fullmatch(
         r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?", pathname
     )
     if match is not None:
-        response = await _admin_item_response(request, admin, method, match)
+        response = await _admin_item_response(request, admin, method, match, actor)
         if response is not None:
             return response
     return JSONResponse({"error": "admin_endpoint_not_found"}, status_code=404)
@@ -937,14 +945,19 @@ async def _dispatch_admin(request: Request, pathname: str, method: str) -> Respo
     if not pathname.startswith("/admin/"):
         return None
     authorization = request.headers.get("authorization")
-    if not admin_authorized(authorization, _scope(method, pathname), runtime.admin_tokens):
+    scope = _scope(method, pathname)
+    if not admin_authorized(authorization, scope, runtime.admin_tokens):
         if runtime.principal_resolver is not None and principal_token_present(authorization):
             return await _principal_admin_response(request, pathname, method)
-        if not await _admin_auth(request, _scope(method, pathname)):
+        if not await _admin_auth(request, scope):
             return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
+    token_scope = admin_token_scope(authorization, scope, runtime.admin_tokens)
+    if token_scope is None:
+        raise RuntimeError("admin request authorized without a matching admin token slot")
     await _admin_rate(method)
     admin = _require_runtime(runtime.admin, "admin service")
-    return await _authorized_admin_response(request, admin, pathname, method)
+    actor = AdminActor(token_scope=token_scope)
+    return await _authorized_admin_response(request, admin, pathname, method, actor)
 
 
 @app.api_route(
