@@ -42,6 +42,8 @@ curl --fail http://localhost:8890/health/ready
 
 Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
 
+The router binds and publishes on `127.0.0.1` by default. To expose it on a LAN or tailnet interface, set `MEMORY_ROUTER_HOST` or the Compose publish address and terminate TLS in front; see [Docker deployment](docs/deployment/docker.md).
+
 ## Documentation
 
 - [Getting started](docs/getting-started.md)

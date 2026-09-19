@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from ipaddress import IPv4Address
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -253,6 +252,7 @@ def test_parse_iso_accepts_z_suffix_and_numeric_offsets() -> None:
 
 def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEMORY_ROUTER_PORT", "8891")
+    monkeypatch.setenv("MEMORY_ROUTER_HOST", "192.0.2.10")
     calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
 
     def fake_run(*args: object, **kwargs: object) -> None:
@@ -264,7 +264,7 @@ def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
         (
             (main_module.app,),
             {
-                "host": str(IPv4Address(0)),
+                "host": "192.0.2.10",
                 "port": 8891,
                 "access_log": False,
                 "log_config": None,
