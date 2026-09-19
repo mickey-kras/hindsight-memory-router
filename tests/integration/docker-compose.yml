@@ -18,6 +18,7 @@ services:
     depends_on:
       - hindsight
     environment:
+      MEMORY_ROUTER_HOST: "0.0.0.0"
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_DEPLOYMENT_MODE: single
       MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "false"
@@ -57,6 +58,7 @@ services:
     depends_on:
       - hindsight
     environment:
+      MEMORY_ROUTER_HOST: "0.0.0.0"
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_DEPLOYMENT_MODE: single
       MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "false"

@@ -4,6 +4,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 
 | Variable                                   |              Built-in default | Purpose                                                         |
 | ------------------------------------------ | ----------------------------: | --------------------------------------------------------------- |
+| `MEMORY_ROUTER_HOST`                       |                   `127.0.0.1` | HTTP listener bind address                                      |
 | `MEMORY_ROUTER_PORT`                       |                        `8890` | HTTP listener port                                              |
 | `MEMORY_ROUTER_DEPLOYMENT_MODE`            |                      `single` | `single` or `cluster`                                           |
 | `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT`  |                       `false` | Confirms external shared admin limiting in cluster mode         |
@@ -12,7 +13,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`         |                          none | Admin review scope                                              |
 | `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`        |                          none | Admin cleanup scope                                             |
 | `MEMORY_ROUTER_ADMIN_TOKEN`                |                          none | Legacy all-admin migration token                                |
-| `MEMORY_ROUTER_ALLOW_ANONYMOUS`            |                       `false` | Development-only anonymous router access                        |
+| `MEMORY_ROUTER_ALLOW_ANONYMOUS`            |                       `false` | Development-only anonymous router access; loopback binds only   |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX`  |                         `120` | Admin read requests/window                                      |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX` |                          `30` | Admin write requests/window                                     |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS` |                       `60000` | Admin rate-limit window                                         |
@@ -53,6 +54,8 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `QUARANTINE_WRAP_SIDECAR_NAME`             |               `https-sidecar` | Provider name in envelope metadata; `[A-Za-z0-9._-]{1,64}`      |
 | `QUARANTINE_WRAP_SIDECAR_VERSION`          |                           `1` | Provider version recorded in envelope metadata                  |
 | `QUARANTINE_WRAP_SIDECAR_WRAPPED_KEY_BYTES` |                        `512` | Maximum wrapped-DEK size; drives 413 size charging              |
+
+The router binds `127.0.0.1` by default; set `MEMORY_ROUTER_HOST` to expose it on other interfaces. `MEMORY_ROUTER_ALLOW_ANONYMOUS=true` fails startup when the bind address is not loopback.
 
 Boolean overrides accept only `true` or `false`. Integer settings are validated as non-negative or positive according to their semantics.
 
