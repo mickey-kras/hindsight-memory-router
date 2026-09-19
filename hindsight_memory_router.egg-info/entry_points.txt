@@ -1,0 +1,4 @@
+[console_scripts]
+memory-router = memory_router.__main__:main
+memory-router-decrypt-quarantine = memory_router.cli.decrypt_quarantine:main
+memory-router-migrate-legacy-quarantine = memory_router.cli.migrate_legacy_quarantine:main

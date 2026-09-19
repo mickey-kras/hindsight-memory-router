@@ -1,0 +1,34 @@
+Metadata-Version: 2.4
+Name: hindsight-memory-router
+Version: 0.1.1
+Requires-Python: >=3.12
+License-File: LICENSE
+License-File: licenses/GPL-3.0.txt
+License-File: licenses/LGPL-3.0.txt
+License-File: licenses/UNICODE-3.0.txt
+Requires-Dist: agent-memory-guard==0.3.2
+Requires-Dist: aiosqlite==0.22.1
+Requires-Dist: Pebble==5.2.2
+Requires-Dist: cryptography==50.0.1
+Requires-Dist: fastapi==0.141.1
+Requires-Dist: httpx==0.28.1
+Requires-Dist: psycopg[binary]==3.3.5
+Requires-Dist: psycopg-pool==3.3.1
+Requires-Dist: pydantic==2.13.5
+Requires-Dist: pydantic-settings==2.15.0
+Requires-Dist: rfc8785==0.1.4
+Requires-Dist: starlette==1.6.0
+Requires-Dist: structlog==26.1.0
+Requires-Dist: uvicorn==0.52.4
+Provides-Extra: dev
+Requires-Dist: bandit==1.9.4; extra == "dev"
+Requires-Dist: coverage==7.16.0; extra == "dev"
+Requires-Dist: mypy==2.3.1; extra == "dev"
+Requires-Dist: pip-audit==2.10.1; extra == "dev"
+Requires-Dist: pip-tools==7.6.1; extra == "dev"
+Requires-Dist: pytest==9.1.1; extra == "dev"
+Requires-Dist: pytest-asyncio==1.4.0; extra == "dev"
+Requires-Dist: pytest-httpx==0.36.2; extra == "dev"
+Requires-Dist: pyyaml==6.0.3; extra == "dev"
+Requires-Dist: ruff==0.16.7; extra == "dev"
+Dynamic: license-file

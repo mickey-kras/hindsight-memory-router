@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from ipaddress import IPv4Address
 
 import uvicorn
 
@@ -31,10 +30,9 @@ def main() -> None:
         )
         raise SystemExit(3) from None
     runtime.configure(settings)
-    bind_all_interfaces = str(IPv4Address(0))
     uvicorn.run(
         app,
-        host=bind_all_interfaces,
+        host=settings.memory_router_host,
         port=settings.memory_router_port,
         access_log=False,
         log_config=None,

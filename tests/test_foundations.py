@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import traceback
 from collections.abc import Callable
+from ipaddress import IPv4Address
 from pathlib import Path
 from secrets import token_urlsafe
 from types import SimpleNamespace
@@ -27,6 +28,8 @@ from memory_router.validation import parse_recall_body, parse_reflect_body, pars
 from tests.fakes import (
     FakeDatabase,
 )
+
+WILDCARD_HOST = str(IPv4Address(0))
 
 
 def test_auth_helpers_and_scopes() -> None:
@@ -80,6 +83,14 @@ def test_typed_settings_preserve_strict_environment_parsing(
 
     monkeypatch.setenv("MEMORY_ROUTER_PORT", "")
     assert config.load_settings().memory_router_port == 8890
+
+    monkeypatch.delenv("MEMORY_ROUTER_HOST", raising=False)
+    assert config.load_settings().memory_router_host == "127.0.0.1"
+    monkeypatch.setenv("MEMORY_ROUTER_HOST", WILDCARD_HOST)
+    assert config.load_settings().memory_router_host == WILDCARD_HOST
+    monkeypatch.setenv("MEMORY_ROUTER_HOST", "")
+    assert config.load_settings().memory_router_host == "127.0.0.1"
+    monkeypatch.delenv("MEMORY_ROUTER_HOST")
     for raw, expected in (("true", True), ("false", False)):
         monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", raw)
         assert config.load_settings().memory_router_allow_anonymous is expected
@@ -288,6 +299,23 @@ def test_environment_assertions(
         getattr(record, "reason", None) != "insecure-hindsight-transport"
         for record in caplog.records
     )
+
+
+def test_anonymous_mode_requires_loopback_bind(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
+    for host in (WILDCARD_HOST, "::", "192.0.2.10", "router.lan"):
+        monkeypatch.setenv("MEMORY_ROUTER_HOST", host)
+        with pytest.raises(RuntimeError, match="requires a loopback MEMORY_ROUTER_HOST"):
+            config.load_settings()
+
+    for host in ("127.0.0.1", "127.0.0.2", "::1", "localhost"):
+        monkeypatch.setenv("MEMORY_ROUTER_HOST", host)
+        assert config.load_settings().memory_router_allow_anonymous is True
+
+    settings = config.load_settings()
+    settings.memory_router_host = WILDCARD_HOST
+    with pytest.raises(RuntimeError, match="requires a loopback MEMORY_ROUTER_HOST"):
+        config.validate_settings(settings)
 
 
 def test_deployment_mode_validation(monkeypatch: pytest.MonkeyPatch) -> None:
