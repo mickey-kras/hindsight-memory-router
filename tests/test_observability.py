@@ -898,6 +898,35 @@ def test_log_event_rejects_invalid_error_without_raising(
     assert not hasattr(record, "error_fingerprint")
 
 
+def test_log_event_write_failure_marks_stderr_and_counts(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import memory_router.logging as logging_module
+
+    def broken(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("pipeline-down-secret")
+
+    monkeypatch.setattr(logging_module, "_log_event", broken)
+    reset_log_state()
+    try:
+        for _ in range(2):
+            log_event(
+                logging.getLogger("memory_router.test"),
+                "error",
+                "request_failed",
+                route_class="memory",
+            )
+        assert logging_module.log_write_failures() == 2
+    finally:
+        reset_log_state()
+
+    err = capsys.readouterr().err
+    markers = [json.loads(line) for line in err.splitlines() if "logging_write_failed" in line]
+    assert [marker["count"] for marker in markers] == [1, 2]
+    assert "pipeline-down-secret" not in err
+
+
 def test_log_event_sanitizes_hostile_fields_and_non_finite_numbers(
     caplog: pytest.LogCaptureFixture,
 ) -> None:

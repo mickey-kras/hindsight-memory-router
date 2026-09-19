@@ -24,7 +24,8 @@ Scopes:
 - `bank.config.read`
 - `bank.config.write`
 - `bank.admin`
-- `quarantine.review` and `quarantine.decide`: reserved; no endpoints
+- `quarantine.review`: read-only principal access to `GET /admin/quarantine/queue` and `GET /admin/quarantine/stats` metadata for granted banks; ciphertext fetch and review actions still require admin tokens
+- `quarantine.decide`: reserved; no endpoints
 
 Authorization is default-deny per principal, bank, and scope. `GET /v1/default/banks` keeps the upstream response shape and removes ungranted banks.
 

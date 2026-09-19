@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -20,6 +21,7 @@ from memory_router.maintenance import (
     prune_events_before,
     sweep_expired,
 )
+from memory_router.timestamps import parse_iso
 from tests.fakes import (
     TxContext,
 )
@@ -240,6 +242,12 @@ def test_app_scope_and_now() -> None:
     assert app_module._scope("POST", "/admin/quarantine/cleanup") == "cleanup"
     assert app_module._scope("POST", "/x") == "review"
     assert app_module.iso_now().endswith("Z")
+
+
+def test_parse_iso_accepts_z_suffix_and_numeric_offsets() -> None:
+    expected = datetime(2026, 1, 1, 0, 0, tzinfo=UTC)
+    assert parse_iso("2026-01-01T00:00:00.000Z") == expected
+    assert parse_iso("2026-01-01T02:00:00.000+02:00") == expected
 
 
 def test_main_runs_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
