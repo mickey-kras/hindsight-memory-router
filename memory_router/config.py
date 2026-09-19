@@ -147,6 +147,9 @@ class RouterSettings(BaseSettings):
     memory_router_external_admin_rate_limit: ExactBool = Field(
         False, validation_alias="MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT"
     )
+    memory_router_metrics_enabled: ExactBool = Field(
+        False, validation_alias="MEMORY_ROUTER_METRICS_ENABLED"
+    )
 
     quarantine_database_url: str = Field(
         DEFAULT_DATABASE_URL,

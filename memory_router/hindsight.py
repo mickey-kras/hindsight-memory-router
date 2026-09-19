@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
 
+from . import metrics
 from .canonical import assert_json_depth, canonical_json
 from .errors import HttpError
 from .models import RecallResponse
@@ -190,18 +191,25 @@ class HindsightGateway:
         )
 
     async def recall(self, bank_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        value = await self._request(
-            "recall", "POST", f"/v1/default/banks/{quote(bank_id, safe='')}/memories/recall", body
-        )
         try:
-            _assert_response_depth(value)
-            RecallResponse.model_validate(value)
-            for result in value.get("results", []):
-                canonical_json({"id": result["id"], "text": result["text"]})
-        except ValueError as exc:
-            raise HindsightGatewayError(
-                "invalid-response", operation="recall", method="POST"
-            ) from exc
+            value = await self._request(
+                "recall",
+                "POST",
+                f"/v1/default/banks/{quote(bank_id, safe='')}/memories/recall",
+                body,
+            )
+            try:
+                _assert_response_depth(value)
+                RecallResponse.model_validate(value)
+                for result in value.get("results", []):
+                    canonical_json({"id": result["id"], "text": result["text"]})
+            except ValueError as exc:
+                raise HindsightGatewayError(
+                    "invalid-response", operation="recall", method="POST"
+                ) from exc
+        except HindsightGatewayError:
+            metrics.record_recall_degraded_bank()
+            raise
         return cast(dict[str, Any], value)
 
     async def list_banks(

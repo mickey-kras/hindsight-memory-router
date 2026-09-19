@@ -16,7 +16,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from . import probes
+from . import metrics, metrics_http, probes
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
 from .canonical import assert_json_depth
@@ -107,6 +107,8 @@ def _route_class(request: Request) -> str:
         return "liveness"
     if path == "/version":
         return "version"
+    if path == "/metrics":
+        return "metrics"
     if path.startswith("/admin/"):
         return "admin"
     if MEMORY_ROUTE.fullmatch(path):
@@ -237,6 +239,7 @@ class Runtime:
         self.max_body_bytes = settings.memory_router_max_body_bytes
         self.router_token = secret_value(settings.memory_router_token)
         self.allow_anonymous = settings.memory_router_allow_anonymous
+        self.metrics_enabled = settings.memory_router_metrics_enabled
         self.principal_resolver = (
             PrincipalResolver(load_principal_registry(settings.memory_router_principals))
             if settings.memory_router_principals
@@ -364,6 +367,7 @@ class Runtime:
                     cutoff = iso_format(datetime.now(UTC) - timedelta(days=retention_days))
                     await prune_events_before(repository, cutoff, at)
             except Exception as exc:
+                metrics.record_sweeper_failure()
                 log_event(
                     logger,
                     "error",
@@ -457,8 +461,12 @@ app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None
 
 @app.exception_handler(HttpError)
 async def http_error_handler(request: Request, exc: HttpError) -> JSONResponse:
+    route_class = _route_class(request)
+    if exc.status == 429:
+        metrics.record_rate_limited(route_class)
+    elif exc.status == 507:
+        metrics.record_capacity_rejection(route_class)
     if isinstance(exc, HindsightGatewayError):
-        route_class = _route_class(request)
         log_event(
             logger,
             "warning",
@@ -947,6 +955,24 @@ async def _dispatch_admin(request: Request, pathname: str, method: str) -> Respo
     return await _authorized_admin_response(request, admin, pathname, method)
 
 
+async def _dispatch_metrics(request: Request, pathname: str, method: str) -> Response | None:
+    if not metrics_http.metrics_route_enabled(pathname, method, runtime.metrics_enabled):
+        return None
+    return await metrics_http.metrics_endpoint_response(
+        request,
+        metrics_http.MetricsDeps(
+            admin_tokens=runtime.admin_tokens,
+            resolver=runtime.principal_resolver,
+            auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+            repository=_require_runtime(runtime.repository, "repository"),
+            admin_auth=_admin_auth,
+            admin_rate=_admin_rate,
+            principal_rate=_principal_rate,
+            auth_failure_rate=_auth_failure_rate,
+        ),
+    )
+
+
 @app.api_route(
     "/{path:path}",
     methods=["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE", "CONNECT"],
@@ -958,6 +984,10 @@ async def dispatch(path: str, request: Request) -> Response:
     admin_response = await _dispatch_admin(request, pathname, method)
     if admin_response is not None:
         return admin_response
+
+    metrics_response = await _dispatch_metrics(request, pathname, method)
+    if metrics_response is not None:
+        return metrics_response
 
     if method == "GET" and pathname == "/version":
         return await _version_response()
