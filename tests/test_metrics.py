@@ -6,14 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from memory_router.errors import HttpError
+from memory_router.principals import PrincipalRegistry, PrincipalResolver
+from tests.request_helpers import request
 
 from memory_router import app as app_module
 from memory_router import config, metrics
 from memory_router.auth import AuthFailureAuditor
-from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
-from memory_router.principals import PrincipalRegistry, PrincipalResolver
-from tests.request_helpers import request
 
 _ADMIN_TOKENS = {
     "legacy": "legacy-token",
@@ -98,7 +98,11 @@ async def test_metrics_endpoint_serves_prometheus_text_to_admin_read_scope() -> 
 
 @pytest.mark.asyncio
 async def test_metrics_endpoint_rejects_anonymous_and_wrong_scope_tokens() -> None:
-    for headers in ({}, {"authorization": "Bearer cleanup-token"}, {"authorization": "Bearer nope"}):
+    for headers in (
+        {},
+        {"authorization": "Bearer cleanup-token"},
+        {"authorization": "Bearer nope"},
+    ):
         response = await app_module.dispatch("metrics", request("GET", "/metrics", headers=headers))
         assert response.status_code == 401, headers
     rendered = metrics.render()
@@ -116,7 +120,9 @@ async def test_metrics_endpoint_allows_principals_with_review_grants() -> None:
 
     response = await app_module.dispatch(
         "metrics",
-        request("GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{_OPERATOR_SECRET}"}),
+        request(
+            "GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{_OPERATOR_SECRET}"}
+        ),
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == metrics.CONTENT_TYPE
@@ -132,7 +138,8 @@ async def test_metrics_endpoint_allows_principals_with_review_grants() -> None:
     assert excinfo.value.code == "authorization_denied"
 
     response = await app_module.dispatch(
-        "metrics", request("GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{'c' * 64}"})
+        "metrics",
+        request("GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{'c' * 64}"}),
     )
     assert response.status_code == 401
     assert 'memory_router_auth_failures_total{route_class="metrics"} 1' in metrics.render()
@@ -175,7 +182,7 @@ async def test_error_responses_are_counted_by_route_class() -> None:
     assert 'memory_router_rate_limited_responses_total{route_class="memory"} 1' in rendered
     assert 'memory_router_quarantine_capacity_rejections_total{route_class="memory"} 1' in rendered
     assert not any(
-        line.startswith("memory_router_rate_limited_responses_total{route_class=\"version\"")
+        line.startswith('memory_router_rate_limited_responses_total{route_class="version"')
         for line in rendered.splitlines()
     )
 
@@ -229,8 +236,7 @@ def test_render_escapes_labels_and_omits_unrecorded_series() -> None:
     )
     assert 'memory_router_auth_failures_total{route_class="od\\"d\\nclass"} 2' in rendered
     assert not any(
-        line.startswith("memory_router_sweeper_failures_total ")
-        for line in rendered.splitlines()
+        line.startswith("memory_router_sweeper_failures_total ") for line in rendered.splitlines()
     )
 
 

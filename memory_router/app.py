@@ -16,7 +16,7 @@ from urllib.parse import unquote
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from . import metrics, probes
+from . import metrics, metrics_http, probes
 from .admin import QuarantineAdminService
 from .auth import AuthFailureAuditor, admin_authorized, admin_token_recognized, router_authorized
 from .canonical import assert_json_depth
@@ -47,10 +47,8 @@ from .principal_gate import (
     authenticate_principal,
     principal_admin_metadata_response,
     principal_token_present,
-    require_grant,
 )
 from .principals import (
-    SCOPE_QUARANTINE_REVIEW,
     PrincipalResolver,
     PrincipalSession,
     load_principal_registry,
@@ -957,45 +955,20 @@ async def _dispatch_admin(request: Request, pathname: str, method: str) -> Respo
     return await _authorized_admin_response(request, admin, pathname, method)
 
 
-async def _metrics_response() -> Response:
-    repository = _require_runtime(runtime.repository, "repository")
-    stats = await repository.stats(iso_now())
-    metrics.set_review_side_effect_started(stats["review_side_effect_started_items"])
-    return Response(metrics.render(), media_type=metrics.CONTENT_TYPE)
-
-
-async def _principal_metrics_response(request: Request) -> Response:
-    principal = await authenticate_principal(
-        request,
-        resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
-        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
-        route_class="metrics",
-        on_failure=lambda: _auth_failure_rate("admin"),
-    )
-    if principal is None:
-        return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
-    if not PrincipalResolver.quarantine_review_banks(principal):
-        require_grant(
-            session=principal,
-            scope=SCOPE_QUARANTINE_REVIEW,
-            bank="-",
-            route_class="metrics",
-        )
-    await _principal_rate(principal, SCOPE_QUARANTINE_REVIEW, "metrics")
-    return await _metrics_response()
-
-
 async def _dispatch_metrics(request: Request, pathname: str, method: str) -> Response | None:
-    if pathname != "/metrics" or method != "GET" or not runtime.metrics_enabled:
+    if not metrics_http.metrics_route_enabled(pathname, method, runtime.metrics_enabled):
         return None
-    authorization = request.headers.get("authorization")
-    if not admin_authorized(authorization, "read", runtime.admin_tokens):
-        if runtime.principal_resolver is not None and principal_token_present(authorization):
-            return await _principal_metrics_response(request)
-        if not await _admin_auth(request, "read"):
-            return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
-    await _admin_rate(method)
-    return await _metrics_response()
+    return await metrics_http.metrics_endpoint_response(
+        request,
+        admin_tokens=runtime.admin_tokens,
+        resolver=runtime.principal_resolver,
+        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+        repository=_require_runtime(runtime.repository, "repository"),
+        admin_auth=_admin_auth,
+        admin_rate=_admin_rate,
+        principal_rate=_principal_rate,
+        auth_failure_rate=_auth_failure_rate,
+    )
 
 
 @app.api_route(
