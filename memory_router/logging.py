@@ -320,7 +320,9 @@ def _record_write_failure() -> None:
     try:
         sys.stderr.write(f'{{"event":"logging_write_failed","count":{_write_failures}}}\n')
         sys.stderr.flush()
-    except Exception:
+    except (OSError, ValueError):
+        # stderr can be closed or unwritable (e.g. interpreter shutdown); the
+        # counter above still records the pipeline failure.
         pass
 
 
