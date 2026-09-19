@@ -98,6 +98,8 @@ async def postpone(
     at: str,
     stale_seconds: int | None = None,
     max_postpones: int | None = None,
+    *,
+    actor: str | None = None,
 ) -> dict[str, object]:
     async def apply(tx: Tx, item: dict[str, object]) -> dict[str, object]:
         count = int(cast(int, item.get("postpone_count")) or 0)
@@ -111,7 +113,9 @@ async def postpone(
             "UPDATE quarantine_items SET status='postponed',postpone_count=postpone_count+1,updated_at=? WHERE quarantine_id=?",
             (at, quarantine_id),
         )
-        await insert_event(tx, quarantine_id, POSTPONED, at, {"postpone_count": count + 1})
+        await insert_event(
+            tx, quarantine_id, POSTPONED, at, {"postpone_count": count + 1}, actor=actor
+        )
         return stored(await tx.fetchone(_SELECT_ITEM, (quarantine_id,))) or {}
 
     return await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
@@ -246,6 +250,7 @@ async def finish_approve_memory(
     at: str,
     *,
     expected_sha256: str | None = None,
+    actor: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
         item = await require_in_progress(tx, quarantine_id, at, expected_sha256=expected_sha256)
@@ -253,7 +258,7 @@ async def finish_approve_memory(
             raise HttpError(
                 409, "invalid_review_action", "only recalled memories can be marked reviewed"
             )
-        await mark_recalled(tx, item, REVIEWED_ALLOWED, at)
+        await mark_recalled(tx, item, REVIEWED_ALLOWED, at, actor=actor)
 
 
 async def finish_reject_memory(
@@ -262,12 +267,13 @@ async def finish_reject_memory(
     at: str,
     *,
     expected_sha256: str | None = None,
+    actor: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
         item = await require_side_effect_completed(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
-        await mark_recalled(tx, item, REVIEWED_BLOCKED, at)
+        await mark_recalled(tx, item, REVIEWED_BLOCKED, at, actor=actor)
 
 
 async def remove(
@@ -276,12 +282,14 @@ async def remove(
     event_type: str,
     at: str,
     stale_seconds: int | None = None,
+    *,
+    actor: str | None = None,
 ) -> None:
     async def apply(tx: Tx, item: dict[str, object]) -> None:
         await tx.execute(
             "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
         )
-        await insert_event(tx, quarantine_id, event_type, at, {})
+        await insert_event(tx, quarantine_id, event_type, at, {}, actor=actor)
 
     await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
 
@@ -312,6 +320,7 @@ async def confirm_side_effect_applied(
     *,
     expected_sha256: str,
     expected_updated_at: str,
+    actor: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
         await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
@@ -325,6 +334,7 @@ async def confirm_side_effect_applied(
             "review_reconciled",
             at,
             {"action": "confirmed_applied", "previous_status": REVIEW_SIDE_EFFECT_STARTED},
+            actor=actor,
         )
 
 
@@ -335,6 +345,7 @@ async def confirm_side_effect_not_applied(
     *,
     expected_sha256: str,
     expected_updated_at: str,
+    actor: str | None = None,
 ) -> None:
     async with repository.db.transaction() as tx:
         await _require_side_effect_started(tx, quarantine_id, expected_sha256, expected_updated_at)
@@ -348,6 +359,7 @@ async def confirm_side_effect_not_applied(
             "review_reconciled",
             at,
             {"action": "confirmed_not_applied", "previous_status": REVIEW_SIDE_EFFECT_STARTED},
+            actor=actor,
         )
 
 
@@ -489,7 +501,9 @@ async def _require_review_state(
     return item
 
 
-async def mark_recalled(tx: Tx, item: dict[str, Any], status: str, at: str) -> None:
+async def mark_recalled(
+    tx: Tx, item: dict[str, Any], status: str, at: str, *, actor: str | None = None
+) -> None:
     await tx.execute(
         "UPDATE quarantine_items SET status=?,encrypted_envelope=NULL,encrypted_bytes=0,updated_at=? WHERE quarantine_id=?",
         (status, at, item["quarantine_id"]),
@@ -504,4 +518,5 @@ async def mark_recalled(tx: Tx, item: dict[str, Any], status: str, at: str) -> N
             "source_memory_id": item.get("source_memory_id"),
             "source_content_sha256": item.get("source_content_sha256"),
         },
+        actor=actor,
     )
