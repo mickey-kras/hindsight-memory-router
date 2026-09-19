@@ -52,6 +52,8 @@ async def cleanup(
     older_than: str | None,
     expected_count: int,
     at: str,
+    *,
+    actor: str | None = None,
 ) -> dict[str, int]:
     where, params = cleanup_params(scope, reasons, older_than)
     async with repository.db.transaction() as tx:
@@ -77,7 +79,7 @@ async def cleanup(
             await tx.execute(
                 "DELETE FROM quarantine_items WHERE quarantine_id=?", (row["quarantine_id"],)
             )
-            await insert_event(tx, row["quarantine_id"], "cleanup", at, details)
+            await insert_event(tx, row["quarantine_id"], "cleanup", at, details, actor=actor)
         return {"count": len(rows), "encrypted_bytes": total}
 
 

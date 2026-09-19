@@ -36,6 +36,9 @@ SAFE_FIELDS = frozenset(
         "reason",
         "timeout_ms",
         "suppressed",
+        "action",
+        "admin_token_scope",
+        "quarantine_id",
     }
 )
 OUTPUT_FIELDS = frozenset({"event", "level", "timestamp", "logger", *SAFE_FIELDS})
@@ -53,6 +56,7 @@ EVENTS = frozenset(
         "principal_concurrency_unavailable",
         "principal_rate_unavailable",
         "auth_rate_unavailable",
+        "admin_action",
         "admin_rate_unavailable",
         "bank_unavailable",
         "configuration_warning",
@@ -106,6 +110,7 @@ OPERATIONS = (
             "invalidate_memory",
             "manage-concurrency-lease",
             "quarantine_maintenance",
+            "quarantine_review",
             "recall",
             "request",
             "release-concurrency-lease",
@@ -155,6 +160,7 @@ REASONS = frozenset(
 )
 RESERVED_FIELDS = frozenset({"event", "level", "timestamp", "logger"})
 THROTTLED_EVENTS = EVENTS - {
+    "admin_action",
     "application_start_failed",
     "application_started",
     "authorization_decision",
@@ -181,13 +187,19 @@ TEXT_LIMITS = {
     "level": 16,
     "timestamp": 64,
     "event": 64,
+    "action": 16,
+    "admin_token_scope": 16,
+    "quarantine_id": 130,
 }
 INTEGER_FIELDS = frozenset({"upstream_status", "http_status", "timeout_ms", "suppressed", "status"})
 DURATION_FIELDS = frozenset({"request_duration_ms", "operation_duration_ms", "latency_ms"})
 BOOLEAN_FIELDS = frozenset({"partial"})
 DECISIONS = frozenset({"allow", "deny"})
+ADMIN_ACTIONS = frozenset({"approve", "reject", "postpone", "reconcile", "cleanup"})
+ADMIN_TOKEN_SCOPES = frozenset({"read", "review", "cleanup", "legacy"})
 FINGERPRINT_PATTERN = re.compile(r"^(?:[A-Za-z][A-Za-z0-9.]{0,63}|site:[0-9a-f]{16})$")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+QUARANTINE_ID_PATTERN = re.compile(r"^q_[0-9A-Za-z]+_[0-9a-f]{16}$")
 WRITER_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 LOGGER_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,127}$")
 
@@ -242,6 +254,7 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
     _sanitize_pattern_field(
         safe_fields, "request_id", REQUEST_ID_PATTERN, 129, fallback="unavailable"
     )
+    _sanitize_pattern_field(safe_fields, "quarantine_id", QUARANTINE_ID_PATTERN, 130)
     _sanitize_identifier(safe_fields, "writer_id", "writer")
     for id_field in ("principal", "token_key_id", "bank"):
         _sanitize_identifier(safe_fields, id_field, id_field)
@@ -276,6 +289,12 @@ def _sanitize_vocabularies(fields: dict[str, Any]) -> None:
     decision = fields.get("decision")
     if not isinstance(decision, str) or decision not in DECISIONS:
         fields.pop("decision", None)
+    action = fields.get("action")
+    if not isinstance(action, str) or action not in ADMIN_ACTIONS:
+        fields.pop("action", None)
+    token_scope = fields.get("admin_token_scope")
+    if not isinstance(token_scope, str) or token_scope not in ADMIN_TOKEN_SCOPES:
+        fields.pop("admin_token_scope", None)
 
 
 def _sanitize_scope(fields: dict[str, Any]) -> None:

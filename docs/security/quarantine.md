@@ -39,6 +39,8 @@ Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY`, and an
 
 `quarantine_items` stores current encrypted state. `quarantine_events` stores audit history. Existing databases are migrated in place. Legacy rows keep `NULL` dedupe and expiry values, so they are neither merged nor expired automatically.
 
+Admin review mutations (approve, reject, postpone, reconcile, cleanup) record the authenticated actor in the event details: the matched admin token scope (`read`, `review`, `cleanup`, or `legacy`), never the token itself. Each mutation also emits an `admin_action` log event with the same actor identity, the action, and the quarantine id; this audit event is never log-throttled.
+
 There is no Hindsight quarantine bank.
 
 ## Deduplication

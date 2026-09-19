@@ -173,8 +173,17 @@ def stored(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 async def insert_event(
-    tx: Tx, quarantine_id: str, event_type: str, at: str, details: dict[str, Any] | None = None
+    tx: Tx,
+    quarantine_id: str,
+    event_type: str,
+    at: str,
+    details: dict[str, Any] | None = None,
+    *,
+    actor: str | None = None,
 ) -> None:
+    payload = dict(details) if details else {}
+    if actor is not None:
+        payload["actor"] = actor
     await tx.execute(
         "INSERT INTO quarantine_events(event_id,quarantine_id,occurred_at,event_type,details) VALUES(?,?,?,?,?)",
         (
@@ -182,7 +191,7 @@ async def insert_event(
             quarantine_id,
             at,
             event_type,
-            json.dumps(details or {}, separators=(",", ":")),
+            json.dumps(payload, separators=(",", ":")),
         ),
     )
 

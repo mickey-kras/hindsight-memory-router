@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from memory_router import admin as admin_module
-from memory_router.admin import QuarantineAdminService
+from memory_router.admin import AdminActor, QuarantineAdminService
 from memory_router.canonical import sha256_hex
 from memory_router.envelope import canonical_decrypted
 from memory_router.errors import HttpError
@@ -16,6 +17,8 @@ from tests.fakes import (
     QID,
     registry,
 )
+
+ACTOR = AdminActor(token_scope="review")  # noqa: S106 - label, not a secret
 
 
 def exact_item(
@@ -78,6 +81,12 @@ def service(
         hindsight,
         limits,
     )
+
+
+def test_admin_actor_label_identity() -> None:
+    assert AdminActor(token_scope="review").label == "review"  # noqa: S106 - label, not a secret
+    assert AdminActor(principal="agent-1", token_key_id="key-1").label == "agent-1"  # noqa: S106 - label, not a secret
+    assert AdminActor().label == "unknown"
 
 
 @pytest.mark.asyncio
@@ -152,7 +161,7 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(admin_module, "complete_side_effect", complete)
     monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
-    result = await svc.approve(QID, {"decrypted": decrypted})
+    result = await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert result == {"approved": True, "quarantine_id": QID, "target_bank": "main"}
     limits.assert_retain_bounds.assert_called_once()
     limits.consume_retain.assert_awaited_once_with("main")
@@ -171,6 +180,11 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     }
     complete.assert_awaited_once()
     finish.assert_awaited_once()
+    assert finish.await_args.args[3] == {
+        "writer_id": "main",
+        "target_bank": "main",
+        "actor": "review",
+    }
 
     for bad_payload, code in (
         ({}, "invalid_quarantine_payload"),
@@ -183,13 +197,13 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
         bad_item, bad_decrypted = exact_item("retain_request", bad_payload)
         repo.get.return_value = bad_item
         with pytest.raises(HttpError) as exc:
-            await svc.approve(QID, {"decrypted": bad_decrypted})
+            await svc.approve(QID, {"decrypted": bad_decrypted}, ACTOR)
         assert exc.value.code == code
 
     repo.get.return_value = item
     hindsight.retain.side_effect = RuntimeError("upstream")
     with pytest.raises(RuntimeError, match="upstream"):
-        await svc.approve(QID, {"decrypted": decrypted})
+        await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
     interrupt.assert_awaited()
 
 
@@ -206,7 +220,7 @@ async def test_approve_recalled_memory_claims_verified_snapshot_before_marking_a
     finish = AsyncMock()
     monkeypatch.setattr(admin_module, "claim_review", claim)
     monkeypatch.setattr(admin_module, "finish_approve_memory", finish)
-    result = await svc.approve(QID, {"decrypted": decrypted})
+    result = await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert result["allowed"] is True and result["source_memory_id"] == "m1"
     assert claim.await_args.args[4] == 300
     assert claim.await_args.kwargs == {
@@ -218,6 +232,7 @@ async def test_approve_recalled_memory_claims_verified_snapshot_before_marking_a
         QID,
         claim.await_args.args[3],
         expected_sha256=item["sha256"],
+        actor="review",
     )
 
     claim.side_effect = HttpError(
@@ -225,7 +240,7 @@ async def test_approve_recalled_memory_claims_verified_snapshot_before_marking_a
     )
     finish.reset_mock()
     with pytest.raises(HttpError) as changed:
-        await svc.approve(QID, {"decrypted": decrypted})
+        await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert changed.value.code == "quarantine_review_changed"
     finish.assert_not_awaited()
 
@@ -235,20 +250,20 @@ async def test_approve_recalled_memory_claims_verified_snapshot_before_marking_a
     )
     repo.get.return_value = bad_item
     with pytest.raises(HttpError) as invalid:
-        await svc.approve(QID, {"decrypted": bad_decrypted})
+        await svc.approve(QID, {"decrypted": bad_decrypted}, ACTOR)
     assert invalid.value.code == "invalid_quarantine_payload"
     mismatch_item, mismatch_dec = exact_item(
         "recalled_memory", payload, source_bank="other", source_memory_id="m1"
     )
     repo.get.return_value = mismatch_item
     with pytest.raises(HttpError) as mismatch:
-        await svc.approve(QID, {"decrypted": mismatch_dec})
+        await svc.approve(QID, {"decrypted": mismatch_dec}, ACTOR)
     assert mismatch.value.code == "quarantine_source_mismatch"
 
     other_item, other_dec = exact_item("security_event", {})
     repo.get.return_value = other_item
     with pytest.raises(HttpError) as action:
-        await svc.approve(QID, {"decrypted": other_dec})
+        await svc.approve(QID, {"decrypted": other_dec}, ACTOR)
     assert action.value.code == "invalid_review_action"
 
 
@@ -266,28 +281,33 @@ async def test_reject_memory_and_request_paths(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(admin_module, "finish_reject_memory", finish)
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
     monkeypatch.setattr(admin_module, "remove", remove)
-    result = await svc.reject(QID)
+    result = await svc.reject(QID, ACTOR)
     assert result["allowed"] is False
     hindsight.invalidate_memory.assert_awaited_once()
     complete.assert_awaited_once()
     finish.assert_awaited_once()
+    assert finish.await_args.kwargs == {
+        "expected_sha256": memory["sha256"],
+        "actor": "review",
+    }
 
     repo.get.return_value = {**memory, "source_bank": None}
     with pytest.raises(HttpError) as missing:
-        await svc.reject(QID)
+        await svc.reject(QID, ACTOR)
     assert missing.value.code == "quarantine_source_missing"
 
     repo.get.return_value = memory
     hindsight.invalidate_memory.side_effect = RuntimeError("down")
     with pytest.raises(RuntimeError):
-        await svc.reject(QID)
+        await svc.reject(QID, ACTOR)
     interrupt.assert_awaited()
 
     request, _ = exact_item("retain_request", {})
     repo.get.return_value = request
     hindsight.invalidate_memory.side_effect = None
-    assert (await svc.reject(QID))["rejected"] is True
+    assert (await svc.reject(QID, ACTOR))["rejected"] is True
     remove.assert_awaited_once()
+    assert remove.await_args.kwargs == {"actor": "review"}
 
 
 @pytest.mark.asyncio
@@ -296,9 +316,10 @@ async def test_postpone_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     svc, _, _, _ = service(item)
     postpone = AsyncMock(return_value={"postpone_count": 1})
     monkeypatch.setattr(admin_module, "postpone_item", postpone)
-    assert (await svc.postpone(QID))["count"] == 1
+    assert (await svc.postpone(QID, ACTOR))["count"] == 1
     postpone.assert_awaited_once()
     assert postpone.await_args.args[3:] == (300, 2)
+    assert postpone.await_args.kwargs == {"actor": "review"}
 
 
 @pytest.mark.asyncio
@@ -309,7 +330,7 @@ async def test_cleanup_dry_run_commit_and_validation(monkeypatch: pytest.MonkeyP
     perform = AsyncMock(return_value={"count": 2, "encrypted_bytes": 10})
     monkeypatch.setattr(admin_module, "preview_cleanup", preview)
     monkeypatch.setattr(admin_module, "cleanup", perform)
-    assert await svc.cleanup({}) == {"dry_run": True, "count": 2, "encrypted_bytes": 10}
+    assert await svc.cleanup({}, ACTOR) == {"dry_run": True, "count": 2, "encrypted_bytes": 10}
     assert (
         await svc.cleanup(
             {
@@ -317,19 +338,78 @@ async def test_cleanup_dry_run_commit_and_validation(monkeypatch: pytest.MonkeyP
                 "dry_run": False,
                 "expected_count": 2,
                 "older_than": "2026-01-01T00:00:00Z",
-            }
+            },
+            ACTOR,
         )
     )["dry_run"] is False
     perform.assert_awaited_once()
+    assert perform.await_args.kwargs == {"actor": "review"}
     with pytest.raises(HttpError, match="scope"):
-        await svc.cleanup({"scope": "bad"})
+        await svc.cleanup({"scope": "bad"}, ACTOR)
     with pytest.raises(HttpError) as time:
-        await svc.cleanup({"older_than": "bad"})
+        await svc.cleanup({"older_than": "bad"}, ACTOR)
     assert time.value.code == "invalid_cleanup_time"
     for expected in (None, True, -1, "2"):
         with pytest.raises(HttpError) as required:
-            await svc.cleanup({"dry_run": False, "expected_count": expected})
+            await svc.cleanup({"dry_run": False, "expected_count": expected}, ACTOR)
         assert required.value.code == "expected_count_required"
+
+
+@pytest.mark.asyncio
+async def test_admin_mutations_emit_unthrottled_admin_action_audit_events(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    item, decrypted = retain_item()
+    svc, _, _, _ = service(item)
+    monkeypatch.setattr(admin_module, "claim_review", AsyncMock(return_value=item))
+    monkeypatch.setattr(admin_module, "complete_side_effect", AsyncMock())
+    monkeypatch.setattr(admin_module, "finish_approve_retain", AsyncMock())
+    monkeypatch.setattr(
+        admin_module,
+        "preview_cleanup",
+        AsyncMock(return_value={"count": 0, "encrypted_bytes": 0}),
+    )
+    monkeypatch.setattr(
+        admin_module, "cleanup", AsyncMock(return_value={"count": 0, "encrypted_bytes": 0})
+    )
+    caplog.set_level(logging.INFO, logger="memory_router.admin")
+
+    await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
+    await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
+    await svc.cleanup({"dry_run": False, "expected_count": 0}, ACTOR)
+    await svc.cleanup({}, ACTOR)
+
+    records = [record for record in caplog.records if record.msg == "admin_action"]
+    assert [(record.action, record.operation) for record in records] == [  # type: ignore[attr-defined]
+        ("approve", "quarantine_review"),
+        ("approve", "quarantine_review"),
+        ("cleanup", "quarantine_maintenance"),
+    ]
+    for record in records:
+        assert record.admin_token_scope == "review"  # type: ignore[attr-defined]  # noqa: S105 - label, not a secret
+        assert record.route_class == "admin"  # type: ignore[attr-defined]
+        assert record.outcome == "healthy"  # type: ignore[attr-defined]
+    assert records[0].quarantine_id == QID  # type: ignore[attr-defined]
+    assert not hasattr(records[-1], "quarantine_id")
+
+
+@pytest.mark.asyncio
+async def test_failed_admin_mutations_emit_no_admin_action(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    item, _ = exact_item("retain_request", {})
+    svc, repo, _, _ = service(item)
+    repo.get.return_value = None
+    caplog.set_level(logging.INFO, logger="memory_router.admin")
+
+    with pytest.raises(HttpError):
+        await svc.reject(QID, ACTOR)
+    with pytest.raises(HttpError):
+        await svc.postpone(QID, ACTOR)
+
+    assert not [record for record in caplog.records if record.msg == "admin_action"]
 
 
 def test_iso_now_shape() -> None:
@@ -369,7 +449,7 @@ async def test_memory_approve_interrupts_claim_when_finish_fails(
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="finish failed"):
-        await service.approve(QID, {"decrypted": {}})
+        await service.approve(QID, {"decrypted": {}}, ACTOR)
 
     claim.assert_awaited_once()
     finish.assert_awaited_once()
@@ -415,8 +495,8 @@ async def test_retain_finish_failure_resumes_without_replaying_upstream_retain(
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="finish failed"):
-        await service.approve(QID, {"decrypted": {}})
-    result = await service.approve(QID, {"decrypted": {}})
+        await service.approve(QID, {"decrypted": {}}, ACTOR)
+    result = await service.approve(QID, {"decrypted": {}}, ACTOR)
 
     assert result["approved"] is True
     hindsight.retain.assert_awaited_once()
@@ -455,8 +535,8 @@ async def test_reject_finish_failure_resumes_without_replaying_invalidation(
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="finish failed"):
-        await service.reject(QID)
-    result = await service.reject(QID)
+        await service.reject(QID, ACTOR)
+    result = await service.reject(QID, ACTOR)
 
     assert result["allowed"] is False
     hindsight.invalidate_memory.assert_awaited_once()
@@ -501,7 +581,7 @@ async def test_approve_after_requarantine_ignores_preserved_row_created_at(
     monkeypatch.setattr(admin_module, "claim_review", AsyncMock(return_value=item))
     monkeypatch.setattr(admin_module, "complete_side_effect", AsyncMock())
     monkeypatch.setattr(admin_module, "finish_approve_retain", AsyncMock())
-    result = await service.approve(QID, {"decrypted": decrypted})
+    result = await service.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert result["approved"] is True
     hindsight.retain.assert_awaited_once()
 
@@ -539,7 +619,7 @@ async def test_unknown_writer_approval_is_scanned_before_hindsight(
     limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
     service = admin_module.QuarantineAdminService(repository, hindsight, registry(), limits)
     with pytest.raises(HttpError) as exc:
-        await service.approve(QID, {"decrypted": decrypted})
+        await service.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert exc.value.code == "quarantine_security_review_required"
     hindsight.retain.assert_not_awaited()
 
@@ -609,7 +689,7 @@ async def test_retain_upstream_failure_restores_side_effect(
     hindsight.retain.side_effect = RuntimeError("upstream")
 
     with pytest.raises(RuntimeError, match="upstream"):
-        await svc.approve(QID, {"decrypted": decrypted})
+        await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
 
     interrupt.assert_awaited_once()
     complete.assert_not_awaited()
@@ -635,7 +715,7 @@ async def test_retain_ambiguous_timeout_is_not_restored_for_replay(
     )
 
     with pytest.raises(HindsightGatewayError) as exc:
-        await svc.approve(QID, {"decrypted": decrypted})
+        await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
 
     assert exc.value.kind == "timeout"
     interrupt.assert_not_awaited()
@@ -661,8 +741,8 @@ async def test_retain_finish_failure_retries_without_replaying_upstream(
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="db finish"):
-        await svc.approve(QID, {"decrypted": decrypted})
-    result = await svc.approve(QID, {"decrypted": decrypted})
+        await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
+    result = await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
 
     assert result["approved"] is True
     assert hindsight.retain.await_count == 1
@@ -691,8 +771,8 @@ async def test_reject_finish_failure_retries_without_replaying_invalidation(
     monkeypatch.setattr(admin_module, "interrupt_review", interrupt)
 
     with pytest.raises(RuntimeError, match="db finish"):
-        await svc.reject(QID)
-    result = await svc.reject(QID)
+        await svc.reject(QID, ACTOR)
+    result = await svc.reject(QID, ACTOR)
 
     assert result["allowed"] is False
     assert hindsight.invalidate_memory.await_count == 1
@@ -718,6 +798,7 @@ async def test_reconcile_confirmed_not_applied_returns_item_to_postponed(
             "expected_sha256": "sha",
             "expected_updated_at": "claim",
         },
+        ACTOR,
     )
 
     assert result == {
@@ -729,6 +810,7 @@ async def test_reconcile_confirmed_not_applied_returns_item_to_postponed(
     assert confirm.await_args.kwargs == {
         "expected_sha256": "sha",
         "expected_updated_at": "claim",
+        "actor": "review",
     }
     hindsight.retain.assert_not_awaited()
     hindsight.invalidate_memory.assert_not_awaited()
@@ -750,14 +832,20 @@ async def test_reconcile_confirmed_applied_finalizes_each_kind_without_replaying
     result = await svc.reconcile(
         QID,
         {"action": "confirmed_applied", "expected_sha256": "sha", "expected_updated_at": "claim"},
+        ACTOR,
     )
     assert result["status"] == "approved"
     assert confirm.await_args.kwargs == {
         "expected_sha256": "sha",
         "expected_updated_at": "claim",
+        "actor": "review",
     }
     finish_retain.assert_awaited_once()
-    assert finish_retain.await_args.args[3] == {"writer_id": "main", "target_bank": "main"}
+    assert finish_retain.await_args.args[3] == {
+        "writer_id": "main",
+        "target_bank": "main",
+        "actor": "review",
+    }
     assert finish_retain.await_args.kwargs == {"expected_sha256": "sha"}
 
     svc, _, _, _ = service(recalled_item(status="review_side_effect_started"))
@@ -769,14 +857,17 @@ async def test_reconcile_confirmed_applied_finalizes_each_kind_without_replaying
             "expected_sha256": "sha",
             "expected_updated_at": "claim",
         },
+        ACTOR,
     )
     assert result["status"] == "reviewed_blocked"
     finish_block.assert_awaited_once()
+    assert finish_block.await_args.kwargs == {"expected_sha256": "sha", "actor": "review"}
 
     svc, _, _, _ = service(recalled_item(status="review_side_effect_started"))
     result = await svc.reconcile(
         QID,
         {"action": "confirmed_applied", "expected_sha256": "sha", "expected_updated_at": "claim"},
+        ACTOR,
     )
     assert result["status"] == "reviewed_blocked"
     assert finish_block.await_count == 2
@@ -802,7 +893,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
         {"action": "confirmed_applied", "expected_sha256": 1, "expected_updated_at": "claim"},
     ):
         with pytest.raises(HttpError) as bad:
-            await svc.reconcile(QID, body)
+            await svc.reconcile(QID, body, ACTOR)
         assert bad.value.code == "invalid_request"
     confirm.assert_not_awaited()
 
@@ -815,6 +906,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
                 "expected_sha256": "sha",
                 "expected_updated_at": "claim",
             },
+            ACTOR,
         )
     assert state.value.code == "invalid_review_action"
 
@@ -828,6 +920,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
                 "expected_sha256": "sha",
                 "expected_updated_at": "claim",
             },
+            ACTOR,
         )
     assert decision.value.code == "invalid_review_action"
 
@@ -841,6 +934,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
                 "expected_sha256": "sha",
                 "expected_updated_at": "claim",
             },
+            ACTOR,
         )
     assert approve_memory.value.code == "invalid_review_action"
 
@@ -853,6 +947,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
                 "expected_sha256": "sha",
                 "expected_updated_at": "claim",
             },
+            ACTOR,
         )
     assert kind.value.code == "invalid_review_action"
 
@@ -866,6 +961,7 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
                 "expected_sha256": "sha",
                 "expected_updated_at": "claim",
             },
+            ACTOR,
         )
     assert stale.value.code == "quarantine_review_changed"
 

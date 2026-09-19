@@ -11,6 +11,7 @@ from fastapi import Request
 
 from memory_router import app as app_module
 from memory_router import probes
+from memory_router.admin import AdminActor
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
 from memory_router.principals import PrincipalRegistry, PrincipalResolver
@@ -339,6 +340,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
     )
     app_module.runtime.admin = admin
     auth = {"authorization": "Bearer admin"}
+    actor = AdminActor(token_scope="legacy")  # noqa: S106 - label, not a secret
 
     response = await app_module.dispatch(
         "admin/quarantine/queue",
@@ -380,7 +382,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
             request("POST", "/admin/quarantine/cleanup", headers=auth),
         )
     ) == {"count": 0}
-    admin.cleanup.assert_awaited_with({})
+    admin.cleanup.assert_awaited_with({}, actor)
     with pytest.raises(HttpError):
         await app_module.dispatch(
             "admin/quarantine/cleanup",
@@ -405,6 +407,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         )["approved"]
         is True
     )
+    admin.approve.assert_awaited_once_with("q", {}, actor)
     with pytest.raises(HttpError):
         await app_module.dispatch(
             "admin/quarantine/items/q/approve",
@@ -419,6 +422,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         )["rejected"]
         is True
     )
+    admin.reject.assert_awaited_once_with("q", actor)
     assert (
         payload(
             await app_module.dispatch(
@@ -428,6 +432,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         )["postponed"]
         is True
     )
+    admin.postpone.assert_awaited_once_with("q", actor)
     admin.reconcile = AsyncMock(return_value={"reconciled": True})
     assert (
         payload(
@@ -443,7 +448,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         )["reconciled"]
         is True
     )
-    admin.reconcile.assert_awaited_once_with("q", {"action": "confirmed_not_applied"})
+    admin.reconcile.assert_awaited_once_with("q", {"action": "confirmed_not_applied"}, actor)
     with pytest.raises(HttpError):
         await app_module.dispatch(
             "admin/quarantine/items/q/reconcile",
@@ -572,6 +577,66 @@ async def test_reconcile_is_unreachable_with_read_token(
 
     assert response.status_code == 401
     app_module.runtime.admin.reconcile.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_admin_mutation_actor_reflects_matched_token_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        app_module.runtime,
+        "admin_tokens",
+        {"legacy": None, "read": "read", "review": "review", "cleanup": "clean"},
+    )
+    admin = SimpleNamespace(
+        postpone=AsyncMock(return_value={"postponed": True}),
+        cleanup=AsyncMock(return_value={"count": 0}),
+    )
+    app_module.runtime.admin = admin
+
+    response = await app_module.dispatch(
+        "admin/quarantine/items/q/postpone",
+        request(
+            "POST",
+            "/admin/quarantine/items/q/postpone",
+            headers={"authorization": "Bearer review"},
+        ),
+    )
+    assert response.status_code == 200
+    admin.postpone.assert_awaited_once_with("q", AdminActor(token_scope="review"))  # noqa: S106 - label, not a secret
+
+    response = await app_module.dispatch(
+        "admin/quarantine/cleanup",
+        request(
+            "POST",
+            "/admin/quarantine/cleanup",
+            headers={"authorization": "Bearer clean"},
+        ),
+    )
+    assert response.status_code == 200
+    admin.cleanup.assert_awaited_once_with({}, AdminActor(token_scope="cleanup"))  # noqa: S106 - label, not a secret
+
+
+@pytest.mark.asyncio
+async def test_authorized_admin_without_matching_token_slot_fails_loud(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_slot(authorization: str | None, scope: str, tokens: dict[str, str | None]) -> str | None:
+        return None
+
+    monkeypatch.setattr(app_module, "admin_token_scope", no_slot)
+    app_module.runtime.admin = SimpleNamespace(postpone=AsyncMock())
+
+    with pytest.raises(RuntimeError, match="authorized without a matching admin token slot"):
+        await app_module.dispatch(
+            "admin/quarantine/items/q/postpone",
+            request(
+                "POST",
+                "/admin/quarantine/items/q/postpone",
+                headers={"authorization": "Bearer admin"},
+            ),
+        )
+    app_module.runtime.admin.postpone.assert_not_awaited()
 
 
 @pytest.mark.asyncio
