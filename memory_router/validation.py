@@ -10,11 +10,13 @@ from .errors import HttpError
 from .models import RecallBody, RetainBody
 
 _INVALID_RETAIN_BODY_MESSAGE = "retain body is invalid"
+_ROUTING_KEYS = frozenset({"bankId", "bank_id", "bank_ids"})
 
 
 def parse_retain_body(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise _invalid_retain("retain body must be an object")
+    _reject_routing_keys(value, "retain", _invalid_retain)
     try:
         canonical_json(value)
     except ValueError as exc:
@@ -65,6 +67,7 @@ def _parse_recall_like(
 ) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise invalid(f"{label} body must be an object")
+    _reject_routing_keys(value, label, invalid)
     try:
         canonical_json(value)
     except ValueError as exc:
@@ -85,6 +88,14 @@ def _parse_recall_like(
         }
         raise invalid(mapping.get(field, f"{label} body is invalid")) from exc
     return parsed.model_dump(by_alias=True, exclude_unset=True)
+
+
+def _reject_routing_keys(
+    value: dict[str, Any], label: str, invalid: Callable[[str], HttpError]
+) -> None:
+    rejected = sorted(key for key in value if key in _ROUTING_KEYS)
+    if rejected:
+        raise invalid(f"{label} body must not include routing keys: {', '.join(rejected)}")
 
 
 def _first_error_location(exc: ValidationError) -> tuple[Any, ...]:
