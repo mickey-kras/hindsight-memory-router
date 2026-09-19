@@ -20,7 +20,9 @@ Memory Router:
 - maps writer IDs to Hindsight banks;
 - applies authentication, bounds, quotas, safety scans, and encrypted quarantine.
 
-Cross-writer, file-transfer, import/export, webhook, metrics, and deprecated endpoints are denied. Hindsight is the only supported memory backend.
+Cross-writer, file-transfer, import/export, webhook, upstream metrics, and deprecated endpoints are denied. Hindsight is the only supported memory backend.
+
+Setting `MEMORY_ROUTER_METRICS_ENABLED=true` exposes the router's own `GET /metrics` in Prometheus text format. The endpoint is off by default and requires an admin read-scope token, never anonymous access.
 
 ## Quick start
 

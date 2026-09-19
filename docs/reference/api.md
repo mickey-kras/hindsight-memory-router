@@ -24,6 +24,8 @@ or `503 principal_concurrency_unavailable` with `Retry-After: 1`.
 
 Health and `/version` are unauthenticated. `/health/live` is liveness. `/health/ready` is readiness; `/health` is its alias. `/ready` is deprecated. Other router endpoints require authentication unless development-only anonymous access is enabled.
 
+With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` returns router counters in Prometheus text format: authentication failures, HTTP 429 and quarantine 507 rejections by route class, degraded recall bank calls, sweeper failures, and a `review_side_effect_started` gauge refreshed at scrape time. It requires the admin read scope (read, review, or legacy token), shares the admin read rate limit, and is off by default.
+
 Facade contract: `openapi/openclaw.json`.
 
 - `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
@@ -33,7 +35,7 @@ Facade contract: `openapi/openclaw.json`.
 - An empty upstream success body returns JSON `null` only when the route permits it. Otherwise validation returns a typed 502.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 
-Denied: webhooks, file upload/transfer, import/export, `/metrics`, provider-credential probes (`POST /v1/default/banks/{bank_id}/health/llm`), deprecated upstream routes, and cross-writer endpoints (`/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`). `GET /v1/default/banks` is denied in legacy token mode and filtered by the `bank.list` grant in principal mode.
+Denied: webhooks, file upload/transfer, import/export, upstream `/metrics`, provider-credential probes (`POST /v1/default/banks/{bank_id}/health/llm`), deprecated upstream routes, and cross-writer endpoints (`/v1/default/chunks/{id}`, `/v1/default/files/download/{key}`, `/v1/bank-template-schema`). `GET /v1/default/banks` is denied in legacy token mode and filtered by the `bank.list` grant in principal mode.
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 

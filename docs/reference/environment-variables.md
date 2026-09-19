@@ -7,6 +7,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_PORT`                       |                        `8890` | HTTP listener port                                              |
 | `MEMORY_ROUTER_DEPLOYMENT_MODE`            |                      `single` | `single` or `cluster`                                           |
 | `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT`  |                       `false` | Confirms external shared admin limiting in cluster mode         |
+| `MEMORY_ROUTER_METRICS_ENABLED`            |                       `false` | Expose `/metrics` (Prometheus text) behind admin read auth      |
 | `MEMORY_ROUTER_TOKEN`                      |                          none | Router bearer token; absent means router endpoints fail closed  |
 | `MEMORY_ROUTER_ADMIN_READ_TOKEN`           |                          none | Admin read scope                                                |
 | `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`         |                          none | Admin review scope                                              |

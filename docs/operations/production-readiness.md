@@ -26,7 +26,7 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Build/publish artifact identity | Implemented; live validation pending | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
 | SonarQube Community gate | Implemented; live validation pending | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
 | Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
-| Production metrics/alerts | Needs improvement | No first-class metrics surface for key degradation/security states |
+| Production metrics/alerts | Partial | Opt-in `/metrics` endpoint covers the minimum counter set; latency/utilization metrics and alert rules remain pending |
 
 ## Blocker: ambiguous review side-effect reconciliation
 
@@ -104,14 +104,19 @@ Health endpoint semantics are now complete:
 
 The readiness checks run router storage and Hindsight health concurrently. Success returns Hindsight's validated supported health fields; unknown upstream fields are omitted. Either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
 
-Operational telemetry is still incomplete. Recommended metrics/alerts include:
+Operational telemetry is partially complete. With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` (admin read scope, Prometheus text format) exposes:
+
+- authentication failures by route class;
+- HTTP 429 responses by route class;
+- quarantine 507 admission rejections by route class;
+- degraded Hindsight recall bank calls;
+- maintenance/sweeper failures;
+- review items in `review_side_effect_started` (gauge refreshed at scrape time).
+
+Still recommended on top of that minimum set:
 
 - Hindsight availability and latency;
-- degraded recall bank count;
-- quarantine utilization and admission failures;
-- Hindsight and quarantine rate-limit rejects;
-- review items in `review_side_effect_started`;
-- maintenance/sweeper failures;
+- quarantine utilization;
 - request count, latency, and status by route class.
 
 An alert on any sustained `review_side_effect_started` item is especially important until explicit reconciliation exists.
@@ -126,6 +131,6 @@ Work through unresolved items in this order:
 2. provenance source correction;
 3. validate the build/publish and SonarQube gates on the first `main` run;
 4. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
-5. production metrics and alerts.
+5. production metrics and alerts (minimum counter set shipped behind the opt-in `/metrics`; latency/utilization metrics pending).
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.
