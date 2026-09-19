@@ -367,6 +367,7 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         "admin",
         "pathname",
         "method",
+        "actor",
     ]
 
     authorized = functions["_authorized_admin_response"]
@@ -402,6 +403,7 @@ def test_admin_dispatch_selectors_are_bound_to_integration_coverage() -> None:
         "admin",
         "method",
         "match",
+        "actor",
     ]
     response_guards = [
         statement
