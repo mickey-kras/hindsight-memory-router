@@ -618,6 +618,30 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
 
 
 @pytest.mark.asyncio
+async def test_authorized_admin_without_matching_token_slot_fails_loud(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def no_slot(
+        authorization: str | None, scope: str, tokens: dict[str, str | None]
+    ) -> str | None:
+        return None
+
+    monkeypatch.setattr(app_module, "admin_token_scope", no_slot)
+    app_module.runtime.admin = SimpleNamespace(postpone=AsyncMock())
+
+    with pytest.raises(RuntimeError, match="authorized without a matching admin token slot"):
+        await app_module.dispatch(
+            "admin/quarantine/items/q/postpone",
+            request(
+                "POST",
+                "/admin/quarantine/items/q/postpone",
+                headers={"authorization": "Bearer admin"},
+            ),
+        )
+    app_module.runtime.admin.postpone.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_mis_scoped_valid_admin_token_is_logged_and_rate_limited(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

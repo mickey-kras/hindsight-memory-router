@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True, slots=True)
 class AdminActor:
+    # principal/token_key_id are forward API for principal-mode admin mutations; token mode sets token_scope only.
     token_scope: str | None = None
     principal: str | None = None
     token_key_id: str | None = None

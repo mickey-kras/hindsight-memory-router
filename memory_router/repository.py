@@ -285,10 +285,10 @@ class QuarantineRepository:
         return [
             {
                 "bank_id": str(row["bank_id"]),
-                "total_items": int(row["total_items"] or 0),
-                "pending_items": int(row["pending_items"] or 0),
-                "postponed_items": int(row["postponed_items"] or 0),
-                "encrypted_bytes": int(row["encrypted_bytes"] or 0),
+                "total_items": int(row.get("total_items") or 0),
+                "pending_items": int(row.get("pending_items") or 0),
+                "postponed_items": int(row.get("postponed_items") or 0),
+                "encrypted_bytes": int(row.get("encrypted_bytes") or 0),
             }
             for row in rows
         ]
