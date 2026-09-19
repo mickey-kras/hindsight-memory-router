@@ -173,8 +173,17 @@ def stored(row: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 async def insert_event(
-    tx: Tx, quarantine_id: str, event_type: str, at: str, details: dict[str, Any] | None = None
+    tx: Tx,
+    quarantine_id: str,
+    event_type: str,
+    at: str,
+    details: dict[str, Any] | None = None,
+    *,
+    actor: str | None = None,
 ) -> None:
+    payload = dict(details) if details else {}
+    if actor is not None:
+        payload["actor"] = actor
     await tx.execute(
         "INSERT INTO quarantine_events(event_id,quarantine_id,occurred_at,event_type,details) VALUES(?,?,?,?,?)",
         (
@@ -182,7 +191,7 @@ async def insert_event(
             quarantine_id,
             at,
             event_type,
-            json.dumps(details or {}, separators=(",", ":")),
+            json.dumps(payload, separators=(",", ":")),
         ),
     )
 
@@ -276,10 +285,10 @@ class QuarantineRepository:
         return [
             {
                 "bank_id": str(row["bank_id"]),
-                "total_items": int(row.get("total_items") or 0),
-                "pending_items": int(row.get("pending_items") or 0),
-                "postponed_items": int(row.get("postponed_items") or 0),
-                "encrypted_bytes": int(row.get("encrypted_bytes") or 0),
+                "total_items": int(row["total_items"] or 0),
+                "pending_items": int(row["pending_items"] or 0),
+                "postponed_items": int(row["postponed_items"] or 0),
+                "encrypted_bytes": int(row["encrypted_bytes"] or 0),
             }
             for row in rows
         ]
