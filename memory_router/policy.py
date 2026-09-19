@@ -161,7 +161,7 @@ class RouterPolicy:
                 writer_id, source, "suspicious_query", body, read_banks, scan
             )
             return {"results": []}
-        responses = await self._recall_from_banks(writer_id, read_banks, body)
+        responses, failed_banks = await self._recall_from_banks(writer_id, read_banks, body)
         combined: dict[str, Any] = {
             "results": await self._allowed_recall_results(writer_id, source, responses)
         }
@@ -169,6 +169,9 @@ class RouterPolicy:
             present, value = await self._merged_recall_field(writer_id, source, responses, field)
             if present:
                 combined[field] = value
+        if failed_banks:
+            combined["partial"] = True
+            combined["failed_banks"] = failed_banks
         return combined
 
     async def _allowed_recall_results(
@@ -251,22 +254,24 @@ class RouterPolicy:
 
     async def _recall_from_banks(
         self, writer_id: str, banks: list[str], body: dict[str, Any]
-    ) -> list[tuple[str, dict[str, Any]]]:
+    ) -> tuple[list[tuple[str, dict[str, Any]]], int]:
         outcomes = await asyncio.gather(
             *(self.hindsight.recall(bank, body) for bank in banks), return_exceptions=True
         )
         responses: list[tuple[str, dict[str, Any]]] = []
+        failed_banks = 0
         for bank, outcome in zip(banks, outcomes, strict=False):
             if isinstance(outcome, BaseException):
                 if not isinstance(outcome, HindsightGatewayError):
                     raise outcome
+                failed_banks += 1
                 self._log_degradation(
                     "bank_unavailable",
                     {"writer_id": writer_id, "bank_id": bank, **outcome.details()},
                 )
                 continue
             responses.append((bank, cast(dict[str, Any], outcome)))
-        return responses
+        return responses, failed_banks
 
     async def _allow_recall_supplemental_or_degrade(
         self,

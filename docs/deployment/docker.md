@@ -29,6 +29,14 @@ docker compose up -d
 
 Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys. The `${QUARANTINE_PUBLIC_KEY:?...}` guard is evaluated by Compose itself, so commands such as `docker compose down`, `ps`, and `logs` also require the variable. Keep `QUARANTINE_PUBLIC_KEY` in `.env` as the canonical Compose location.
 
+## Network exposure and TLS
+
+Compose keeps the router container listener on `0.0.0.0` inside the container but publishes the port on host loopback only: `127.0.0.1:${MEMORY_ROUTER_PORT:-8890}`. Non-container runs bind `127.0.0.1` by default via `MEMORY_ROUTER_HOST`.
+
+The API is plaintext HTTP: bearer tokens and memory content are visible to anyone who can reach the port. The router does not terminate TLS itself. Before exposing the API beyond the host, put a TLS terminator in front and keep the router on loopback or an internal network. Any terminator works; common options are a Caddy or Traefik reverse proxy with automatic certificates, or `tailscale serve` for tailnet-only exposure. The OpenClaw integrations client already requires an `https` router URL, so a terminator is mandatory on that path.
+
+To expose the router on a LAN or tailnet interface, set the publish address in Compose (for example a specific interface address instead of `127.0.0.1`) and set `MEMORY_ROUTER_HOST` explicitly for non-container runs. Anonymous mode (`MEMORY_ROUTER_ALLOW_ANONYMOUS=true`) is rejected at startup on non-loopback binds.
+
 ## Container healthcheck
 
 The image includes a readiness healthcheck implemented with Python stdlib only. It checks the configured router port and canonical readiness endpoint, and explicitly disables environment proxy discovery so local readiness never depends on `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` configuration:

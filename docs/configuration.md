@@ -4,11 +4,15 @@ Memory Router ships with safe defaults. Environment variables override them. `QU
 
 Use `.env.example` as the complete reference. Docker Compose reads your values from `.env`.
 
+## Listener
+
+The router binds `127.0.0.1:8890` by default. Set `MEMORY_ROUTER_HOST` and `MEMORY_ROUTER_PORT` to change the bind. The shipped Compose file keeps the container listener reachable but publishes the port on host loopback only. Terminate TLS in front of the router before exposing the API beyond the host; see [Docker deployment](deployment/docker.md).
+
 ## Credentials
 
 Credentials have no defaults. Router and admin endpoints fail closed until you set the required tokens.
 
-`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` is a development-only override. Explicit boolean values must be `true` or `false`.
+`MEMORY_ROUTER_ALLOW_ANONYMOUS=true` is a development-only override. Startup rejects it when `MEMORY_ROUTER_HOST` is not a loopback address. Explicit boolean values must be `true` or `false`.
 
 ## Registry
 

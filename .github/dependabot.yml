@@ -31,6 +31,34 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: cron
+      cronjob: "3 9 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directory: /.github/scripts
+    schedule:
+      interval: cron
+      cronjob: "3 11 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 3
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -45,11 +73,25 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
-  - package-ecosystem: docker
+  - package-ecosystem: docker-compose
     directory: /tests/integration
     schedule:
       interval: cron
       cronjob: "3 5 * * *"
+    cooldown:
+      default-days: 7
+    rebase-strategy: auto
+    open-pull-requests-limit: 2
+    groups:
+      docker-minor-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: docker-compose
+    directory: /docs
+    schedule:
+      interval: cron
+      cronjob: "3 13 * * *"
     cooldown:
       default-days: 7
     rebase-strategy: auto

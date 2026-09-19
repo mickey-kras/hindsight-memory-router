@@ -50,7 +50,7 @@ Normal startup uses built-in defaults:
 
 - deployment mode: `single`;
 - quarantine database: `sqlite:./data/quarantine.db`;
-- listener port: `8890`;
+- listener bind and port: `127.0.0.1:8890` (`MEMORY_ROUTER_HOST` / `MEMORY_ROUTER_PORT`);
 - one neutral `main` writer that reads and writes only the `main` Hindsight bank;
 - bounded retain/recall, quarantine, timeout, capacity, and retention settings.
 

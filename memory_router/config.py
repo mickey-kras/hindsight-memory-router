@@ -81,6 +81,14 @@ def _exact_boolean(value: Any) -> bool:
     raise ValueError("must be true or false")
 
 
+def _bind_host(value: Any) -> str:
+    if value == "":
+        raise PydanticUseDefault()
+    if not isinstance(value, str):
+        raise ValueError("must be a string")
+    return value
+
+
 NonNegativeInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=0)]
 PositiveInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=1)]
 ExactBool = Annotated[bool, BeforeValidator(_exact_boolean)]
@@ -92,6 +100,9 @@ class RouterSettings(BaseSettings):
         extra="ignore",
     )
 
+    memory_router_host: Annotated[str, BeforeValidator(_bind_host)] = Field(
+        "127.0.0.1", validation_alias="MEMORY_ROUTER_HOST"
+    )
     memory_router_port: PositiveInt = Field(8890, validation_alias="MEMORY_ROUTER_PORT")
     memory_router_max_body_bytes: PositiveInt = Field(
         1_048_576, validation_alias="MEMORY_ROUTER_MAX_BODY_BYTES"
@@ -252,6 +263,10 @@ class RouterSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_deployment(self) -> RouterSettings:
+        if self.memory_router_allow_anonymous and not is_loopback_host(self.memory_router_host):
+            raise ValueError(
+                "MEMORY_ROUTER_ALLOW_ANONYMOUS=true requires a loopback MEMORY_ROUTER_HOST"
+            )
         if (
             self.memory_router_deployment_mode == "cluster"
             and not self.quarantine_database_url.startswith(("postgres://", "postgresql://"))
@@ -380,7 +395,7 @@ def _forbidden_quarantine_variable(name: str) -> bool:
     return name.startswith("QUARANTINE") and "UNWRAP" in name
 
 
-def _loopback_host(host: str | None) -> bool:
+def is_loopback_host(host: str | None) -> bool:
     if host == "localhost":
         return True
     try:
@@ -407,7 +422,7 @@ def assert_auth_environment(settings: RouterSettings) -> None:
     _warn_configuration(
         [
             (
-                hindsight_url.scheme == "http" and not _loopback_host(hindsight_url.hostname),
+                hindsight_url.scheme == "http" and not is_loopback_host(hindsight_url.hostname),
                 "insecure-hindsight-transport",
             )
         ]
