@@ -40,6 +40,6 @@ Use `python -m memory_router` or the `memory-router` script. Direct Uvicorn CLI 
 
 `logging_contract_violation` is intentionally unthrottled so developer contract bugs fail loud.
 
-Not logged per request: quarantine 413/429/507 responses, general 429 responses, or aged `review_side_effect_started` items. Track these with metrics; see [Production readiness](production-readiness.md).
+Not logged per request: successful authentications, legacy-mode memory operations, quarantine 413/429/507 responses, general 429 responses, or aged `review_side_effect_started` items. Track these with metrics; see [Production readiness](production-readiness.md).
 
 `structlog==26.1.0` and all runtime packages are hash-pinned.

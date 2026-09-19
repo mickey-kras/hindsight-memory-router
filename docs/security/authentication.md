@@ -55,7 +55,7 @@ availability is required for authenticated principal requests.
 
 ### Audit
 
-`authorization_decision`: request ID, principal, key ID, bank, scope, decision, status, latency, source. No token, digest, or Authorization header.
+`authorization_decision`: request ID, principal, key ID, bank, scope, decision, status, latency, source. No token, digest, or Authorization header. Successful authentications are not logged; failed attempts emit `authentication_failed`.
 
 ### Rotation
 
@@ -69,6 +69,8 @@ availability is required for authenticated principal requests.
 `MEMORY_ROUTER_TOKEN` protects router endpoints when principal mode is off. Missing token fails closed unless `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`. Anonymous mode is development-only: startup rejects it unless `MEMORY_ROUTER_HOST` is a loopback address.
 
 `/version` and health endpoints are unauthenticated.
+
+Legacy-mode memory operations are not logged on success; blocked or suspicious operations land in the quarantine review queue.
 
 ## Quarantine admin
 
