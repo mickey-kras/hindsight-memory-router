@@ -24,17 +24,36 @@ def router_authorized(authorization: str | None, token: str | None, allow_anonym
     return bearer_matches(authorization, token) if token else allow_anonymous
 
 
-def admin_authorized(authorization: str | None, scope: str, tokens: dict[str, str | None]) -> bool:
-    allowed: list[str] = []
-    if legacy := tokens.get("legacy"):
-        allowed.append(legacy)
+def _admin_slot_candidates(scope: str, tokens: dict[str, str | None]) -> list[tuple[str, str | None]]:
+    candidates: list[tuple[str, str | None]] = [("legacy", tokens.get("legacy"))]
     if scope == "read":
-        allowed.extend(value for value in (tokens.get("read"), tokens.get("review")) if value)
-    elif scope == "review" and (review := tokens.get("review")):
-        allowed.append(review)
-    elif scope == "cleanup" and (cleanup := tokens.get("cleanup")):
-        allowed.append(cleanup)
-    return any(bearer_matches(authorization, token) for token in allowed)
+        candidates.extend([("read", tokens.get("read")), ("review", tokens.get("review"))])
+    elif scope == "review":
+        candidates.append(("review", tokens.get("review")))
+    elif scope == "cleanup":
+        candidates.append(("cleanup", tokens.get("cleanup")))
+    return candidates
+
+
+def admin_authorized(authorization: str | None, scope: str, tokens: dict[str, str | None]) -> bool:
+    return any(
+        bearer_matches(authorization, token)
+        for _, token in _admin_slot_candidates(scope, tokens)
+        if token
+    )
+
+
+def admin_token_scope(
+    authorization: str | None, scope: str, tokens: dict[str, str | None]
+) -> str | None:
+    return next(
+        (
+            slot
+            for slot, token in _admin_slot_candidates(scope, tokens)
+            if bearer_matches(authorization, token)
+        ),
+        None,
+    )
 
 
 def admin_token_recognized(authorization: str | None, tokens: dict[str, str | None]) -> bool:
