@@ -25,4 +25,4 @@ Execute with the count returned by the preview:
 }
 ```
 
-Cleanup returns `409` if the selected set changes after preview. Event retention is controlled separately by `QUARANTINE_EVENT_RETENTION_DAYS`.
+Cleanup returns `409` if the selected set changes after preview. Event retention is controlled separately by `QUARANTINE_EVENT_RETENTION_DAYS`. Set `QUARANTINE_EVENT_EXPORT_PATH` to append expired events to a JSONL file before pruning deletes them; a failed export aborts the prune, so events are never deleted unexported.

@@ -582,6 +582,45 @@ async def test_postgres_rate_limiter_paths() -> None:
     assert await limiter.with_identity_lock("id", op) == "locked"
 
 
+def test_plaintext_upstream_transport_fails_closed_outside_private_hosts(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    for url in (
+        "http://8.8.8.8:8888",
+        "http://hindsight.example.com",
+        "http://134744072:8888",
+        "http://0x08080808:8888",
+    ):
+        settings = config.RouterSettings(HINDSIGHT_BASE_URL=url)
+        with pytest.raises(RuntimeError, match="must use https"):
+            config.assert_auth_environment(settings)
+
+    monkeypatch.setenv("HINDSIGHT_REQUIRE_SECURE_TRANSPORT", "true")
+    settings = config.load_settings()
+    assert settings.hindsight_require_secure_transport is True
+    with pytest.raises(RuntimeError, match="requires an https HINDSIGHT_BASE_URL"):
+        config.assert_auth_environment(settings)
+    monkeypatch.delenv("HINDSIGHT_REQUIRE_SECURE_TRANSPORT")
+
+    caplog.clear()
+    for url in (
+        "http://hindsight:8888",
+        "http://10.0.0.5:8888",
+        "http://192.168.1.20:8888",
+        "http://169.254.1.1:8888",
+        "http://[fd00::1]:8888",
+        "http://hindsight.internal:8888",
+        "https://hindsight.example.com",
+    ):
+        config.assert_auth_environment(config.RouterSettings(HINDSIGHT_BASE_URL=url))
+    warned = {
+        getattr(record, "reason", None)
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    }
+    assert "insecure-hindsight-transport" in warned
+
+
 @pytest.mark.parametrize("host", ["localhost", "127.0.0.1", "127.0.0.2", "[::1]"])
 def test_loopback_http_transport_does_not_warn(host: str, caplog: pytest.LogCaptureFixture) -> None:
     settings = config.RouterSettings(HINDSIGHT_BASE_URL=f"http://{host}:8888")

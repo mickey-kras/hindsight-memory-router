@@ -5,6 +5,7 @@ import hmac
 import logging
 from typing import Any
 
+from . import metrics
 from .logging import log_event
 from .observability import current_request_id
 from .timestamps import iso_now
@@ -65,6 +66,7 @@ class AuthFailureAuditor:
         self.store = store
 
     def log_failure(self, route_class: str | None = None, *, reason: str | None = None) -> None:
+        metrics.record_auth_failure(route_class or "unmatched")
         log_event(
             logger,
             "warning",

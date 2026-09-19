@@ -8,6 +8,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_PORT`                       |                        `8890` | HTTP listener port                                              |
 | `MEMORY_ROUTER_DEPLOYMENT_MODE`            |                      `single` | `single` or `cluster`                                           |
 | `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT`  |                       `false` | Confirms external shared admin limiting in cluster mode         |
+| `MEMORY_ROUTER_METRICS_ENABLED`            |                       `false` | Expose `/metrics` (Prometheus text) behind admin read auth      |
 | `MEMORY_ROUTER_TOKEN`                      |                          none | Router bearer token; absent means router endpoints fail closed  |
 | `MEMORY_ROUTER_ADMIN_READ_TOKEN`           |                          none | Admin read scope                                                |
 | `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`         |                          none | Admin review scope                                              |
@@ -47,6 +48,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
+| `QUARANTINE_EVENT_EXPORT_PATH`             |                        unset | JSONL file receiving audit events before retention pruning      |
 | `QUARANTINE_WRAP_PROVIDER`                 |                    `rsa-oaep` | DEK wrap provider: `rsa-oaep` or `https-sidecar`                |
 | `QUARANTINE_WRAP_SIDECAR_URL`              |                       unset | Wrap sidecar base URL; https required (loopback http allowed)   |
 | `QUARANTINE_WRAP_SIDECAR_TOKEN`            |                       unset | Optional bearer token for the wrap sidecar                      |

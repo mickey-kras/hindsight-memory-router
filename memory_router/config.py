@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from collections.abc import Iterable
 from ipaddress import ip_address
 from pathlib import Path
@@ -146,6 +147,9 @@ class RouterSettings(BaseSettings):
     memory_router_external_admin_rate_limit: ExactBool = Field(
         False, validation_alias="MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT"
     )
+    memory_router_metrics_enabled: ExactBool = Field(
+        False, validation_alias="MEMORY_ROUTER_METRICS_ENABLED"
+    )
 
     quarantine_database_url: str = Field(
         DEFAULT_DATABASE_URL,
@@ -194,6 +198,7 @@ class RouterSettings(BaseSettings):
     quarantine_event_retention_days: NonNegativeInt = Field(
         90, validation_alias="QUARANTINE_EVENT_RETENTION_DAYS"
     )
+    quarantine_event_export_path: str = Field("", validation_alias="QUARANTINE_EVENT_EXPORT_PATH")
     quarantine_wrap_provider: Literal["rsa-oaep", "https-sidecar"] = Field(
         "rsa-oaep", validation_alias="QUARANTINE_WRAP_PROVIDER"
     )
@@ -216,6 +221,9 @@ class RouterSettings(BaseSettings):
 
     hindsight_base_url: str = Field("http://hindsight:8888", validation_alias="HINDSIGHT_BASE_URL")
     hindsight_api_key: SecretStr | None = Field(None, validation_alias="HINDSIGHT_API_KEY")
+    hindsight_require_secure_transport: ExactBool = Field(
+        False, validation_alias="HINDSIGHT_REQUIRE_SECURE_TRANSPORT"
+    )
     hindsight_timeout_ms: PositiveInt = Field(10_000, validation_alias="HINDSIGHT_TIMEOUT_MS")
     hindsight_max_response_bytes: PositiveInt = Field(
         4 * 1024 * 1024, validation_alias="HINDSIGHT_MAX_RESPONSE_BYTES"
@@ -404,6 +412,24 @@ def is_loopback_host(host: str | None) -> bool:
         return False
 
 
+_OBFUSCATED_IPV4_HOST_RE = re.compile(r"\d+|0[xX][0-9a-fA-F]+")
+
+
+def is_private_upstream_host(host: str | None) -> bool:
+    if is_loopback_host(host):
+        return True
+    if not host:
+        return False
+    try:
+        return ip_address(host).is_private
+    except ValueError:
+        # host is a DNS name rather than an IP literal; apply hostname rules.
+        pass
+    if _OBFUSCATED_IPV4_HOST_RE.fullmatch(host):
+        return False
+    return host.endswith(".internal") or "." not in host
+
+
 def _warn_configuration(conditions: Iterable[tuple[bool, str]]) -> None:
     for condition, reason in conditions:
         if condition:
@@ -419,6 +445,16 @@ def _warn_configuration(conditions: Iterable[tuple[bool, str]]) -> None:
 
 def assert_auth_environment(settings: RouterSettings) -> None:
     hindsight_url = urlsplit(settings.hindsight_base_url)
+    if hindsight_url.scheme == "http":
+        if settings.hindsight_require_secure_transport:
+            raise RuntimeError(
+                "HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true requires an https HINDSIGHT_BASE_URL"
+            )
+        if not is_private_upstream_host(hindsight_url.hostname):
+            raise RuntimeError(
+                "HINDSIGHT_BASE_URL must use https outside private networks"
+                " and docker service names"
+            )
     _warn_configuration(
         [
             (

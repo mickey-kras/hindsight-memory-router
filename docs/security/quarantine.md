@@ -55,7 +55,7 @@ Quarantine item size, pending-item count, per-writer capacity, encrypted-byte ca
 
 Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
 
-Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry, so export events first when long-term audit history is required.
+Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry. Set `QUARANTINE_EVENT_EXPORT_PATH` to append each pruned batch to a JSONL export file before deletion when long-term audit history is required.
 
 Limit failures remain fail-closed:
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from .errors import HttpError
@@ -100,14 +101,41 @@ async def sweep_expired(repository: QuarantineRepository, at: str) -> int:
         return len(rows)
 
 
-async def prune_events_before(repository: QuarantineRepository, cutoff: str, at: str) -> int:
+EXPORT_EVENT_KEYS = ("event_id", "quarantine_id", "occurred_at", "event_type", "details")
+
+_EVENT_EXPORT_SELECT = """
+SELECT event_id, quarantine_id, occurred_at, event_type, details
+FROM quarantine_events
+WHERE occurred_at<? ORDER BY occurred_at
+LIMIT ?
+"""
+
+_EVENT_ID_SELECT = (
+    "SELECT event_id FROM quarantine_events WHERE occurred_at<? ORDER BY occurred_at LIMIT ?"
+)
+
+
+def append_event_export(path: str, rows: list[dict[str, Any]]) -> None:
+    with open(path, "a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(
+                json.dumps({key: str(row[key]) for key in EXPORT_EVENT_KEYS}, separators=(",", ":"))
+                + "\n"
+            )
+
+
+async def prune_events_before(
+    repository: QuarantineRepository, cutoff: str, at: str, export_path: str | None = None
+) -> int:
     total = 0
     while True:
         async with repository.db.transaction() as tx:
-            rows = await tx.fetchall(
-                "SELECT event_id FROM quarantine_events WHERE occurred_at<? ORDER BY occurred_at LIMIT ?",
-                (cutoff, BATCH_LIMIT),
-            )
+            if export_path is None:
+                rows = await tx.fetchall(_EVENT_ID_SELECT, (cutoff, BATCH_LIMIT))
+            else:
+                rows = await tx.fetchall(_EVENT_EXPORT_SELECT, (cutoff, BATCH_LIMIT))
+                if rows:
+                    append_event_export(export_path, rows)
             for row in rows:
                 await tx.execute(
                     "DELETE FROM quarantine_events WHERE event_id=?", (row["event_id"],)
