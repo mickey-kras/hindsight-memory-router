@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import traceback
+from collections.abc import Callable
 from pathlib import Path
 from secrets import token_urlsafe
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,7 +23,7 @@ from memory_router.rate_limit import (
     PostgresRateLimiter,
     _PostgresSession,
 )
-from memory_router.validation import parse_recall_body, parse_retain_body
+from memory_router.validation import parse_recall_body, parse_reflect_body, parse_retain_body
 from tests.fakes import (
     FakeDatabase,
 )
@@ -369,6 +371,24 @@ def test_recall_validation_success() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("parse", "body", "code"),
+    [
+        (parse_retain_body, {"items": [{"content": "x"}]}, "invalid_retain_body"),
+        (parse_recall_body, {"query": "x"}, "invalid_recall_body"),
+        (parse_reflect_body, {"query": "x"}, "invalid_reflect_body"),
+    ],
+)
+@pytest.mark.parametrize("key", ["bankId", "bank_id", "bank_ids"])
+def test_parse_rejects_routing_keys(
+    parse: Callable[[Any], dict[str, Any]], body: dict[str, Any], code: str, key: str
+) -> None:
+    with pytest.raises(HttpError, match="must not include routing keys") as raised:
+        parse({**body, key: "other-bank"})
+    assert raised.value.status == 400
+    assert raised.value.code == code
+
+
 def test_dedupe_helpers_and_shapes() -> None:
     key = dedupe.request_dedupe_key("retain", "main", "x", {"a": 1})
     assert key == dedupe.request_dedupe_key("retain", "main", "x", {"a": 1})
@@ -460,7 +480,7 @@ async def test_in_memory_rate_limiter_count_distinct_expiry_and_lock() -> None:
     limiter = InMemoryRateLimiter()
     await limiter.consume_many_distinct(
         [Bucket("b", 1, 10), Bucket("off", 0, 1)],
-        [Distinct("s", "a", 1, 10), Distinct("off", "x", 0, 1)],
+        [Distinct("s", "a", 1, 10), Distinct("off", "x", 1, 10)],
         at_ms=10,
     )
     with pytest.raises(HttpError):
