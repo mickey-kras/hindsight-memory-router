@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import hmac
+import logging
+from dataclasses import dataclass
 from typing import Any, cast
 
 from .canonical import sha256_hex
 from .envelope import QUARANTINE_ID_RE, canonical_decrypted, parse_decrypted
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
+from .logging import log_event
 from .maintenance import cleanup, preview_cleanup
+from .observability import current_request_id
 from .policy import prepare_retain_body
 from .repository import (
     PENDING,
@@ -37,6 +41,37 @@ from .review_repository import postpone as postpone_item
 from .security import scan_retain_body
 from .timestamps import iso_now, parse_iso
 from .validation import parse_retain_body
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class AdminActor:
+    token_scope: str | None = None
+    principal: str | None = None
+    token_key_id: str | None = None
+
+    @property
+    def label(self) -> str:
+        return self.principal or self.token_scope or "unknown"
+
+
+def _log_admin_action(action: str, actor: AdminActor, quarantine_id: str | None = None) -> None:
+    log_event(
+        logger,
+        "info",
+        "admin_action",
+        request_id=current_request_id(),
+        operation="quarantine_maintenance" if action == "cleanup" else "quarantine_review",
+        route_class="admin",
+        action=action,
+        quarantine_id=quarantine_id,
+        admin_token_scope=actor.token_scope,
+        principal=actor.principal,
+        token_key_id=actor.token_key_id,
+        source="http",
+        outcome="healthy",
+    )
 
 
 class QuarantineAdminService:
@@ -81,19 +116,26 @@ class QuarantineAdminService:
         record = {key: value for key, value in item.items() if key != "encrypted"}
         return {"record": record, "encrypted": item["encrypted"]}
 
-    async def approve(self, quarantine_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def approve(
+        self, quarantine_id: str, body: dict[str, Any], actor: AdminActor
+    ) -> dict[str, Any]:
         item = await self._require_claim_candidate(quarantine_id)
         decrypted = self._verify_exact(item, body.get("decrypted"))
         if item["kind"] == "retain_request":
-            return await self._approve_retain(quarantine_id, item, decrypted)
-        if item["kind"] == "recalled_memory":
-            return await self._approve_recalled_memory(quarantine_id, item, decrypted)
-        raise HttpError(
-            409, "invalid_review_action", "this quarantine item cannot be approved into memory"
-        )
+            result = await self._approve_retain(quarantine_id, item, decrypted, actor.label)
+        elif item["kind"] == "recalled_memory":
+            result = await self._approve_recalled_memory(
+                quarantine_id, item, decrypted, actor.label
+            )
+        else:
+            raise HttpError(
+                409, "invalid_review_action", "this quarantine item cannot be approved into memory"
+            )
+        _log_admin_action("approve", actor, quarantine_id)
+        return result
 
     async def _approve_retain(
-        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any]
+        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any], actor: str
     ) -> dict[str, Any]:
         payload = decrypted["payload"]
         if not isinstance(payload, dict) or payload.get("action") != "retain":
@@ -125,7 +167,7 @@ class QuarantineAdminService:
             writer.write_bank,
             decision="approved",
         )
-        details = {"writer_id": writer_id, "target_bank": writer.write_bank}
+        details = {"writer_id": writer_id, "target_bank": writer.write_bank, "actor": actor}
         if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED:
             await finish_approve_retain(
                 self.repository,
@@ -175,7 +217,7 @@ class QuarantineAdminService:
         )
 
     async def _approve_recalled_memory(
-        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any]
+        self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any], actor: str
     ) -> dict[str, Any]:
         payload = decrypted["payload"]
         if (
@@ -208,7 +250,11 @@ class QuarantineAdminService:
         )
         try:
             await finish_approve_memory(
-                self.repository, quarantine_id, at, expected_sha256=str(item["sha256"])
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=str(item["sha256"]),
+                actor=actor,
             )
         except Exception as exc:
             await interrupt_review(self.repository, claimed, at, exc)
@@ -221,7 +267,7 @@ class QuarantineAdminService:
             "source_memory_id": result["id"],
         }
 
-    async def reject(self, quarantine_id: str) -> dict[str, Any]:
+    async def reject(self, quarantine_id: str, actor: AdminActor) -> dict[str, Any]:
         item = await self._require_claim_candidate(quarantine_id)
         if item["kind"] == "recalled_memory":
             bank_id = item.get("source_bank")
@@ -236,6 +282,7 @@ class QuarantineAdminService:
                     quarantine_id,
                     str(item["updated_at"]),
                     expected_sha256=str(item["sha256"]),
+                    actor=actor.label,
                 )
             else:
                 at = iso_now()
@@ -270,24 +317,29 @@ class QuarantineAdminService:
                     quarantine_id,
                     at,
                     expected_sha256=str(item["sha256"]),
+                    actor=actor.label,
                 )
-            return {
+            result = {
                 "reviewed": True,
                 "allowed": False,
                 "quarantine_id": quarantine_id,
                 "source_bank": bank_id,
                 "source_memory_id": memory_id,
             }
-        await remove(
-            self.repository,
-            quarantine_id,
-            "rejected",
-            iso_now(),
-            self.review_stale_seconds,
-        )
-        return {"rejected": True, "quarantine_id": quarantine_id}
+        else:
+            await remove(
+                self.repository,
+                quarantine_id,
+                "rejected",
+                iso_now(),
+                self.review_stale_seconds,
+                actor=actor.label,
+            )
+            result = {"rejected": True, "quarantine_id": quarantine_id}
+        _log_admin_action("reject", actor, quarantine_id)
+        return result
 
-    async def postpone(self, quarantine_id: str) -> dict[str, Any]:
+    async def postpone(self, quarantine_id: str, actor: AdminActor) -> dict[str, Any]:
         await self._require_claim_candidate(quarantine_id)
         next_item = await postpone_item(
             self.repository,
@@ -295,14 +347,18 @@ class QuarantineAdminService:
             iso_now(),
             self.review_stale_seconds,
             self.max_postpones,
+            actor=actor.label,
         )
+        _log_admin_action("postpone", actor, quarantine_id)
         return {
             POSTPONED: True,
             "quarantine_id": quarantine_id,
             "count": next_item["postpone_count"],
         }
 
-    async def reconcile(self, quarantine_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def reconcile(
+        self, quarantine_id: str, body: dict[str, Any], actor: AdminActor
+    ) -> dict[str, Any]:
         action = body.get("action")
         if action not in {"confirmed_applied", "confirmed_not_applied"}:
             raise HttpError(
@@ -336,16 +392,20 @@ class QuarantineAdminService:
                 at,
                 expected_sha256=expected_sha256,
                 expected_updated_at=expected_updated_at,
+                actor=actor.label,
             )
-            return {
-                "reconciled": True,
-                "action": action,
-                "quarantine_id": quarantine_id,
-                "status": POSTPONED,
-            }
-        status = await self._reconcile_applied(
-            quarantine_id, item, body.get("decision"), at, expected_sha256, expected_updated_at
-        )
+            status = POSTPONED
+        else:
+            status = await self._reconcile_applied(
+                quarantine_id,
+                item,
+                body.get("decision"),
+                at,
+                expected_sha256,
+                expected_updated_at,
+                actor.label,
+            )
+        _log_admin_action("reconcile", actor, quarantine_id)
         return {
             "reconciled": True,
             "action": action,
@@ -361,6 +421,7 @@ class QuarantineAdminService:
         at: str,
         expected_sha256: str,
         expected_updated_at: str,
+        actor: str,
     ) -> str:
         if item["kind"] == "retain_request":
             if decision not in (None, "approve"):
@@ -375,12 +436,14 @@ class QuarantineAdminService:
                 at,
                 expected_sha256=expected_sha256,
                 expected_updated_at=expected_updated_at,
+                actor=actor,
             )
             writer_id = _optional_str(item.get("writer_id"))
             writer = self.registry.writers.get(writer_id) if writer_id else None
             details = {
                 "writer_id": writer_id,
                 "target_bank": writer.write_bank if writer else None,
+                "actor": actor,
             }
             await finish_approve_retain(
                 self.repository, quarantine_id, at, details, expected_sha256=expected_sha256
@@ -399,9 +462,14 @@ class QuarantineAdminService:
                 at,
                 expected_sha256=expected_sha256,
                 expected_updated_at=expected_updated_at,
+                actor=actor,
             )
             await finish_reject_memory(
-                self.repository, quarantine_id, at, expected_sha256=expected_sha256
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=expected_sha256,
+                actor=actor,
             )
             return REVIEWED_BLOCKED
         raise HttpError(409, "invalid_review_action", "this quarantine item cannot be reconciled")
@@ -417,7 +485,7 @@ class QuarantineAdminService:
     async def bank_stats(self, bank_ids: tuple[str, ...]) -> dict[str, Any]:
         return {"banks": await self.repository.bank_stats(iso_now(), bank_ids)}
 
-    async def cleanup(self, body: dict[str, Any]) -> dict[str, Any]:
+    async def cleanup(self, body: dict[str, Any], actor: AdminActor) -> dict[str, Any]:
         scope = body.get("scope", PENDING)
         if scope not in {PENDING, "all"}:
             raise HttpError(400, "invalid_request", "scope must be pending or all")
@@ -438,7 +506,10 @@ class QuarantineAdminService:
             raise HttpError(
                 400, "expected_count_required", "expected_count from a dry run is required"
             )
-        result = await cleanup(self.repository, scope, reasons, older_than, expected, iso_now())
+        result = await cleanup(
+            self.repository, scope, reasons, older_than, expected, iso_now(), actor=actor.label
+        )
+        _log_admin_action("cleanup", actor)
         return {"dry_run": False, **result}
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
