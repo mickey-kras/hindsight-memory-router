@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -235,6 +237,38 @@ async def test_maintenance_preview_cleanup_sweep_and_prune() -> None:
     events = [{"event_id": "1"}, {"event_id": "2"}]
     assert await prune_events_before(Repo(Tx(many=events)), "old", "now") == 2
     assert await prune_events_before(Repo(Tx(many=[])), "old", "now") == 0
+
+
+@pytest.mark.asyncio
+async def test_prune_events_exports_rows_before_deleting(tmp_path: Path) -> None:
+    rows = [
+        {
+            "event_id": "1",
+            "quarantine_id": "q1",
+            "occurred_at": "2026-01-01T00:00:00Z",
+            "event_type": "quarantined",
+            "details": '{"kind":"retain_request"}',
+        },
+        {
+            "event_id": "2",
+            "quarantine_id": "q1",
+            "occurred_at": "2026-01-02T00:00:00Z",
+            "event_type": "cleanup",
+            "details": "{}",
+        },
+    ]
+    export_path = tmp_path / "events.jsonl"
+    tx = Tx(many=rows)
+    assert await prune_events_before(Repo(tx), "old", "now", str(export_path)) == 2
+    exported = [json.loads(line) for line in export_path.read_text(encoding="utf-8").splitlines()]
+    assert exported == rows
+    assert sum("DELETE FROM quarantine_events" in sql for sql, _ in tx.calls) == 2
+
+    failing_tx = Tx(many=rows)
+    missing = tmp_path / "missing" / "events.jsonl"
+    with pytest.raises(OSError):
+        await prune_events_before(Repo(failing_tx), "old", "now", str(missing))
+    assert not any("DELETE FROM quarantine_events" in sql for sql, _ in failing_tx.calls)
 
 
 def test_app_scope_and_now() -> None:

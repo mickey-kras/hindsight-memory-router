@@ -48,6 +48,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `QUARANTINE_ITEM_TTL_DAYS`                 |                          `30` | Pending/postponed item TTL; `0` disables                        |
 | `QUARANTINE_SWEEP_INTERVAL_SECONDS`        |                        `3600` | Sweep cadence; `0` disables                                     |
 | `QUARANTINE_EVENT_RETENTION_DAYS`          |                          `90` | Audit-event retention; `0` keeps forever                        |
+| `QUARANTINE_EVENT_EXPORT_PATH`             |                        unset | JSONL file receiving audit events before retention pruning      |
 | `QUARANTINE_WRAP_PROVIDER`                 |                    `rsa-oaep` | DEK wrap provider: `rsa-oaep` or `https-sidecar`                |
 | `QUARANTINE_WRAP_SIDECAR_URL`              |                       unset | Wrap sidecar base URL; https required (loopback http allowed)   |
 | `QUARANTINE_WRAP_SIDECAR_TOKEN`            |                       unset | Optional bearer token for the wrap sidecar                      |
