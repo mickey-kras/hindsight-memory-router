@@ -16,7 +16,7 @@ http://hindsight:8888
 
 Override it with `HINDSIGHT_BASE_URL`. Set `HINDSIGHT_API_KEY` when the Hindsight deployment requires authentication.
 
-The default HTTP endpoint is for an isolated Docker network shared only by Memory Router and Hindsight. Use HTTPS whenever Hindsight is routed outside that private network, especially when sending `HINDSIGHT_API_KEY`.
+The default HTTP endpoint is for an isolated Docker network shared only by Memory Router and Hindsight. Plaintext `http` upstream URLs fail at startup unless the host is private (RFC1918/link-local, loopback, `*.internal`, or a single-label docker service name); exempt hosts keep the `insecure-hindsight-transport` startup warning. Set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to require HTTPS for every upstream, especially when sending `HINDSIGHT_API_KEY`.
 
 ## Facade policy
 
