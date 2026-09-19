@@ -42,7 +42,7 @@ docker compose up -d
 curl --fail http://localhost:8890/health/ready
 ```
 
-Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment.
+Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment. Plaintext `http` upstream URLs are rejected at startup unless the host is private (RFC1918/link-local, loopback, `*.internal`, or a single-label docker service name). Set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to require `https` for every upstream.
 
 The router binds and publishes on `127.0.0.1` by default. To expose it on a LAN or tailnet interface, set `MEMORY_ROUTER_HOST` or the Compose publish address and terminate TLS in front; see [Docker deployment](docs/deployment/docker.md).
 
