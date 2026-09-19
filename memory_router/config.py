@@ -484,6 +484,7 @@ def assert_auth_environment(settings: RouterSettings) -> None:
         [
             (router_missing and settings.memory_router_allow_anonymous, "anonymous-mode"),
             (router_missing and not settings.memory_router_allow_anonymous, "router-token-missing"),
+            (bool(secret_value(settings.memory_router_token)), "legacy-router-token"),
             (legacy, "legacy-admin-token"),
             (not legacy and not (read or review), "admin-read-token-missing"),
             (not legacy and not review, "admin-review-token-missing"),

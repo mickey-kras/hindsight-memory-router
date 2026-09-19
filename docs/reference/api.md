@@ -22,7 +22,7 @@ returns only banks where the principal holds the `bank.list` scope.
 PostgreSQL-backed principal limit failures return `503 principal_rate_unavailable`
 or `503 principal_concurrency_unavailable` with `Retry-After: 1`.
 
-Health and `/version` are unauthenticated. `/health/live` is liveness. `/health/ready` is readiness; `/health` is its alias. `/ready` is deprecated. Other router endpoints require authentication unless development-only anonymous access is enabled.
+`/health/live` is anonymous liveness with a static `{"status": "alive"}` body. `/health/ready` is readiness; `/health` is its alias; `/ready` is deprecated. Readiness answers anonymous callers with only `{"status": ...}`; the full upstream payload requires router authentication. `/version` requires router authentication. Other router endpoints require authentication unless development-only anonymous access is enabled. Responses authenticated by the legacy `MEMORY_ROUTER_TOKEN` or `MEMORY_ROUTER_ADMIN_TOKEN` carry a `Deprecation` header; both credentials are removed at the next major release.
 
 With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` returns router counters in Prometheus text format: authentication failures, HTTP 429 and quarantine 507 rejections by route class, failed or degraded recall bank calls, sweeper failures, and a `review_side_effect_started` gauge refreshed at scrape time. It requires the admin read scope (read, review, or legacy token; in principal mode, a principal holding any `quarantine.review` grant), shares the admin read rate limit, and is off by default.
 

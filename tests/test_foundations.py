@@ -309,6 +309,29 @@ def test_environment_assertions(
     )
 
 
+def test_legacy_router_token_emits_single_deprecation_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    for name in list(config.os.environ):
+        if name.startswith("MEMORY_ROUTER_"):
+            monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MEMORY_ROUTER_TOKEN", token_urlsafe(24))
+    config.assert_auth_environment(config.load_settings())
+    assert [
+        record.reason  # type: ignore[attr-defined]
+        for record in caplog.records
+        if record.msg == "configuration_warning"
+    ].count("legacy-router-token") == 1
+
+    monkeypatch.delenv("MEMORY_ROUTER_TOKEN")
+    monkeypatch.setenv("MEMORY_ROUTER_PRINCIPALS", "principals.json")
+    caplog.clear()
+    config.assert_auth_environment(config.load_settings())
+    assert all(
+        getattr(record, "reason", None) != "legacy-router-token" for record in caplog.records
+    )
+
+
 def test_anonymous_mode_requires_loopback_bind(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MEMORY_ROUTER_ALLOW_ANONYMOUS", "true")
     for host in (WILDCARD_HOST, "::", "192.0.2.10", "router.lan"):

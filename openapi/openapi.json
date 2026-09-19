@@ -812,11 +812,18 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Get Hindsight API version and features",
-        "description": "Returns a Hindsight-compatible /version response without requiring router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
+        "description": "Returns a Hindsight-compatible /version response. Requires router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Hindsight API version and facade-exposed capabilities.",
@@ -827,6 +834,9 @@
                 }
               }
             }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "502": {
             "description": "Hindsight is unavailable, rejected the request, or returned an invalid or oversized response.",
@@ -1043,21 +1053,12 @@
         "type": "object",
         "additionalProperties": false,
         "required": [
-          "status",
-          "version",
-          "uptime_seconds"
+          "status"
         ],
         "properties": {
           "status": {
             "type": "string",
             "const": "alive"
-          },
-          "version": {
-            "type": "string"
-          },
-          "uptime_seconds": {
-            "type": "number",
-            "minimum": 0
           }
         }
       },

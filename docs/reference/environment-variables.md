@@ -9,11 +9,11 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_DEPLOYMENT_MODE`            |                      `single` | `single` or `cluster`                                           |
 | `MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT`  |                       `false` | Confirms external shared admin limiting in cluster mode         |
 | `MEMORY_ROUTER_METRICS_ENABLED`            |                       `false` | Expose `/metrics` (Prometheus text) behind admin read auth      |
-| `MEMORY_ROUTER_TOKEN`                      |                          none | Router bearer token; absent means router endpoints fail closed  |
+| `MEMORY_ROUTER_TOKEN`                      |                          none | Deprecated legacy router bearer token; removed at next major    |
 | `MEMORY_ROUTER_ADMIN_READ_TOKEN`           |                          none | Admin read scope                                                |
 | `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`         |                          none | Admin review scope                                              |
 | `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`        |                          none | Admin cleanup scope                                             |
-| `MEMORY_ROUTER_ADMIN_TOKEN`                |                          none | Legacy all-admin migration token                                |
+| `MEMORY_ROUTER_ADMIN_TOKEN`                |                          none | Deprecated legacy all-admin token; removed at next major        |
 | `MEMORY_ROUTER_ALLOW_ANONYMOUS`            |                       `false` | Development-only anonymous router access; loopback binds only   |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX`  |                         `120` | Admin read requests/window                                      |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX` |                          `30` | Admin write requests/window                                     |

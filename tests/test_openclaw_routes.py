@@ -65,7 +65,7 @@ def _openclaw_response(method: str, path: str) -> object:
 
 
 @pytest.mark.asyncio
-async def test_openclaw_startup_health_and_version_probe_are_unauthenticated() -> None:
+async def test_openclaw_startup_probes_stay_bounded_and_version_requires_auth() -> None:
     app_module.runtime.allow_anonymous = False
     app_module.runtime.router_token = "router-secret"  # noqa: S105 - synthetic test credential
     app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
@@ -78,11 +78,19 @@ async def test_openclaw_startup_health_and_version_probe_are_unauthenticated() -
         health=AsyncMock(return_value=health), version=AsyncMock(return_value=version)
     )
 
-    health_response = await app_module.health_ready()
-    version_response = await app_module.dispatch("version", request("GET", "/version"))
+    anonymous_health = await app_module.health_ready(request("GET", "/health/ready"))
+    anonymous_version = await app_module.dispatch("version", request("GET", "/version"))
+    headers = {"authorization": "Bearer router-secret"}
+    full_health = await app_module.health_ready(request("GET", "/health/ready", headers=headers))
+    version_response = await app_module.dispatch(
+        "version", request("GET", "/version", headers=headers)
+    )
 
-    assert health_response.status_code == 200
-    assert _payload(health_response) == health
+    assert anonymous_health.status_code == 200
+    assert _payload(anonymous_health) == {"status": "healthy"}
+    assert anonymous_version.status_code == 401
+    assert full_health.status_code == 200
+    assert _payload(full_health) == health
     assert version_response.status_code == 200
     assert _payload(version_response) == version
 

@@ -96,9 +96,9 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     assert isinstance(paths, dict)
     version = paths["/version"]["get"]
     assert "503" in version["responses"]
-    assert version["security"] == []
-    assert "401" not in version["responses"]
-    assert {"200", "4XX", "502", "503", "504"} <= set(version["responses"])
+    assert version["security"] == [{"RouterToken": []}, {"PrincipalToken": []}]
+    assert version["responses"]["401"] == {"$ref": "#/components/responses/Unauthorized"}
+    assert {"200", "401", "4XX", "502", "503", "504"} <= set(version["responses"])
 
     schemas = spec["components"]["schemas"]
     version_schema = schemas["VersionResponse"]

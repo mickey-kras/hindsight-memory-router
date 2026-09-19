@@ -64,11 +64,13 @@ availability is required for authenticated principal requests.
 3. Update client token.
 4. Set old `revoked_at`; restart.
 
-## Legacy router token
+## Legacy router token (deprecated)
 
 `MEMORY_ROUTER_TOKEN` protects router endpoints when principal mode is off. Missing token fails closed unless `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`. Anonymous mode is development-only: startup rejects it unless `MEMORY_ROUTER_HOST` is a loopback address.
 
-`/version` and health endpoints are unauthenticated.
+Legacy token mode is deprecated and is removed at the next major release: startup logs a `legacy-router-token` configuration warning and authenticated responses carry a `Deprecation` header. Migrate to principal mode: create a principal registry (see `principal_registry.example.json`) with one principal per writer (unique key ID, SHA-256 secret digest, bank and scope grants), set `MEMORY_ROUTER_PRINCIPALS` to its path, unset `MEMORY_ROUTER_TOKEN`, and issue each caller a `mr_<key-id>_<secret>` token.
+
+`/health/live` is anonymous and static. `/health/ready`, `/health`, and `/ready` answer anonymous callers with only `{"status": ...}`; the full upstream readiness payload requires router authentication. `/version` requires router authentication.
 
 Legacy-mode memory operations are not logged on success; blocked or suspicious operations land in the quarantine review queue.
 
@@ -77,6 +79,6 @@ Legacy-mode memory operations are not logged on success; blocked or suspicious o
 - `MEMORY_ROUTER_ADMIN_READ_TOKEN`: read
 - `MEMORY_ROUTER_ADMIN_REVIEW_TOKEN`: read and decide
 - `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`: cleanup
-- `MEMORY_ROUTER_ADMIN_TOKEN`: legacy superuser; remove after migration
+- `MEMORY_ROUTER_ADMIN_TOKEN`: legacy all-scope superuser; deprecated and removed at the next major release (authenticated responses carry a `Deprecation` header)
 
 Keep tokens out of Git, files, logs, prompts, and shell history.

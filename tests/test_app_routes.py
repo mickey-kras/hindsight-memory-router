@@ -63,39 +63,49 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
     app_module.runtime.hindsight = hindsight
 
     live = await app_module.health_live()
-    assert live["status"] == "alive"
-    assert isinstance(live["version"], str) and live["version"]
-    assert isinstance(live["uptime_seconds"], float) and live["uptime_seconds"] >= 0
+    assert live == {"status": "alive"}
     repository.ping.assert_not_awaited()
     hindsight.health.assert_not_awaited()
 
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 200
     assert payload(response) == upstream_health
     repository.ping.assert_awaited_once()
     hindsight.health.assert_awaited_once()
 
-    response = await app_module.ready()
+    response = await app_module.ready(request("GET", "/ready"))
     assert response.status_code == 200
     assert payload(response) == upstream_health
     cached = probes.readiness.cache
     assert cached is not None and isinstance(cached.body, bytes)
     assert probes.readiness.cache is cached
 
+    app_module.runtime.allow_anonymous = False
+    response = await app_module.health_ready(request("GET", "/health/ready"))
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+    app_module.runtime.allow_anonymous = True
+
     repository.ping.side_effect = RuntimeError("database down")
     hindsight.health.reset_mock()
     probes.readiness.cache = None
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
     hindsight.health.assert_awaited_once()
+
+    app_module.runtime.allow_anonymous = False
+    response = await app_module.health_ready(request("GET", "/health"))
+    assert response.status_code == 503
+    assert payload(response) == {"status": "unhealthy"}
+    app_module.runtime.allow_anonymous = True
 
     repository.ping.side_effect = None
     hindsight.health.side_effect = HindsightGatewayError(
         "network", operation="health", method="GET"
     )
     probes.readiness.cache = None
-    response = await app_module.health_ready()
+    response = await app_module.health_ready(request("GET", "/health/ready"))
     assert response.status_code == 503
     assert payload(response) == {"status": "unhealthy"}
 
@@ -225,7 +235,13 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
     auth_value = "route" + "r"
     app_module.runtime.router_token = auth_value
     response = await app_module.dispatch("version", request("GET", "/version"))
+    assert response.status_code == 401
+    response = await app_module.dispatch(
+        "version",
+        request("GET", "/version", headers={"authorization": f"Bearer {auth_value}"}),
+    )
     assert response.status_code == 200 and payload(response) == version_response
+    assert response.headers["Deprecation"] == "true"
     hindsight.version.assert_awaited_once()
 
     app_module.runtime.allow_anonymous = True
@@ -235,6 +251,7 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         request("POST", "/v1/default/banks/main/memories", body={"items": [{"content": "ok"}]}),
     )
     assert payload(response) == {"retained": True}
+    assert "Deprecation" not in response.headers
     limits.assert_retain_bounds.assert_called_once()
     policy.retain.assert_awaited_once()
 
@@ -263,6 +280,19 @@ async def test_router_dispatch_version_retain_recall_and_denied() -> None:
         "error": "unauthorized",
         "message": "authentication required",
     }
+
+    app_module.runtime.router_token = auth_value
+    response = await app_module.dispatch(
+        "v1/default/banks/main/memories",
+        request(
+            "POST",
+            "/v1/default/banks/main/memories",
+            headers={"authorization": f"Bearer {auth_value}"},
+            body={"items": [{"content": "ok"}]},
+        ),
+    )
+    assert payload(response) == {"retained": True}
+    assert response.headers["Deprecation"] == "true"
 
 
 @pytest.mark.asyncio
@@ -347,6 +377,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
         request("GET", "/admin/quarantine/queue", headers=auth, query="limit=5&offset=1"),
     )
     assert payload(response) == {"items": []}
+    assert response.headers["Deprecation"] == "true"
     admin.list_queue.assert_awaited_with(5, 1, None)
     with pytest.raises(HttpError) as invalid_int:
         await app_module.dispatch(
@@ -603,6 +634,7 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
         ),
     )
     assert response.status_code == 200
+    assert "Deprecation" not in response.headers
     admin.postpone.assert_awaited_once_with("q", AdminActor(token_scope="review"))  # noqa: S106 - label, not a secret
 
     response = await app_module.dispatch(

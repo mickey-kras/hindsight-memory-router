@@ -144,6 +144,7 @@ REASONS = frozenset(
         "http-protocol-error",
         "insecure-hindsight-transport",
         "legacy-admin-token",
+        "legacy-router-token",
         "direct-stdlib-log",
         "openclaw-suspicious-provider-response",
         "openclaw-suspicious-request",

@@ -4,12 +4,9 @@ import asyncio
 import json
 import logging
 import re
-import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as package_version
 from typing import Any
 from urllib.parse import unquote
 
@@ -85,16 +82,11 @@ _PERCENT_DOT = re.compile(r"%2e", re.I)
 _INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
 _MAX_PATH_PROBE_DECODES = 8
-_PROCESS_START = time.monotonic()
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
     "message": "authentication required",
 }
-try:
-    _ROUTER_VERSION = package_version("hindsight-memory-router")
-except PackageNotFoundError:
-    _ROUTER_VERSION = "0.0.0"
 
 
 def _scope(method: str, path: str) -> str:
@@ -745,12 +737,8 @@ async def _admin_rate(method: str) -> None:
 
 
 @app.get("/health/live")
-async def health_live() -> dict[str, str | float]:
-    return {
-        "status": "alive",
-        "version": _ROUTER_VERSION,
-        "uptime_seconds": round(time.monotonic() - _PROCESS_START, 1),
-    }
+async def health_live() -> dict[str, str]:
+    return {"status": "alive"}
 
 
 async def _database_health(repository: QuarantineRepository) -> probes.ProbeResult[None]:
@@ -791,15 +779,29 @@ async def _health_ready_response() -> Response:
     return await probes.readiness.get(refresh)
 
 
+def _full_readiness_authorized(request: Request) -> bool:
+    return router_authorized(
+        request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
+    )
+
+
+async def _readiness_probe_response(request: Request) -> Response:
+    response = await _health_ready_response()
+    if _full_readiness_authorized(request):
+        return response
+    status = "healthy" if response.status_code == 200 else "unhealthy"
+    return JSONResponse({"status": status}, status_code=response.status_code)
+
+
 @app.get("/health")
 @app.get("/health/ready")
-async def health_ready() -> Response:
-    return await _health_ready_response()
+async def health_ready(request: Request) -> Response:
+    return await _readiness_probe_response(request)
 
 
 @app.get("/ready")
-async def ready() -> Response:
-    return await _health_ready_response()
+async def ready(request: Request) -> Response:
+    return await _readiness_probe_response(request)
 
 
 async def _version_response() -> Response:
@@ -968,7 +970,10 @@ async def _dispatch_admin(request: Request, pathname: str, method: str) -> Respo
     await _admin_rate(method)
     admin = _require_runtime(runtime.admin, "admin service")
     actor = AdminActor(token_scope=token_scope)
-    return await _authorized_admin_response(request, admin, pathname, method, actor)
+    response = await _authorized_admin_response(request, admin, pathname, method, actor)
+    if token_scope == "legacy":  # noqa: S105  # nosec B105 - token scope label, not a credential
+        response.headers["Deprecation"] = "true"
+    return response
 
 
 async def _dispatch_metrics(request: Request, pathname: str, method: str) -> Response | None:
@@ -1005,8 +1010,6 @@ async def dispatch(path: str, request: Request) -> Response:
     if metrics_response is not None:
         return metrics_response
 
-    if method == "GET" and pathname == "/version":
-        return await _version_response()
     route_class = _route_class(request)
     principal: PrincipalSession | None = None
     if runtime.principal_resolver is not None:
@@ -1021,15 +1024,20 @@ async def dispatch(path: str, request: Request) -> Response:
             return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     elif not await _router_auth(request):
         return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
-    dispatcher = AuthenticatedRequestDispatcher(
-        DispatchDependencies(
-            policy=_require_runtime(runtime.policy, "router policy"),
-            resolver=runtime.principal_resolver,
-            hindsight=runtime.hindsight,
-            json_body=_json_body,
-            principal_rate=_principal_rate,
-            concurrency=_with_principal_concurrency,
-            decode_path_segment=_decode_path_segment,
-        )
-    )
-    return await dispatcher.dispatch(request, pathname, method, principal, route_class)
+    if method == "GET" and pathname == "/version":
+        response = await _version_response()
+    else:
+        response = await AuthenticatedRequestDispatcher(
+            DispatchDependencies(
+                policy=_require_runtime(runtime.policy, "router policy"),
+                resolver=runtime.principal_resolver,
+                hindsight=runtime.hindsight,
+                json_body=_json_body,
+                principal_rate=_principal_rate,
+                concurrency=_with_principal_concurrency,
+                decode_path_segment=_decode_path_segment,
+            )
+        ).dispatch(request, pathname, method, principal, route_class)
+    if principal is None and runtime.router_token is not None:
+        response.headers["Deprecation"] = "true"
+    return response
