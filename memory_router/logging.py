@@ -27,15 +27,22 @@ _MEMORY_ROUTER_EVENT = object()
 LOG_THROTTLE_INTERVAL_SECONDS = 60.0
 _last_emitted: dict[tuple[str, str, str], float] = {}
 _suppressed: dict[tuple[str, str, str], int] = {}
+_write_failures = 0
 
 
 def event_catalog() -> frozenset[str]:
     return EVENTS
 
 
+def log_write_failures() -> int:
+    return _write_failures
+
+
 def reset_log_state() -> None:
+    global _write_failures
     _last_emitted.clear()
     _suppressed.clear()
+    _write_failures = 0
 
 
 def error_fingerprint(exc: BaseException) -> str:
@@ -304,7 +311,19 @@ def log_event(
     try:
         _log_event(logger, level, event, error=error, **fields)
     except Exception:
-        return
+        _record_write_failure()
+
+
+def _record_write_failure() -> None:
+    global _write_failures
+    _write_failures += 1
+    try:
+        sys.stderr.write(f'{{"event":"logging_write_failed","count":{_write_failures}}}\n')
+        sys.stderr.flush()
+    except (OSError, ValueError):
+        # stderr can be closed or unwritable (e.g. interpreter shutdown); the
+        # counter above still records the pipeline failure.
+        pass
 
 
 def _log_event(

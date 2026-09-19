@@ -746,7 +746,7 @@
       "post": {
         "operationId": "recallMemory",
         "summary": "Recall memory through writer policy",
-        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
+        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed. When a fanned-out bank is unavailable, the response sets partial and failed_banks. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
         "tags": [
           "Memory"
         ],
@@ -1333,6 +1333,15 @@
               "null"
             ],
             "additionalProperties": true
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "True when at least one fanned-out bank was unavailable; results are incomplete."
+          },
+          "failed_banks": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Number of banks that failed during fan-out. Present only together with partial."
           }
         },
         "additionalProperties": true

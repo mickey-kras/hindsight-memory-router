@@ -112,6 +112,8 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
         "entities",
         "source_facts",
         "trace",
+        "partial",
+        "failed_banks",
     }
 
 
