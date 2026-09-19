@@ -22,7 +22,7 @@ _DEFINITIONS = (
     (
         RECALL_DEGRADED_BANKS_TOTAL,
         "counter",
-        "Hindsight recall bank calls that degraded to partial results.",
+        "Failed or degraded Hindsight recall bank calls.",
     ),
     (SWEEPER_FAILURES_TOTAL, "counter", "Quarantine sweeper iterations that failed."),
     (

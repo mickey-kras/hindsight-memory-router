@@ -22,7 +22,7 @@ Memory Router:
 
 Cross-writer, file-transfer, import/export, webhook, upstream metrics, and deprecated endpoints are denied. Hindsight is the only supported memory backend.
 
-Setting `MEMORY_ROUTER_METRICS_ENABLED=true` exposes the router's own `GET /metrics` in Prometheus text format. The endpoint is off by default and requires an admin read-scope token, never anonymous access.
+Setting `MEMORY_ROUTER_METRICS_ENABLED=true` exposes the router's own `GET /metrics` in Prometheus text format. The endpoint is off by default and requires an admin read-scope token (or, in principal mode, a principal holding any `quarantine.review` grant), never anonymous access.
 
 ## Quick start
 

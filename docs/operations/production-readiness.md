@@ -109,7 +109,7 @@ Operational telemetry is partially complete. With `MEMORY_ROUTER_METRICS_ENABLED
 - authentication failures by route class;
 - HTTP 429 responses by route class;
 - quarantine 507 admission rejections by route class;
-- degraded Hindsight recall bank calls;
+- failed or degraded Hindsight recall bank calls;
 - maintenance/sweeper failures;
 - review items in `review_side_effect_started` (gauge refreshed at scrape time).
 

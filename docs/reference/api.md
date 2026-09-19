@@ -24,7 +24,7 @@ or `503 principal_concurrency_unavailable` with `Retry-After: 1`.
 
 Health and `/version` are unauthenticated. `/health/live` is liveness. `/health/ready` is readiness; `/health` is its alias. `/ready` is deprecated. Other router endpoints require authentication unless development-only anonymous access is enabled.
 
-With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` returns router counters in Prometheus text format: authentication failures, HTTP 429 and quarantine 507 rejections by route class, degraded recall bank calls, sweeper failures, and a `review_side_effect_started` gauge refreshed at scrape time. It requires the admin read scope (read, review, or legacy token), shares the admin read rate limit, and is off by default.
+With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` returns router counters in Prometheus text format: authentication failures, HTTP 429 and quarantine 507 rejections by route class, failed or degraded recall bank calls, sweeper failures, and a `review_side_effect_started` gauge refreshed at scrape time. It requires the admin read scope (read, review, or legacy token; in principal mode, a principal holding any `quarantine.review` grant), shares the admin read rate limit, and is off by default.
 
 Facade contract: `openapi/openclaw.json`.
 

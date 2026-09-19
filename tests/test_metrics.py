@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -11,6 +12,7 @@ from memory_router import config, metrics
 from memory_router.auth import AuthFailureAuditor
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
+from memory_router.principals import PrincipalRegistry, PrincipalResolver
 from tests.request_helpers import request
 
 _ADMIN_TOKENS = {
@@ -19,6 +21,38 @@ _ADMIN_TOKENS = {
     "review": "review-token",
     "cleanup": "cleanup-token",
 }
+_OPERATOR_SECRET = "a" * 64
+_VIEWER_SECRET = "b" * 64
+
+
+def _principal_resolver() -> PrincipalResolver:
+    registry = PrincipalRegistry.model_validate(
+        {
+            "principals": {
+                "operator": {
+                    "keys": [
+                        {
+                            "id": "op-key",
+                            "sha256": hashlib.sha256(_OPERATOR_SECRET.encode()).hexdigest(),
+                            "created_at": "2024-01-01T00:00:00+00:00",
+                        }
+                    ],
+                    "grants": [{"bank": "main", "scopes": ["quarantine.review"]}],
+                },
+                "viewer": {
+                    "keys": [
+                        {
+                            "id": "view-key",
+                            "sha256": hashlib.sha256(_VIEWER_SECRET.encode()).hexdigest(),
+                            "created_at": "2024-01-01T00:00:00+00:00",
+                        }
+                    ],
+                    "grants": [{"bank": "main", "scopes": ["bank.list"]}],
+                },
+            }
+        }
+    )
+    return PrincipalResolver(registry)
 
 
 @pytest.fixture(autouse=True)
@@ -73,6 +107,35 @@ async def test_metrics_endpoint_rejects_anonymous_and_wrong_scope_tokens() -> No
     response = await app_module.dispatch("metrics", request("POST", "/metrics"))
     assert response.status_code == 401
     assert 'memory_router_auth_failures_total{route_class="metrics"} 4' in metrics.render()
+
+
+@pytest.mark.asyncio
+async def test_metrics_endpoint_allows_principals_with_review_grants() -> None:
+    app_module.runtime.principal_resolver = _principal_resolver()
+    app_module.runtime.principal_limiter = SimpleNamespace(consume_many=AsyncMock())
+
+    response = await app_module.dispatch(
+        "metrics",
+        request("GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{_OPERATOR_SECRET}"}),
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == metrics.CONTENT_TYPE
+
+    with pytest.raises(HttpError) as excinfo:
+        await app_module.dispatch(
+            "metrics",
+            request(
+                "GET", "/metrics", headers={"authorization": f"Bearer mr_view-key_{_VIEWER_SECRET}"}
+            ),
+        )
+    assert excinfo.value.status == 403
+    assert excinfo.value.code == "authorization_denied"
+
+    response = await app_module.dispatch(
+        "metrics", request("GET", "/metrics", headers={"authorization": f"Bearer mr_op-key_{'c' * 64}"})
+    )
+    assert response.status_code == 401
+    assert 'memory_router_auth_failures_total{route_class="metrics"} 1' in metrics.render()
 
 
 @pytest.mark.asyncio
