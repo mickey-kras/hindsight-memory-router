@@ -8,12 +8,11 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import unquote
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 
-from . import metrics, metrics_http, probes
+from . import metrics, metrics_http, probes_http
 from .admin import AdminActor, QuarantineAdminService
 from .auth import (
     AuthFailureAuditor,
@@ -44,6 +43,7 @@ from .openclaw import (
     shutdown_facade_scan_executor_async,
     start_facade_scan_executor,
 )
+from .paths import _decode_path_segment, _raw_pathname, _route_class
 from .policy import RouterPolicy
 from .principal_gate import (
     PrincipalAdminDeps,
@@ -69,7 +69,6 @@ from .rate_limit import (
 from .repository import QuarantineRepository, parse_queue_filter
 from .request_dispatch import (
     EMPTY_BODY,
-    MEMORY_ROUTE,
     AuthenticatedRequestDispatcher,
     DispatchDependencies,
 )
@@ -78,10 +77,7 @@ from .timestamps import iso_format, iso_now
 
 logger = logging.getLogger(__name__)
 configure_logging()
-_PERCENT_DOT = re.compile(r"%2e", re.I)
-_INVALID_PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _MAX_JSON_DEPTH = 64
-_MAX_PATH_PROBE_DECODES = 8
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
@@ -97,90 +93,10 @@ def _scope(method: str, path: str) -> str:
     return "review"
 
 
-def _route_class(request: Request) -> str:
-    path = _raw_pathname(request)
-    if path in {"/health", "/health/ready", "/ready"}:
-        return "readiness"
-    if path == "/health/live":
-        return "liveness"
-    if path == "/version":
-        return "version"
-    if path == "/metrics":
-        return "metrics"
-    if path.startswith("/admin/"):
-        return "admin"
-    if MEMORY_ROUTE.fullmatch(path):
-        return "memory"
-    if path.startswith("/v1/default/banks/"):
-        return "openclaw"
-    return "unmatched"
-
-
-_REFRESH_TIMEOUT_SECONDS = 15.0
-_DEPENDENCY_PROBE_TIMEOUT_SECONDS = 10.0
-
-
 def _require_runtime[T](value: T | None, component: str) -> T:
     if value is None:
         raise RuntimeError(f"memory-router runtime {component} is not initialized")
     return value
-
-
-def _raw_pathname(request: Request) -> str:
-    raw = request.scope.get("raw_path")
-    path = raw.decode("latin-1") if isinstance(raw, bytes) else request.url.path
-    return _normalize_dot_segments(path)
-
-
-def _normalize_dot_segments(path: str) -> str:
-    segments = path.split("/")
-    output: list[str] = []
-    last_index = len(segments) - 1
-    for index, segment in enumerate(segments):
-        dot_segment = _PERCENT_DOT.sub(".", segment)
-        if dot_segment in {".", ".."}:
-            _apply_dot_segment(output, dot_segment, index == last_index)
-            continue
-        output.append(segment)
-    return "/".join(output)
-
-
-def _apply_dot_segment(output: list[str], segment: str, trailing: bool) -> None:
-    if segment == ".." and output and output != [""]:
-        output.pop()
-    if trailing:
-        output.append("")
-
-
-def _decode_path_segment(value: str) -> str:
-    if _INVALID_PERCENT.search(value):
-        raise HttpError(
-            400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
-        )
-    try:
-        decoded = unquote(value, encoding="utf-8", errors="strict")
-    except ValueError as exc:
-        raise HttpError(
-            400, "invalid_path_encoding", "path segment contains malformed percent-encoding"
-        ) from exc
-    probe = decoded
-    for _ in range(_MAX_PATH_PROBE_DECODES):
-        if "/" in probe:
-            raise HttpError(400, "invalid_path_segment", "encoded path separators are not allowed")
-        if probe in {".", ".."}:
-            raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
-        try:
-            next_probe = unquote(probe, encoding="utf-8", errors="strict")
-        except ValueError:
-            break
-        if next_probe == probe:
-            break
-        probe = next_probe
-    else:
-        if probe in {".", ".."}:
-            raise HttpError(400, "invalid_path_segment", "dot path segments are not allowed")
-        raise HttpError(400, "invalid_path_encoding", "path segment has excessive nested encoding")
-    return decoded
 
 
 def _build_wrap_provider(settings: RouterSettings) -> SidecarWrapProvider | None:
@@ -736,118 +652,32 @@ async def _admin_rate(method: str) -> None:
         raise _rate_storage_unavailable("admin", exc) from exc
 
 
+def _probes_deps() -> probes_http.ProbesDeps:
+    return probes_http.ProbesDeps(
+        repository=runtime.repository,
+        hindsight=runtime.hindsight,
+        router_token=runtime.router_token,
+        allow_anonymous=runtime.allow_anonymous,
+        resolver=runtime.principal_resolver,
+        auditor=runtime.auditor,
+        auth_failure_rate=_auth_failure_rate,
+    )
+
+
 @app.get("/health/live")
 async def health_live() -> dict[str, str]:
     return {"status": "alive"}
 
 
-async def _database_health(repository: QuarantineRepository) -> probes.ProbeResult[None]:
-    async def ping() -> None:
-        async with asyncio.timeout(_DEPENDENCY_PROBE_TIMEOUT_SECONDS):
-            await repository.ping()
-
-    return await probes.timed_probe(ping, probes.storage_readiness_log_state)
-
-
-async def _hindsight_health(hindsight: HindsightGateway) -> probes.ProbeResult[dict[str, object]]:
-    async def health() -> dict[str, object]:
-        async with asyncio.timeout(_DEPENDENCY_PROBE_TIMEOUT_SECONDS):
-            return await hindsight.health()
-
-    return await probes.timed_probe(health, probes.readiness_log_state)
-
-
-async def _health_ready_response() -> Response:
-    async def refresh() -> Response:
-        status_code = 200
-        payload: Any
-        try:
-            repository = _require_runtime(runtime.repository, "repository")
-            hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
-            database_check, hindsight_check = await asyncio.wait_for(
-                asyncio.gather(_database_health(repository), _hindsight_health(hindsight)),
-                timeout=_REFRESH_TIMEOUT_SECONDS,
-            )
-            if not database_check.healthy or not hindsight_check.healthy:
-                status_code, payload = 503, {"status": "unhealthy"}
-            else:
-                payload = hindsight_check.value
-        except Exception:
-            status_code, payload = 503, {"status": "unhealthy"}
-        return JSONResponse(payload, status_code=status_code)
-
-    return await probes.readiness.get(refresh)
-
-
-async def _full_readiness_authorized(request: Request) -> bool:
-    authorization = request.headers.get("authorization")
-    if router_authorized(authorization, runtime.router_token, runtime.allow_anonymous):
-        return True
-    resolver = runtime.principal_resolver
-    if resolver is None or not principal_token_present(authorization):
-        return False
-    principal = await authenticate_principal(
-        request,
-        resolver=resolver,
-        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
-        route_class="readiness",
-        on_failure=lambda: _auth_failure_rate("router"),
-    )
-    return principal is not None
-
-
-async def _readiness_probe_response(request: Request) -> Response:
-    response = await _health_ready_response()
-    if await _full_readiness_authorized(request):
-        return response
-    status = "healthy" if response.status_code == 200 else "unhealthy"
-    return JSONResponse({"status": status}, status_code=response.status_code)
-
-
 @app.get("/health")
 @app.get("/health/ready")
 async def health_ready(request: Request) -> Response:
-    return await _readiness_probe_response(request)
+    return await probes_http.readiness_probe_response(request, _probes_deps())
 
 
 @app.get("/ready")
 async def ready(request: Request) -> Response:
-    return await _readiness_probe_response(request)
-
-
-async def _version_response() -> Response:
-    async def refresh() -> Response:
-        try:
-            hindsight = _require_runtime(runtime.hindsight, "Hindsight gateway")
-            payload = await asyncio.wait_for(hindsight.version(), timeout=_REFRESH_TIMEOUT_SECONDS)
-        except TimeoutError as exc:
-            error = HindsightGatewayError("timeout", operation="version", method="GET")
-            error.__cause__ = exc
-            return _version_failure(error)
-        except HindsightGatewayError as exc:
-            return _version_failure(exc)
-        except Exception as exc:
-            error = HindsightGatewayError(
-                "network", operation="version", method="GET", client_status=503
-            )
-            error.__cause__ = exc
-            return _version_failure(error)
-        return JSONResponse(payload)
-
-    return await probes.version.get(refresh)
-
-
-def _version_failure(error: HindsightGatewayError) -> Response:
-    log_event(
-        logger,
-        "warning",
-        "hindsight_request_failed",
-        **hindsight_log_fields(error),
-        error=error,
-        outcome="failed",
-        route_class="version",
-    )
-    return JSONResponse(error.body(), status_code=error.status, headers=error.headers)
+    return await probes_http.readiness_probe_response(request, _probes_deps())
 
 
 async def _admin_queue_response(
@@ -1036,7 +866,7 @@ async def dispatch(path: str, request: Request) -> Response:
     elif not await _router_auth(request):
         return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     if method == "GET" and pathname == "/version":
-        response = await _version_response()
+        response = await probes_http.version_response(runtime.hindsight)
     else:
         response = await AuthenticatedRequestDispatcher(
             DispatchDependencies(

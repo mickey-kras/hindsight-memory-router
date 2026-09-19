@@ -14,7 +14,7 @@ import pytest
 from pytest_httpx import HTTPXMock
 
 import memory_router.app as app_module
-from memory_router import probes
+from memory_router import probes, probes_http
 from memory_router.auth import AuthFailureAuditor
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.logging import (
@@ -198,8 +198,8 @@ async def test_readiness_failure_kind_is_logged_without_sensitive_details(
     hindsight = type("Hindsight", (), {"health": AsyncFail(error)})()
     caplog.set_level(logging.WARNING, logger="memory_router.app")
 
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    probe = await app_module._hindsight_health(hindsight)
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
+    probe = await probes_http._hindsight_health(hindsight)
     healthy, response = probe.healthy, probe.value  # type: ignore[arg-type]
 
     assert (healthy, response) == (False, None)
@@ -221,12 +221,12 @@ async def test_hindsight_readiness_probe_has_its_own_timeout(
     async def hang() -> None:
         await release.wait()
 
-    monkeypatch.setattr(app_module, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(probes_http, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr(probes, "readiness_log_state", probes.ReadinessLogState())
     hindsight = SimpleNamespace(health=hang)
 
     for _ in range(2):
-        probe = await app_module._hindsight_health(hindsight)
+        probe = await probes_http._hindsight_health(hindsight)
         healthy, response, error = probe.healthy, probe.value, probe.error
         assert (healthy, response) == (False, None)
         assert isinstance(error, TimeoutError)
@@ -281,8 +281,8 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
     hindsight = type("Hindsight", (), {"health": health})()
     caplog.set_level(logging.INFO, logger="memory_router.app")
 
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 1
 
     async def recovered() -> dict[str, str]:
@@ -290,20 +290,20 @@ async def test_readiness_logs_failure_once_and_recovery_transition(
 
     hindsight.health = recovered
     reset_log_state()
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 1
 
     hindsight.health = health
     reset_log_state()
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_failed") == 2
 
     hindsight.health = recovered
     reset_log_state()
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
-    await app_module._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
+    await probes_http._hindsight_health(hindsight)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("hindsight_readiness_recovered") == 2
 
 
@@ -343,16 +343,16 @@ async def test_storage_readiness_failure_and_recovery_are_logged(
 ) -> None:
     repository = type("Repository", (), {"ping": AsyncFail(RuntimeError("database down"))})()
 
-    await app_module._database_health(repository)  # type: ignore[arg-type]
-    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("storage_readiness_failed") == 1
 
     async def recovered() -> None:
         return None
 
     repository.ping = recovered
-    await app_module._database_health(repository)  # type: ignore[arg-type]
-    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
     assert [record.msg for record in caplog.records].count("storage_readiness_recovered") == 1
 
 
@@ -364,11 +364,11 @@ async def test_storage_readiness_timeout_is_recorded(
     async def hangs() -> None:
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(app_module, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(probes_http, "_DEPENDENCY_PROBE_TIMEOUT_SECONDS", 0.001)
     repository = SimpleNamespace(ping=hangs)
 
-    await app_module._database_health(repository)  # type: ignore[arg-type]
-    await app_module._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
+    await probes_http._database_health(repository)  # type: ignore[arg-type]
 
     record = next(record for record in caplog.records if record.msg == "storage_readiness_failed")
     assert record.error_kind == "timeout"  # type: ignore[attr-defined]
@@ -385,7 +385,7 @@ async def test_readiness_serves_stale_cache_while_refresh_lock_is_held() -> None
     probes.readiness.lock = asyncio.Lock()
     await probes.readiness.lock.acquire()
     try:
-        response = await app_module._health_ready_response()
+        response = await probes_http.readiness_response(app_module._probes_deps())
     finally:
         probes.readiness.lock.release()
 
@@ -403,7 +403,7 @@ async def test_readiness_fails_closed_when_stale_cache_exceeds_bound() -> None:
     probes.readiness.lock = asyncio.Lock()
     await probes.readiness.lock.acquire()
     try:
-        response = await app_module._health_ready_response()
+        response = await probes_http.readiness_response(app_module._probes_deps())
     finally:
         probes.readiness.lock.release()
 
@@ -416,7 +416,7 @@ async def test_readiness_cold_refresh_returns_503_instead_of_queueing() -> None:
     probes.readiness.lock = asyncio.Lock()
     await probes.readiness.lock.acquire()
     try:
-        response = await app_module._health_ready_response()
+        response = await probes_http.readiness_response(app_module._probes_deps())
     finally:
         probes.readiness.lock.release()
 
@@ -438,7 +438,7 @@ async def test_readiness_ttl_expiry_refetches_dependencies(
         b'{"status":"unhealthy"}',
     )
 
-    response = await app_module._health_ready_response()
+    response = await probes_http.readiness_response(app_module._probes_deps())
 
     assert response.status_code == 200
     ping.assert_awaited_once()
@@ -455,9 +455,9 @@ async def test_readiness_refresh_timeout_fails_closed(monkeypatch: pytest.Monkey
 
     monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=hangs))
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=hangs))
-    monkeypatch.setattr(app_module, "_REFRESH_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(probes_http, "_REFRESH_TIMEOUT_SECONDS", 0.001)
 
-    response = await app_module._health_ready_response()
+    response = await probes_http.readiness_response(app_module._probes_deps())
 
     assert started.is_set()
     assert response.status_code == 503
@@ -473,7 +473,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
 
     for _ in range(2):
         probes.readiness.cache = None
-        response = await app_module._health_ready_response()
+        response = await probes_http.readiness_response(app_module._probes_deps())
         assert response.status_code == 503
 
     monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=AsyncMock()))
@@ -486,7 +486,7 @@ async def test_uninitialized_readiness_does_not_emit_storage_transitions(
     )
     for _ in range(2):
         probes.readiness.cache = None
-        response = await app_module._health_ready_response()
+        response = await probes_http.readiness_response(app_module._probes_deps())
         assert response.status_code == 200
 
     assert not any(record.msg.startswith("storage_readiness_") for record in caplog.records)
@@ -507,9 +507,9 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
     version = AsyncMock(side_effect=load_version)
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(version=version))
 
-    first_task = asyncio.create_task(app_module._version_response())
+    first_task = asyncio.create_task(probes_http.version_response(app_module.runtime.hindsight))
     await started.wait()
-    second_task = asyncio.create_task(app_module._version_response())
+    second_task = asyncio.create_task(probes_http.version_response(app_module.runtime.hindsight))
     await asyncio.sleep(0)
     release.set()
     first, second = await asyncio.gather(first_task, second_task)
@@ -523,7 +523,7 @@ async def test_version_refresh_fails_fast_for_concurrent_cold_request_and_refetc
         probes.version.cache.status_code,
         probes.version.cache.body,
     )
-    await app_module._version_response()
+    await probes_http.version_response(app_module.runtime.hindsight)
     assert version.await_count == 2
 
 
@@ -542,7 +542,7 @@ async def test_version_stale_response_is_bounded(age: float, expected_status: in
     probes.version.lock = asyncio.Lock()
     await probes.version.lock.acquire()
     try:
-        response = await app_module._version_response()
+        response = await probes_http.version_response(app_module.runtime.hindsight)
     finally:
         probes.version.lock.release()
 
@@ -558,10 +558,10 @@ async def test_version_refresh_timeout_is_cached_and_logged(
         await asyncio.Event().wait()
 
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(version=hangs))
-    monkeypatch.setattr(app_module, "_REFRESH_TIMEOUT_SECONDS", 0.001)
+    monkeypatch.setattr(probes_http, "_REFRESH_TIMEOUT_SECONDS", 0.001)
 
-    response = await app_module._version_response()
-    cached = await app_module._version_response()
+    response = await probes_http.version_response(app_module.runtime.hindsight)
+    cached = await probes_http.version_response(app_module.runtime.hindsight)
 
     assert response.status_code == 504
     assert cached.status_code == 504
@@ -586,12 +586,12 @@ async def test_version_failure_does_not_queue_or_amplify_concurrent_requests(
     version = AsyncMock(side_effect=fail_version)
     monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(version=version))
 
-    first_task = asyncio.create_task(app_module._version_response())
+    first_task = asyncio.create_task(probes_http.version_response(app_module.runtime.hindsight))
     await started.wait()
-    second = await app_module._version_response()
+    second = await probes_http.version_response(app_module.runtime.hindsight)
     release.set()
     first = await first_task
-    cached = await app_module._version_response()
+    cached = await probes_http.version_response(app_module.runtime.hindsight)
 
     assert [first.status_code, second.status_code, cached.status_code] == [502, 503, 502]
     assert json.loads(second.body) == {
@@ -619,7 +619,7 @@ def test_overlong_request_id_is_deliberately_dropped() -> None:
 async def test_version_without_initialized_gateway_fails_closed() -> None:
     app_module.runtime.hindsight = None
 
-    response = await app_module._version_response()
+    response = await probes_http.version_response(app_module.runtime.hindsight)
 
     assert response.status_code == 503
 

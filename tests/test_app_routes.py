@@ -14,6 +14,7 @@ from memory_router import probes
 from memory_router.admin import AdminActor
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGatewayError
+from memory_router.paths import _MAX_PATH_PROBE_DECODES, _normalize_dot_segments
 from memory_router.principals import PrincipalRegistry, PrincipalResolver
 from memory_router.rate_limit import InMemoryRateLimiter
 from tests.request_helpers import request
@@ -150,7 +151,7 @@ async def test_principal_mode_readiness_payload_requires_valid_principal() -> No
     )
     assert response.status_code == 200
     assert payload(response) == {"status": "healthy"}
-    app_module.runtime.auditor.log_failure.assert_called_with("readiness")
+    app_module.runtime.auditor.log_failure.assert_called_with("readiness", reason="wrong-secret")
 
 
 @pytest.mark.asyncio
@@ -799,16 +800,16 @@ def test_matched_segment_decode_remains_strict() -> None:
         max_depth_dot = quote(max_depth_dot, safe="")
     with pytest.raises(HttpError, match="dot path segments are not allowed"):
         app_module._decode_path_segment(max_depth_dot)
-    assert app_module._MAX_PATH_PROBE_DECODES == 8  # noqa: SLF001
+    assert _MAX_PATH_PROBE_DECODES == 8
 
 
 def test_trailing_dot_segment_preserves_trailing_slash() -> None:
-    assert app_module._normalize_dot_segments("/a/.") == "/a/"
-    assert app_module._normalize_dot_segments("/a/%2e") == "/a/"
-    assert app_module._normalize_dot_segments("/a/./b") == "/a/b"
-    assert app_module._normalize_dot_segments("/a/b/..") == "/a/"
-    assert app_module._normalize_dot_segments("/..") == "/"
-    assert app_module._normalize_dot_segments("../a") == "a"
+    assert _normalize_dot_segments("/a/.") == "/a/"
+    assert _normalize_dot_segments("/a/%2e") == "/a/"
+    assert _normalize_dot_segments("/a/./b") == "/a/b"
+    assert _normalize_dot_segments("/a/b/..") == "/a/"
+    assert _normalize_dot_segments("/..") == "/"
+    assert _normalize_dot_segments("../a") == "a"
 
 
 def _review_resolver() -> PrincipalResolver:
