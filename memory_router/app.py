@@ -779,15 +779,26 @@ async def _health_ready_response() -> Response:
     return await probes.readiness.get(refresh)
 
 
-def _full_readiness_authorized(request: Request) -> bool:
-    return router_authorized(
-        request.headers.get("authorization"), runtime.router_token, runtime.allow_anonymous
+async def _full_readiness_authorized(request: Request) -> bool:
+    authorization = request.headers.get("authorization")
+    if router_authorized(authorization, runtime.router_token, runtime.allow_anonymous):
+        return True
+    resolver = runtime.principal_resolver
+    if resolver is None or not principal_token_present(authorization):
+        return False
+    principal = await authenticate_principal(
+        request,
+        resolver=resolver,
+        auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
+        route_class="readiness",
+        on_failure=lambda: _auth_failure_rate("router"),
     )
+    return principal is not None
 
 
 async def _readiness_probe_response(request: Request) -> Response:
     response = await _health_ready_response()
-    if _full_readiness_authorized(request):
+    if await _full_readiness_authorized(request):
         return response
     status = "healthy" if response.status_code == 200 else "unhealthy"
     return JSONResponse({"status": status}, status_code=response.status_code)

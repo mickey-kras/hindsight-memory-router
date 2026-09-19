@@ -124,6 +124,36 @@ async def test_health_endpoints_and_exception_handlers(caplog: pytest.LogCapture
 
 
 @pytest.mark.asyncio
+async def test_principal_mode_readiness_payload_requires_valid_principal() -> None:
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.router_token = None
+    app_module.runtime.principal_resolver = _review_resolver()
+    app_module.runtime.repository = SimpleNamespace(ping=AsyncMock())
+    upstream_health = {"status": "healthy", "database": "connected", "db_acquire_ms": 0.4}
+    app_module.runtime.hindsight = SimpleNamespace(health=AsyncMock(return_value=upstream_health))
+
+    response = await app_module.health_ready(request("GET", "/health/ready"))
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+
+    auth = {"authorization": "Bearer mr_review-1_" + "ab" * 32}
+    probes.readiness.cache = None
+    response = await app_module.health_ready(request("GET", "/health/ready", headers=auth))
+    assert response.status_code == 200
+    assert payload(response) == upstream_health
+
+    probes.readiness.cache = None
+    response = await app_module.health_ready(
+        request(
+            "GET", "/health/ready", headers={"authorization": "Bearer mr_review-1_" + "ff" * 32}
+        )
+    )
+    assert response.status_code == 200
+    assert payload(response) == {"status": "healthy"}
+    app_module.runtime.auditor.log_failure.assert_called_with("readiness")
+
+
+@pytest.mark.asyncio
 async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     app_module.runtime.max_body_bytes = 3
     with pytest.raises(HttpError) as declared:
