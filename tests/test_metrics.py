@@ -6,14 +6,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from memory_router.errors import HttpError
-from memory_router.principals import PrincipalRegistry, PrincipalResolver
-from tests.request_helpers import request
 
 from memory_router import app as app_module
 from memory_router import config, metrics
 from memory_router.auth import AuthFailureAuditor
+from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
+from memory_router.principals import PrincipalRegistry, PrincipalResolver
+from tests.request_helpers import request
 
 _ADMIN_TOKENS = {
     "legacy": "legacy-token",
