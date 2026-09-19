@@ -64,7 +64,7 @@ jobs:
             package-lock.json
             ui/package-lock.json
 
-      - run: python -m pip install 'pip==26.1.2'
+      - run: python -m pip install 'pip==26.2.1'
       - run: python -m pip install --require-hashes -r requirements.txt
       - run: python -m pip install --require-hashes -r dev-requirements.txt
       - run: python -m pip install --no-deps -e .
@@ -79,7 +79,7 @@ jobs:
       - name: Python dev lock is current
         run: |
           cp dev-requirements.txt dev-requirements.expected.txt
-          printf 'pip==26.1.2\n' > dev-constraints.txt
+          printf 'pip==26.2.1\n' > dev-constraints.txt
           pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
             --allow-unsafe --extra dev -c dev-constraints.txt \
             --output-file dev-requirements.txt pyproject.toml
