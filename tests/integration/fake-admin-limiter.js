@@ -77,9 +77,13 @@ const server = http.createServer((req, res) => {
       },
     },
     (upstreamResponse) => {
+      // Forward application response headers the contract exposes to clients.
       res.writeHead(upstreamResponse.statusCode ?? 502, {
         "content-type":
           upstreamResponse.headers["content-type"] ?? "application/json",
+        ...(upstreamResponse.headers["deprecation"]
+          ? { deprecation: upstreamResponse.headers["deprecation"] }
+          : {}),
       });
       upstreamResponse.pipe(res);
     },
