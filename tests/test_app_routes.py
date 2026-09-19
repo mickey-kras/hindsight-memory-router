@@ -340,7 +340,7 @@ async def test_admin_dispatch_all_routes_and_validation() -> None:
     )
     app_module.runtime.admin = admin
     auth = {"authorization": "Bearer admin"}
-    actor = AdminActor(token_scope="legacy")
+    actor = AdminActor(token_scope="legacy")  # noqa: S106 - label, not a secret
 
     response = await app_module.dispatch(
         "admin/quarantine/queue",
@@ -603,7 +603,7 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
         ),
     )
     assert response.status_code == 200
-    admin.postpone.assert_awaited_once_with("q", AdminActor(token_scope="review"))
+    admin.postpone.assert_awaited_once_with("q", AdminActor(token_scope="review"))  # noqa: S106 - label, not a secret
 
     response = await app_module.dispatch(
         "admin/quarantine/cleanup",
@@ -614,7 +614,7 @@ async def test_admin_mutation_actor_reflects_matched_token_scope(
         ),
     )
     assert response.status_code == 200
-    admin.cleanup.assert_awaited_once_with({}, AdminActor(token_scope="cleanup"))
+    admin.cleanup.assert_awaited_once_with({}, AdminActor(token_scope="cleanup"))  # noqa: S106 - label, not a secret
 
 
 @pytest.mark.asyncio

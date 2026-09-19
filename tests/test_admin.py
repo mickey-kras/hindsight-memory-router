@@ -18,7 +18,7 @@ from tests.fakes import (
     registry,
 )
 
-ACTOR = AdminActor(token_scope="review")
+ACTOR = AdminActor(token_scope="review")  # noqa: S106 - label, not a secret
 
 
 def exact_item(
@@ -84,8 +84,8 @@ def service(
 
 
 def test_admin_actor_label_identity() -> None:
-    assert AdminActor(token_scope="review").label == "review"
-    assert AdminActor(principal="agent-1", token_key_id="key-1").label == "agent-1"
+    assert AdminActor(token_scope="review").label == "review"  # noqa: S106 - label, not a secret
+    assert AdminActor(principal="agent-1", token_key_id="key-1").label == "agent-1"  # noqa: S106 - label, not a secret
     assert AdminActor().label == "unknown"
 
 
@@ -387,7 +387,7 @@ async def test_admin_mutations_emit_unthrottled_admin_action_audit_events(
         ("cleanup", "quarantine_maintenance"),
     ]
     for record in records:
-        assert record.admin_token_scope == "review"  # type: ignore[attr-defined]
+        assert record.admin_token_scope == "review"  # type: ignore[attr-defined]  # noqa: S105 - label, not a secret
         assert record.route_class == "admin"  # type: ignore[attr-defined]
         assert record.outcome == "healthy"  # type: ignore[attr-defined]
     assert records[0].quarantine_id == QID  # type: ignore[attr-defined]

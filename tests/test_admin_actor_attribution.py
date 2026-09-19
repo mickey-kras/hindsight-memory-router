@@ -19,7 +19,7 @@ def test_admin_action_audit_fields_follow_bounded_vocabularies() -> None:
         }
     )
     assert fields["action"] == "approve"
-    assert fields["admin_token_scope"] == "review"
+    assert fields["admin_token_scope"] == "review"  # noqa: S105 - label, not a secret
     assert fields["quarantine_id"] == "q_item_0123456789abcdef"
     assert "action" not in sanitize_fields({"action": "drop-everything"})
     assert "admin_token_scope" not in sanitize_fields({"admin_token_scope": "Bearer secret"})
@@ -36,7 +36,7 @@ def test_admin_action_events_are_never_throttled(caplog: pytest.LogCaptureFixtur
             "admin_action",
             route_class="admin",
             action="cleanup",
-            admin_token_scope="cleanup",
+            admin_token_scope="cleanup",  # noqa: S106 - label, not a secret
         )
     assert [record.msg for record in caplog.records].count("admin_action") == 2
 
