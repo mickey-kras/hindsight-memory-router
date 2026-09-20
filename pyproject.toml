@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,35 +8,72 @@ version = "0.1.2"
 license-files = ["LICENSE", "licenses/*.txt"]
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi==0.135.1",
-    "uvicorn==0.42.0",
-    "python-socks==2.7.3",
-    "python-multipart==0.0.22",
-    "aiohttp==3.13.3",
-    "cryptography==46.0.7",
-    "hindsight-client==0.4.1",
-    "psycopg[binary]==3.3.3",
-    "prometheus-client==0.24.1",
+  "agent-memory-guard==0.3.2",
+  "aiosqlite==0.22.1",
+  "Pebble==5.2.2",
+  "cryptography==50.0.1",
+  "fastapi==0.141.1",
+  "httpx==0.28.1",
+  "psycopg[binary]==3.3.5",
+  "psycopg-pool==3.3.1",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "rfc8785==0.1.4",
+  "starlette==1.6.0",
+  "structlog==26.1.0",
+  "uvicorn==0.52.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit==1.9.4",
+  "coverage==7.16.0",
+  "mypy==2.3.1",
+  "pip-audit==2.10.1",
+  "pip-tools==7.6.1",
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "pytest-httpx==0.36.2",
+  "pyyaml==6.0.3",
+  "ruff==0.16.7",
 ]
 
 [project.scripts]
-hmr = "hindsight_memory_router.cli:main"
+memory-router = "memory_router.__main__:main"
+memory-router-decrypt-quarantine = "memory_router.cli.decrypt_quarantine:main"
+memory-router-migrate-legacy-quarantine = "memory_router.cli.migrate_legacy_quarantine:main"
 
 [tool.setuptools.packages.find]
-include = ["hindsight_memory_router*"]
+include = ["memory_router*"]
 
 [tool.setuptools.package-data]
-hindsight_memory_router = ["compat/**/*"]
-
-[dependency-groups]
-dev = []
+memory_router = ["confusables_ascii.json"]
 
 [tool.ruff]
 target-version = "py312"
+line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+select = ["E", "F", "I", "B", "UP", "SIM", "S"]
+ignore = ["E501", "SIM105", "SIM117", "UP038"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]
+"ui/tests/**" = ["S101"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
+packages = ["memory_router"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["memory_router"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
