@@ -128,16 +128,35 @@ function mock() {
           state.refs[ref.replace(/^refs\//, "")] = { object: { type: "commit", sha: commit } };
           return data({});
         },
+        deleteRef: ({ ref }) => {
+          state.calls.push(`delete:${ref}`);
+          if (!state.refs[ref]) throw Object.assign(new Error("Not found"), { status: 404 });
+          delete state.refs[ref];
+          return data({});
+        },
+      },
+      pulls: {
+        list: () => data(state.pulls || []),
+        create: (args) => {
+          state.calls.push(`pr:${args.head}`);
+          state.pull = { number: 7, ...args };
+          return data(state.pull);
+        },
       },
     },
     paginate: async (method, args) => (await method(args)).data,
   };
   const outputs = {};
+  const summary = {
+    addRaw: () => summary,
+    addHeading: () => summary,
+    write: async () => {},
+  };
   const core = {
     setOutput: (key, value) => {
       outputs[key] = value;
     },
-    summary: { addRaw: () => ({ write: async () => {} }) },
+    summary,
   };
   const context = {
     repo: { owner: "example", repo: "hindsight-memory-router" },
@@ -462,3 +481,88 @@ test("unchanged integration artifacts can be reused but changed bytes need a new
   assert.deepEqual(waits, [1000, 2000]);
   await assert.rejects(release.retry(async () => { throw Object.assign(new Error("missing"), { status: 404 }); }, async () => assert.fail("must not retry missing versions")), /missing/);
  });
+
+test("follow-up versions derive only from the release workflow ref", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    assert.equal(release.publishedVersion(m.context), "0.1.0");
+    assert.equal(release.nextPatch("0.1.0"), "0.1.1");
+    assert.equal(release.nextPatch("1.9.9"), "1.9.10");
+    assert.throws(() => release.nextPatch("0.1"), /Invalid released version/);
+    m.context.eventName = "workflow_dispatch";
+    assert.throws(() => release.publishedVersion(m.context), /release workflow/);
+    m.context.eventName = "push";
+    m.context.ref = "refs/heads/main";
+    assert.throws(() => release.publishedVersion(m.context), /release workflow/);
+    m.context.ref = "refs/heads/release/0.1";
+    assert.throws(() => release.publishedVersion(m.context), /Invalid release branch version/);
+  }));
+
+function publishedFixture(m) {
+  prepared(m);
+  m.state.refs["tags/v0.1.0"] = { object: { type: "commit", sha } };
+  const files = {
+    "release-version.json": `${JSON.stringify({ version: "0.1.0" }, null, 2)}\n`,
+    "pyproject.toml": '[project]\nversion = "0.1.0"\n',
+  };
+  m.github.rest.repos.getContent = async ({ path }) => ({
+    data: { type: "file", encoding: "base64", content: Buffer.from(files[path]).toString("base64") },
+  });
+  return files;
+}
+
+test("follow-up opens a next-patch bump PR on main and never repeats it", () =>
+  fixture(async () => {
+    const m = mock();
+    const files = publishedFixture(m);
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, ["tree", "commit", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1"]);
+    assert.equal(m.state.pull.base, "main");
+    const tree = Object.fromEntries(m.state.tree.map((item) => [item.path, item.content]));
+    assert.deepEqual(JSON.parse(tree["release-version.json"]), { version: "0.1.1" });
+    assert.equal(tree["pyproject.toml"], '[project]\nversion = "0.1.1"\n');
+    m.state.calls.length = 0;
+    m.state.pulls = [{ number: 7 }];
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, [], "an open bump PR must be reused");
+    m.state.pulls = [];
+    files["release-version.json"] = `${JSON.stringify({ version: "0.2.0" }, null, 2)}\n`;
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, [], "a main that moved on must not be bumped");
+    m.state.refs["heads/ci/bump-release-version-0-1-1"] = { object: { type: "commit", sha: base } };
+    files["release-version.json"] = `${JSON.stringify({ version: "0.1.0" }, null, 2)}\n`;
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, ["tree", "commit", "delete:heads/ci/bump-release-version-0-1-1", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1"], "a stale bump branch must be recreated");
+  }));
+
+test("follow-up bump refuses unpublished versions and misaligned main files", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    await assert.rejects(release.bumpReleasedVersion(m), /not published/);
+    const files = publishedFixture(m);
+    m.state.refs["tags/v0.1.0"].object.sha = base;
+    await assert.rejects(release.bumpReleasedVersion(m), /not published/);
+    m.state.refs["tags/v0.1.0"].object.sha = sha;
+    files["pyproject.toml"] = '[project]\nversion = "0.9.9"\n';
+    await assert.rejects(release.bumpReleasedVersion(m), /exactly once/);
+    assert.equal(m.state.calls.length, 0);
+  }));
+
+test("follow-up deletes the published branch only at its tagged commit", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    await assert.rejects(release.deletePublishedBranch(m), /not published/);
+    m.state.refs["tags/v0.1.0"] = { object: { type: "commit", sha: base } };
+    await assert.rejects(release.deletePublishedBranch(m), /not published/);
+    m.state.refs["tags/v0.1.0"].object.sha = sha;
+    m.state.refs["heads/release/0.1.0"].object.sha = base;
+    await assert.rejects(release.deletePublishedBranch(m), /advanced past the published commit/);
+    m.state.refs["heads/release/0.1.0"].object.sha = sha;
+    await release.deletePublishedBranch(m);
+    assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"]);
+    await release.deletePublishedBranch(m);
+    assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"], "an absent branch must be a no-op");
+  }));
