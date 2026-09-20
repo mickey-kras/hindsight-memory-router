@@ -576,15 +576,37 @@ async function deletePublishedBranch({ github, context, core }) {
   const ref = `heads/release/${version}`;
   const current = await optional(() => github.rest.git.getRef({ ...context.repo, ref }));
   if (!current) {
-    await summary.addRaw(`Branch \`release/${version}\` is already absent.\n`).write();
-    return;
+    await summary.addRaw(`Branch \`release/${version}\` is already absent.\n`);
+  } else {
+    requireValue(
+      current.object.sha === context.sha,
+      `Refusing to delete release/${version}: the branch advanced past the published commit`,
+    );
+    await github.rest.git.deleteRef({ ...context.repo, ref });
+    await summary.addRaw(`Deleted \`release/${version}\`.\n`);
   }
-  requireValue(
-    current.object.sha === context.sha,
-    `Refusing to delete release/${version}: the branch advanced past the published commit`,
-  );
-  await github.rest.git.deleteRef({ ...context.repo, ref });
-  await summary.addRaw(`Deleted \`release/${version}\`.\n`).write();
+  const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+  for (const item of branches) {
+    if (!item.name.startsWith("release/") || item.name === `release/${version}`) continue;
+    const stale = item.name.slice("release/".length);
+    if (!releaseTag.test(`v${stale}`)) continue;
+    try {
+      const tag = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `tags/v${stale}` }));
+      if (!tag || tag.object.type !== "commit") continue;
+      if (item.commit.sha !== tag.object.sha) {
+        core.warning(`Kept ${item.name}: the branch advanced past its published tag`);
+        await summary.addRaw(`Kept \`${item.name}\`: the branch advanced past its published tag.\n`);
+        continue;
+      }
+      await github.rest.git.deleteRef({ ...context.repo, ref: `heads/${item.name}` });
+      await summary.addRaw(`Pruned \`${item.name}\`: v${stale} is published at the same commit.\n`);
+    } catch (error) {
+      if (error.status === 404) continue;
+      core.error(`Pruning ${item.name} failed: ${error.message}`);
+      await summary.addRaw(`Pruning \`${item.name}\` failed (${error.message}); delete it manually.\n`);
+    }
+  }
+  await summary.write();
 }
 
 module.exports = {

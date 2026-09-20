@@ -59,6 +59,8 @@ function mock() {
     calls: [],
     assets: [],
     releases: [],
+    warnings: [],
+    errors: [],
     comparison: { status: "ahead", total_commits: 1, commits: [{ sha }], files: [{ filename: "release.json" }] },
   };
   state.rules.push({
@@ -156,6 +158,8 @@ function mock() {
     setOutput: (key, value) => {
       outputs[key] = value;
     },
+    warning: (line) => state.warnings.push(line),
+    error: (line) => state.errors.push(line),
     summary,
   };
   const context = {
@@ -565,4 +569,31 @@ test("follow-up deletes the published branch only at its tagged commit", () =>
     assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"]);
     await release.deletePublishedBranch(m);
     assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"], "an absent branch must be a no-op");
+  }));
+
+test("follow-up prunes stale branches published at their tag and keeps advanced ones", () =>
+  fixture(async () => {
+    const m = mock();
+    publishedFixture(m);
+    m.state.branches = [
+      { name: "release/0.1.0", commit: { sha } },
+      { name: "release/0.0.9", commit: { sha: base } },
+      { name: "release/0.0.8", commit: { sha } },
+      { name: "release/0.0.7", commit: { sha: base } },
+      { name: "release/0.0.6", commit: { sha: base } },
+      { name: "release/next", commit: { sha: base } },
+      { name: "main", commit: { sha: base } },
+    ];
+    m.state.refs["heads/release/0.0.9"] = { object: { type: "commit", sha: base } };
+    m.state.refs["tags/v0.0.9"] = { object: { type: "commit", sha: base } };
+    m.state.refs["tags/v0.0.8"] = { object: { type: "commit", sha: base } };
+    m.state.refs["tags/v0.0.6"] = { object: { type: "commit", sha: base } };
+    await release.deletePublishedBranch(m);
+    assert.deepEqual(m.state.calls, [
+      "delete:heads/release/0.1.0",
+      "delete:heads/release/0.0.9",
+      "delete:heads/release/0.0.6",
+    ]);
+    assert.deepEqual(m.state.errors, [], "a branch that vanished mid-run must be tolerated");
+    assert.deepEqual(m.state.warnings, ["Kept release/0.0.8: the branch advanced past its published tag"]);
   }));
