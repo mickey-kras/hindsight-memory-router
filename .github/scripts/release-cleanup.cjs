@@ -150,7 +150,7 @@ async function cleanupDockerHubReferrers(core, repository, credentials, digests,
   try {
     const tokenResponse = await hubRequest(
       fetchImpl,
-      "https://auth.docker.io/token?service=registry.docker.io&scope=repository:" + repository + ":pull,delete",
+      `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repository}:pull,delete`,
       { headers: { authorization: `Basic ${credentials}` } },
     );
     const { token } = await tokenResponse.json();
