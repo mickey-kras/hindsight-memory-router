@@ -263,3 +263,81 @@ test("branch deletion skips published, advanced, and absent branches", async () 
   await cleanup.branch({ github: current, context: fakeContext(), core });
   assert.equal(current.deleted, true);
 });
+
+function dispatchContext(runId = 99) {
+  return fakeContext({
+    eventName: "workflow_dispatch",
+    workflow: "main",
+    ref: "refs/heads/main",
+    runId,
+  });
+}
+
+function preparationGithub(branches, deleted) {
+  const encode = (value) => ({
+    data: { type: "file", encoding: "base64", content: Buffer.from(`${JSON.stringify(value)}\n`).toString("base64") },
+  });
+  return {
+    paginate: async () => branches.map((branch) => ({ name: branch.name })),
+    rest: {
+      repos: {
+        getContent: async ({ ref }) => {
+          const branch = branches.find((item) => item.name === ref);
+          if (!branch || !branch.manifest) throw Object.assign(new Error("Not Found"), { status: 404 });
+          return encode(branch.manifest);
+        },
+        getReleaseByTag: async ({ tag }) => {
+          const branch = branches.find((item) => `v${item.manifest?.version}` === tag && item.published);
+          if (!branch) throw Object.assign(new Error("Not Found"), { status: 404 });
+          return { data: {} };
+        },
+      },
+      git: {
+        getRef: async ({ ref }) => {
+          const branch = branches.find((item) => `v${item.manifest?.version}` === ref.slice("tags/".length) && item.published);
+          if (!branch) throw Object.assign(new Error("Not Found"), { status: 404 });
+          return { data: {} };
+        },
+        deleteRef: async ({ ref }) => {
+          if (ref === "heads/release/0.4.0") throw new Error("forbidden");
+          deleted.push(ref);
+        },
+      },
+    },
+  };
+}
+
+test("preparation cleanup accepts only the main dispatch context", async () => {
+  const { core } = fakeCore();
+  const github = preparationGithub([], []);
+  await assert.rejects(cleanup.preparation({ github, context: fakeContext(), core }), /main workflow button/);
+  const wrongRef = { ...dispatchContext(), ref: "refs/heads/release/0.2.0" };
+  await assert.rejects(cleanup.preparation({ github, context: wrongRef, core }), /main workflow button/);
+});
+
+test("preparation cleanup deletes only this run's unpublished release branches", async () => {
+  const { core, state } = fakeCore();
+  const branches = [
+    { name: "release/0.2.0", manifest: { version: "0.2.0", preparation_run: 99 } },
+    { name: "release/0.3.0", manifest: { version: "0.3.0", preparation_run: 42 } },
+    { name: "release/0.3.1", manifest: { version: "0.3.1", preparation_run: 99 }, published: true },
+    { name: "release/0.4.0", manifest: { version: "0.4.0", preparation_run: 99 } },
+    { name: "release/not-a-version", manifest: { version: "x", preparation_run: 99 } },
+    { name: "release/0.5.0", manifest: null },
+    { name: "main" },
+  ];
+  const deleted = [];
+  await cleanup.preparation({ github: preparationGithub(branches, deleted), context: dispatchContext(), core });
+  assert.deepEqual(deleted, ["heads/release/0.2.0"]);
+  assert.deepEqual(state.errors, ["Branch `release/0.4.0` cleanup failed: forbidden"]);
+  assert.match(state.summary, /Kept `release\/0\.3\.1`/);
+  assert.doesNotMatch(state.summary, /release\/0\.3\.0`: deleted/);
+});
+
+test("preparation cleanup is a no-op without matching branches", async () => {
+  const { core, state } = fakeCore();
+  const deleted = [];
+  await cleanup.preparation({ github: preparationGithub([{ name: "main" }], deleted), context: dispatchContext(), core });
+  assert.deepEqual(deleted, []);
+  assert.equal(state.errors.length, 0);
+});
