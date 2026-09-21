@@ -1298,6 +1298,33 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "name": "time_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Time axis used for filtering and ordering."
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive ISO datetime lower bound."
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exclusive ISO datetime upper bound."
           }
         ],
         "responses": {
@@ -3263,6 +3290,33 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "name": "time_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Time axis used for filtering and ordering."
+          },
+          {
+            "name": "start_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Inclusive ISO datetime lower bound."
+          },
+          {
+            "name": "end_date",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Exclusive ISO datetime upper bound."
           }
         ],
         "responses": {
