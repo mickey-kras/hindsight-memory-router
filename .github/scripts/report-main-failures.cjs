@@ -59,7 +59,7 @@ function diagnostics(lines) {
   return errors.length ? [[...new Set(errors)].join('\n')] : [];
 }
 
-function reportsForJob(run, job, log) {
+function reportsForJob(run, job, log, fallback = '') {
   const steps = (job.steps || []).filter(step => BAD.has(step.conclusion));
   if (!steps.length) steps.push({ name: job.conclusion, number: 0 });
   return steps.flatMap(step => {
@@ -75,7 +75,7 @@ function reportsForJob(run, job, log) {
       const symptoms = lines.filter(line => /HMR_FAILURE_JSON=|current check:|(?:failed|error|exited)(?:[ :.(]|$)/i.test(line));
       const excerpt = (symptoms.length ? symptoms.slice(-50) : lines.slice(-35)).join('\n');
       const diagnostic = identified ? detail : [detail, excerpt].filter(Boolean).join('\n');
-      const evidence = clean((diagnostic || 'Job logs unavailable.').slice(0,10000));
+      const evidence = clean((diagnostic || fallback || 'Job logs unavailable.').slice(0,10000));
       return { key, occurrence,
         title: clean(`[ci] ${job.name}: ${detail ? detail.split('\n')[0] : `${step.name} — diagnostics incomplete`}`).slice(0,240),
         body: `Validation failed on ${clean(run.head_branch || 'main')}.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
@@ -87,6 +87,19 @@ function reportsForJob(run, job, log) {
   });
 }
 
+function logFallback(api, job, failure) {
+  const lines = (job.steps || []).filter(step => BAD.has(step.conclusion))
+    .map(step => `Step "${step.name}" concluded ${step.conclusion}.`);
+  try {
+    const path = new URL(job.check_run_url).pathname;
+    const annotations = JSON.parse(api(`${path}/annotations?per_page=100`));
+    lines.push(...annotations.filter(annotation => annotation.annotation_level === 'failure')
+      .map(annotation => annotation.message).slice(0, 10));
+  } catch { /* Check annotations are best-effort. */ }
+  if (failure) lines.push(`Job log download failed: ${String(failure.message).trim().split('\n').at(-1)}`);
+  return lines.filter(Boolean).join('\n');
+}
+
 function trustedRun(run, repository, defaultBranch) {
   return run.repository?.full_name === repository && run.head_repository?.full_name === repository &&
     ((run.head_branch === defaultBranch && ['push', 'workflow_dispatch'].includes(run.event) &&
@@ -95,7 +108,8 @@ function trustedRun(run, repository, defaultBranch) {
       run.event === 'push' && run.path === '.github/workflows/release.yml'));
 }
 
-function main(env = process.env, execute = execFileSync) {
+function main(env = process.env, execute = execFileSync,
+  sleep = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)) {
   const repository = env.GITHUB_REPOSITORY;
   const id = env.REPORT_RUN_ID || env.GITHUB_RUN_ID;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repository || '') || !/^\d+$/.test(id || '')) {
@@ -116,9 +130,14 @@ function main(env = process.env, execute = execFileSync) {
     issue.body.includes(`- Detected at commit: \`${run.head_sha}\``) && issue.body.includes(`- Workflow: ${run.html_url}`));
   const reports = [];
   for (const job of jobs.filter(job => BAD.has(job.conclusion))) {
-    let log = '';
-    try { log = api(`${root}/actions/jobs/${job.id}/logs`); } catch { /* Report missing diagnostics. */ }
-    for (const report of reportsForJob(run, job, log)) {
+    // Just-finished jobs often 404 on log download while the run is still open.
+    let log = '', failure;
+    for (let attempt = 0; attempt < 3 && !log; attempt += 1) {
+      if (attempt) sleep(10000 * attempt);
+      try { log = api(`${root}/actions/jobs/${job.id}/logs`); } catch (error) { failure = error; }
+    }
+    const fallback = log ? '' : logFallback(api, job, failure);
+    for (const report of reportsForJob(run, job, log, fallback)) {
       // Sonar's stable finding IDs already identify individual causes.
       if (relatedSonar.length && report.body.includes(' / SonarQube quality gate\n')) continue;
       reports.push(report);
@@ -143,5 +162,5 @@ function main(env = process.env, execute = execFileSync) {
   return reports;
 }
 
-module.exports = { clean, normalize, diagnostics, reportsForJob, trustedRun, main };
+module.exports = { clean, normalize, diagnostics, reportsForJob, logFallback, trustedRun, main };
 if (require.main === module) main();

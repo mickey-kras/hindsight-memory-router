@@ -30,7 +30,13 @@ if (cmd === 'image') {
 } else if (cmd === 'push') {
   state.pushes.push(sub);
   fs.writeFileSync(process.env.MOCK_STATE, JSON.stringify(state));
-  if (state.fail === sub) { process.stderr.write('push failed'); process.exit(1); }
+  if (state.fail === sub) { process.stderr.write(state.failMessage || 'push failed'); process.exit(1); }
+  if (state.transient && state.transient.tag === sub && state.transient.times > 0) {
+    state.transient.times -= 1;
+    fs.writeFileSync(process.env.MOCK_STATE, JSON.stringify(state));
+    process.stderr.write(state.transient.message);
+    process.exit(1);
+  }
   state.existing.push(sub);
   fs.writeFileSync(process.env.MOCK_STATE, JSON.stringify(state));
 } else if (cmd === 'buildx') {
@@ -59,6 +65,34 @@ test('scan-to-push promotion refuses existing multi-arch index manifests before 
   put({ existing: [`${env.IMAGE_GHCR}:${env.VERSION}`], pushes: [], index: true });
   assert.notEqual(run().status, 0);
   assert.deepEqual(get().pushes, []);
+}));
+
+test('transient registry errors are retried with backoff until the push succeeds', () => fixture(({ run, put, get, env }) => {
+  const flakyTag = `${env.IMAGE_GHCR}:${env.VERSION}`;
+  put({ existing: [], pushes: [], transient: { tag: flakyTag, times: 2, message: 'unknown blob' } });
+  const result = run();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(get().pushes.filter(tag => tag === flakyTag).length, 3);
+  assert.match(result.stderr, /retrying/);
+  assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /published=true/);
+}));
+
+test('persistent transient errors exhaust three attempts and fail the push', () => fixture(({ run, put, get, env }) => {
+  const flakyTag = `${env.IMAGE_GHCR}:${env.VERSION}`;
+  put({ existing: [], pushes: [], transient: { tag: flakyTag, times: 99, message: 'i/o timeout' } });
+  assert.notEqual(run().status, 0);
+  assert.equal(get().pushes.filter(tag => tag === flakyTag).length, 3);
+  assert.deepEqual(get().existing, []);
+}));
+
+test('permanent and unrecognized push errors fail without retries', () => fixture(({ run, put, get, env }) => {
+  const tag = `${env.IMAGE_GHCR}:${env.VERSION}`;
+  for (const failMessage of ['denied: requested access to the resource is denied',
+    'unauthorized: authentication required', 'blob upload invalid']) {
+    put({ existing: [], pushes: [], fail: tag, failMessage });
+    assert.notEqual(run().status, 0);
+    assert.deepEqual(get().pushes, [tag]);
+  }
 }));
 
 test('partial registry publication resumes only missing tags without overwriting existing ones', () => fixture(({ run, put, get, env }) => {

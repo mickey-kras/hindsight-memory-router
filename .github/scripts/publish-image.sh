@@ -34,9 +34,28 @@ for tag in "${tags[@]}"; do
   fi
 done
 
+push_with_retry() {
+  local tag="$1" delay
+  for delay in 0 5 15; do
+    if [ "$delay" -gt 0 ]; then
+      echo "Push of $tag hit a transient registry error; retrying in ${delay}s" >&2
+      sleep "$delay"
+    fi
+    if docker push "$tag" 2>&1 | tee "$RUNNER_TEMP/release-push.log"; then
+      return 0
+    fi
+    if grep -Eiq 'denied|unauthorized' "$RUNNER_TEMP/release-push.log" ||
+       ! grep -Eiq 'unknown blob|EOF|i/o timeout|timeout|TLS handshake' "$RUNNER_TEMP/release-push.log"; then
+      return 1
+    fi
+  done
+  echo "Push failed after 3 attempts: $tag" >&2
+  return 1
+}
+
 for tag in "${missing[@]}"; do
   docker tag "$SOURCE_IMAGE" "$tag"
-  docker push "$tag"
+  push_with_retry "$tag"
 done
 
 ghcr_digest="$(docker buildx imagetools inspect "$IMAGE_GHCR:$VERSION" --format '{{json .Manifest.Digest}}' | jq -er .)"
