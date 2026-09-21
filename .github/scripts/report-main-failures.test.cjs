@@ -67,6 +67,55 @@ test('missing logs and job-level cancellation still create actionable occurrence
   assert.match(result[0].body, /Job logs unavailable/);
 });
 
+test('log download is retried and late-arriving logs supply the real excerpt', () => {
+  let downloads = 0;
+  const sleeps = [];
+  const execute = (command, args) => {
+    if (command === 'bash') return '';
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify(run);
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path.endsWith('/logs')) {
+      downloads += 1;
+      if (downloads < 3) throw new Error('Command failed: gh api\nHTTP 404: logs not yet available');
+      return log('ValueError: unknown blob');
+    }
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  const reports = main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute, ms => sleeps.push(ms));
+  assert.equal(downloads, 3);
+  assert.deepEqual(sleeps, [10000, 20000]);
+  assert.match(reports[0].body, /ValueError: unknown blob/);
+  assert.doesNotMatch(reports[0].body, /Job logs unavailable/);
+});
+
+test('unavailable logs fall back to failed steps, check annotations, and the download error', () => {
+  const sleeps = [];
+  const failing = { ...job, check_run_url: 'https://api.github.com/repos/owner/repo/check-runs/7' };
+  const execute = (command, args) => {
+    if (command === 'bash') return '';
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify(run);
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [failing] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path.endsWith('/logs')) throw new Error('Command failed: gh api\nHTTP 404: logs not yet available');
+    if (path.endsWith('/annotations?per_page=100')) return JSON.stringify([
+      { annotation_level: 'failure', message: 'Process completed with exit code 1.' },
+      { annotation_level: 'notice', message: 'ubuntu-latest label migration notice' }]);
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  const reports = main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute, ms => sleeps.push(ms));
+  assert.deepEqual(sleeps, [10000, 20000]);
+  assert.match(reports[0].body, /Step "smoke" concluded failure\./);
+  assert.match(reports[0].body, /Process completed with exit code 1\./);
+  assert.match(reports[0].body, /Job log download failed: HTTP 404/);
+  assert.doesNotMatch(reports[0].body, /migration notice/);
+  assert.doesNotMatch(reports[0].body, /Job logs unavailable/);
+});
+
 test('only canonical main publish runs can write issues', () => {
   assert.equal(trustedRun(run, 'owner/repo', 'main'), true);
   for (const override of [{ event: 'pull_request' }, { head_branch: 'feature' },

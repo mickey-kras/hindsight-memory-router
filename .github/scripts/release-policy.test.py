@@ -290,7 +290,7 @@ class ReleasePolicyTests(unittest.TestCase):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         followup = main["jobs"]["release-followup"]
         self.assertEqual(followup["needs"], ["publish"])
-        self.assertIs(followup["continue-on-error"], True)
+        self.assertNotIn("continue-on-error", followup)
         self.assertEqual(followup["environment"], "release-automation")
         self.assertEqual(followup["permissions"], {"contents": "read"})
         condition = followup["if"]
