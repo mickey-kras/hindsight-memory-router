@@ -534,7 +534,6 @@ jobs:
       needs.publish.result == 'success' &&
       needs.publish.outputs.released != ''
     runs-on: ubuntu-latest
-    continue-on-error: true
     environment: release-automation
     concurrency:
       group: image-release-${{ github.repository }}
