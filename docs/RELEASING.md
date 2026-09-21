@@ -7,6 +7,9 @@
 3. Main passes, including Sonar → `release/X.Y.Z` freezes inputs → release gates pass → publish artifacts and immutable `vX.Y.Z` → promote `latest`.
 
 The checkbox authorizes publication; there is no second button. Normal main runs never publish.
+After publication the automation opens a pull request bumping main to the next patch version and
+deletes the published `release/X.Y.Z` branch, plus any earlier `release/*` branch still at its
+published tag. A branch that advanced past its tag is kept and reported in the run summary.
 Preparation pauses Dependabot auto-merge for the full run. Avoid manual merges until it finishes.
 The release includes the main SHA selected at dispatch, shown in the run summary. If main advances
 before branch creation, rerun from current main. Only automation creates release branches and tags.
@@ -56,8 +59,8 @@ grandfathered; reviewed exceptions go into `allow-dependencies-licenses` as exac
 
 1. Merge reviewed automation through existing gates. Integrations may need an owner-reviewed policy
    bootstrap. Keep the guard enabled; never fabricate statuses or give the release App a guard bypass.
-2. Create a dedicated GitHub App installed only here: **Contents read/write**, implicit Metadata read,
-   **no Administration**. Create environment **release-automation**, restricted to `main` and `release/*`.
+2. Create a dedicated GitHub App installed only here: **Contents read/write**, **Pull requests read/write**,
+   implicit Metadata read, **no Administration**. Create environment **release-automation**, restricted to `main` and `release/*`.
    Add environment secret `RELEASE_APP_PRIVATE_KEY`, repository variable `RELEASE_APP_ID`, and no environment reviewers.
 3. Generate ruleset import files:
 
@@ -98,7 +101,8 @@ self-approval. Sonar stays main-only by design; release tests, CodeQL, Aislop an
 - **Upload/signing/alias failure:** **Re-run failed jobs**. Existing tags/assets must match. Router retains
   the tested image for 30 days and repeats smoke/scanning on retry. Never overwrite published bytes.
 - **Bytes must change after publication began, or saved image expired:** use a new version.
-- **Released:** retain the branch/tag. Future releases use another version.
+- **Released:** the branch is deleted automatically; the tag and immutable release stay. Future
+  releases use another version.
 
 Avoid merging release fixes during publication. GitHub and the registries do not publish atomically;
 use recorded digests while recovering a partial publication.
@@ -115,6 +119,8 @@ removes the run's leftovers automatically and posts a summary of what it deleted
 - the `release/X.Y.Z` branch, deleted with the release App token (the App is the only bypass actor on the
   deletion ruleset). The branch is kept when it advanced past the failed run or when `vX.Y.Z` already
   exists — in that case re-run the failed jobs to finish the release instead.
+
+A failed preparation dispatch also runs cleanup, deleting only the `release/*` branches its own run created.
 
 Cleanup is idempotent, runs only on release branches after a failure, never on main or on success, and its
 own failures cannot mask the original failure. It assumes the single-arch (Linux amd64) image the publish

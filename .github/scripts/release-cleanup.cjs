@@ -273,6 +273,40 @@ async function branch({ github, context, core }) {
   await summary.write();
 }
 
+async function preparation({ github, context, core }) {
+  requireValue(
+    context.eventName === "workflow_dispatch" && context.ref === "refs/heads/main",
+    "Preparation cleanup is allowed only from the main workflow button",
+  );
+  const summary = core.summary.addHeading("Failed release cleanup: preparation branches", 3);
+  const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+  for (const item of branches.filter((branch) => branch.name.startsWith("release/"))) {
+    const version = item.name.slice("release/".length);
+    if (!releaseTag.test(`v${version}`)) continue;
+    const file = await github.rest.repos
+      .getContent({ ...context.repo, path: "release.json", ref: item.name })
+      .then(
+        ({ data }) => data,
+        (error) => {
+          if (error.status === 404) return null;
+          throw error;
+        },
+      );
+    if (!file || file.type !== "file" || file.encoding !== "base64") continue;
+    const manifest = JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
+    if (manifest.preparation_run !== context.runId) continue;
+    if (await published(github, context.repo, version)) {
+      await summary.addRaw(`Kept \`${item.name}\`: \`v${version}\` already has a git tag or release.\n`);
+      continue;
+    }
+    await attempt(core, summary, `Branch \`${item.name}\``, async () => {
+      await github.rest.git.deleteRef({ ...context.repo, ref: `heads/${item.name}` });
+      return [item.name];
+    });
+  }
+  await summary.write();
+}
+
 module.exports = {
   CleanupError,
   targets,
@@ -283,4 +317,5 @@ module.exports = {
   cleanupDockerHub,
   registries,
   branch,
+  preparation,
 };

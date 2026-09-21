@@ -479,6 +479,136 @@ async function finalize({ github, context, core }) {
   core.setOutput("latest", String(latest));
 }
 
+function publishedVersion(context) {
+  requireValue(
+    context.eventName === "push" && context.workflow === "release" &&
+      context.ref.startsWith("refs/heads/release/"),
+    "Release follow-up is allowed only through the release workflow",
+  );
+  const version = context.ref.slice("refs/heads/release/".length);
+  requireValue(releaseTag.test(`v${version}`), "Invalid release branch version");
+  requireValue(commitSha.test(context.sha), "Invalid release commit");
+  return version;
+}
+
+function nextPatch(version) {
+  requireValue(releaseTag.test(`v${version}`), "Invalid released version");
+  const [major, minor, patch] = version.split(".").map(Number);
+  return `${major}.${minor}.${patch + 1}`;
+}
+
+async function publishedTag(github, repository, version, sha) {
+  const tag = await optional(() => github.rest.git.getRef({ ...repository, ref: `tags/v${version}` }));
+  requireValue(
+    tag && tag.object.type === "commit" && tag.object.sha === sha,
+    `Refusing follow-up: v${version} is not published at this commit`,
+  );
+}
+
+async function bumpReleasedVersion({ github, context, core }) {
+  const version = publishedVersion(context);
+  await publishedTag(github, context.repo, version, context.sha);
+  const next = nextPatch(version);
+  const repository = context.repo;
+  const branch = `ci/bump-release-version-${next.replaceAll(".", "-")}`;
+  const summary = core.summary.addHeading("Release follow-up: version bump", 3);
+  const open = await github.paginate(github.rest.pulls.list, {
+    ...repository,
+    state: "open",
+    head: `${repository.owner}:${branch}`,
+    per_page: 100,
+  });
+  if (open.length) {
+    await summary.addRaw(`Kept existing pull request #${open[0].number}.\n`).write();
+    return;
+  }
+  const { data: main } = await github.rest.git.getRef({ ...repository, ref: "heads/main" });
+  const read = async (path) => {
+    const { data: file } = await github.rest.repos.getContent({ ...repository, path, ref: main.object.sha });
+    requireValue(file.type === "file" && file.encoding === "base64", `Cannot read ${path} on main`);
+    return Buffer.from(file.content, "base64").toString("utf8");
+  };
+  const current = JSON.parse(await read("release-version.json")).version;
+  if (current !== version) {
+    await summary.addRaw(`Main already targets ${current}; no bump needed.\n`).write();
+    return;
+  }
+  const pyproject = await read("pyproject.toml");
+  requireValue(
+    pyproject.split(`version = "${version}"`).length === 2,
+    `pyproject.toml on main must pin version = "${version}" exactly once`,
+  );
+  const { data: base } = await github.rest.git.getCommit({ ...repository, commit_sha: main.object.sha });
+  const { data: tree } = await github.rest.git.createTree({
+    ...repository,
+    base_tree: base.tree.sha,
+    tree: [
+      { path: "release-version.json", mode: "100644", type: "blob", content: json({ version: next }) },
+      { path: "pyproject.toml", mode: "100644", type: "blob", content: pyproject.replace(`version = "${version}"`, `version = "${next}"`) },
+    ],
+  });
+  const { data: commit } = await github.rest.git.createCommit({
+    ...repository,
+    message: `Bump release version to ${next}`,
+    tree: tree.sha,
+    parents: [main.object.sha],
+  });
+  const ref = `heads/${branch}`;
+  if (await optional(() => github.rest.git.getRef({ ...repository, ref }))) {
+    await github.rest.git.deleteRef({ ...repository, ref });
+  }
+  await github.rest.git.createRef({ ...repository, ref: `refs/${ref}`, sha: commit.sha });
+  const { data: pr } = await github.rest.pulls.create({
+    ...repository,
+    title: `Bump release version to ${next}`,
+    head: branch,
+    base: "main",
+    body: `Release v${version} is published; reserve the next version on main.\n\n- Bump release-version.json and pyproject.toml to ${next}\n- Edit this PR for a minor or major bump instead\n`,
+    maintainer_can_modify: false,
+  });
+  await summary.addRaw(`Opened #${pr.number}: bump ${version} to ${next}.\n`).write();
+}
+
+async function deletePublishedBranch({ github, context, core }) {
+  const version = publishedVersion(context);
+  await publishedTag(github, context.repo, version, context.sha);
+  const summary = core.summary.addHeading("Release follow-up: release branch", 3);
+  const ref = `heads/release/${version}`;
+  const current = await optional(() => github.rest.git.getRef({ ...context.repo, ref }));
+  if (!current) {
+    await summary.addRaw(`Branch \`release/${version}\` is already absent.\n`);
+  } else {
+    requireValue(
+      current.object.sha === context.sha,
+      `Refusing to delete release/${version}: the branch advanced past the published commit`,
+    );
+    await github.rest.git.deleteRef({ ...context.repo, ref });
+    await summary.addRaw(`Deleted \`release/${version}\`.\n`);
+  }
+  const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });
+  for (const item of branches) {
+    if (!item.name.startsWith("release/") || item.name === `release/${version}`) continue;
+    const stale = item.name.slice("release/".length);
+    if (!releaseTag.test(`v${stale}`)) continue;
+    try {
+      const tag = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `tags/v${stale}` }));
+      if (!tag || tag.object.type !== "commit") continue;
+      if (item.commit.sha !== tag.object.sha) {
+        core.warning(`Kept ${item.name}: the branch advanced past its published tag`);
+        await summary.addRaw(`Kept \`${item.name}\`: the branch advanced past its published tag.\n`);
+        continue;
+      }
+      await github.rest.git.deleteRef({ ...context.repo, ref: `heads/${item.name}` });
+      await summary.addRaw(`Pruned \`${item.name}\`: v${stale} is published at the same commit.\n`);
+    } catch (error) {
+      if (error.status === 404) continue;
+      core.error(`Pruning ${item.name} failed: ${error.message}`);
+      await summary.addRaw(`Pruning \`${item.name}\` failed (${error.message}); delete it manually.\n`);
+    }
+  }
+  await summary.write();
+}
+
 module.exports = {
   ReleaseError,
   retry,
@@ -495,6 +625,10 @@ module.exports = {
   prepare,
   validate,
   finalize,
+  publishedVersion,
+  nextPatch,
+  bumpReleasedVersion,
+  deletePublishedBranch,
   checkRules,
   packageAssets,
   uiPackageAssets,
