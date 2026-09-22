@@ -138,6 +138,9 @@ if [[ "$router_db" == "sqlite" ]]; then
   begin_check "SQLite cancellation releases storage for subsequent transactions"
   docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/sqlite-cancellation.py
   pass_check
+  begin_check "failed startup releases workers and supports retry"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 15 python - < tests/integration/startup-cleanup.py
+  pass_check
 fi
 
 begin_check "router runtime does not receive quarantine private key"

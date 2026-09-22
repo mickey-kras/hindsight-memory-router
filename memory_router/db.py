@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from collections.abc import AsyncIterator, Iterable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -12,6 +12,7 @@ import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from .lifecycle import cleanup_result, finish_before_cancelling
 from .rate_limit import (
     InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
@@ -143,7 +144,8 @@ class SqliteDatabase(Database):
     async def initialize(self) -> None:
         if self.path != SQLITE_MEMORY_PATH:
             Path(self.path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.connection = await aiosqlite.connect(self.path)
+        self.connection = aiosqlite.connect(self.path)
+        await finish_before_cancelling(self.connection)
         if self.path != SQLITE_MEMORY_PATH:
             os.chmod(self.path, 0o600)
         self.connection.row_factory = aiosqlite.Row
@@ -163,20 +165,6 @@ class SqliteDatabase(Database):
             await connection.close()
             raise
 
-    async def _rollback_after_error(
-        self, connection: aiosqlite.Connection, error: BaseException
-    ) -> None:
-        rollback = asyncio.create_task(self._rollback_or_close(connection))
-        try:
-            while not rollback.done():
-                try:
-                    await asyncio.shield(rollback)
-                except asyncio.CancelledError:
-                    continue
-            rollback.result()
-        except BaseException as cleanup_error:
-            raise error from cleanup_error
-
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         del capacity_lock
@@ -189,7 +177,10 @@ class SqliteDatabase(Database):
                 yield SqliteTx(connection)
                 await connection.commit()
             except BaseException as error:
-                await self._rollback_after_error(connection, error)
+                if (
+                    cleanup_error := await cleanup_result(self._rollback_or_close(connection))
+                ) is not None:
+                    error.__cause__ = cleanup_error
                 raise
 
 
@@ -288,8 +279,13 @@ async def create_database(url: str) -> Database:
         raise RuntimeError(
             "QUARANTINE_DATABASE_URL must use sqlite:, postgres://, or postgresql://"
         )
-    await db.initialize()
-    await initialize_schema(db)
+    try:
+        await db.initialize()
+        await initialize_schema(db)
+    except BaseException as error:
+        if (cleanup_error := await cleanup_result(db.close())) is not None:
+            error.__cause__ = cleanup_error
+        raise
     return db
 
 
@@ -308,17 +304,20 @@ async def create_backend(url: str) -> Backend:
     database = await create_database(url)
     if database.dialect != "postgres":
         return Backend(database, InMemoryRateLimiter())
-    rate_database = PostgresDatabase(url, max_size=5)
+    resources = AsyncExitStack()
+    resources.push_async_callback(database.close)
     try:
+        rate_database = PostgresDatabase(url, max_size=5)
+        resources.push_async_callback(rate_database.close)
         await rate_database.initialize()
         limiter = PostgresRateLimiter(rate_database)
         await limiter.initialize()
         concurrency = PostgresConcurrencyLimiter(rate_database)
         await concurrency.initialize()
         return Backend(database, limiter, concurrency, rate_database)
-    except BaseException:
-        await rate_database.close()
-        await database.close()
+    except BaseException as error:
+        if (cleanup_error := await cleanup_result(resources.aclose())) is not None:
+            error.__cause__ = cleanup_error
         raise
 
 
