@@ -1,5 +1,13 @@
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function validateContext(context) {
+  if (!['push', 'workflow_dispatch'].includes(context.eventName) ||
+      !/^refs\/heads\/(main|release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.test(context.ref)) {
+    throw new Error('PR updates require a push or dispatch on main or a release branch');
+  }
+  return context.ref.slice('refs/heads/'.length);
+}
+
 async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
@@ -21,18 +29,9 @@ async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
     }
     if (pull.mergeable === false) return 'conflicting';
     if (pull.mergeable === true) {
-      try {
-        await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
-          owner, repo, pull_number: number, expected_head_sha: pull.head.sha,
-        });
-      } catch (error) {
-        // GITHUB_TOKEN can never update branches that change workflow
-        // files; a human (or Dependabot's own rebase) has to move those.
-        if (error.status === 403 && /workflow/.test(error.message)) {
-          return 'skipped: updates workflow files, manual rebase required';
-        }
-        throw error;
-      }
+      await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+        owner, repo, pull_number: number, expected_head_sha: pull.head.sha,
+      });
       return 'update requested';
     }
     if (attempt < 3) await sleep(5000);
@@ -41,11 +40,8 @@ async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
 }
 
 async function run({ github, context, core, sleep = pause }) {
+  const baseBranch = validateContext(context);
   const { owner, repo } = context.repo;
-  const baseBranch = context.ref?.replace(/^refs\/heads\//, "") || "main";
-  if (baseBranch !== "main" && !/^release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(baseBranch)) {
-    throw new Error("PR updates require main or a release branch");
-  }
   const pulls = await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', base: baseBranch, per_page: 100,
   });
@@ -70,4 +66,4 @@ async function run({ github, context, core, sleep = pause }) {
   if (unresolved) core.setFailed(`${unresolved} PR branch update(s) unresolved`);
 }
 
-module.exports = { run };
+module.exports = { run, validateContext };

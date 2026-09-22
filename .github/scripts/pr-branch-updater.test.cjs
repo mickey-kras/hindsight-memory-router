@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { run } = require('./pr-branch-updater.cjs');
 
 function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user } = {}) {
-  const calls = { updates: [], sleeps: [], failures: [], comparisons: [] };
+  const calls = { updates: [], sleeps: [], failures: [], comparisons: [], logs: [] };
   let reads = 0;
   const pull = { number: 1, user, state: 'open', base: { ref: 'main', sha: 'base' },
     head: { sha: 'head', repo: { full_name: fork ? 'other/repo' : 'owner/repo' } } };
@@ -29,8 +29,10 @@ function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user
     },
   };
   const summary = { addHeading: () => summary, addTable: () => summary, write: async () => {} };
-  return { calls, args: { github, context: { repo: { owner: 'owner', repo: 'repo' } },
-    core: { info: () => {}, summary, setFailed: (s) => calls.failures.push(s) },
+  return { calls, args: { github, context: {
+    repo: { owner: 'owner', repo: 'repo' }, eventName: 'push', ref: 'refs/heads/main',
+  },
+    core: { info: (s) => calls.logs.push(s), summary, setFailed: (s) => calls.failures.push(s) },
     sleep: async (ms) => calls.sleeps.push(ms) } };
 }
 
@@ -39,6 +41,33 @@ test('updates against current main despite stale PR base metadata and blocked ch
   assert.deepEqual(calls.comparisons, ['head...current-main']);
   assert.equal(calls.updates[0].expected_head_sha, 'head');
 });
+test('a manual main dispatch updates branches through the same guarded API', async () => {
+  const { args, calls } = fixture();
+  args.context.eventName = 'workflow_dispatch';
+  await run(args);
+  assert.equal(calls.updates.length, 1);
+});
+for (const [eventName, ref] of [
+  ['pull_request', 'refs/heads/main'],
+  ['pull_request_target', 'refs/heads/main'],
+  ['workflow_run', 'refs/heads/main'],
+  ['push', undefined],
+  ['push', 'main'],
+  ['push', 'refs/pull/1/merge'],
+  ['push', 'refs/tags/v0.1.0'],
+  ['workflow_dispatch', 'refs/heads/fix/untrusted'],
+  ['push', 'refs/heads/release/01.2.3'],
+  ['push', 'refs/heads/release/1.2.3-rc.1'],
+  ['push', 'refs/heads/release/1.2.3/extra'],
+]) {
+  test(`rejects ${eventName} on ${ref} before accessing GitHub`, async () => {
+    const { args } = fixture();
+    args.context.eventName = eventName;
+    args.context.ref = ref;
+    args.github = new Proxy({}, { get() { assert.fail('GitHub accessed before context validation'); } });
+    await assert.rejects(run(args), /PR updates require a push or dispatch/);
+  });
+}
 test('retries unknown mergeability and then updates', async () => {
   const { args, calls } = fixture({ mergeable: [null, true] }); await run(args);
   assert.equal(calls.sleeps.length, 1); assert.equal(calls.updates.length, 1);
@@ -57,16 +86,24 @@ test('API failure is not reported as success', async () => {
   const { args, calls } = fixture({ fail: true }); await run(args);
   assert.equal(calls.failures.length, 1);
 });
-test('workflow-permission 403 skips instead of failing the job', async () => {
+test('an App authorization failure remains a failed update', async () => {
   const { args, calls } = fixture();
   args.github.request = async () => {
-    const error = new Error('refusing to allow a GitHub App to create or update workflow `.github/workflows/x.yml` without `workflows` permission');
-    error.status = 403;
-    throw error;
+    throw Object.assign(new Error('Resource not accessible by integration'), { status: 403 });
+  };
+  await run(args);
+  assert.deepEqual(calls.failures, ['1 PR branch update(s) unresolved']);
+});
+test('workflow-permission denial fails the job with the original diagnostic', async () => {
+  const { args, calls } = fixture();
+  const message = 'refusing to allow a GitHub App to create or update workflow `.github/workflows/x.yml` without `workflows` permission';
+  args.github.request = async () => {
+    throw Object.assign(new Error(message), { status: 403 });
   };
   await run(args);
   assert.equal(calls.updates.length, 0);
-  assert.equal(calls.failures.length, 0);
+  assert.deepEqual(calls.failures, ['1 PR branch update(s) unresolved']);
+  assert.deepEqual(calls.logs, [`#1: unresolved: ${message}`]);
 });
 
 test('leaves stale Dependabot branches to scheduled native rebasing', async () => {
