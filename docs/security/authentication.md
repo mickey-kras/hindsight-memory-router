@@ -29,6 +29,8 @@ Scopes:
 
 Authorization is default-deny per principal, bank, and scope. `GET /v1/default/banks` keeps the upstream response shape and removes ungranted banks.
 
+Facade reads of memory graphs, audit-log entries, LLM request traces, and operation payloads require `memory.recall`. Operation status without payloads and aggregate audit/LLM statistics keep `bank.config.read`. For operation detail, any true `include_payload` value requires `memory.recall`, including repeated query parameters; invalid boolean values return `400` in principal mode.
+
 Optional `x-memory-router-agent`: must equal the token principal.
 
 ### Limits

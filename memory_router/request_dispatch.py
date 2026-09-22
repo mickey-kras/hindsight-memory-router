@@ -195,7 +195,8 @@ class AuthenticatedRequestDispatcher:
             return None
         route, route_match = matched
         bank = route_match.group("bank")
-        scope = facade_scope(route)
+        query = list(request.query_params.multi_items())
+        scope = facade_scope(route, query=query) if principal is not None else facade_scope(route)
         if principal is not None:
             await self.deps.principal_rate(principal, scope, route_class)
             require_grant(session=principal, scope=scope, bank=bank, route_class=route_class)
@@ -210,7 +211,7 @@ class AuthenticatedRequestDispatcher:
                 writer_id=principal.principal_id if principal is not None else bank,
                 params={name: route_match.group(name) for name in route.params},
                 body=body,
-                query=list(request.query_params.multi_items()) or None,
+                query=query or None,
                 bank_override=bank if principal is not None else None,
                 source=principal.source if principal is not None else "openclaw",
             )

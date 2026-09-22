@@ -366,7 +366,8 @@
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
-        }
+        },
+        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/audit-logs/stats": {
@@ -2146,7 +2147,8 @@
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
-        }
+        },
+        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/knowledge-base/folders": {
@@ -2895,7 +2897,8 @@
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
-        }
+        },
+        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/llm-requests/stats": {
@@ -4674,7 +4677,8 @@
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
           }
-        }
+        },
+        "description": "Principal mode requires bank.config.read for status without payloads, or memory.recall if any include_payload value is true. Repeated values are checked individually; invalid boolean values return 400. Legacy-mode query forwarding is unchanged."
       },
       "delete": {
         "summary": "Cancel one background operation",
