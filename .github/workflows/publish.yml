@@ -711,4 +711,6 @@ jobs:
       - name: Report each distinct failure
         env:
           GH_TOKEN: ${{ github.token }}
+          REPORT_CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          REPORT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: bash .github/scripts/upsert-main-failure-issue.sh

@@ -36,18 +36,18 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "0e166adee44c8e9c538ff6f4f1ff70eef76101963d615ce6bd7d81990483c76a",
+              ".github/scripts/release-policy.test.py": "7c33b55b80cae27d8c657c91aa789a4465943315df35b60995b451a9ddf6396b",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
-              ".github/workflows/publish.yml": "0796e54fc3657819f4e45349645d587dc41684444706aa2e0129e7488d3db413",
+              ".github/workflows/publish.yml": "3b39fb44b2d9b0f41c32db255f27adc3fff11759a8cd5086aab5c61443c15221",
               ".github/workflows/release.yml": "6013b346b78288f2666c7fd0d1bc21d0fb80b928469848292ca251443abca151",
               ".github/workflows/ci.yml": "3971dffcaef0a667a8491145e9271c272d7f9849f2fa6e8cf90852cff68f02c2",
               ".github/workflows/aislop.yml": "dbc57921f92d8c45726d9ff3edb16bdc38e67e53733b6c0b7a61670bf6658492",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
-              ".github/scripts/report-main-failures.cjs": "70f46ee79ee208cad0627da1b9977dd57ee7c6ca3a5e6d74fe85117f6c398027",
-              ".github/scripts/report-main-failures.test.cjs": "88e13492c7e8a7a3a1b75bdf7f8490174adb95f4c134371af2f8e1073c570c0d"
+              ".github/scripts/report-main-failures.cjs": "b4b834f8a3334e5a7e9cf95896c15e2c57da19ed55b5b3224fce46deb463cb37",
+              ".github/scripts/report-main-failures.test.cjs": "a5781a8c86b8c5e714b0b1839a3db3cfdf72dadad4a08c2b88458e6a87492dab"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');

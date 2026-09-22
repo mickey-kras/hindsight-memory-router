@@ -296,3 +296,88 @@ test('unified release failures are trusted only on main', () => {
     { event: 'pull_request' }, { event: 'push' }, { head_repository: { full_name: 'fork/repo' } },
   ]) assert.equal(trustedRun({ ...dispatch, ...changed }, 'owner/repo', 'main'), false);
 });
+
+function sourceReportFixture(workflow = {}) {
+  const workflowRun = { ...run, event: 'workflow_dispatch', path: '.github/workflows/release.yml',
+    head_sha: 'a'.repeat(40), conclusion: 'failure', ...workflow };
+  const env = { GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' };
+  const writes = [];
+  const execute = (command, args) => {
+    if (command === 'bash') {
+      writes.push(readFileSync(args[1], 'utf8'));
+      return '';
+    }
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify(workflowRun);
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path.endsWith('/logs')) return log('ValueError: invalid bank');
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  return { workflowRun, env, execute, writes };
+}
+
+const candidateReportEnv = { REPORT_CANDIDATE_REF: 'refs/heads/release/0.1.0', REPORT_CANDIDATE_SHA: 'b'.repeat(40) };
+
+test('main and candidate failures identify the failed source separately from the workflow snapshot', () => {
+  const { workflowRun, env, execute, writes } = sourceReportFixture();
+  const baseline = main(env, execute)[0];
+  const candidate = main({ ...env, ...candidateReportEnv }, execute)[0];
+  assert.match(baseline.body, /^Validation failed on main\./);
+  assert.ok(baseline.body.includes(`- Failed source commit: ${workflowRun.head_sha}\n`));
+  assert.match(candidate.body, /^Validation failed on release\/0\.1\.0\./);
+  assert.ok(candidate.body.includes(`- Failed source ref: ${candidateReportEnv.REPORT_CANDIDATE_REF}\n`));
+  assert.ok(candidate.body.includes(`- Failed source commit: ${candidateReportEnv.REPORT_CANDIDATE_SHA}\n`));
+  assert.ok(candidate.body.includes(`- Workflow source: main\n- Workflow commit: ${workflowRun.head_sha}\n`));
+  assert.equal(candidate.key, baseline.key);
+  assert.equal(candidate.occurrence, baseline.occurrence);
+  assert.deepEqual(writes, [baseline.body, candidate.body]);
+});
+
+test('malformed candidate metadata is rejected before jobs, logs or issues are fetched', () => {
+  const { workflowRun, env } = sourceReportFixture();
+  const execute = (command, args) => {
+    assert.equal(command, 'gh');
+    if (args[1].endsWith('/actions/runs/42')) return JSON.stringify(workflowRun);
+    if (args[1] === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    assert.fail('invalid candidate metadata must precede job collection and issue access');
+  };
+  for (const fields of [
+    { REPORT_CANDIDATE_REF: 'refs/heads/release/0.1.0' },
+    { REPORT_CANDIDATE_SHA: 'b'.repeat(40) },
+    { ...candidateReportEnv, REPORT_CANDIDATE_REF: 'refs/heads/main' },
+    { ...candidateReportEnv, REPORT_CANDIDATE_REF: 'refs/heads/release/01.0.0' },
+    { ...candidateReportEnv, REPORT_CANDIDATE_REF: 'refs/heads/release/0.1.0\nmalformed' },
+    { ...candidateReportEnv, REPORT_CANDIDATE_SHA: 'main' },
+    { ...candidateReportEnv, REPORT_CANDIDATE_SHA: 'B'.repeat(40) },
+  ]) assert.throws(() => main({ ...env, ...fields }, execute), /Invalid report candidate/);
+});
+
+test('candidate metadata cannot relabel a main push, another workflow or a fork run', () => {
+  for (const workflow of [
+    { event: 'push' }, { path: '.github/workflows/publish.yml' },
+    { head_branch: 'release/0.1.0' }, { head_repository: { full_name: 'fork/repo' } },
+    { head_sha: candidateReportEnv.REPORT_CANDIDATE_SHA },
+  ]) {
+    const { workflowRun, env } = sourceReportFixture(workflow);
+    const execute = (command, args) => {
+      assert.equal(command, 'gh');
+      if (args[1].endsWith('/actions/runs/42')) return JSON.stringify(workflowRun);
+      if (args[1] === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+      assert.fail('untrusted candidate source must not reach issue access');
+    };
+    assert.throws(() => main({ ...env, ...candidateReportEnv }, execute), /Untrusted publish run|trusted main release dispatch/);
+  }
+});
+
+test('a cancelled unified release exits before processing candidate metadata', () => {
+  const { workflowRun, env } = sourceReportFixture({ conclusion: 'cancelled' });
+  const execute = (command, args) => {
+    assert.equal(command, 'gh');
+    if (args[1].endsWith('/actions/runs/42')) return JSON.stringify(workflowRun);
+    if (args[1] === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    assert.fail('cancelled release must not fetch jobs or write issues');
+  };
+  assert.deepEqual(main({ ...env, REPORT_CANDIDATE_SHA: 'malformed' }, execute), []);
+});

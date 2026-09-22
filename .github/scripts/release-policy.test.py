@@ -316,6 +316,9 @@ class ReleasePolicyTests(unittest.TestCase):
             self.skipTest("router publish workflow required")
         jobs = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]
         reporter = jobs["report-validation-failure"]
+        report = next(step for step in reporter["steps"] if step.get("name") == "Report each distinct failure")
+        self.assertEqual(report["env"]["REPORT_CANDIDATE_REF"], "${{ inputs.candidate_ref }}")
+        self.assertEqual(report["env"]["REPORT_CANDIDATE_SHA"], "${{ inputs.candidate_sha }}")
         condition = reporter["if"]
         self.assertIn("!cancelled() &&", condition)
         self.assertNotIn("always()", condition)
