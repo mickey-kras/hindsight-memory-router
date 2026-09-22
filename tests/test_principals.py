@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 
 from memory_router import app as app_module
 from memory_router import request_dispatch
@@ -22,6 +23,7 @@ from memory_router.facade_routes import FACADE_ROUTES
 from memory_router.logging_contract import sanitize_fields
 from memory_router.principals import (
     SCOPE_VOCABULARY,
+    PrincipalGrant,
     PrincipalResolver,
     facade_scope,
     load_principal_registry,
@@ -878,6 +880,123 @@ async def test_facade_routes_enforce_scope_and_forward_target_bank(
         )
     assert denial.value.status == 403
     assert forward.await_count == 1
+
+
+@pytest.fixture
+def facade_upstream() -> AsyncMock:
+    upstream = AsyncMock(return_value={"text": "the release is scheduled for Friday"})
+    app_module.runtime.policy.hindsight = SimpleNamespace(openclaw_request=upstream)
+    return upstream
+
+
+def _grant_facade_scope(scope: str) -> None:
+    resolver = app_module.runtime.principal_resolver
+    assert resolver is not None
+    resolver.registry.principals["agent-reader"].grants = [
+        PrincipalGrant(bank="shared", scopes=[scope])
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "graph",
+        "audit-logs",
+        "llm-requests",
+        "operations/op-1?include_payload=true",
+        "operations/op-1?include_payload=1",
+        "operations/op-1?include_payload=YES",
+        "operations/op-1?include_payload=On",
+        "operations/op-1?include_payload=T",
+        "operations/op-1?include_payload=y",
+        "operations/op-1?include_payload=false&include_payload=true",
+        "operations/op-1?include_payload=true&include_payload=false",
+        "operations/op-1?include_%70ayload=true",
+    ],
+)
+@pytest.mark.parametrize(
+    ("scope", "bank", "status"),
+    [
+        ("bank.config.read", "shared", 403),
+        ("memory.recall", "shared", 200),
+        ("memory.recall", "ungranted", 403),
+    ],
+)
+async def test_content_facade_reads_require_recall_for_the_target_bank(
+    facade_upstream: AsyncMock, resource: str, scope: str, bank: str, status: int
+) -> None:
+    _grant_facade_scope(scope)
+    async with AsyncClient(
+        transport=ASGITransport(app=app_module.app), base_url="http://router"
+    ) as client:
+        response = await client.get(
+            f"/v1/default/banks/{bank}/{resource}",
+            headers={"authorization": _bearer("reader-1", READER_SECRET)},
+        )
+    assert response.status_code == status
+    if status == 200:
+        assert response.json() == facade_upstream.return_value
+        assert facade_upstream.await_args.args[2].startswith("/v1/default/banks/shared/")
+    else:
+        assert response.json()["error"] == "authorization_denied"
+        facade_upstream.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "resource",
+    [
+        "config",
+        "stats",
+        "stats/memories-timeseries",
+        "tags",
+        "audit-logs/stats",
+        "llm-requests/stats",
+        "operations",
+        "operations/op-1",
+        "operations/op-1?include_payload=false",
+        "operations/op-1?include_payload=0",
+        "operations/op-1?include_payload=NO",
+        "operations/op-1?include_payload=Off",
+        "operations/op-1?include_payload=F",
+        "operations/op-1?include_payload=n",
+        "operations/op-1?include_payload=false&include_payload=0",
+    ],
+)
+async def test_config_read_preserves_metadata_facade_access(
+    facade_upstream: AsyncMock, resource: str
+) -> None:
+    _grant_facade_scope("bank.config.read")
+    facade_upstream.return_value = {"status": "completed"}
+    async with AsyncClient(
+        transport=ASGITransport(app=app_module.app), base_url="http://router"
+    ) as client:
+        response = await client.get(
+            f"/v1/default/banks/shared/{resource}",
+            headers={"authorization": _bearer("reader-1", READER_SECRET)},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"status": "completed"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", ["", "sometimes", " true ", "2"])
+async def test_invalid_operation_payload_flags_fail_before_upstream(
+    facade_upstream: AsyncMock, value: str
+) -> None:
+    _grant_facade_scope("bank.config.read")
+    async with AsyncClient(
+        transport=ASGITransport(app=app_module.app), base_url="http://router"
+    ) as client:
+        response = await client.get(
+            "/v1/default/banks/shared/operations/op-1",
+            params={"include_payload": value},
+            headers={"authorization": _bearer("reader-1", READER_SECRET)},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid_query"
+    facade_upstream.assert_not_awaited()
 
 
 @pytest.mark.asyncio
