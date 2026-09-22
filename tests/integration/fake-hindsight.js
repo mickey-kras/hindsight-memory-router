@@ -341,6 +341,25 @@ createServer(async (req, res) => {
         query: url.search,
         body,
       });
+      if (method === "GET") {
+        const content = "facade content scope smoke";
+        if (facade[2] === "graph") {
+          return send(res, 200, { nodes: [{ data: { id: "fact-1", text: content } }] });
+        }
+        if (facade[2] === "audit-logs") {
+          return send(res, 200, { items: [{ request: { query: content } }] });
+        }
+        if (facade[2] === "llm-requests") {
+          return send(res, 200, { items: [{ input: content, output: content }] });
+        }
+        if (facade[2] === "operations/op-1") {
+          const operation = { operation_id: "op-1", status: "completed" };
+          if (url.searchParams.getAll("include_payload").at(-1) === "true") {
+            operation.task_payload = { items: [{ content }] };
+          }
+          return send(res, 200, operation);
+        }
+      }
       const status = /^knowledge-base\/(folders|pages)$/.test(facade[2]) ? 201 : 200;
       return send(res, status, { ok: true });
     }

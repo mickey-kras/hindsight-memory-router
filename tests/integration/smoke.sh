@@ -446,6 +446,26 @@ assert item["metadata"]["router_decision"] == "approved"
 PY
   pass_check
 
+  begin_check "principal facade content requires memory recall"
+  config_auth="Authorization: Bearer mr_config-1_cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+  for resource in graph audit-logs llm-requests 'operations/op-1?include_payload=true' 'operations/op-1?include_payload=false&include_payload=true' 'operations/op-1?include_payload=true&include_payload=false'; do
+    events_before="$(wc -l < "$state_file")"
+    denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$config_auth" "${principals_url}/v1/default/banks/shared/${resource}")"
+    [[ "$denied_status" == "403" ]] || fail_check "configuration-only principal read ${resource}: ${denied_status}"
+    [[ "$(wc -l < "$state_file")" == "$events_before" ]] || fail_check "denied content read reached Hindsight"
+  done
+  for resource in graph audit-logs llm-requests 'operations/op-1?include_payload=true'; do
+    content_response="$(curl --max-time 5 -fsS -H "$reader_auth" "${principals_url}/v1/default/banks/shared/${resource}")"
+    [[ "$content_response" == *'facade content scope smoke'* ]] || fail_check "memory reader could not read ${resource} content"
+  done
+  for resource in operations 'operations/op-1?include_payload=false' audit-logs/stats llm-requests/stats; do
+    metadata_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$config_auth" "${principals_url}/v1/default/banks/shared/${resource}")"
+    [[ "$metadata_status" == "200" ]] || fail_check "configuration reader lost ${resource} access: ${metadata_status}"
+  done
+  pass_check
+fi
+
+if [[ "$mode" == "fake" ]]; then
   # Fake Hindsight covers the full facade matrix. Real smoke covers core
   # transport and SQLite/PostgreSQL parity, including retain/recall mutations.
   # shellcheck source=tests/integration/openclaw-compat.sh

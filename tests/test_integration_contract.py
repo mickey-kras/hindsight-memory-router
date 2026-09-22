@@ -83,6 +83,7 @@ DISPATCH_BRANCH_COVERAGE = {
 }
 REQUIRED_WORKFLOW_CHECKS = {
     "principal quarantine approval preserves original bank",
+    "principal facade content requires memory recall",
     "scoped admin tokens enforce read review and cleanup boundaries",
     "local decryption recovers exact original outside router",
     "altered approval is rejected by original hash",

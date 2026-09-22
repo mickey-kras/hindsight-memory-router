@@ -4,13 +4,23 @@ import hashlib
 import hmac
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
+from .errors import HttpError
 from .facade_routes import FacadeRoute
 
 # Authorization scope vocabulary. Every authenticated surface maps to exactly
@@ -61,14 +71,12 @@ _BANK_LEVEL_READ_RESOURCES = frozenset(
         "stats",
         "stats/memories-timeseries",
         "tags",
-        "graph",
-        "audit-logs",
         "audit-logs/stats",
-        "llm-requests",
         "llm-requests/stats",
     }
 )
 _BANK_MANAGE_RESOURCES = frozenset({"consolidate", "consolidation/recover"})
+_PAYLOAD_QUERY = TypeAdapter(list[bool])
 
 
 class PrincipalKey(BaseModel):
@@ -366,7 +374,17 @@ def scope_limit_operation(scope: str) -> LimitOperation:
     return "config"
 
 
-def facade_scope(route: FacadeRoute) -> str:
+def _operation_read_scope(query: Sequence[tuple[str, str]]) -> str:
+    try:
+        include_payload = _PAYLOAD_QUERY.validate_python(
+            [value for key, value in query if key == "include_payload"]
+        )
+    except ValidationError as exc:
+        raise HttpError(400, "invalid_query", "include_payload must be a boolean") from exc
+    return SCOPE_MEMORY_RECALL if any(include_payload) else SCOPE_BANK_CONFIG_READ
+
+
+def facade_scope(route: FacadeRoute, *, query: Sequence[tuple[str, str]] = ()) -> str:
     resource = route.resource
     if route.template == "reflect":
         return SCOPE_MEMORY_REFLECT
@@ -378,6 +396,8 @@ def facade_scope(route: FacadeRoute) -> str:
         return SCOPE_BANK_CONFIG_READ if route.read else SCOPE_BANK_CONFIG_WRITE
     if resource in _BANK_LEVEL_READ_RESOURCES:
         return SCOPE_BANK_CONFIG_READ
+    if route.read and route.template == "operations/{operation_id}":
+        return _operation_read_scope(query)
     if resource == "operations" or resource.startswith("operations/"):
         return SCOPE_BANK_CONFIG_READ if route.read else SCOPE_BANK_ADMIN
     return SCOPE_MEMORY_RECALL if route.read else SCOPE_MEMORY_RETAIN
