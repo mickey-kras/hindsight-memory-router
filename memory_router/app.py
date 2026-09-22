@@ -35,7 +35,7 @@ from .db import Database, PostgresDatabase, create_backend, validate_storage
 from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .key_wrap import SidecarWrapProvider, WrapProvider
-from .lifecycle import finish_before_cancelling
+from .lifecycle import cleanup_result, finish_before_cancelling
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
@@ -180,10 +180,8 @@ class Runtime:
             try:
                 await self._start()
             except BaseException as error:
-                try:
-                    await self._close()
-                except BaseException as cleanup_error:
-                    raise error from cleanup_error
+                if (cleanup_error := await cleanup_result(self._close())) is not None:
+                    error.__cause__ = cleanup_error
                 raise
 
     async def _start(self) -> None:
@@ -343,9 +341,8 @@ async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool)
 
 
 async def _run_startup_cleanup(cleanup: Awaitable[None]) -> None:
-    try:
-        await finish_before_cancelling(cleanup)
-    except BaseException as result:
+    result = await cleanup_result(cleanup)
+    if result is not None:
         log_event(
             logger,
             "error",

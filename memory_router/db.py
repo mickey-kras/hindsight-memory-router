@@ -12,7 +12,7 @@ import aiosqlite
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
-from .lifecycle import finish_before_cancelling
+from .lifecycle import cleanup_result, finish_before_cancelling
 from .rate_limit import (
     InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
@@ -165,20 +165,6 @@ class SqliteDatabase(Database):
             await connection.close()
             raise
 
-    async def _rollback_after_error(
-        self, connection: aiosqlite.Connection, error: BaseException
-    ) -> None:
-        rollback = asyncio.create_task(self._rollback_or_close(connection))
-        try:
-            while not rollback.done():
-                try:
-                    await asyncio.shield(rollback)
-                except asyncio.CancelledError:
-                    continue
-            rollback.result()
-        except BaseException as cleanup_error:
-            raise error from cleanup_error
-
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         del capacity_lock
@@ -191,7 +177,10 @@ class SqliteDatabase(Database):
                 yield SqliteTx(connection)
                 await connection.commit()
             except BaseException as error:
-                await self._rollback_after_error(connection, error)
+                if (
+                    cleanup_error := await cleanup_result(self._rollback_or_close(connection))
+                ) is not None:
+                    error.__cause__ = cleanup_error
                 raise
 
 
@@ -294,10 +283,8 @@ async def create_database(url: str) -> Database:
         await db.initialize()
         await initialize_schema(db)
     except BaseException as error:
-        try:
-            await finish_before_cancelling(db.close())
-        except BaseException as cleanup_error:
-            raise error from cleanup_error
+        if (cleanup_error := await cleanup_result(db.close())) is not None:
+            error.__cause__ = cleanup_error
         raise
     return db
 
@@ -329,10 +316,8 @@ async def create_backend(url: str) -> Backend:
         await concurrency.initialize()
         return Backend(database, limiter, concurrency, rate_database)
     except BaseException as error:
-        try:
-            await finish_before_cancelling(resources.aclose())
-        except BaseException as cleanup_error:
-            raise error from cleanup_error
+        if (cleanup_error := await cleanup_result(resources.aclose())) is not None:
+            error.__cause__ = cleanup_error
         raise
 
 
