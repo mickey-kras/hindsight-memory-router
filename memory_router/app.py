@@ -5,7 +5,7 @@ import json
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -35,6 +35,7 @@ from .db import Database, PostgresDatabase, create_backend, validate_storage
 from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .key_wrap import SidecarWrapProvider, WrapProvider
+from .lifecycle import finish_before_cancelling
 from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
@@ -138,6 +139,7 @@ class Runtime:
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
         self.principal_resolver: PrincipalResolver | None = None
+        self._lifecycle_lock = asyncio.Lock()
         if settings is None:
             self._apply_request_settings(RouterSettings.model_construct())
         else:
@@ -172,6 +174,19 @@ class Runtime:
         self.auth_failure_window = settings.memory_router_auth_failure_rate_limit_window_ms
 
     async def start(self) -> None:
+        async with self._lifecycle_lock:
+            if self.database is not None:
+                raise RuntimeError("memory-router runtime is already started")
+            try:
+                await self._start()
+            except BaseException as error:
+                try:
+                    await self._close()
+                except BaseException as cleanup_error:
+                    raise error from cleanup_error
+                raise
+
+    async def _start(self) -> None:
         settings = self.settings or load_settings()
         self.configure(settings)
         self.auth_prefilter = InMemoryRateLimiter()
@@ -254,21 +269,42 @@ class Runtime:
             self.sweeper = asyncio.create_task(self._sweep_loop(interval, retention, export_path))
 
     async def stop(self) -> None:
-        if self.sweeper:
-            self.sweeper.cancel()
-            (sweeper_result,) = await asyncio.gather(self.sweeper, return_exceptions=True)
-            if isinstance(sweeper_result, BaseException) and not isinstance(
-                sweeper_result, asyncio.CancelledError
-            ):
-                raise sweeper_result
-        if self.hindsight:
-            await self.hindsight.close()
-        if self.wrap_provider:
-            await self.wrap_provider.close()
-        if self.rate_limit_database:
-            await self.rate_limit_database.close()
+        async with self._lifecycle_lock:
+            await self._close()
+
+    async def _close(self) -> None:
+        resources = AsyncExitStack()
         if self.repository:
-            await self.repository.close()
+            resources.push_async_callback(self.repository.close)
+        elif self.database:
+            resources.push_async_callback(self.database.close)
+        if self.rate_limit_database:
+            resources.push_async_callback(self.rate_limit_database.close)
+        if self.wrap_provider:
+            resources.push_async_callback(self.wrap_provider.close)
+        if self.hindsight:
+            resources.push_async_callback(self.hindsight.close)
+        if self.sweeper:
+            resources.push_async_callback(self._stop_sweeper, self.sweeper)
+        try:
+            await finish_before_cancelling(resources.aclose())
+        finally:
+            self.sweeper = None
+            self.hindsight = None
+            self.wrap_provider = None
+            self.rate_limit_database = None
+            self.database = None
+            self.repository = None
+            self.policy = None
+            self.admin = None
+            self.auditor = None
+
+    @staticmethod
+    async def _stop_sweeper(sweeper: asyncio.Task[None]) -> None:
+        sweeper.cancel()
+        (result,) = await asyncio.gather(sweeper, return_exceptions=True)
+        if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+            raise result
 
     async def _sweep_loop(
         self, interval: int, retention_days: int, export_path: str | None = None
@@ -307,8 +343,9 @@ async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool)
 
 
 async def _run_startup_cleanup(cleanup: Awaitable[None]) -> None:
-    (result,) = await asyncio.gather(cleanup, return_exceptions=True)
-    if isinstance(result, BaseException):
+    try:
+        await finish_before_cancelling(cleanup)
+    except BaseException as result:
         log_event(
             logger,
             "error",
@@ -347,7 +384,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await runtime.start()
         runtime_started = True
         scanner_start_attempted = True
-        await asyncio.to_thread(start_facade_scan_executor)
+        await finish_before_cancelling(asyncio.to_thread(start_facade_scan_executor))
     except BaseException as exc:
         await _cleanup_failed_start(
             runtime_started=runtime_started,
