@@ -105,7 +105,8 @@ function logFallback(api, job, failure) {
 function trustedRun(run, repository, defaultBranch) {
   return run.repository?.full_name === repository && run.head_repository?.full_name === repository &&
     ((run.head_branch === defaultBranch && ['push', 'workflow_dispatch'].includes(run.event) &&
-      run.path === '.github/workflows/publish.yml') ||
+      (run.path === '.github/workflows/publish.yml' ||
+       (run.event === 'workflow_dispatch' && run.path === '.github/workflows/release.yml'))) ||
      (/^release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(run.head_branch) &&
       run.event === 'push' && run.path === '.github/workflows/release.yml'));
 }

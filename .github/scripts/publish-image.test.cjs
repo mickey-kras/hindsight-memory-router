@@ -17,7 +17,7 @@ const [cmd, sub, ...rest] = process.argv.slice(2);
 const state = JSON.parse(fs.readFileSync(process.env.MOCK_STATE, 'utf8'));
 const config = 'sha256:' + 'c'.repeat(64);
 if (cmd === 'image') {
-  process.stdout.write(rest.at(-1) === '{{.Id}}' ? config : process.env.GITHUB_SHA);
+  process.stdout.write(rest.at(-1) === '{{.Id}}' ? config : (process.env.MOCK_REVISION || process.env.SOURCE_SHA || process.env.GITHUB_SHA));
 } else if (cmd === 'manifest') {
   if (state.denied) { process.stderr.write('unauthorized'); process.exit(1); }
   if (state.different || state.existing.includes(rest[0])) {
@@ -108,5 +108,16 @@ test('partial registry publication resumes only missing tags without overwriting
   assert.match(readFileSync(env.GITHUB_OUTPUT, 'utf8'), /published=true/);
   const completed = get(); completed.pushes = []; put(completed);
   assert.equal(run().status, 0);
+  assert.deepEqual(get().pushes, []);
+}));
+
+test('main dispatch publishes candidate tags and rejects an image built from the workflow SHA', () => fixture(({ run, get, put, env }) => {
+  env.SOURCE_SHA = 'b'.repeat(40);
+  assert.equal(run().status, 0);
+  assert.deepEqual(get().pushes, [`${env.IMAGE_GHCR}:${env.VERSION}`, `${env.IMAGE_GHCR}:${env.SOURCE_SHA}`,
+    `${env.IMAGE_DOCKERHUB}:${env.VERSION}`, `${env.IMAGE_DOCKERHUB}:${env.SOURCE_SHA}`]);
+  put({ existing: [], pushes: [] });
+  env.MOCK_REVISION = env.GITHUB_SHA;
+  assert.notEqual(run().status, 0);
   assert.deepEqual(get().pushes, []);
 }));

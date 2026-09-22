@@ -166,7 +166,12 @@ Verify a pinned GHCR image with the repository workflow identity:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@.*' \
+  --certificate-identity-regexp '^https://github\.com/mickey-kras/hindsight-memory-router/\.github/workflows/publish\.yml@refs/heads/(main|release/[0-9]+\.[0-9]+\.[0-9]+)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/mickey-kras/hindsight-memory-router@sha256:<digest>
 ```
+
+For unified releases started on main, the signer is the reusable `publish.yml` workflow at main.
+The image SLSA attestation also names the exact frozen commit as the `release-candidate` resolved
+dependency. Match that commit to the immutable release tag and `image-digests.txt`; the workflow's
+own source SHA remains the main dispatch snapshot.

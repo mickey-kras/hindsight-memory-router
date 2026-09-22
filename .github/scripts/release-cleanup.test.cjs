@@ -311,9 +311,9 @@ function preparationGithub(branches, deleted) {
 test("preparation cleanup accepts only the main dispatch context", async () => {
   const { core } = fakeCore();
   const github = preparationGithub([], []);
-  await assert.rejects(cleanup.preparation({ github, context: fakeContext(), core }), /main workflow button/);
+  await assert.rejects(cleanup.preparation({ github, context: fakeContext(), core }), /main release dispatch/);
   const wrongRef = { ...dispatchContext(), ref: "refs/heads/release/0.2.0" };
-  await assert.rejects(cleanup.preparation({ github, context: wrongRef, core }), /main workflow button/);
+  await assert.rejects(cleanup.preparation({ github, context: wrongRef, core }), /main release dispatch/);
 });
 
 test("failed preparation retains its frozen candidate and never deletes other runs", async () => {
@@ -368,4 +368,20 @@ test("failure cleanup never removes registry state after its candidate branch ad
       fetchImpl: async () => assert.fail("newer candidate registry state must remain untouched") });
   });
   assert.match(state.summary, /branch advanced/);
+});
+
+test("unified cleanup scopes deletions to the candidate instead of the main workflow SHA", async () => {
+  const context = fakeContext({ eventName: "workflow_dispatch", ref: "refs/heads/main", sha: "a".repeat(40) });
+  const target = { ref: "refs/heads/release/0.1.0", sha };
+  assert.deepEqual(cleanup.targets(context, target), { version: "0.1.0", sha });
+  const { core, state } = fakeCore();
+  const github = { rest: {
+    git: { getRef: async ({ ref }) => {
+      if (ref === "heads/release/0.1.0") return { data: { object: { sha } } };
+      throw Object.assign(new Error("missing"), { status: 404 });
+    } }, repos: { getReleaseByTag: async () => { throw Object.assign(new Error("missing"), { status: 404 }); } },
+  } };
+  await cleanup.branch({ github, context, target, core });
+  assert.match(state.summary, new RegExp(`at ${sha} for recovery`));
+  assert.throws(() => cleanup.targets({ ...context, workflow: "main" }, target), cleanup.CleanupError);
 });

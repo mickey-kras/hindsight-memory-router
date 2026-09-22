@@ -286,3 +286,13 @@ test('captures fractional timestamps in the final step second', () => {
   assert.equal(trustedRun({ ...release, event: 'pull_request' }, 'owner/repo', 'main'), false);
   assert.equal(trustedRun({ ...release, path: '.github/workflows/other.yml' }, 'owner/repo', 'main'), false);
  });
+
+test('unified release failures are trusted only on main', () => {
+  const dispatch = { ...run, event: 'workflow_dispatch', path: '.github/workflows/release.yml' };
+  assert.equal(trustedRun(dispatch, 'owner/repo', 'main'), true);
+  assert.equal(trustedRun({ ...dispatch, head_branch: 'release/0.1.0' }, 'owner/repo', 'main'), false);
+  for (const changed of [
+    { head_branch: 'feature/release' }, { head_branch: 'release/01.0.0' },
+    { event: 'pull_request' }, { event: 'push' }, { head_repository: { full_name: 'fork/repo' } },
+  ]) assert.equal(trustedRun({ ...dispatch, ...changed }, 'owner/repo', 'main'), false);
+});
