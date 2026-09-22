@@ -24,11 +24,13 @@ ACTOR = AdminActor(token_scope="review")  # noqa: S106 - label, not a secret
 def exact_item(
     kind: str, payload: object, **extra: object
 ) -> tuple[dict[str, object], dict[str, object]]:
+    if isinstance(payload, dict) and payload.get("action") == "retain":
+        payload = {**payload, "identity_mode": "legacy", "target_bank": "main"}
     decrypted: dict[str, object] = {
         "quarantine_id": QID,
         "created_at": "2026-08-08T00:00:00.000Z",
         "reason": "suspicious_content",
-        "writer_id": "main",
+        "writer_id": payload.get("writer_id", "main") if isinstance(payload, dict) else "main",
         "source": "http",
         "payload": payload,
     }
@@ -36,6 +38,7 @@ def exact_item(
         **decrypted,
         "updated_at": "2026-08-08T00:00:00.000Z",
         "kind": kind,
+        "bank_id": "main",
         "status": "pending",
         "postpone_count": 0,
         "encrypted": {"v": 1},
@@ -177,6 +180,7 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     assert claim.await_args.kwargs == {
         "expected_sha256": item["sha256"],
         "expected_updated_at": item["updated_at"],
+        "target_bank": "main",
     }
     complete.assert_awaited_once()
     finish.assert_awaited_once()
@@ -463,6 +467,7 @@ async def test_retain_finish_failure_resumes_without_replaying_upstream_retain(
     pending = {
         "quarantine_id": QID,
         "kind": "retain_request",
+        "bank_id": "main",
         "reason": "suspicious_content",
         "writer_id": "main",
         "source": "http",
@@ -480,6 +485,8 @@ async def test_retain_finish_failure_resumes_without_replaying_upstream_retain(
         return_value={
             "payload": {
                 "action": "retain",
+                "identity_mode": "legacy",
+                "target_bank": "main",
                 "writer_id": "main",
                 "body": {"items": [{"content": "system prompt"}]},
             }
@@ -505,6 +512,32 @@ async def test_retain_finish_failure_resumes_without_replaying_upstream_retain(
     complete.assert_awaited_once()
     assert finish.await_count == 2
     interrupt.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_preupgrade_completed_retain_finalizes_original_bank_without_current_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    item, decrypted = exact_item(
+        "retain_request",
+        {"action": "retain", "writer_id": "main", "body": {"items": [{"content": "ok"}]}},
+        status="review_side_effect_completed",
+    )
+    payload = decrypted["payload"]
+    assert isinstance(payload, dict)
+    del payload["identity_mode"]
+    del payload["target_bank"]
+    item["sha256"] = sha256_hex(canonical_decrypted(decrypted))
+    svc, _, hindsight, _ = service(item)
+    svc.registry.writers.clear()
+    finish = AsyncMock()
+    monkeypatch.setattr(admin_module, "finish_approve_retain", finish)
+
+    result = await svc.approve(QID, {"decrypted": decrypted}, ACTOR)
+
+    assert result["target_bank"] == "main"
+    finish.assert_awaited_once()
+    hindsight.retain.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -558,6 +591,8 @@ async def test_approve_after_requarantine_ignores_preserved_row_created_at(
         "source": "http",
         "payload": {
             "action": "retain",
+            "identity_mode": "legacy",
+            "target_bank": "main",
             "writer_id": "main",
             "body": {"items": [{"content": "system prompt"}]},
         },
@@ -569,6 +604,7 @@ async def test_approve_after_requarantine_ignores_preserved_row_created_at(
         "writer_id": "main",
         "source": "http",
         "kind": "retain_request",
+        "bank_id": "main",
         "status": "pending",
         "postpone_count": 0,
         "encrypted": {"v": 1},
@@ -627,6 +663,8 @@ async def test_unknown_writer_approval_is_scanned_before_hindsight(
 def retain_item(status: str = "pending") -> tuple[dict[str, object], dict[str, object]]:
     payload = {
         "action": "retain",
+        "identity_mode": "legacy",
+        "target_bank": "main",
         "writer_id": "main",
         "body": {"items": [{"content": "ok"}]},
     }
@@ -646,6 +684,7 @@ def retain_item(status: str = "pending") -> tuple[dict[str, object], dict[str, o
         "writer_id": decrypted["writer_id"],
         "source": decrypted["source"],
         "kind": "retain_request",
+        "bank_id": "main",
         "status": status,
         "postpone_count": 0,
         "encrypted": {"v": 1},
