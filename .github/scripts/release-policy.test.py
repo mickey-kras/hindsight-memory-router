@@ -316,6 +316,34 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(delete["with"]["github-token"], "${{ steps.app.outputs.token }}")
         self.assertIn("release.cjs').deletePublishedBranch(", delete["with"]["script"])
 
+    def test_failure_reporting_is_cancellable_and_requires_failed_dependencies(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        jobs = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]
+        reporter = jobs["report-validation-failure"]
+        condition = reporter["if"]
+        self.assertIn("!cancelled() &&", condition)
+        self.assertNotIn("always()", condition)
+        self.assertNotIn("!= 'success'", condition)
+        for dependency in reporter["needs"]:
+            self.assertIn(f"needs.{dependency}.result == 'failure'", condition)
+        sonar = next(
+            step for step in jobs["sonar"]["steps"]
+            if step.get("name") == "Synchronize SonarQube findings"
+        )
+        self.assertIn("!cancelled() && failure()", sonar["if"])
+
+    def test_cancellation_reporting_regressions_fail_policy(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        original = (ROOT / MAIN).read_text()
+        for changed in [
+            original.replace("!cancelled() &&", "always() &&"),
+            original.replace("needs.aislop.result == 'failure'", "needs.aislop.result != 'success'"),
+        ]:
+            with self.subTest(workflow=changed):
+                self.assertTrue(policy({MAIN: changed}))
+
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])
 

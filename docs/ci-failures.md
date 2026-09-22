@@ -1,6 +1,6 @@
 # Main failures
 
-The final publish job reports failed validation, publishing, Pages and branch-update jobs.
+The failure reporter covers failed validation, publishing, Pages and branch-update jobs.
 It reads completed job logs with `GITHUB_TOKEN`; reporting does not turn failed gates green.
 
 Each issue contains the failed job/step, diagnostic excerpt, commit and run/attempt links.
@@ -14,5 +14,10 @@ does nothing. Previous descriptions remain intact. Legacy step-only markers are 
 SonarQube keeps its existing finding IDs; successful finding sync avoids a duplicate gate issue.
 
 Smoke tests dump Compose status and container logs before cleanup, including startup failures.
-If the reporting job itself fails or the entire workflow is cancelled, rerun that job to recover
-the report. GitHub outages or unavailable issue-write permissions require manual recovery.
+Cancelled workflows stop reporting, even if another job failed before cancellation.
+Cancelled and skipped jobs never create issues or trigger log downloads. Failures, timeouts,
+startup failures and action-required conclusions remain reportable on non-cancelled workflows.
+
+If the reporting job itself fails, rerun it to recover the report. For a cancelled workflow,
+rerun validation to obtain a completed result. GitHub outages or unavailable issue-write
+permissions require manual recovery.

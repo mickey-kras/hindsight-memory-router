@@ -61,10 +61,63 @@ test('a known smoke assertion does not hide another backend startup failure', ()
   assert.match(reports[1].body, /No reliable error signature/);
 });
 
-test('missing logs and job-level cancellation still create actionable occurrence', () => {
-  const result = reportsForJob(run, { ...job, steps: [], conclusion: 'cancelled' }, '');
-  assert.equal(result.length, 1);
-  assert.match(result[0].body, /Job logs unavailable/);
+test('cancelled runs and non-failing jobs never produce reports', () => {
+  assert.deepEqual(reportsForJob({ ...run, conclusion: 'cancelled' }, job, log('ValueError: invalid')), []);
+  for (const conclusion of ['cancelled', 'skipped', 'success', 'neutral', null]) {
+    assert.deepEqual(reportsForJob(run, { ...job, conclusion }, log('ValueError: invalid')), []);
+  }
+});
+
+test('real job failures remain actionable without failed steps or logs', () => {
+  for (const conclusion of ['failure', 'timed_out', 'action_required', 'startup_failure']) {
+    const result = reportsForJob(run, { ...job, steps: [], conclusion }, '');
+    assert.equal(result.length, 1);
+    assert.match(result[0].body, /Job logs unavailable/);
+    assert.ok(result[0].body.includes(`- Conclusion: ${conclusion}`));
+  }
+});
+
+test('a cancelled run exits before fetching jobs, logs or issues', () => {
+  const execute = (command, args) => {
+    assert.equal(command, 'gh');
+    if (args[1].endsWith('/actions/runs/42')) return JSON.stringify({ ...run, conclusion: 'cancelled' });
+    if (args[1] === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    throw new Error(`Unexpected API: ${args[1]}`);
+  };
+  assert.deepEqual(main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute), []);
+});
+
+test('a failed workflow reports real errors without downloading cancelled or skipped jobs', () => {
+  const execute = (command, args) => {
+    if (command === 'bash') return '';
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify({ ...run, conclusion: 'failure' });
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job,
+      { ...job, id: 8, conclusion: 'cancelled' }, { ...job, id: 9, conclusion: 'skipped' }] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path === '/repos/owner/repo/actions/jobs/7/logs') return log('ValueError: invalid bank');
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  const reports = main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].body, /ValueError: invalid bank/);
+});
+
+test('cancellation during log collection prevents pending issue writes', () => {
+  let reads = 0;
+  const execute = (command, args) => {
+    assert.equal(command, 'gh');
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify({ ...run,
+      conclusion: reads++ ? 'cancelled' : null });
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path.endsWith('/logs')) return log('ValueError: invalid bank');
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  assert.deepEqual(main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute), []);
 });
 
 test('log download is retried and late-arriving logs supply the real excerpt', () => {
@@ -80,7 +133,8 @@ test('log download is retried and late-arriving logs supply the real excerpt', (
     if (path.endsWith('/logs')) {
       downloads += 1;
       if (downloads < 3) throw new Error('Command failed: gh api\nHTTP 404: logs not yet available');
-      return log('ValueError: unknown blob');
+      assert.ok(args.includes('--allow-escape-sequences'));
+      return log('\x1b[31mValueError: unknown blob\x1b[0m');
     }
     throw new Error(`Unexpected API: ${path}`);
   };
@@ -124,9 +178,10 @@ test('only canonical main publish runs can write issues', () => {
   }
 });
 
-test('evidence strips credentials, URL parameters, mentions and issue markers', () => {
-  const text = clean('Bearer secret password=hunter2 https://user:pass@example.com/a?token=x @owner <!-- forged -->');
-  for (const secret of ['Bearer secret', 'hunter2', 'user:pass', 'token=x', '@owner', '<!--']) {
+test('evidence strips terminal controls, credentials, URL parameters, mentions and issue markers', () => {
+  const text = clean('\x1b[31mBearer secret\x1b[0m password=hunter2 https://user:pass@example.com/a?token=x @owner <!-- forged -->' +
+    '\x1b]8;;https://example.com?token=hidden\x07link\x1b]8;;\x07');
+  for (const secret of ['\x1b', '\x07', 'hidden', 'Bearer secret', 'hunter2', 'user:pass', 'token=x', '@owner', '<!--']) {
     assert.ok(!text.includes(secret));
   }
 });
