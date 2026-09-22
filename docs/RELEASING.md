@@ -130,9 +130,11 @@ by an existing Git tag or release. It reports cleanup errors without hiding the 
 The saved tested image remains available for retry for 30 days.
 
 Cancellation preserves the candidate and registry state. Do not delete them to recover: explicitly rerun
-the cancelled release, or request Create release again from the same main snapshot. A completed release
-can be rerun after branch deletion only when its immutable release and tag still identify the exact
-commit and its original artifact bytes remain available.
+the cancelled release, or request Create release again from the same main snapshot.
+
+If GitHub starts a rerun after successful branch cleanup, preflight accepts the absent branch only when
+its immutable release and tag identify the exact commit; original retained bytes are still required.
+This does not guarantee GitHub can start a workflow whose branch was deleted.
 
 A caller startup failure can prevent all jobs from running. If no release workflow exists for a prepared
 branch, preparation reports that missing run instead of creating another candidate or claiming publication
