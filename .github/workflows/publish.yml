@@ -557,6 +557,8 @@ jobs:
           permission-pull-requests: write
       - name: Open the next version bump pull request
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
         with:
           github-token: ${{ steps.app.outputs.token }}
           script: await require('./.github/scripts/release.cjs').bumpReleasedVersion({ github, context, core });

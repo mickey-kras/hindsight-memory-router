@@ -29,16 +29,16 @@ jobs:
             const releaseProtected = {
               ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
               ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
-              ".github/scripts/release.cjs": "e9c634ca80f01bc88130f25adeb81f1e2ae32e22608dad5ebd55d81111b704b9",
+              ".github/scripts/release.cjs": "71ae213047e5ae51d98f9ca422b0f4455d515490f91580bbd33b6ed992b35198",
               ".github/scripts/release-settings.cjs": "e485de848409942ca37d32a4caea8a93cd4bac5e93048e7b24bf57d848372a57",
-              ".github/scripts/release.test.cjs": "3247dcdb9074911aae1cb1c9b1cc52ee8f5c67efd0843a2b94a49d6142c1b8c0",
+              ".github/scripts/release.test.cjs": "5feb2b885d5369e16247b700194d062e8b1e9198fdae422357dc7cceba266f56",
               ".github/scripts/release-cleanup.cjs": "079c2553f194ba98c76351eefa45bbff1dddc2d82def8121ed47c536d1ccf03d",
               ".github/scripts/release-cleanup.test.cjs": "22958a25aec9dee67fbe6d0c7dc015077fb5c989535ebf432a887a05764d31ea",
-              ".github/scripts/release-policy.test.py": "706e059300bbb843c76268cb4a4935ab41e409cd48a35224b87718f861b428c2",
+              ".github/scripts/release-policy.test.py": "59972afba13396a1f12c0724a22d91a0afb3b88a874d72bc8e8e901b825be78d",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "0787b076528380ca6475de1a58ccd8f72f49113922c5c74974a9f8597c6dbb4c",
               ".github/scripts/publish-image.test.cjs": "c9cec6865bd070775b6a8e2cf393787d3fe305ad896734295cdea18b6c772311",
-              ".github/workflows/publish.yml": "de21d744646b2f52c0937f47c45775b6b9d7fcbabc37bb692b7e2ce431c3da43",
+              ".github/workflows/publish.yml": "b267bf9e035f5d574b6a160a62fb155cfb1539fe1e95cf2fca0737065e7e6331",
               ".github/workflows/release.yml": "abbf2aad80a014dd01fa518a2a2d1160c8d7ca7038d5367aba8369e11c44b6ff",
               ".github/workflows/ci.yml": "b7523c17090afa8aaa60bc08cb7e846ca80d5a084390cd9262ffd801402000d0"
             };

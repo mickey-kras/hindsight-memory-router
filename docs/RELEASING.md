@@ -7,8 +7,9 @@
 3. Main passes, including Sonar → `release/X.Y.Z` freezes inputs → release gates pass → publish artifacts and immutable `vX.Y.Z` → promote `latest`.
 
 The checkbox authorizes publication; there is no second button. Normal main runs never publish.
-After publication the automation opens a pull request bumping main to the next patch version and
-deletes the published `release/X.Y.Z` branch, plus any earlier `release/*` branch still at its
+After publication the automation opens a next-patch version PR and enables squash auto-merge
+after required checks pass. Retries verify the PR still contains only that version bump.
+It deletes the published `release/X.Y.Z` branch, plus any earlier `release/*` branch still at its
 published tag. A branch that advanced past its tag is kept and reported in the run summary.
 Preparation pauses Dependabot auto-merge for the full run. Avoid manual merges until it finishes.
 The release includes the main SHA selected at dispatch, shown in the run summary. If main advances

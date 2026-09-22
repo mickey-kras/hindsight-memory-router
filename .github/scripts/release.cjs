@@ -505,7 +505,39 @@ async function publishedTag(github, repository, version, sha) {
   );
 }
 
-async function bumpReleasedVersion({ github, context, core }) {
+function mergeVersionBump({ repository, number, sha }) {
+  execFileSync("gh", ["pr", "merge", String(number), "--repo", repository,
+    "--auto", "--squash", "--match-head-commit", sha], { timeout: 30000, stdio: "pipe" });
+}
+
+async function queueVersionBump({ github, repository, number, branch, version, next, merge }) {
+  const params = { ...repository, pull_number: number };
+  const { data: pull } = await github.rest.pulls.get(params);
+  const fullName = `${repository.owner}/${repository.repo}`;
+  requireValue(pull.state === "open" && !pull.draft && pull.base.ref === "main" &&
+    pull.head.repo?.full_name === fullName && pull.head.ref === branch && commitSha.test(pull.head.sha),
+  `Refusing auto-merge: #${number} is not the expected bump PR`);
+  // On retries, a maintainer may have edited the generated PR. Only the exact
+  // two version-line replacements are eligible for unattended merging.
+  const expected = {
+    "release-version.json": [`-  "version": "${version}"`, `+  "version": "${next}"`],
+    "pyproject.toml": [`-version = "${version}"`, `+version = "${next}"`],
+  };
+  const files = await github.paginate(github.rest.pulls.listFiles, { ...params, per_page: 100 });
+  requireValue(files.length === 2 && new Set(files.map(file => file.filename)).size === 2 &&
+    files.every(file => file.status === "modified" && file.additions === 1 && file.deletions === 1 &&
+      expected[file.filename] && isDeepStrictEqual(
+        (file.patch || "").split("\n").filter(line => /^[+-]/.test(line)), expected[file.filename])),
+  `Refusing auto-merge: #${number} contains changes beyond the next patch version`);
+  if (pull.auto_merge) {
+    requireValue(pull.auto_merge.merge_method === "squash", `#${number} must use squash auto-merge`);
+    return;
+  }
+  // gh queues pending checks or merges an already-green retry; branch rules apply.
+  await merge({ repository: fullName, number, sha: pull.head.sha });
+}
+
+async function bumpReleasedVersion({ github, context, core, merge = mergeVersionBump }) {
   const version = publishedVersion(context);
   await publishedTag(github, context.repo, version, context.sha);
   const next = nextPatch(version);
@@ -519,7 +551,8 @@ async function bumpReleasedVersion({ github, context, core }) {
     per_page: 100,
   });
   if (open.length) {
-    await summary.addRaw(`Kept existing pull request #${open[0].number}.\n`).write();
+    await queueVersionBump({ github, repository, number: open[0].number, branch, version, next, merge });
+    await summary.addRaw(`Reused #${open[0].number}; squash auto-merge enabled.\n`).write();
     return;
   }
   const { data: main } = await github.rest.git.getRef({ ...repository, ref: "heads/main" });
@@ -563,10 +596,11 @@ async function bumpReleasedVersion({ github, context, core }) {
     title: `Bump release version to ${next}`,
     head: branch,
     base: "main",
-    body: `Release v${version} is published; reserve the next version on main.\n\n- Bump release-version.json and pyproject.toml to ${next}\n- Edit this PR for a minor or major bump instead\n`,
+    body: `Release v${version} is published; reserve the next version on main.\n\n- Bump release-version.json and pyproject.toml to ${next}\n- Squash-merges automatically after required checks pass\n`,
     maintainer_can_modify: false,
   });
-  await summary.addRaw(`Opened #${pr.number}: bump ${version} to ${next}.\n`).write();
+  await queueVersionBump({ github, repository, number: pr.number, branch, version, next, merge });
+  await summary.addRaw(`Opened #${pr.number}: bump ${version} to ${next}; squash auto-merge enabled.\n`).write();
 }
 
 async function deletePublishedBranch({ github, context, core }) {
