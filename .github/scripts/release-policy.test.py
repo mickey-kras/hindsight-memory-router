@@ -198,7 +198,8 @@ class ReleasePolicyTests(unittest.TestCase):
         steps = {step.get("name"): step for step in publish["steps"]}
         gate = "steps.push.outputs.published == 'true'"
         for name in ["Generate CycloneDX SBOM", "Attest GHCR SBOM", "Attest Docker Hub SBOM"]:
-            self.assertEqual(steps[name]["if"], gate)
+            expected = gate + " && steps.candidate.outputs.release_assets == ''" if name == "Generate CycloneDX SBOM" else gate
+            self.assertEqual(steps[name]["if"], expected)
         generate = steps["Generate CycloneDX SBOM"]["run"]
         self.assertIn("--format cyclonedx", generate)
         self.assertIn("normalize-sbom.py", generate)
@@ -220,7 +221,8 @@ class ReleasePolicyTests(unittest.TestCase):
         steps = {step.get("name"): step for step in publish["steps"]}
         gate = "steps.push.outputs.published == 'true'"
         for name in ["Build and pack the UI package", "Sign the UI package"]:
-            self.assertEqual(steps[name]["if"], gate)
+            expected = gate + " && steps.candidate.outputs.release_assets == ''" if name == "Sign the UI package" else gate
+            self.assertEqual(steps[name]["if"], expected)
         build = steps["Build and pack the UI package"]["run"]
         self.assertIn("npm ci --prefix ui", build)
         self.assertIn("npm pack ./ui", build)
@@ -248,7 +250,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIs(cleanup["continue-on-error"], True)
         condition = cleanup["if"]
         for guard in [
-            "always()",
+            "!cancelled()",
             "github.event_name == 'push'",
             "startsWith(github.ref, 'refs/heads/release/')",
             "needs.publish.outputs.released == ''",
@@ -260,29 +262,45 @@ class ReleasePolicyTests(unittest.TestCase):
         # never matches, so manual cancellations cannot delete orphaned state.
         for need in ["quality", "aislop", "codeql", "architecture", "publish"]:
             self.assertIn(f"needs.{need}.result == 'failure'", condition)
-        self.assertNotIn("cancelled", condition)
-        # A failed workflow_dispatch preparation also cleans up, scoped to the
-        # branches its own run created.
+        self.assertNotIn("always()", condition)
+        # Failed preparation retains its own candidate for recovery.
         self.assertIn("github.event_name == 'workflow_dispatch'", condition)
         self.assertIn("github.ref == 'refs/heads/main'", condition)
         self.assertIn("needs.prepare-release.result == 'failure'", condition)
         self.assertEqual(cleanup["environment"], "release-automation")
         self.assertEqual(cleanup["permissions"], {"contents": "read", "packages": "write"})
         steps = {step.get("name"): step for step in cleanup["steps"]}
-        self.assertEqual(
-            steps["Release App token"]["with"]["private-key"], "${{ secrets.RELEASE_APP_PRIVATE_KEY }}"
-        )
+        self.assertNotIn("Release App token", steps)
         registries = steps["Remove orphaned registry tags"]
         self.assertEqual(registries["if"], "github.event_name == 'push'")
         self.assertIn("release-cleanup.cjs').registries(", registries["with"]["script"])
-        branch = steps["Delete the failed release branch"]
-        self.assertEqual(branch["if"], "always() && github.event_name == 'push'")
-        self.assertEqual(branch["with"]["github-token"], "${{ steps.app.outputs.token }}")
+        branch = steps["Retain the failed release branch"]
+        self.assertEqual(branch["if"], "${{ !cancelled() && github.event_name == 'push' }}")
+        self.assertNotIn("github-token", branch["with"])
         self.assertIn("release-cleanup.cjs').branch(", branch["with"]["script"])
-        preparation = steps["Delete failed preparation branches"]
-        self.assertEqual(preparation["if"], "always() && github.event_name == 'workflow_dispatch'")
-        self.assertEqual(preparation["with"]["github-token"], "${{ steps.app.outputs.token }}")
+        preparation = steps["Retain failed preparation branches"]
+        self.assertEqual(preparation["if"], "${{ !cancelled() && github.event_name == 'workflow_dispatch' }}")
+        self.assertNotIn("github-token", preparation["with"])
         self.assertIn("release-cleanup.cjs').preparation(", preparation["with"]["script"])
+
+    def test_recovery_reuses_prepared_assets_and_retries_with_the_job_token(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        prepare = main["jobs"]["prepare-release"]
+        self.assertEqual(prepare["permissions"], {"contents": "read", "actions": "write"})
+        steps = {step.get("name"): step for step in prepare["steps"]}
+        resume = steps["Resume the prepared release"]
+        self.assertNotIn("github-token", resume["with"])
+        self.assertIn("resume_sha", resume["if"])
+        self.assertNotIn("permission-actions", steps["Release App token"]["with"])
+        publish = {step.get("name"): step for step in main["jobs"]["publish"]["steps"]}
+        self.assertIn("retryArtifacts", publish["Find previously tested image"]["with"]["script"])
+        self.assertIn("release_assets != ''", publish["Restore prepared release assets"]["if"])
+        self.assertIn("restoreReleaseAssets", publish["Verify and restore release bytes"]["with"]["script"])
+        for name in ["Generate CycloneDX SBOM", "Sign the UI package", "Record image digests", "Upload image digests"]:
+            self.assertIn("release_assets == ''", publish[name]["if"])
+        self.assertIn('if [ -z "$RELEASE_ASSETS" ]', publish["Build and pack the UI package"]["run"])
 
     def test_release_followup_contract(self):
         if not ROUTER:
@@ -312,7 +330,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("release.cjs').bumpReleasedVersion(", bump["with"]["script"])
         self.assertEqual(bump["env"]["GH_TOKEN"], "${{ steps.app.outputs.token }}")
         delete = steps["Delete the published release branch"]
-        self.assertEqual(delete["if"], "always()")
+        self.assertEqual(delete["if"], "success()")
         self.assertEqual(delete["with"]["github-token"], "${{ steps.app.outputs.token }}")
         self.assertIn("release.cjs').deletePublishedBranch(", delete["with"]["script"])
 
