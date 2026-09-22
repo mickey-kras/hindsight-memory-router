@@ -152,7 +152,7 @@ jobs:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
       - name: Synchronize SonarQube findings
-        if: failure() && steps.sonar-quality-gate.outcome == 'failure'
+        if: ${{ !cancelled() && failure() && steps.sonar-quality-gate.outcome == 'failure' }}
         env:
           GH_TOKEN: ${{ github.token }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -650,17 +650,17 @@ jobs:
     needs: [quality, aislop, codeql, architecture, publish, sonar, pages, update-pr-branches]
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
         (
-          needs.quality.result != 'success' ||
-          needs.aislop.result != 'success' ||
-          needs.codeql.result != 'success' ||
-          needs.architecture.result != 'success' ||
-          needs.publish.result != 'success' ||
-          (github.ref == 'refs/heads/main' && needs.sonar.result != 'success') ||
-          (github.ref == 'refs/heads/main' && needs.pages.result != 'success') ||
-          needs.update-pr-branches.result != 'success'
+          needs.quality.result == 'failure' ||
+          needs.aislop.result == 'failure' ||
+          needs.codeql.result == 'failure' ||
+          needs.architecture.result == 'failure' ||
+          needs.publish.result == 'failure' ||
+          (github.ref == 'refs/heads/main' && needs.sonar.result == 'failure') ||
+          (github.ref == 'refs/heads/main' && needs.pages.result == 'failure') ||
+          needs.update-pr-branches.result == 'failure'
         )
       }}
     runs-on: ubuntu-latest

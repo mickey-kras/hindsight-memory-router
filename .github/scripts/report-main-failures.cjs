@@ -3,12 +3,13 @@ const { execFileSync } = require('node:child_process');
 const { mkdtempSync, writeFileSync, rmSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
+const { stripVTControlCharacters } = require('node:util');
 
-const BAD = new Set(['failure', 'timed_out', 'cancelled', 'action_required', 'startup_failure']);
+const REPORTABLE = new Set(['failure', 'timed_out', 'action_required', 'startup_failure']);
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 function clean(text) {
-  return text.replace(/\x1b\[[0-9;]*m/g, '').replace(/\r/g, '')
+  return stripVTControlCharacters(text).replace(/\r/g, '')
     .replace(/[a-z][a-z0-9+.-]*:\/\/[^\s<>]+/g, value => {
       try {
         const url = new URL(value);
@@ -60,7 +61,8 @@ function diagnostics(lines) {
 }
 
 function reportsForJob(run, job, log, fallback = '') {
-  const steps = (job.steps || []).filter(step => BAD.has(step.conclusion));
+  if (run.conclusion === 'cancelled' || !REPORTABLE.has(job.conclusion)) return [];
+  const steps = (job.steps || []).filter(step => REPORTABLE.has(step.conclusion));
   if (!steps.length) steps.push({ name: job.conclusion, number: 0 });
   return steps.flatMap(step => {
     const lines = stepLines(log, step);
@@ -88,7 +90,7 @@ function reportsForJob(run, job, log, fallback = '') {
 }
 
 function logFallback(api, job, failure) {
-  const lines = (job.steps || []).filter(step => BAD.has(step.conclusion))
+  const lines = (job.steps || []).filter(step => REPORTABLE.has(step.conclusion))
     .map(step => `Step "${step.name}" concluded ${step.conclusion}.`);
   try {
     const path = new URL(job.check_run_url).pathname;
@@ -123,18 +125,20 @@ function main(env = process.env, execute = execFileSync,
   const run = json(`${root}/actions/runs/${id}`);
   const repo = json(root);
   if (!trustedRun(run, repository, repo.default_branch)) throw new Error('Untrusted publish run');
+  if (run.conclusion === 'cancelled') return [];
   const pages = JSON.parse(api(`${root}/actions/runs/${id}/jobs?filter=latest&per_page=100`, ['--paginate', '--slurp']));
   const jobs = pages.flatMap(page => page.jobs);
   const issues = JSON.parse(api(`${root}/issues?state=all&per_page=100`, ['--paginate', '--slurp'])).flat();
   const relatedSonar = issues.filter(issue => !issue.pull_request && issue.body?.includes('<!-- sonar-finding:') &&
     issue.body.includes(`- Detected at commit: \`${run.head_sha}\``) && issue.body.includes(`- Workflow: ${run.html_url}`));
   const reports = [];
-  for (const job of jobs.filter(job => BAD.has(job.conclusion))) {
+  for (const job of jobs.filter(job => REPORTABLE.has(job.conclusion))) {
     // Just-finished jobs often 404 on log download while the run is still open.
     let log = '', failure;
     for (let attempt = 0; attempt < 3 && !log; attempt += 1) {
       if (attempt) sleep(10000 * attempt);
-      try { log = api(`${root}/actions/jobs/${job.id}/logs`); } catch (error) { failure = error; }
+      try { log = api(`${root}/actions/jobs/${job.id}/logs`, ['--allow-escape-sequences']); }
+      catch (error) { failure = error; }
     }
     const fallback = log ? '' : logFallback(api, job, failure);
     for (const report of reportsForJob(run, job, log, fallback)) {
@@ -143,13 +147,16 @@ function main(env = process.env, execute = execFileSync,
       reports.push(report);
     }
   }
-  if (!reports.length && !relatedSonar.length && BAD.has(run.conclusion)) {
+  if (!reports.length && !relatedSonar.length && REPORTABLE.has(run.conclusion)) {
     reports.push(...reportsForJob(run, { id: 0, name: 'publish workflow', steps: [],
       conclusion: run.conclusion, html_url: run.html_url }, ''));
   }
+  if (!reports.length) return [];
+  const completed = [];
   const directory = mkdtempSync(join(tmpdir(), 'main-failures-'));
   try {
     for (const report of reports) {
+      if (json(`${root}/actions/runs/${id}`).conclusion === 'cancelled') break;
       const path = join(directory, `${report.key}.md`);
       writeFileSync(path, report.body);
       execute('bash', ['.github/scripts/upsert-main-failure-issue.sh', path], {
@@ -157,9 +164,10 @@ function main(env = process.env, execute = execFileSync,
         env: { ...env, FAILURE_KEY: report.key, FAILURE_TITLE: report.title,
           FAILURE_OCCURRENCE: report.occurrence },
       });
+      completed.push(report);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-  return reports;
+  return completed;
 }
 
 module.exports = { clean, normalize, diagnostics, reportsForJob, logFallback, trustedRun, main };
