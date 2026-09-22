@@ -81,10 +81,18 @@ function mock() {
         listTags: () => data(state.tags),
         listBranches: () => data(state.branches),
         getCommit: () => data({ sha: base }),
-        getContent: () => data(encode(state.prepared)),
+        getContent: ({ path }) => {
+          if (path === "compat/hindsight.json") return data(encode({ channel: "release", ...pin }));
+          if (path === "release-version.json") return data(encode({ version: "0.1.0" }));
+          if (path === "pyproject.toml") return data({ type: "file", encoding: "base64", content: Buffer.from('version = "0.1.0"').toString("base64") });
+          return data(encode(state.prepared));
+        },
         compareCommitsWithBasehead: ({ basehead }) =>
           data(basehead.endsWith("...main") ? { status: "identical" } : state.comparison),
-        getReleaseByTag: () => (state.release ? data(state.release) : notFound()),
+        getReleaseByTag: ({ tag }) => {
+          const found = state.releasesByTag?.[tag] || state.release;
+          return found ? data(found) : notFound();
+        },
         createRelease: (args) => {
           state.calls.push("draft");
           state.release = { id: 1, ...args };
@@ -137,6 +145,12 @@ function mock() {
           return data({});
         },
       },
+      actions: {
+        listWorkflowRuns: () => data(state.runs || []),
+        listWorkflowRunArtifacts: () => data(state.artifacts || []),
+        reRunWorkflow: ({ run_id }) => { state.calls.push(`rerun:${run_id}`); return data({}); },
+        reRunWorkflowFailedJobs: ({ run_id }) => { state.calls.push(`rerun-failed:${run_id}`); return data({}); },
+      },
       pulls: {
         list: () => data(state.pulls || []),
         get: () => data(state.pull),
@@ -160,7 +174,7 @@ function mock() {
   };
   const outputs = {};
   const summary = {
-    addRaw: () => summary,
+    addRaw: (value) => { state.summary = (state.summary || "") + value; return summary; },
     addHeading: () => summary,
     write: async () => {},
   };
@@ -632,6 +646,7 @@ test("follow-up prunes stale branches published at their tag and keeps advanced 
   fixture(async () => {
     const m = mock();
     publishedFixture(m);
+    m.state.releasesByTag = Object.fromEntries(["v0.0.9", "v0.0.8", "v0.0.6"].map((tag) => [tag, { immutable: true, draft: false, prerelease: false }]));
     m.state.branches = [
       { name: "release/0.1.0", commit: { sha } },
       { name: "release/0.0.9", commit: { sha: base } },
@@ -644,13 +659,212 @@ test("follow-up prunes stale branches published at their tag and keeps advanced 
     m.state.refs["heads/release/0.0.9"] = { object: { type: "commit", sha: base } };
     m.state.refs["tags/v0.0.9"] = { object: { type: "commit", sha: base } };
     m.state.refs["tags/v0.0.8"] = { object: { type: "commit", sha: base } };
+    m.state.refs["heads/release/0.0.8"] = { object: { type: "commit", sha } };
     m.state.refs["tags/v0.0.6"] = { object: { type: "commit", sha: base } };
     await release.deletePublishedBranch(m);
     assert.deepEqual(m.state.calls, [
       "delete:heads/release/0.1.0",
       "delete:heads/release/0.0.9",
-      "delete:heads/release/0.0.6",
     ]);
     assert.deepEqual(m.state.errors, [], "a branch that vanished mid-run must be tolerated");
     assert.deepEqual(m.state.warnings, ["Kept release/0.0.8: the branch advanced past its published tag"]);
+  }));
+
+
+test("fresh preparation resumes the frozen candidate without resolving newer upstream inputs", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    m.context = { ...m.context, eventName: "workflow_dispatch", workflow: "main", ref: "refs/heads/main", sha: base, runId: 6 };
+    m.state.branches = [{ name: "release/0.1.0" }];
+    m.inspect = () => assert.fail("recovery must not repin Hindsight");
+    await release.prepare(m);
+    assert.equal(m.outputs.resume_sha, sha);
+    assert.deepEqual(m.state.calls, []);
+    m.state.prepared.base = "d".repeat(40);
+    await assert.rejects(release.prepare(m), /another main snapshot/);
+    assert.deepEqual(m.state.calls, []);
+  }));
+
+function recoverable(m, conclusion = "failure") {
+  m.state.refs["heads/release/0.1.0"] = { object: { type: "commit", sha } };
+  m.state.runs = [{ id: 99, event: "push", head_branch: "release/0.1.0", head_sha: sha,
+    path: ".github/workflows/release.yml", status: "completed", conclusion }];
+  return { ...m, version: "0.1.0", sha };
+}
+
+test("preparation reruns failed jobs and explicitly retries cancelled runs at the frozen SHA", () =>
+  fixture(async () => {
+    const m = mock();
+    await release.resumePreparedRelease(recoverable(m));
+    await release.resumePreparedRelease(recoverable(m, "cancelled"));
+    assert.deepEqual(m.state.calls, ["rerun-failed:99", "rerun:99"]);
+    assert.match(m.state.summary, /Publication is pending/);
+  }));
+
+test("repeated preparation leaves active and successful release runs alone", () =>
+  fixture(async () => {
+    const m = mock();
+    const args = recoverable(m);
+    m.state.runs[0].status = "in_progress";
+    await release.resumePreparedRelease(args);
+    assert.match(m.state.summary, /No duplicate release/);
+    m.state.runs[0].status = "completed";
+    m.state.runs[0].conclusion = "success";
+    await release.resumePreparedRelease(args);
+    assert.deepEqual(m.state.calls, []);
+  }));
+
+test("recovery refuses missing, mismatched, or advanced release candidates", () =>
+  fixture(async () => {
+    for (const change of [
+      (m) => { delete m.state.refs["heads/release/0.1.0"]; },
+      (m) => { m.state.refs["heads/release/0.1.0"].object.sha = base; },
+      (m) => { m.state.runs[0].head_sha = base; },
+      (m) => { m.state.runs[0].event = "pull_request"; },
+      (m) => { m.state.runs[0].path = ".github/workflows/publish.yml"; },
+      (m) => { m.state.runs = []; },
+    ]) {
+      const m = mock();
+      const args = recoverable(m);
+      change(m);
+      await assert.rejects(release.resumePreparedRelease(args), release.ReleaseError);
+      assert.deepEqual(m.state.calls, []);
+    }
+    const m = mock();
+    const args = recoverable(m);
+    m.github.rest.actions.listWorkflowRuns = () => {
+      m.state.refs["heads/release/0.1.0"].object.sha = base;
+      return { data: m.state.runs };
+    };
+    await assert.rejects(release.resumePreparedRelease(args), /advanced before retry/);
+    assert.deepEqual(m.state.calls, []);
+  }));
+
+test("release retries require retained bytes once an immutable tag exists", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    m.state.refs["tags/v0.1.0"] = { object: { type: "commit", sha } };
+    m.state.artifacts = [
+      { id: 1, name: `image-${sha}`, expired: false },
+      { id: 2, name: `image-digests-${sha}-1`, expired: true },
+      { id: 3, name: `image-digests-${base}-2`, expired: false },
+      { id: 4, name: `image-digests-${sha}-2extra`, expired: false },
+    ];
+    await assert.rejects(release.retryArtifacts(m), /retained release bytes are missing/);
+    m.state.artifacts.push({ id: 5, name: `image-digests-${sha}-2`, expired: false });
+    await release.retryArtifacts(m);
+    assert.equal(m.outputs.artifact, "1");
+    assert.equal(m.outputs.release_assets, "5");
+    m.state.artifacts[0].expired = true;
+    await assert.rejects(release.retryArtifacts(m), /Saved release image expired/);
+  }));
+
+test("partial publication restores its original signature bytes before resuming asset uploads", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    const hash = (path) => `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
+    writeFileSync("image-digests.txt", `commit=${sha}\nversion=0.1.0\nsbom=${hash("sbom.cdx.json")}\nui-package=${hash("memory-router-ui-0.2.0.tgz")}\n`);
+    mkdirSync("saved");
+    for (const path of ["image-digests.txt", "sbom.cdx.json", ...release.uiPackageAssets()]) {
+      writeFileSync(join("saved", path), readFileSync(path));
+    }
+    const upload = m.github.rest.repos.uploadReleaseAsset;
+    m.github.rest.repos.uploadReleaseAsset = (args) => {
+      const result = upload(args);
+      if (args.name.endsWith(".sigstore.json")) throw new Error("upload acknowledgement lost");
+      return result;
+    };
+    await assert.rejects(release.finalize(m), /acknowledgement lost/);
+    writeFileSync("memory-router-ui-0.2.0.tgz.sigstore.json", '{"regenerated":"different bytes"}');
+    await assert.rejects(release.finalize(m), /Existing release asset differs/);
+    release.restoreReleaseAssets({ context: m.context, directory: "saved" });
+    await release.finalize(m);
+    assert.equal(m.state.release.draft, false);
+    assert.equal(m.state.calls.filter((call) => call === "refs/tags/v0.1.0").length, 1);
+  }));
+
+test("restoring release assets rejects incomplete inventory, corrupt bytes, and another commit", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    mkdirSync("saved");
+    await assert.rejects(async () => release.restoreReleaseAssets({ context: m.context, directory: "saved" }), /ENOENT/);
+    for (const path of ["image-digests.txt", "sbom.cdx.json", ...release.uiPackageAssets()]) {
+      writeFileSync(join("saved", path), readFileSync(path));
+    }
+    assert.throws(() => release.restoreReleaseAssets({ context: m.context, directory: "saved" }), /another commit/);
+    writeFileSync("saved/image-digests.txt", `commit=${sha}\nversion=0.1.0\nsbom=wrong\n`);
+    assert.throws(() => release.restoreReleaseAssets({ context: m.context, directory: "saved" }), /checksum differs/);
+  }));
+
+test("full rerun accepts a deleted branch only for its immutable published commit", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    delete m.state.refs["heads/release/0.1.0"];
+    await assert.rejects(release.validate(m), /branch is missing/);
+    m.state.release = { immutable: false, draft: true, prerelease: false };
+    m.state.refs["tags/v0.1.0"] = { object: { type: "commit", sha } };
+    await assert.rejects(release.validate(m), /branch is missing/);
+    m.state.release = { immutable: true, draft: false, prerelease: false };
+    await release.validate(m);
+    m.state.refs["tags/v0.1.0"].object.sha = base;
+    await assert.rejects(release.validate(m), /not published at this commit/);
+  }));
+
+
+test("preparation does not repeat an immutable publication after branch cleanup", () =>
+  fixture(async () => {
+    const m = mock();
+    prepared(m);
+    delete m.state.refs["heads/release/0.1.0"];
+    m.context = { ...m.context, eventName: "workflow_dispatch", workflow: "main", ref: "refs/heads/main", sha: base, runId: 6 };
+    m.state.tags = [{ name: "v0.1.0" }];
+    m.state.refs["tags/v0.1.0"] = { object: { type: "commit", sha } };
+    m.state.release = { immutable: true, draft: false, prerelease: false };
+    m.inspect = () => assert.fail("completed release must not repin Hindsight");
+    await release.prepare(m);
+    assert.deepEqual(m.state.calls, []);
+    assert.match(m.state.summary, /already published/);
+    m.state.release.immutable = false;
+    await assert.rejects(release.prepare(m), /incomplete release/);
+  }));
+
+test("startup failure recovery retries the caller instead of nonexistent failed jobs", () =>
+  fixture(async () => {
+    const m = mock();
+    await release.resumePreparedRelease(recoverable(m, "startup_failure"));
+    assert.deepEqual(m.state.calls, ["rerun:99"]);
+  }));
+
+
+test("published branch pruning retains newer releases awaiting their own follow-up", () =>
+  fixture(async () => {
+    const m = mock();
+    publishedFixture(m);
+    m.state.branches = [{ name: "release/0.2.0", commit: { sha } }];
+    m.state.refs["heads/release/0.2.0"] = { object: { type: "commit", sha } };
+    m.state.refs["tags/v0.2.0"] = { object: { type: "commit", sha } };
+    await release.deletePublishedBranch(m);
+    assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"]);
+    assert.equal(m.state.refs["heads/release/0.2.0"].object.sha, sha);
+  }));
+
+
+test("published branch pruning retains tag-only and draft releases", () =>
+  fixture(async () => {
+    for (const published of [undefined, { immutable: false, draft: true }, { immutable: false, draft: false }]) {
+      const m = mock();
+      publishedFixture(m);
+      m.state.branches = [{ name: "release/0.0.9", commit: { sha: base } }];
+      m.state.refs["heads/release/0.0.9"] = { object: { type: "commit", sha: base } };
+      m.state.refs["tags/v0.0.9"] = { object: { type: "commit", sha: base } };
+      m.state.releasesByTag = { "v0.0.9": published };
+      await release.deletePublishedBranch(m);
+      assert.deepEqual(m.state.calls, ["delete:heads/release/0.1.0"]);
+      assert.equal(m.state.refs["heads/release/0.0.9"].object.sha, base);
+    }
   }));

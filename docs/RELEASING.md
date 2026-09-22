@@ -9,8 +9,8 @@
 The checkbox authorizes publication; there is no second button. Normal main runs never publish.
 After publication the automation opens a next-patch version PR and enables squash auto-merge
 after required checks pass. Retries verify the PR still contains only that version bump.
-It deletes the published `release/X.Y.Z` branch, plus any earlier `release/*` branch still at its
-published tag. A branch that advanced past its tag is kept and reported in the run summary.
+After the bump PR is queued successfully, it deletes the published `release/X.Y.Z` branch,
+plus older `release/*` branches still at their immutable published tags. A branch that advanced past its tag is kept and reported in the run summary.
 Preparation pauses Dependabot auto-merge for the full run. Avoid manual merges until it finishes.
 The release includes the main SHA selected at dispatch, shown in the run summary. If main advances
 before branch creation, rerun from current main. Only automation creates release branches and tags.
@@ -29,7 +29,8 @@ artifacts by recorded digest, not by tag.
 
 Versions advance independently. Use plain SemVer; below 1.0, minor means breaking and patch means
 compatible fixes. Review bumps on main, refresh locks/provenance, and rebuild changed packages.
-Published package versions can be reused only with identical bytes. Failed preparation reserves its version.
+Published package versions can be reused only with identical bytes. A created release branch reserves its
+version, including after failure or cancellation. Failure before branch creation does not reserve a version.
 
 Release router first. Integrations requires its latest immutable release with the same Hindsight pin.
 `release.json` identifies the exact tested combination: package versions/checksums, router commit/digests,
@@ -99,8 +100,16 @@ self-approval. Sonar stays main-only by design; release tests, CodeQL, Aislop an
   that release branch refresh automatically. Forward-port code fixes to main. Keep pins and `.github/` unchanged.
 - **Package fix:** bump that package if necessary, rebuild, update checksum/Nix files and its `release.json` entry.
 - **Different pins/automation:** prepare a new version from main.
-- **Upload/signing/alias failure:** **Re-run failed jobs**. Existing tags/assets must match. Router retains
-  the tested image for 30 days and repeats smoke/scanning on retry. Never overwrite published bytes.
+- **Credentials/upload/signing/alias failure:** fix the cause, then **Re-run failed jobs** on the release
+  run. The candidate branch stays available. Alternatively, run main with **Create release** from the
+  same main snapshot: automation validates the existing candidate and requests its failed jobs again.
+  Active runs are linked without starting a duplicate. A cancelled release is retried only by an explicit
+  rerun or another Create release request; cancellation never schedules a retry by itself.
+- **Partial publication:** router restores the tested image and original release asset bytes from the
+  same run's retained artifacts, including the UI signature bundle, then repeats smoke/scanning. It
+  verifies existing tags/assets match. Missing retained bytes after publication began fail closed.
+- **Version-bump follow-up failure:** **Re-run failed jobs**. The published branch remains until the bump
+  PR is queued successfully; retries reuse the PR and leave required checks in force.
 - **Bytes must change after publication began, or saved image expired:** use a new version.
 - **Released:** the branch is deleted automatically; the tag and immutable release stay. Future
   releases use another version.
@@ -110,32 +119,21 @@ use recorded digests while recovering a partial publication.
 
 ### Failed release cleanup
 
-When a release run fails before the immutable release is finalized, the **clean up failed release** job
-removes the run's leftovers automatically and posts a summary of what it deleted:
+Failure cleanup retains prepared branches so release-automation can resume the exact candidate. Failed
+preparation also retains any branch it already created. Recovery never replaces a newer branch head,
+changes frozen pins, or silently publishes another main snapshot. If main has advanced, rerun the
+existing release workflow directly; use a new version for different code, pins, or automation.
 
-- the GHCR and Docker Hub tags the run pushed — exactly the version tag and the commit-sha tag, plus the
-  cosign signature/attestation artifacts of this run's digest. `latest` and every other version are never
-  touched. If the run's digest is known, tags that meanwhile moved to another digest (a newer attempt)
-  are left alone;
-- the `release/X.Y.Z` branch, deleted with the release App token (the App is the only bypass actor on the
-  deletion ruleset). The branch is kept when it advanced past the failed run or when `vX.Y.Z` already
-  exists — in that case re-run the failed jobs to finish the release instead.
+Registry cleanup remains scoped to unpublished version/commit tags and their signing/attestation
+artifacts. It preserves `latest`, other versions, tags owned by a newer digest, and every image referenced
+by an existing Git tag or release. It reports cleanup errors without hiding the original failure.
+The saved tested image remains available for retry for 30 days.
 
-A failed preparation dispatch also runs cleanup, deleting only the `release/*` branches its own run created.
+Cancellation preserves the candidate and registry state. Do not delete them to recover: explicitly rerun
+the cancelled release, or request Create release again from the same main snapshot. A completed release
+can be rerun after branch deletion only when its immutable release and tag still identify the exact
+commit and its original artifact bytes remain available.
 
-Cleanup is idempotent, runs only on release branches after a failure, never on main or on success, and its
-own failures cannot mask the original failure. It assumes the single-arch (Linux amd64) image the publish
-job pushes; a multi-arch image would also leave the untagged per-arch child manifests behind. Abandon a
-failed release by simply not re-running it; the version stays reserved, so the next release uses a new
-version number.
-
-Manual edge cases that still need the owner:
-
-- **Startup failures:** when the caller workflow itself fails to start (no jobs execute, e.g. an invalid
-  workflow or unresolvable secret), no cleanup job can run. Delete the orphaned branch with the release
-  App and any pushed registry tags by hand.
-- **Cleanup job failures** (e.g. a registry API outage): the job summary names what remains; delete it
-  manually, then re-run the failed release jobs if the release should proceed.
-- **Manual cancellation:** cancelling a run after it pushed and signed registry tags but before finalize
-  leaves signed orphans behind. Cleanup intentionally skips `cancelled` runs (it triggers on `failure`
-  results only), so delete the orphaned tags and the release branch by hand.
+A caller startup failure can prevent all jobs from running. If no release workflow exists for a prepared
+branch, preparation reports that missing run instead of creating another candidate or claiming publication
+succeeded. Resolve the workflow startup problem before retrying.

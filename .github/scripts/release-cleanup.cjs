@@ -1,11 +1,3 @@
-// Removes the orphaned state of a failed release run: the registry tags the
-// run pushed (GHCR and Docker Hub, including cosign/attestation artifacts) and
-// the protected release branch. Strictly scoped to the exact version tag, the
-// commit-sha tag, and referrers of this run's digest. Never touches latest,
-// other versions, or anything an existing git tag/release still references.
-// Every target is best-effort: failures are logged, never thrown, so cleanup
-// can never mask the original release failure.
-
 const releaseTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const commitSha = /^[a-f0-9]{40}$/;
 const imageDigest = /^sha256:[a-f0-9]{64}$/;
@@ -218,8 +210,6 @@ async function cleanupDockerHub(core, version, sha, fetchImpl) {
 }
 
 async function registries({ github, context, core, fetchImpl = fetch }) {
-  // Fail-safe entry guards (targets(), the published() probe) throw before any
-  // deletion; still leave a summary line so the run page shows why nothing ran.
   const summary = core.summary.addHeading("Failed release cleanup: registry tags", 3);
   try {
     const { version, sha } = targets(context);
@@ -228,6 +218,15 @@ async function registries({ github, context, core, fetchImpl = fetch }) {
       await summary
         .addRaw(`\`v${version}\` already has a git tag or release; keeping every registry tag. Re-run failed jobs to finish the release.\n`)
         .write();
+      return;
+    }
+    if (!runDigest()) {
+      await summary.addRaw("No completed image digest was recorded; retaining registry state for retry.\n").write();
+      return;
+    }
+    const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: `heads/release/${version}` });
+    if (head.object.sha !== sha) {
+      await summary.addRaw("The release branch advanced; retaining registry state owned by its current candidate.\n").write();
       return;
     }
     await attempt(core, summary, "GHCR", () => cleanupGhcr(github, context, core, version, sha, fetchImpl));
@@ -266,11 +265,9 @@ async function branch({ github, context, core }) {
       .write();
     return;
   }
-  await attempt(core, summary, `Branch \`release/${version}\``, async () => {
-    await github.rest.git.deleteRef({ ...context.repo, ref });
-    return [ref];
-  });
-  await summary.write();
+  await summary
+    .addRaw(`Kept \`release/${version}\` at ${context.sha} for recovery. Re-run failed jobs or use Create release from the same main snapshot.\n`)
+    .write();
 }
 
 async function preparation({ github, context, core }) {
@@ -299,10 +296,7 @@ async function preparation({ github, context, core }) {
       await summary.addRaw(`Kept \`${item.name}\`: \`v${version}\` already has a git tag or release.\n`);
       continue;
     }
-    await attempt(core, summary, `Branch \`${item.name}\``, async () => {
-      await github.rest.git.deleteRef({ ...context.repo, ref: `heads/${item.name}` });
-      return [item.name];
-    });
+    await summary.addRaw(`Kept \`${item.name}\` for recovery; preparation retries reuse its frozen commit.\n`);
   }
   await summary.write();
 }
