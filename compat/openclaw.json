@@ -8,11 +8,11 @@
     "facade_spec": "hindsight-clients/go/api/openapi.yaml"
   },
   "source_blob_shas": {
-    "plugin": "2d3e0087bf701b7ce52d73a4f1c02e7d74708162",
+    "plugin": "e48ba92673e4c6dade2ef7247088690dd88f1db9",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
-    "client": "c5ca541070d0fc597a0728c8e87f58aa67ab45a8",
-    "facade_spec": "3ed047ad60b9ae59a9d921c9dfaf5fff66d65d23"
+    "client": "0c7142c3f2da5f0dee79dc54aabc20424da615bd",
+    "facade_spec": "4c534f18b115db74b68dd63e91c01a414d068e83"
   },
   "plugin_client_methods": [
     "createBank",
