@@ -9,6 +9,9 @@
 The checkbox authorizes publication; there is no second button. Normal main runs never publish.
 After publication the automation opens a next-patch version PR and enables squash auto-merge
 after required checks pass. Retries verify the PR still contains only that version bump.
+Both PR creation and later branch updates use the Release App so GitHub starts required PR checks
+without the approval required for `GITHUB_TOKEN` updates. The App has no workflow-write permission;
+the updater reports denied workflow-file updates as failures requiring a maintainer rebase.
 After the bump PR is queued successfully, it deletes the published `release/X.Y.Z` branch,
 plus older `release/*` branches still at their immutable published tags. A branch that advanced past its tag is kept and reported in the run summary.
 Preparation pauses Dependabot auto-merge for the full run. Avoid manual merges until it finishes.

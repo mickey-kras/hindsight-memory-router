@@ -47,9 +47,10 @@ jobs:
     name: update PR branches
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     uses: ./.github/workflows/pr-branch-updater.yml
+    secrets:
+      RELEASE_APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
 
   aislop:
     name: aislop

@@ -27,6 +27,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/scripts/pr-branch-updater.cjs": "6a1a52b9d1f8b08ece758dcc4457e496b7b2c0c170e29f6fada8dc6e0362e685",
+              ".github/workflows/pr-branch-updater.yml": "22052e109b525cea71d62e00ad0352297b3873f883c2493332c03f448ad70d0f",
               ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
               ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
               ".github/scripts/release.cjs": "c30e260d4ae04289dc351f6ec00c6bae8d3461e70085f1b32fb530553d38188c",
@@ -34,11 +36,11 @@ jobs:
               ".github/scripts/release.test.cjs": "c798a40c8cb1de6fe0ce5bae63374144c8e717e6286121a7bb9e7ec034620ed6",
               ".github/scripts/release-cleanup.cjs": "99538d2bcea1f0a689419280ec7a23d93890db23091e7171518ccc15bfc442a3",
               ".github/scripts/release-cleanup.test.cjs": "d4df80d31c5eee98cd98450d8f0d8715ffe55d77edecd9709d60c01458a168cc",
-              ".github/scripts/release-policy.test.py": "e71630d7e4f5c62383b2e951bf52c13ad1edbb9549909722cde920301f0593dc",
+              ".github/scripts/release-policy.test.py": "06c9c48aab74f4d4fd6c022b2d6ce54af8de9100f7e7764449f05f79bca02ab5",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "0787b076528380ca6475de1a58ccd8f72f49113922c5c74974a9f8597c6dbb4c",
               ".github/scripts/publish-image.test.cjs": "c9cec6865bd070775b6a8e2cf393787d3fe305ad896734295cdea18b6c772311",
-              ".github/workflows/publish.yml": "1d78b4d7fc92485fd403b4b2c625655688c2fcddd1eeff297152b15374a33774",
+              ".github/workflows/publish.yml": "9c1f6dce9002c17c26086a9f4a12bccf845d775f2e4c5dacf0ae527236a58197",
               ".github/workflows/release.yml": "fc2ce68300de8c6f014e7379aa52b9ddc978df5148d9b05aec63b76226e80f38",
               ".github/workflows/ci.yml": "918648e2f6346dd989874f71ee6426abb04817e233d32c54c2f1726ccd50830e"
             };
