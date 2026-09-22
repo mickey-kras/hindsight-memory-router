@@ -233,6 +233,18 @@ createServer(async (req, res) => {
       const bankId = decodeURIComponent(recall[1]);
       if (rejectForbiddenRouterTraffic(res, "recall", bankId)) return;
       record({ kind: "recall", bank_id: bankId, body });
+      if (body.query === "CI metadata scan") {
+        return send(res, 200, {
+          results: [{
+            id: "cpu-heavy-result",
+            text: "project status is green",
+            metadata: Object.fromEntries(Array.from({ length: 50 }, (_, index) => [
+              `key${index}`,
+              `meeting notes archive item ${index} ordinary reference information `.repeat(200),
+            ])),
+          }],
+        });
+      }
       const unsafe = String(body.query ?? "").includes("unsafe");
       const id = memoryId(bankId, body.query);
       const chunkId = `${id}-chunk`;

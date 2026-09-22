@@ -1040,7 +1040,7 @@
         }
       },
       "MemoryUnavailable": {
-        "description": "Principal rate/concurrency control or request safety scanning is temporarily unavailable. Scanner failures return request_scan_unavailable; no content is forwarded or quarantined for an operational scanner failure.",
+        "description": "Principal rate/concurrency control or safety scanning is temporarily unavailable. Request failures return request_scan_unavailable; native recall-result or supplemental scan failures return recall_scan_unavailable without partial results. Operational scanner failures do not quarantine content.",
         "headers": {
           "Retry-After": {
             "description": "Seconds before retrying.",

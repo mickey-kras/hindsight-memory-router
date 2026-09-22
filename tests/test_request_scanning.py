@@ -106,6 +106,7 @@ async def test_request_capacity_is_shared_with_responses_and_recovers_after_canc
         for call in [
             scan_executor.scan_request({}, operation="recall"),
             scan_executor.scan_facade_response({}),
+            scan_executor.scan_recalled({}),
         ]:
             with pytest.raises(HttpError) as busy:
                 await call
@@ -125,7 +126,7 @@ async def test_request_timeout_kills_worker_and_allows_following_scan(monkeypatc
     original = scan_executor._scan_request_payload
     with monkeypatch.context() as patch:
         patch.setattr(scan_executor, "_scan_request_payload", _slow_scan)
-        patch.setattr(scan_executor, "REQUEST_SCAN_TASK_SECONDS", 0.2)
+        patch.setattr(scan_executor, "CORE_SCAN_TASK_SECONDS", 0.2)
         with pytest.raises(HttpError) as failure:
             await scan_executor.scan_request({}, operation="retain")
         assert failure.value.code == "request_scan_unavailable"

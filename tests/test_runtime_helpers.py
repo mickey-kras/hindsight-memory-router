@@ -368,7 +368,7 @@ async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
     monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
-    primary_db = SimpleNamespace(dialect="postgres")
+    primary_db = SimpleNamespace(dialect="postgres", close=AsyncMock())
     create_database = AsyncMock(return_value=primary_db)
     validate_storage = AsyncMock()
     recover_interrupted = AsyncMock()
@@ -453,15 +453,15 @@ async def test_runtime_stop_cancels_sweeper_and_closes_resources() -> None:
     async def wait_forever() -> None:
         await blocker.wait()
 
-    runtime.sweeper = asyncio.create_task(wait_forever())
-    runtime.hindsight = SimpleNamespace(close=AsyncMock())
-    runtime.repository = SimpleNamespace(close=AsyncMock())
+    runtime.sweeper = sweeper = asyncio.create_task(wait_forever())
+    runtime.hindsight = hindsight = SimpleNamespace(close=AsyncMock())
+    runtime.repository = repository = SimpleNamespace(close=AsyncMock())
 
     await runtime.stop()
 
-    assert runtime.sweeper.cancelled()
-    runtime.hindsight.close.assert_awaited_once()
-    runtime.repository.close.assert_awaited_once()
+    assert sweeper.cancelled()
+    hindsight.close.assert_awaited_once()
+    repository.close.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -492,11 +492,11 @@ async def test_runtime_stop_and_sweep(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     rt = app_module.Runtime()
-    rt.hindsight = SimpleNamespace(close=AsyncMock())
-    rt.repository = SimpleNamespace(close=AsyncMock())
+    rt.hindsight = hindsight = SimpleNamespace(close=AsyncMock())
+    rt.repository = repository = SimpleNamespace(close=AsyncMock())
     await rt.stop()
-    rt.hindsight.close.assert_awaited_once()
-    rt.repository.close.assert_awaited_once()
+    hindsight.close.assert_awaited_once()
+    repository.close.assert_awaited_once()
 
     repo = SimpleNamespace()
     rt.repository = repo
@@ -526,7 +526,7 @@ async def test_postgres_runtime_shares_admin_and_auth_failure_limits(
     monkeypatch.setattr(app_module, "assert_no_private_key_environment", lambda: None)
     monkeypatch.setattr(app_module, "assert_auth_environment", lambda _: None)
 
-    primary_db = SimpleNamespace(dialect="postgres")
+    primary_db = SimpleNamespace(dialect="postgres", close=AsyncMock())
     monkeypatch.setattr(db_module, "create_database", AsyncMock(return_value=primary_db))
     monkeypatch.setattr(app_module, "validate_storage", AsyncMock())
     monkeypatch.setattr(app_module, "recover_interrupted", AsyncMock())

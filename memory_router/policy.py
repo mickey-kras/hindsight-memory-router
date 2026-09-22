@@ -19,8 +19,8 @@ from .repository import (
     REVIEWED_ALLOWED,
     REVIEWED_BLOCKED,
 )
-from .scan_executor import scan_request
-from .security import SafetyResult, scan_recall_result
+from .scan_executor import scan_recalled, scan_request
+from .security import SafetyResult
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
@@ -284,7 +284,7 @@ class RouterPolicy:
         value: Any,
     ) -> bool:
         evidence = {field: value} if key is None else {field: {key: value}}
-        scan = scan_recall_result(evidence)
+        scan = await scan_recalled(evidence, writer_id=writer_id)
         if scan.safe:
             return True
         digest = _audit_digest(evidence)
@@ -381,15 +381,15 @@ class RouterPolicy:
                 volatile = {
                     key: value for key, value in result.items() if key not in {"id", "text"}
                 }
-                scan = scan_recall_result(volatile)
+                scan = await scan_recalled(volatile, writer_id=writer_id)
                 if scan.safe:
                     return True
                 await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
                 return False
-            scan = scan_recall_result(result)
+            scan = await scan_recalled(result, writer_id=writer_id)
             await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
             return False
-        scan = scan_recall_result(result)
+        scan = await scan_recalled(result, writer_id=writer_id)
         if state and state["status"] in REVIEWABLE_STATUSES:
             if state.get("source_content_sha256") == digest:
                 return False
@@ -433,7 +433,7 @@ class RouterPolicy:
         self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
     ) -> None:
         digest = _recalled_audit_digest(result)
-        scan = scan_recall_result(result)
+        scan = await scan_recalled(result, writer_id=writer_id)
         memory_id = str(result.get("id", "unknown"))
         await self.quarantine_security_event(
             {

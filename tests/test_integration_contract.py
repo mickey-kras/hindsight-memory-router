@@ -84,6 +84,7 @@ DISPATCH_BRANCH_COVERAGE = {
 REQUIRED_WORKFLOW_CHECKS = {
     "principal facade content requires memory recall",
     "metadata-heavy request scanning preserves liveness responsiveness",
+    "native recall scanning preserves liveness responsiveness",
     "scoped admin tokens enforce read review and cleanup boundaries",
     "local decryption recovers exact original outside router",
     "altered approval is rejected by original hash",

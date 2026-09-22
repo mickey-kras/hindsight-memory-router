@@ -138,6 +138,9 @@ if [[ "$router_db" == "sqlite" ]]; then
   begin_check "SQLite cancellation releases storage for subsequent transactions"
   docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/sqlite-cancellation.py
   pass_check
+  begin_check "failed startup releases workers and supports retry"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 15 python - < tests/integration/startup-cleanup.py
+  pass_check
 fi
 
 begin_check "router runtime does not receive quarantine private key"
@@ -239,8 +242,14 @@ wrong_cleanup_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H 
 pass_check
 
 begin_check "metadata-heavy request scanning preserves liveness responsiveness"
-python3 tests/integration/request-scanning.py "$router_url" "$router_token"
+python3 tests/integration/request-scanning.py "$router_url" "$router_token" retain
 pass_check
+
+if [[ "$mode" == "fake" ]]; then
+  begin_check "native recall scanning preserves liveness responsiveness"
+  python3 tests/integration/request-scanning.py "$router_url" "$router_token" recall
+  pass_check
+fi
 
 begin_check "known writer retain succeeds"
 known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":true}')"

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from urllib.request import ProxyHandler, Request, build_opener
 
 
-def retain(router_url: str, token: str) -> dict[str, object]:
+def memory_request(router_url: str, token: str, operation: str) -> dict[str, object]:
     body = {
         "items": [
             {
@@ -19,8 +19,11 @@ def retain(router_url: str, token: str) -> dict[str, object]:
             }
         ]
     }
+    if operation == "recall":
+        body = {"query": "CI metadata scan"}
+    suffix = "/recall" if operation == "recall" else ""
     request = Request(  # noqa: S310 - URL is the isolated CI router.
-        f"{router_url}/v1/default/banks/main/memories",
+        f"{router_url}/v1/default/banks/main/memories{suffix}",
         data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
@@ -30,10 +33,10 @@ def retain(router_url: str, token: str) -> dict[str, object]:
 
 
 def main() -> None:
-    router_url, token = sys.argv[1:]
+    router_url, token, operation = sys.argv[1:]
     delays = []
     with ThreadPoolExecutor(max_workers=1) as executor:
-        pending = executor.submit(retain, router_url, token)
+        pending = executor.submit(memory_request, router_url, token, operation)
         while not pending.done():
             time.sleep(0.05)
             started = time.monotonic()
@@ -43,7 +46,10 @@ def main() -> None:
                 assert json.load(response) == {"status": "alive"}
             delays.append(time.monotonic() - started)
         result = pending.result()
-    assert result.get("queued") is True, result
+    if operation == "recall":
+        assert result.get("results") == [] and not result.get("partial"), result
+    else:
+        assert result.get("queued") is True, result
     assert len(delays) >= 3, delays
     assert max(delays) < 1.0, delays
 

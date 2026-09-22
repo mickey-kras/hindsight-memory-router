@@ -22,6 +22,7 @@ from .security import (
     scan_facade_payload,
     scan_query_values,
     scan_recall_body,
+    scan_recall_result,
     scan_retain_body,
 )
 
@@ -37,9 +38,9 @@ class _ScannerShutdown(RuntimeError):
 
 
 _SCANNER_SHUT_DOWN = "safety scanner shut down"
-REQUEST_SCAN_TASK_SECONDS = MAX_CORE_SCAN_SECONDS + 1.0
+CORE_SCAN_TASK_SECONDS = MAX_CORE_SCAN_SECONDS + 1.0
 QUERY_SCAN_TASK_SECONDS = MAX_CORE_SCAN_SECONDS + MAX_QUERY_SCAN_SECONDS + 1.0
-ScanKind = Literal["request", "response"]
+ScanKind = Literal["request", "response", "recall"]
 
 
 def _new_scan_executor() -> ProcessPool:
@@ -60,7 +61,7 @@ _SCAN_FUTURES: set[Any] = set()
 def scan_unavailable(
     message: str, *, error_kind: str, writer_id: str | None = None, kind: ScanKind = "response"
 ) -> HttpError:
-    operation = "facade_scan" if kind == "response" else "request_scan"
+    operation = "facade_scan" if kind == "response" else f"{kind}_scan"
     log_event(
         logger,
         "warning",
@@ -189,8 +190,13 @@ async def _scan_in_worker(  # NOSONAR
                 kind=kind,
             )
         executor = await _get_scan_executor_async(generation)
+        scanner = {
+            "response": scan_facade_payload,
+            "request": _scan_request_payload,
+            "recall": _scan_recalled_payload,
+        }[kind]
         future = executor.schedule(
-            scan_facade_payload if kind == "response" else _scan_request_payload,
+            scanner,
             args=[payload],
             timeout=task_seconds,
         )
@@ -270,7 +276,7 @@ async def scan_request(
     writer_id: str | None = None,
     query: list[tuple[str, str]] | None = None,
 ) -> SafetyResult:
-    task_seconds = QUERY_SCAN_TASK_SECONDS if query else REQUEST_SCAN_TASK_SECONDS
+    task_seconds = QUERY_SCAN_TASK_SECONDS if query else CORE_SCAN_TASK_SECONDS
     return await _scan_in_worker(
         {"body": body, "operation": operation, "query": query},
         kind="request",
@@ -286,5 +292,19 @@ async def scan_facade_response(value: Any, *, writer_id: str | None = None) -> S
         kind="response",
         task_seconds=FACADE_SCAN_TASK_SECONDS,
         wait_seconds=FACADE_SCAN_WAIT_SECONDS,
+        writer_id=writer_id,
+    )
+
+
+def _scan_recalled_payload(payload: bytes) -> SafetyResult:
+    return scan_recall_result(json.loads(payload))
+
+
+async def scan_recalled(value: dict[str, Any], *, writer_id: str | None = None) -> SafetyResult:
+    return await _scan_in_worker(
+        value,
+        kind="recall",
+        task_seconds=CORE_SCAN_TASK_SECONDS,
+        wait_seconds=CORE_SCAN_TASK_SECONDS + 1.0,
         writer_id=writer_id,
     )
