@@ -3,7 +3,7 @@
   "info": {
     "title": "Memory Router OpenClaw Compatibility Surface",
     "version": "0.9.0",
-    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. bank_id is always resolved as a Memory Router writer ID; it is never forwarded as an arbitrary Hindsight bank ID.",
+    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. With MEMORY_ROUTER_PRINCIPALS, bank_id is a literal Hindsight bank ID authorized against the principal's per-bank operation grants. In legacy shared-token mode, bank_id is a Memory Router writer ID resolved to its configured write bank.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -23,6 +23,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -81,6 +84,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -90,6 +96,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -156,6 +165,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -165,6 +177,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -217,6 +232,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -228,6 +246,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -365,6 +386,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         },
         "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
@@ -377,6 +401,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -456,6 +483,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -467,6 +497,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -534,6 +567,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -543,6 +579,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -595,6 +634,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -604,6 +646,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -656,6 +701,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -667,6 +715,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -733,6 +784,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -744,6 +798,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -796,6 +853,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -807,6 +867,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -932,6 +995,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -941,6 +1007,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1007,6 +1076,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1018,6 +1090,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1073,6 +1148,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -1082,6 +1160,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1151,6 +1232,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -1160,6 +1244,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1215,6 +1302,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1226,6 +1316,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1373,6 +1466,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1384,6 +1480,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1439,6 +1538,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -1448,6 +1550,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1517,6 +1622,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -1526,6 +1634,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1581,6 +1692,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1592,6 +1706,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1676,6 +1793,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1687,6 +1807,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1742,6 +1865,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1753,6 +1879,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1833,6 +1962,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1844,6 +1976,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1923,6 +2058,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -1934,6 +2072,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -1989,6 +2130,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2000,6 +2144,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2146,6 +2293,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         },
         "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
@@ -2158,6 +2308,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2224,6 +2377,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2235,6 +2391,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2304,6 +2463,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -2313,6 +2475,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2368,6 +2533,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2379,6 +2547,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2445,6 +2616,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2456,6 +2630,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2511,6 +2688,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2522,6 +2702,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2602,6 +2785,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2613,6 +2799,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2665,6 +2854,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2676,6 +2868,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2896,6 +3091,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         },
         "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
@@ -2908,6 +3106,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -2987,6 +3188,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -2998,6 +3202,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3064,6 +3271,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3075,6 +3285,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3141,6 +3354,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3152,6 +3368,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3367,6 +3586,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3378,6 +3600,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3433,6 +3658,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -3442,6 +3670,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3511,6 +3742,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3522,6 +3756,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3577,6 +3814,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3588,6 +3828,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3643,6 +3886,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3654,6 +3900,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3776,6 +4025,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -3785,6 +4037,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3843,6 +4098,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -3854,6 +4112,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3919,6 +4180,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -3928,6 +4192,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -3989,6 +4256,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       },
@@ -3998,6 +4268,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4053,6 +4326,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4064,6 +4340,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4119,6 +4398,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4130,6 +4412,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4185,6 +4470,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4196,6 +4484,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4251,6 +4542,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4262,6 +4556,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4317,6 +4614,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4328,6 +4628,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4380,6 +4683,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4391,6 +4697,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4464,6 +4773,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4475,6 +4787,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4597,6 +4912,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4608,6 +4926,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4676,6 +4997,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         },
         "description": "Principal mode requires bank.config.read for status without payloads, or memory.recall if any include_payload value is true. Repeated values are checked individually; invalid boolean values return 400. Legacy-mode query forwarding is unchanged."
@@ -4686,6 +5010,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4741,6 +5068,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4752,6 +5082,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4807,6 +5140,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4818,6 +5154,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4873,6 +5212,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4884,6 +5226,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -4988,6 +5333,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -4999,6 +5347,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -5064,6 +5415,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -5075,6 +5429,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -5151,6 +5508,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -5162,6 +5522,9 @@
         "security": [
           {
             "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
           }
         ],
         "parameters": [
@@ -5273,6 +5636,9 @@
           },
           "504": {
             "$ref": "#/components/responses/UpstreamTimeout"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -5282,7 +5648,13 @@
     "securitySchemes": {
       "RouterToken": {
         "type": "http",
-        "scheme": "bearer"
+        "scheme": "bearer",
+        "description": "Legacy MEMORY_ROUTER_TOKEN; mutually exclusive with principal mode."
+      },
+      "PrincipalToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Per-principal token configured by MEMORY_ROUTER_PRINCIPALS; requires the operation scope on the literal target bank."
       }
     },
     "parameters": {
@@ -5290,7 +5662,7 @@
         "name": "bank_id",
         "in": "path",
         "required": true,
-        "description": "Memory Router writer ID; resolved to the configured write bank.",
+        "description": "Principal mode: literal target bank ID checked against per-bank grants. Legacy shared-token mode: Memory Router writer ID resolved to its configured write bank.",
         "schema": {
           "type": "string",
           "minLength": 1
@@ -5381,7 +5753,7 @@
         }
       },
       "Unauthorized": {
-        "description": "Missing or invalid router bearer token",
+        "description": "Missing or invalid router or principal bearer token",
         "content": {
           "application/json": {
             "schema": {
@@ -5480,6 +5852,16 @@
       },
       "UpstreamTimeout": {
         "description": "Hindsight did not respond before the configured timeout",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Principal lacks the required operation scope on the target bank (authorization_denied).",
         "content": {
           "application/json": {
             "schema": {

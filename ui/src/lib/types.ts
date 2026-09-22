@@ -150,7 +150,6 @@ export interface RouterError {
   message?: string;
 }
 
-export interface VersionResponse {
-  version?: string;
-  [key: string]: unknown;
+export interface LivenessResponse {
+  status: "alive";
 }

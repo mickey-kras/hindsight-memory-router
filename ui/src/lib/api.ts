@@ -15,7 +15,7 @@ import type {
   ReconcileRequest,
   ReconcileResponse,
   RouterError,
-  VersionResponse,
+  LivenessResponse,
 } from "./types";
 
 export class ApiError extends Error {
@@ -71,9 +71,14 @@ async function request<T>(
   return (await response.json()) as T;
 }
 
-export function fetchVersion(): Promise<VersionResponse> {
-  // Unauthenticated probe used to show router presence on the connect screen.
-  return fetch(apiUrl("/version")).then((r) => (r.ok ? r.json() : Promise.reject(new Error("offline"))));
+export async function fetchLiveness(): Promise<LivenessResponse> {
+  const response = await fetch(apiUrl("/health/live"));
+  if (!response.ok) throw new Error("offline");
+  const body: unknown = await response.json();
+  if (typeof body !== "object" || body === null || !("status" in body) || body.status !== "alive") {
+    throw new Error("invalid liveness response");
+  }
+  return { status: "alive" };
 }
 
 export function listQueue(

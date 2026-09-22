@@ -719,7 +719,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "oneOf": [
+                  "anyOf": [
                     {
                       "$ref": "#/components/schemas/QuarantinedResponse"
                     },
@@ -727,6 +727,20 @@
                       "$ref": "#/components/schemas/UpstreamResponse"
                     }
                   ]
+                },
+                "examples": {
+                  "quarantined": {
+                    "value": {
+                      "queued": true,
+                      "reason": "unknown_writer",
+                      "quarantine_id": "q_retain_0123456789abcdef"
+                    }
+                  },
+                  "upstream": {
+                    "value": {
+                      "success": true
+                    }
+                  }
                 }
               }
             }

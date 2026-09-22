@@ -33,7 +33,8 @@ With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` returns router counter
 
 Facade contract: `openapi/openclaw.json`.
 
-- `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
+- Principal mode (`MEMORY_ROUTER_PRINCIPALS`): `{bank_id}` is the literal target bank; the bearer token must grant the requested operation on that bank. Missing grants return `403 authorization_denied`.
+- Legacy shared-token mode (`MEMORY_ROUTER_TOKEN`): `{bank_id}` is a writer ID resolved to its configured write bank.
 - Every route uses router authentication, safety scanning, and a retain or recall quota. Development-only anonymous mode also applies.
 - Writes use the global JSON limit; retain has stricter limits.
 - Response scanner worker, capacity, field, or time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`.

@@ -99,8 +99,21 @@ function minimalInstance(schema, root, depth = 0) {
   return output;
 }
 
-function schemaContent(schema) {
-  return JSON.stringify(minimalInstance(schema ?? { type: "object" }));
+function schemaContent(schema, messages) {
+  const output = minimalInstance(schema ?? { type: "object" });
+  const marker = textFromMessages(messages).match(/\bCI_SMOKE_[A-Za-z0-9_]+\b/)?.[0];
+  const factSchema = resolveRef(schema?.properties?.facts?.items, schema);
+  if (marker && factSchema.properties?.what && factSchema.properties?.fact_type) {
+    output.facts = [{
+      what: `The integration smoke retained marker ${marker}.`,
+      when: "N/A",
+      where: "N/A",
+      who: "N/A",
+      why: "N/A",
+      fact_type: "world",
+    }];
+  }
+  return JSON.stringify(output);
 }
 
 // Free-form answers are a fixed benign fact, never a prompt echo. Hindsight's
@@ -188,7 +201,7 @@ createServer(async (req, res) => {
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: schemaContent(schema) },
+              message: { role: "assistant", content: schemaContent(schema, body.messages) },
               finish_reason: "stop",
             },
           ],
@@ -237,7 +250,7 @@ createServer(async (req, res) => {
 
     if (method === "POST" && url.pathname === "/api/chat") {
       const body = await readJson(req);
-      const content = body.format ? schemaContent(body.format) : CI_FACT;
+      const content = body.format ? schemaContent(body.format, body.messages) : CI_FACT;
       return send(res, 200, {
         model: body.model ?? "ci-fake",
         done: true,

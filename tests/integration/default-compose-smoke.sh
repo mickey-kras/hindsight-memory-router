@@ -71,6 +71,7 @@ assert_proxy_free_image_healthcheck() {
   return 1
 }
 
+QUARANTINE_PUBLIC_KEY= "${compose[@]}" config >/dev/null
 resolved_compose="$("${compose[@]}" config)"
 if grep -q 'QUARANTINE_PRIVATE_KEY' <<<"$resolved_compose"; then
   echo "resolved compose config contains quarantine private-key environment" >&2
@@ -79,6 +80,31 @@ fi
 
 docker tag hindsight-memory-router:ci memory-router:local
 assert_proxy_free_image_healthcheck
+"${compose[@]}" run --rm --no-deps \
+  -e QUARANTINE_PUBLIC_KEY= \
+  -e QUARANTINE_WRAP_PROVIDER=https-sidecar \
+  -e QUARANTINE_WRAP_SIDECAR_URL=https://wrap.example.test \
+  -e QUARANTINE_DATABASE_URL=sqlite:/tmp/sidecar-smoke.db \
+  memory-router python -c '
+import asyncio
+from memory_router.app import Runtime
+from memory_router.config import RouterSettings
+async def check():
+    runtime = Runtime()
+    await runtime.start()
+    await runtime.stop()
+    for url in ("ftp://hindsight:8888", "hindsight:8888", "https://hindsight/#fragment"):
+        invalid = Runtime(RouterSettings(HINDSIGHT_BASE_URL=url))
+        try:
+            await invalid.start()
+        except RuntimeError as exc:
+            assert "HINDSIGHT_BASE_URL" in str(exc)
+        else:
+            raise AssertionError("invalid upstream URL passed startup")
+        finally:
+            await invalid.stop()
+asyncio.run(check())
+'
 "${compose[@]}" up -d --no-build
 wait_for_liveness
 assert_not_ready_without_hindsight

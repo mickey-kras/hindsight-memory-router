@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { fetchVersion, type AdminTokens } from "../lib/api";
+import { fetchLiveness, type AdminTokens } from "../lib/api";
 
 interface Props {
   onConnect: (tokens: AdminTokens) => void;
@@ -9,12 +9,12 @@ export function ConnectScreen({ onConnect }: Props) {
   const [read, setRead] = useState("");
   const [review, setReview] = useState("");
   const [cleanup, setCleanup] = useState("");
-  const [version, setVersion] = useState<string | null>(null);
+  const [reachable, setReachable] = useState(false);
   const [probeFailed, setProbeFailed] = useState(false);
 
   useEffect(() => {
-    fetchVersion()
-      .then((body) => setVersion(typeof body.version === "string" ? body.version : "unknown"))
+    fetchLiveness()
+      .then(() => setReachable(true))
       .catch(() => setProbeFailed(true));
   }, []);
 
@@ -37,13 +37,9 @@ export function ConnectScreen({ onConnect }: Props) {
         </p>
 
         <div className="mb-5 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs">
-          {version !== null && (
-            <span className="text-emerald-300">
-              router reachable, API <span className="mono">{version}</span>
-            </span>
-          )}
+          {reachable && <span className="text-emerald-300">router reachable</span>}
           {probeFailed && <span className="text-amber-300">router not reachable on this origin</span>}
-          {version === null && !probeFailed && <span className="text-zinc-500">probing router...</span>}
+          {!reachable && !probeFailed && <span className="text-zinc-500">probing router...</span>}
         </div>
 
         <form onSubmit={submit} className="flex flex-col gap-3">

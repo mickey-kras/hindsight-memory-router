@@ -717,3 +717,46 @@ def test_canonicalization_rejects_lossy_values() -> None:
     for value in (2**53, -(2**53), float("inf"), float("-inf"), float("nan"), "\ud800"):
         with pytest.raises(ValueError, match="JSON values only"):
             canonical_json(value)
+
+
+@pytest.mark.parametrize("secure", [False, True])
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://hindsight:8888",
+        "hindsight:8888",
+        "//hindsight:8888",
+        "https:///api",
+        "https://",
+        "https://hindsight:invalid",
+        "https://hindsight:70000",
+        "https://[::1",
+        "https://hindsight/api?tenant=a",
+        "https://hindsight/api?",
+        "https://hindsight/api#fragment",
+        "https://hindsight/api#",
+        "https://user:secret@hindsight",
+        "https://hind sight",
+        "https://hindsight\x00",
+        "https://hindsight\x7f",
+        "https://[v1.foo]",
+        "https://\ud800.test",
+        "\nhttps://hindsight",
+        "https://hindsight\\other",
+    ],
+)
+def test_invalid_upstream_base_urls_fail_at_startup(url: str, secure: bool) -> None:
+    settings = config.RouterSettings(
+        HINDSIGHT_BASE_URL=url, HINDSIGHT_REQUIRE_SECURE_TRANSPORT=secure
+    )
+    with pytest.raises(RuntimeError, match=r"absolute http\(s\) URL"):
+        config.assert_auth_environment(settings)
+
+
+def test_secure_upstream_keeps_the_exact_configured_path() -> None:
+    url = "https://hindsight.example.com:9443/tenant/CaseSensitive/"
+    settings = config.RouterSettings(
+        HINDSIGHT_BASE_URL=url, HINDSIGHT_REQUIRE_SECURE_TRANSPORT=True
+    )
+    config.assert_auth_environment(settings)
+    assert settings.hindsight_base_url == url

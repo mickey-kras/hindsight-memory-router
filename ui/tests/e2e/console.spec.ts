@@ -33,10 +33,16 @@ test.beforeEach(async ({ page }) => {
   expect(response.ok()).toBe(true);
 });
 
-test("connect screen probes the router and shows the version", async ({ page }) => {
+test("connect screen reaches a secured router without a router token", async ({ page }) => {
+  expect((await page.request.get("/version")).status()).toBe(401);
   await page.goto("/");
-  await expect(page.getByText(/router reachable, API/)).toBeVisible();
-  await expect(page.getByText(/0\.9\.0-e2e-mock/)).toBeVisible();
+  await expect(page.getByText("router reachable", { exact: true })).toBeVisible();
+});
+
+test("connect screen reports a failed liveness probe", async ({ page }) => {
+  await page.route("**/health/live", (route) => route.abort("connectionfailed"));
+  await page.goto("/");
+  await expect(page.getByText("router not reachable on this origin")).toBeVisible();
 });
 
 test("stats and queue render after connect", async ({ page }, testInfo) => {

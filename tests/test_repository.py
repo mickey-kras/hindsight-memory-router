@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from memory_router.admin import QuarantineAdminService
 from memory_router.db import SqliteDatabase, SqliteTx, create_database, initialize_schema
 from memory_router.errors import HttpError
 from memory_router.repository import (
@@ -494,3 +495,27 @@ async def test_bank_id_migration_backfills_recalled_memory_only(tmp_path: Path) 
         assert retain and retain["bank_id"] is None
     finally:
         await database.close()
+
+
+@pytest.mark.asyncio
+async def test_admin_detail_omits_absent_metadata_from_real_storage(
+    repository: QuarantineRepository,
+) -> None:
+    stored_item = item(QID, writer="unknown", reason="unknown_writer")
+    await repository.store(
+        stored_item, Capacity(10, 10, 100_000), mode="request", at="2026-01-01T00:00:00.000Z"
+    )
+    service = QuarantineAdminService(repository, None, None, None)
+    result = await service.read_item(QID)
+    assert set(result["record"]).isdisjoint(
+        {
+            "source_bank",
+            "source_memory_id",
+            "source_content_sha256",
+            "expires_at",
+            "bank_id",
+            "dedupe_key",
+        }
+    )
+    assert result["record"]["postpone_count"] == 0
+    assert result["encrypted"] == stored_item["encrypted"]
