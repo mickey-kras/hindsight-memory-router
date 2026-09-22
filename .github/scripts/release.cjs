@@ -510,7 +510,7 @@ function mergeVersionBump({ repository, number, sha }) {
     "--auto", "--squash", "--match-head-commit", sha], { timeout: 30000, stdio: "pipe" });
 }
 
-async function queueVersionBump(github, repository, number, branch, version, next, merge) {
+async function queueVersionBump({ github, repository, number, branch, version, next, merge }) {
   const params = { ...repository, pull_number: number };
   const { data: pull } = await github.rest.pulls.get(params);
   const fullName = `${repository.owner}/${repository.repo}`;
@@ -551,7 +551,7 @@ async function bumpReleasedVersion({ github, context, core, merge = mergeVersion
     per_page: 100,
   });
   if (open.length) {
-    await queueVersionBump(github, repository, open[0].number, branch, version, next, merge);
+    await queueVersionBump({ github, repository, number: open[0].number, branch, version, next, merge });
     await summary.addRaw(`Reused #${open[0].number}; squash auto-merge enabled.\n`).write();
     return;
   }
@@ -599,7 +599,7 @@ async function bumpReleasedVersion({ github, context, core, merge = mergeVersion
     body: `Release v${version} is published; reserve the next version on main.\n\n- Bump release-version.json and pyproject.toml to ${next}\n- Squash-merges automatically after required checks pass\n`,
     maintainer_can_modify: false,
   });
-  await queueVersionBump(github, repository, pr.number, branch, version, next, merge);
+  await queueVersionBump({ github, repository, number: pr.number, branch, version, next, merge });
   await summary.addRaw(`Opened #${pr.number}: bump ${version} to ${next}; squash auto-merge enabled.\n`).write();
 }
 

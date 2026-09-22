@@ -29,7 +29,7 @@ jobs:
             const releaseProtected = {
               ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
               ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
-              ".github/scripts/release.cjs": "17a1433d09f7431a53ac0d4d2a79e81aaab05bd2596f17ba0d3732b41d56a6e8",
+              ".github/scripts/release.cjs": "71ae213047e5ae51d98f9ca422b0f4455d515490f91580bbd33b6ed992b35198",
               ".github/scripts/release-settings.cjs": "e485de848409942ca37d32a4caea8a93cd4bac5e93048e7b24bf57d848372a57",
               ".github/scripts/release.test.cjs": "5feb2b885d5369e16247b700194d062e8b1e9198fdae422357dc7cceba266f56",
               ".github/scripts/release-cleanup.cjs": "079c2553f194ba98c76351eefa45bbff1dddc2d82def8121ed47c536d1ccf03d",
