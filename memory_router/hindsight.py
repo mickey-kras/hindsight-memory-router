@@ -273,7 +273,6 @@ class HindsightGateway:
         expected_status: int = 200,
         allow_empty_response: bool = False,
     ) -> Any:
-        """Forward one allowlisted OpenClaw-facing Hindsight operation."""
         return await self._request(
             operation,
             method,

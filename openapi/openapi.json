@@ -626,6 +626,79 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Read router Prometheus metrics",
+        "description": "Available only when MEMORY_ROUTER_METRICS_ENABLED=true (disabled by default). Requires an admin read, review, or legacy credential, or a principal token with a quarantine.review grant on at least one bank. Metrics cover the router globally, not only the granted banks. Returns Prometheus text exposition format 0.0.4. When disabled, the request follows normal router authentication and endpoint-denial handling.",
+        "tags": [
+          "Service"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          },
+          {
+            "PrincipalToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Prometheus metrics for this router process and quarantine repository.",
+            "content": {
+              "text/plain; version=0.0.4; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Credential is missing, invalid, or not accepted for metrics access.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Metrics are disabled and router authentication succeeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Admin read, principal, or authentication-failure rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Authentication or request-rate storage is temporarily unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/default/banks": {
       "get": {
         "operationId": "listBanks",

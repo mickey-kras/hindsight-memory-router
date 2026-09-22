@@ -192,8 +192,6 @@ class PrincipalSession:
 
 @dataclass(frozen=True, slots=True)
 class Authentication:
-    """Token verification outcome; distinct statuses feed audit and metrics."""
-
     status: Literal["ok", "invalid-format", "unknown-key", "wrong-secret", "expired", "revoked"]
     session: PrincipalSession | None = None
 
@@ -272,15 +270,6 @@ def token_digest(secret: str) -> bytes:
 
 
 class PrincipalResolver:
-    """Authenticates mr_<key-id>_<secret> tokens and evaluates grants.
-
-    The registry stores SHA-256 digests only; presented secrets are hashed and
-    compared in constant time, including tokens with an unknown key ID (a dummy
-    digest keeps the comparison path identical). Key-id lookup is O(1);
-    overlapping keys per principal support rotation without downtime, and
-    expires_at/revoked_at retire keys without deleting their audit history.
-    """
-
     def __init__(self, registry: PrincipalRegistry) -> None:
         self.registry = registry
         self._index: dict[str, tuple[str, PrincipalKey]] = {
@@ -323,6 +312,7 @@ class PrincipalResolver:
             return Authentication("invalid-format")
         key_id, secret = parsed
         entry = self._index.get(key_id)
+        # Unknown key IDs must still take the constant-time comparison path.
         stored = bytes.fromhex(entry[1].sha256) if entry is not None else _DUMMY_DIGEST
         matched = hmac.compare_digest(token_digest(secret), stored)
         if entry is None:
