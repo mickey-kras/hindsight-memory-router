@@ -120,6 +120,29 @@ test('cancellation during log collection prevents pending issue writes', () => {
   assert.deepEqual(main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute), []);
 });
 
+test('cancellation after the first issue prevents remaining issue writes', () => {
+  let writes = 0;
+  const execute = (command, args) => {
+    if (command === 'bash') {
+      writes += 1;
+      return '';
+    }
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify({ ...run,
+      conclusion: writes ? 'cancelled' : null });
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job] }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    if (path.endsWith('/logs')) return ['first', 'second', 'third']
+      .map(name => log(`FAILED tests/test_x.py::test_${name} - ValueError: invalid bank`)).join('\n');
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  const reports = main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute);
+  assert.equal(writes, 1);
+  assert.equal(reports.length, 1);
+  assert.match(reports[0].body, /test_first/);
+});
+
 test('log download is retried and late-arriving logs supply the real excerpt', () => {
   let downloads = 0;
   const sleeps = [];

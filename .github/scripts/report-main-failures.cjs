@@ -151,10 +151,12 @@ function main(env = process.env, execute = execFileSync,
     reports.push(...reportsForJob(run, { id: 0, name: 'publish workflow', steps: [],
       conclusion: run.conclusion, html_url: run.html_url }, ''));
   }
-  if (!reports.length || json(`${root}/actions/runs/${id}`).conclusion === 'cancelled') return [];
+  if (!reports.length) return [];
+  const completed = [];
   const directory = mkdtempSync(join(tmpdir(), 'main-failures-'));
   try {
     for (const report of reports) {
+      if (json(`${root}/actions/runs/${id}`).conclusion === 'cancelled') break;
       const path = join(directory, `${report.key}.md`);
       writeFileSync(path, report.body);
       execute('bash', ['.github/scripts/upsert-main-failure-issue.sh', path], {
@@ -162,9 +164,10 @@ function main(env = process.env, execute = execFileSync,
         env: { ...env, FAILURE_KEY: report.key, FAILURE_TITLE: report.title,
           FAILURE_OCCURRENCE: report.occurrence },
       });
+      completed.push(report);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
-  return reports;
+  return completed;
 }
 
 module.exports = { clean, normalize, diagnostics, reportsForJob, logFallback, trustedRun, main };
