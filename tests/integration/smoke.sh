@@ -91,6 +91,23 @@ fail_check() {
   exit 1
 }
 
+wait_for_readiness_event() {
+  local expected_status="$1"
+  local expected_event="$2"
+  local logs_start="$3"
+  local deadline=$((SECONDS + 60))
+  local status
+  while (( SECONDS < deadline )); do
+    status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")" || status=""
+    if [[ "$status" == "$expected_status" ]] &&
+      docker logs "$router_container" 2>&1 | python3 -c 'import json,sys; events=[json.loads(line).get("event") for line in sys.stdin.read().splitlines()[int(sys.argv[2]):] if line]; sys.exit(0 if sys.argv[1] in events else 1)' "$expected_event" "$logs_start"; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail_check "readiness did not reach HTTP ${expected_status} with ${expected_event}"
+}
+
 rm -rf "$tmp_dir"
 mkdir -p "${tmp_dir}/state" "${tmp_dir}/quarantine"
 chmod -R ugo+rwX "$tmp_dir"
@@ -142,6 +159,10 @@ if [[ "$router_db" == "sqlite" ]]; then
   docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 15 python - < tests/integration/startup-cleanup.py
   pass_check
 fi
+
+begin_check "security audit capacity is scoped and durable across replicas"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/security-event-capacity.py
+pass_check
 
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
@@ -528,28 +549,19 @@ cleanup_result="$(admin_cleanup_post "/admin/quarantine/cleanup" "{\"scope\":\"p
 printf '%s' "$cleanup_result" | grep -q '"dry_run":false' || fail_check "cleanup execution failed"
 pass_check
 
+router_container="$(docker compose -p "$project" -f "$compose_file" ps -q memory-router)"
 if [[ "$mode" == "fake" ]]; then
   begin_check "readiness logs Hindsight outage and recovery"
+  readiness_logs_start="$(docker logs "$router_container" 2>&1 | wc -l)"
   docker compose -p "$project" -f "$compose_file" stop hindsight >/dev/null
-  sleep 2
-  first_outage_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
-  sleep 2
-  second_outage_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")"
-  [[ "$first_outage_status" == "503" && "$second_outage_status" == "503" ]] || fail_check "readiness did not fail during Hindsight outage"
+  wait_for_readiness_event 503 hindsight_readiness_failed "$readiness_logs_start"
+  readiness_logs_start="$(docker logs "$router_container" 2>&1 | wc -l)"
   docker compose -p "$project" -f "$compose_file" start hindsight >/dev/null
-  for _ in {1..30}; do
-    if curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null 2>&1; then
-      break
-    fi
-    sleep 1
-  done
-  sleep 2
-  curl --max-time 5 -fsS "${router_url}/health/ready" >/dev/null || fail_check "readiness did not recover with Hindsight"
+  wait_for_readiness_event 200 hindsight_readiness_recovered "$readiness_logs_start"
   pass_check
 fi
 
 begin_check "application logs are safe structured JSON after authenticated traffic"
-router_container="$(docker compose -p "$project" -f "$compose_file" ps -q memory-router)"
 router_logs="$(docker logs "$router_container" 2>&1)"
 event_catalog="$(docker exec "$router_container" python -c 'import json; from memory_router.logging import event_catalog; catalog=event_catalog(); required={"application_stop_failed","runtime_message","storage_readiness_failed","storage_readiness_recovered"}; assert required <= catalog; print(json.dumps(sorted(catalog)))')"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; lines=[line for line in sys.stdin.read().splitlines() if line]; assert lines and all(isinstance(json.loads(line),dict) for line in lines)' || fail_check "memory-router emitted a non-JSON log line"

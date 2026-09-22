@@ -1038,7 +1038,7 @@
         }
       },
       "QuarantineCapacityExceeded": {
-        "description": "Persistent quarantine item or ciphertext capacity is exhausted. The router fails closed.",
+        "description": "Persistent quarantine item, writer/principal, bank, ciphertext, or global security-event identity capacity is exhausted. Security-event admission is limited to 64 stored identities across replicas and returns quarantine_security_event_capacity_exceeded when full. The router fails closed.",
         "content": {
           "application/json": {
             "schema": {
