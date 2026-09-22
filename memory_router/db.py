@@ -155,21 +155,42 @@ class SqliteDatabase(Database):
         if self.connection:
             await self.connection.close()
 
+    async def _rollback_or_close(self, connection: aiosqlite.Connection) -> None:
+        try:
+            await connection.rollback()
+        except BaseException:
+            self.connection = None
+            await connection.close()
+            raise
+
+    async def _rollback_after_error(
+        self, connection: aiosqlite.Connection, error: BaseException
+    ) -> None:
+        rollback = asyncio.create_task(self._rollback_or_close(connection))
+        try:
+            while not rollback.done():
+                try:
+                    await asyncio.shield(rollback)
+                except asyncio.CancelledError:
+                    continue
+            rollback.result()
+        except BaseException as cleanup_error:
+            raise error from cleanup_error
+
     @asynccontextmanager
     async def transaction(self, *, capacity_lock: bool = False) -> AsyncIterator[Tx]:
         del capacity_lock
-        if not self.connection:
-            raise RuntimeError("database not initialized")
         async with self.lock:
-            await self.connection.execute("BEGIN IMMEDIATE")
-            tx: Tx = SqliteTx(self.connection)
+            connection = self.connection
+            if connection is None:
+                raise RuntimeError("database not initialized")
             try:
-                yield tx
-            except Exception:
-                await self.connection.rollback()
+                await connection.execute("BEGIN IMMEDIATE")
+                yield SqliteTx(connection)
+                await connection.commit()
+            except BaseException as error:
+                await self._rollback_after_error(connection, error)
                 raise
-            else:
-                await self.connection.commit()
 
 
 def _escaped_quote(statement: str, index: int, quote: str) -> bool:
