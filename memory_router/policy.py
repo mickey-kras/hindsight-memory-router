@@ -19,7 +19,8 @@ from .repository import (
     REVIEWED_ALLOWED,
     REVIEWED_BLOCKED,
 )
-from .security import SafetyResult, scan_recall_body, scan_recall_result, scan_retain_body
+from .scan_executor import scan_request
+from .security import SafetyResult, scan_recall_result
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
@@ -124,7 +125,7 @@ class RouterPolicy:
         self, identity: str, target_bank: str, body: dict[str, Any], source: str
     ) -> Any:
         await self.limits.consume_retain(identity)
-        scan = scan_retain_body(body)
+        scan = await scan_request(body, operation="retain", writer_id=identity)
         if not scan.safe:
             return await self._quarantine_retain(
                 identity, source, "suspicious_content", body, target_bank, scan
@@ -155,7 +156,7 @@ class RouterPolicy:
         self, writer_id: str, read_banks: list[str], body: dict[str, Any], source: str
     ) -> dict[str, Any]:
         await self.limits.consume_recall(writer_id)
-        scan = scan_recall_body(body)
+        scan = await scan_request(body, operation="recall", writer_id=writer_id)
         if not scan.safe:
             await self._quarantine_recall_or_degrade(
                 writer_id, source, "suspicious_query", body, read_banks, scan

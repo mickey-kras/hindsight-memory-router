@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 141784d8be895197e3dd464b435952840164ab3a386a8a33aea409f1c9a319bd
+# integration-behavior-sha256: 8a5a527861a8988232f4b187c2bb7105ab47713ef55192088d0110957e372d20
 
 openclaw_request() {
   local method="$1"

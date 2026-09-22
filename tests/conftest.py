@@ -6,13 +6,13 @@ import pytest
 
 import memory_router.app as app_module
 import memory_router.logging as logging_module
-import memory_router.openclaw as openclaw_module
+import memory_router.scan_executor as scan_executor_module
 from memory_router import probes
 
 
 @pytest.fixture(autouse=True)
 def reset_observability_state(caplog: pytest.LogCaptureFixture) -> None:
-    openclaw_module.start_facade_scan_executor()
+    scan_executor_module.start_scan_executor()
     previous_runtime = vars(app_module.runtime).copy()
     previous_admin_tokens = dict(app_module.runtime.admin_tokens)
     app_module.runtime.auth_prefilter = app_module.InMemoryRateLimiter()

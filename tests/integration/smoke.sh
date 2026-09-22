@@ -238,6 +238,10 @@ wrong_cleanup_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H 
 [[ "$wrong_cleanup_status" == "401" ]] || fail_check "review token unexpectedly accessed admin cleanup endpoint"
 pass_check
 
+begin_check "metadata-heavy request scanning preserves liveness responsiveness"
+python3 tests/integration/request-scanning.py "$router_url" "$router_token"
+pass_check
+
 begin_check "known writer retain succeeds"
 known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":true}')"
 printf '%s' "$known_response" | grep -Eq 'success|ok' || fail_check "known retain failed: ${known_response}"
