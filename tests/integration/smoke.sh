@@ -134,6 +134,12 @@ if [[ "${HMR_SKIP_BUILD:-false}" != "true" ]]; then
 fi
 run_check "start compose stack" docker compose -p "$project" -f "$compose_file" up --wait --wait-timeout 120
 
+if [[ "$router_db" == "sqlite" ]]; then
+  begin_check "SQLite cancellation releases storage for subsequent transactions"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/sqlite-cancellation.py
+  pass_check
+fi
+
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
