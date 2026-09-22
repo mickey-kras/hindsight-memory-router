@@ -82,6 +82,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "principal facade content requires memory recall",
     "scoped admin tokens enforce read review and cleanup boundaries",
     "local decryption recovers exact original outside router",
     "altered approval is rejected by original hash",
