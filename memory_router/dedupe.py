@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import unicodedata
 from dataclasses import asdict, dataclass
 from typing import Any
@@ -30,23 +29,22 @@ def request_dedupe_key(kind: str, writer_id: str | None, target: str | None, pay
 
 
 def security_event_dedupe_key(method: str, path: str) -> str:
-    without_query = re.split(r"[?#]", path, maxsplit=1)[0]
-    normalized = without_query.lower().rstrip("/") or "/"
-    return f"{method.upper()}:{normalized}"
+    return canonical_json({"method": method, "path": path})
 
 
-class SecurityEventIdentityCap:
-    def __init__(self) -> None:
-        self.seen: set[str] = set()
-
-    def resolve(self, writer_id: str | None, base_key: str) -> str:
-        scoped = f"{writer_id or 'anonymous'}:{base_key}"
-        if scoped in self.seen:
-            return scoped
-        if len(self.seen) >= 64:
-            return "aggregate"
-        self.seen.add(scoped)
-        return scoped
+def security_event_identity(input_: dict[str, Any]) -> str:
+    return "security-event:" + sha256_hex(
+        canonical_json(
+            {
+                "writer_id": input_.get("writerId"),
+                "bank_id": input_.get("bankId"),
+                "source": input_.get("source"),
+                "reason": input_["reason"],
+                "identity": input_.get("dedupeKey"),
+                "payload": input_["payload"] if not input_.get("dedupeKey") else None,
+            }
+        )
+    )
 
 
 def request_family_identity(

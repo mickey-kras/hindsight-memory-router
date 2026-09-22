@@ -5,7 +5,7 @@ import logging
 from typing import Any, cast, get_args, get_origin
 
 from .canonical import canonical_json, sha256_hex
-from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
+from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .logging import log_event
@@ -32,6 +32,7 @@ _RECALL_RESPONSE_MAP_FIELDS = tuple(
 _QUARANTINE_ERRORS: dict[str, tuple[int, str]] = {
     "quarantine_capacity_exceeded": (507, "capacity"),
     "quarantine_writer_capacity_exceeded": (507, "capacity"),
+    "quarantine_security_event_capacity_exceeded": (507, "capacity"),
     "quarantine_rate_limited": (429, "rate-limit"),
     "quarantine_item_too_large": (413, "payload-too-large"),
     "quarantine_request_in_review": (409, "conflict"),
@@ -104,7 +105,6 @@ class RouterPolicy:
         self.limits = limits
         self.store = quarantine_store
         self.repository = repository
-        self.security_event_identities = SecurityEventIdentityCap()
 
     async def retain(self, writer_id: str, body: dict[str, Any], source: str | None = None) -> Any:
         writer = self.registry.writers.get(writer_id)
@@ -236,9 +236,7 @@ class RouterPolicy:
         writer_id: str | None = None,
         bank_id: str | None = None,
     ) -> dict[str, str]:
-        dedupe = self.security_event_identities.resolve(
-            writer_id, security_event_dedupe_key(method, path)
-        )
+        dedupe = security_event_dedupe_key(method, path)
         await self.quarantine_security_event(
             {
                 "writerId": writer_id,

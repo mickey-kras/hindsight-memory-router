@@ -8,6 +8,8 @@ from typing import Any
 from .db import Database, Tx
 from .errors import HttpError
 
+SECURITY_EVENT_IDENTITY_LIMIT = 64
+
 PENDING = "pending"
 POSTPONED = "postponed"
 REVIEW_IN_PROGRESS = "review_in_progress"
@@ -471,12 +473,23 @@ class QuarantineRepository:
             await tx.fetchone(
                 """SELECT
             COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END),0) pending_count,
-            COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes
+            COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes,
+            COALESCE(SUM(CASE WHEN kind='security_event' THEN 1 ELSE 0 END),0) security_event_count
             FROM quarantine_items""",
                 (at, at),
             )
             or {}
         )
+        if (
+            item["kind"] == "security_event"
+            and existing is None
+            and int(totals.get("security_event_count") or 0) >= SECURITY_EVENT_IDENTITY_LIMIT
+        ):
+            raise HttpError(
+                507,
+                "quarantine_security_event_capacity_exceeded",
+                "security event identity capacity is exhausted",
+            )
         existing_live = existing if existing and not _expired(existing, at) else None
         existing_pending = _is_pending(existing_live)
         next_pending = int(totals.get("pending_count") or 0) - int(existing_pending) + 1
@@ -512,8 +525,6 @@ class QuarantineRepository:
         bank_id = item.get("bank_id")
         if capacity.max_pending_items_per_bank <= 0 or bank_id is None:
             return
-        # Count-then-insert mirrors the global and per-writer checks above: limits are
-        # best-effort under concurrency, not a hard invariant, matching existing semantics.
         row = await tx.fetchone(
             _PENDING_SCOPE_PREFIX + "bank_id=?",
             (at, bank_id),
@@ -606,8 +617,6 @@ def _expired(item: dict[str, Any], at: str) -> bool:
 
 
 def _same_scope(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    if left.get("kind") == "security_event" or right.get("kind") == "security_event":
-        return False
     if left.get("reason") == "unknown_writer" or right.get("reason") == "unknown_writer":
         return left.get("reason") == right.get("reason") == "unknown_writer"
     if left.get("writer_id") is not None or right.get("writer_id") is not None:

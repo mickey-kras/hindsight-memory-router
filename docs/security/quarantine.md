@@ -47,11 +47,13 @@ There is no Hindsight quarantine bank.
 
 Identical retain and recall quarantine requests reuse one pending item. The dedupe key covers request kind, writer, policy target, and canonical JSON payload. Object key order and JSON formatting do not matter; string content remains exact.
 
-A repeated request refreshes the item, increments `requarantine_count`, and records `requarantined`. Repeats are rejected with `409` while the matching item is under review. Security-event identities are normalized by method and path, scoped by writer, and capped across the process.
+A repeated request refreshes the item, increments `requarantine_count`, and records `requarantined`. Repeats are rejected with `409` while the matching item is under review. Security-event identities preserve exact producer keys and are scoped by writer/principal, bank, source, and reason. At most 64 distinct security-event items may be stored across the database, including reviewed and expired items. New identities fail with `507 quarantine_security_event_capacity_exceeded` until cleanup removes an item; repeats can refresh an existing identity. SQLite transactions and the PostgreSQL capacity lock enforce this admission bound across restarts and replicas. Existing rows count toward the limit. Pre-upgrade security-event keys remain unchanged and do not coalesce with new scoped identities; cleanup may be required before new identities can be admitted.
 
 ## Capacity and retention
 
 Quarantine item size, pending-item count, per-writer capacity, encrypted-byte capacity, request-family admission, requarantine operations, rate limits, item TTL, sweep cadence, and event retention all have safe built-in defaults and can be overridden explicitly.
+
+Attributed security events consume the same writer/principal and bank pending capacities as other quarantine items. Denied endpoints charge a principal bank only when the principal has a grant for that exact bank; ungranted requested paths remain encrypted evidence without charging that bank. Legacy denied endpoints resolve registered writer names to their configured write bank. Only anonymous `auth_failed` events with no writer or bank are exempt from scoped capacities; they still consume global item, byte, and security-event identity capacity. Audit persistence failures are logged; authentication failures and unsafe-content blocking remain fail-closed.
 
 Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
 

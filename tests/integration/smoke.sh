@@ -143,6 +143,10 @@ if [[ "$router_db" == "sqlite" ]]; then
   pass_check
 fi
 
+begin_check "security audit capacity is scoped and durable across replicas"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/security-event-capacity.py
+pass_check
+
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
