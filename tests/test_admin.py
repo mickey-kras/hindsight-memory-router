@@ -180,6 +180,7 @@ async def test_approve_retain_success_and_errors(monkeypatch: pytest.MonkeyPatch
     assert claim.await_args.kwargs == {
         "expected_sha256": item["sha256"],
         "expected_updated_at": item["updated_at"],
+        "target_bank": "main",
     }
     complete.assert_awaited_once()
     finish.assert_awaited_once()

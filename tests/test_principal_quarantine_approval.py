@@ -5,6 +5,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
+from memory_router import admin as admin_module
 from memory_router import app as app_module
 from memory_router.config import RouterSettings
 from memory_router.envelope import decrypt_envelope
@@ -366,3 +368,61 @@ async def test_inconsistent_authenticated_retain_provenance_cannot_reach_upstrea
     assert response.status_code == 409
     assert response.json()["error"] == code
     assert httpx_mock.get_requests() == []
+
+
+@pytest.mark.parametrize("interruption", ["upstream_timeout", "finalization_failure"])
+async def test_unknown_writer_recovery_preserves_written_bank_after_registry_changes(
+    scenario: ReviewScenario,
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+    interruption: str,
+) -> None:
+    runtime = scenario.runtime
+    assert runtime.policy is not None and runtime.admin is not None
+    assert runtime.repository is not None
+    queued = await runtime.policy.retain("new-writer", {"items": [{"content": "release passed"}]})
+    quarantine_id = queued["quarantine_id"]
+    detail = await runtime.admin.read_item(quarantine_id)
+    decrypted = decrypt_envelope(detail["encrypted"], scenario.private_key)
+    runtime.admin.registry.writers["new-writer"] = legacy_writer("onboarded-bank")
+    upstream_url = "https://hindsight.example/v1/default/banks/onboarded-bank/memories"
+    if interruption == "upstream_timeout":
+        httpx_mock.add_exception(httpx.ReadTimeout("response lost"), url=upstream_url)
+        response = await scenario.approve(quarantine_id, decrypted)
+        assert response.status_code == 504, response.text
+    else:
+        httpx_mock.add_response(url=upstream_url, json={"ok": True})
+        with monkeypatch.context() as failure:
+            failure.setattr(
+                admin_module,
+                "finish_approve_retain",
+                AsyncMock(side_effect=RuntimeError("finalization failed")),
+            )
+            with pytest.raises(RuntimeError, match="finalization failed"):
+                await scenario.approve(quarantine_id, decrypted)
+    runtime.admin.registry.writers["new-writer"] = legacy_writer("different-bank")
+    record = await runtime.repository.get(quarantine_id)
+    assert record is not None
+    if interruption == "upstream_timeout":
+        response = await scenario.client.post(
+            f"/admin/quarantine/items/{quarantine_id}/reconcile",
+            headers={"authorization": f"Bearer {REVIEW_TOKEN}"},
+            json={
+                "action": "confirmed_applied",
+                "expected_sha256": record["sha256"],
+                "expected_updated_at": record["updated_at"],
+            },
+        )
+    else:
+        response = await scenario.approve(quarantine_id, decrypted)
+        assert response.json()["target_bank"] == "onboarded-bank"
+
+    assert response.status_code == 200, response.text
+    assert len(httpx_mock.get_requests()) == 1
+    async with runtime.repository.db.transaction() as tx:
+        event = await tx.fetchone(
+            "SELECT details FROM quarantine_events WHERE quarantine_id=? AND event_type='approved'",
+            (quarantine_id,),
+        )
+    assert event is not None
+    assert json.loads(event["details"])["target_bank"] == "onboarded-bank"

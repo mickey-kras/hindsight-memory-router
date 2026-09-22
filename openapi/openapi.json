@@ -130,7 +130,7 @@
       "post": {
         "operationId": "approveQuarantineItem",
         "summary": "Approve the exact original quarantined object",
-        "description": "The caller decrypts locally and submits the complete object unchanged. The router canonicalizes it and compares its SHA-256 with the original digest. A changed field is rejected. Retain requests are written to the writer's current configured bank; recalled memories are marked reviewed and allowed only for their unchanged digest.",
+        "description": "The caller decrypts locally and submits the complete object unchanged. The router verifies its original SHA-256. Retain approval preserves the original bank and requires the original principal's current memory.retain grant, or an unchanged legacy writer bank. Unknown legacy writers must be registered before approval. Pending pre-upgrade retains without verifiable origin require resubmission. Completed writes finalize without replay. Recalled memories are allowed only for their unchanged digest.",
         "tags": [
           "Quarantine administration"
         ],
@@ -179,6 +179,16 @@
           },
           "429": {
             "$ref": "#/components/responses/AdminRateLimited"
+          },
+          "403": {
+            "description": "The original principal no longer has memory.retain for the quarantined bank (authorization_denied).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

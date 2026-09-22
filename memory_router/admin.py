@@ -270,6 +270,7 @@ class QuarantineAdminService:
             True,
             expected_sha256=str(item["sha256"]),
             expected_updated_at=_optional_str(item.get("updated_at")),
+            target_bank=bank,
         )
         try:
             await self.hindsight.retain(bank, approved_body)
