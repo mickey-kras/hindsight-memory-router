@@ -21,7 +21,7 @@ dependencies = [
   "rfc8785==0.1.4",
   "starlette==1.6.0",
   "structlog==26.1.0",
-  "uvicorn==0.52.4",
+  "uvicorn==0.53.0",
 ]
 
 [project.optional-dependencies]
