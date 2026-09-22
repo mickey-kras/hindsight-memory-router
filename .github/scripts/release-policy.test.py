@@ -310,6 +310,7 @@ class ReleasePolicyTests(unittest.TestCase):
         bump = steps["Open the next version bump pull request"]
         self.assertEqual(bump["with"]["github-token"], "${{ steps.app.outputs.token }}")
         self.assertIn("release.cjs').bumpReleasedVersion(", bump["with"]["script"])
+        self.assertEqual(bump["env"]["GH_TOKEN"], "${{ steps.app.outputs.token }}")
         delete = steps["Delete the published release branch"]
         self.assertEqual(delete["if"], "always()")
         self.assertEqual(delete["with"]["github-token"], "${{ steps.app.outputs.token }}")

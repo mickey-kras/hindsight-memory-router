@@ -139,9 +139,19 @@ function mock() {
       },
       pulls: {
         list: () => data(state.pulls || []),
+        get: () => data(state.pull),
+        listFiles: () => data(state.bumpFiles || [
+          { filename: "release-version.json", status: "modified", additions: 1, deletions: 1,
+            patch: '@@ -1,3 +1,3 @@\n {\n-  "version": "0.1.0"\n+  "version": "0.1.1"\n }' },
+          { filename: "pyproject.toml", status: "modified", additions: 1, deletions: 1,
+            patch: '@@ -1,2 +1,2 @@\n [project]\n-version = "0.1.0"\n+version = "0.1.1"' },
+        ]),
         create: (args) => {
           state.calls.push(`pr:${args.head}`);
-          state.pull = { number: 7, ...args };
+          state.pull = { number: 7, ...args, state: "open", draft: false,
+            base: { ref: args.base },
+            head: { ref: args.head, sha, repo: { full_name: "example/hindsight-memory-router" } } };
+          state.pulls = [state.pull];
           return data(state.pull);
         },
       },
@@ -170,7 +180,12 @@ function mock() {
     runId: 5,
     payload: {},
   };
-  return { github, state, context, core, outputs, inspect: () => digest };
+  const merge = async (args) => {
+    state.calls.push(`merge:${args.number}`);
+    state.merge = args;
+    if (state.failMerge) throw new Error("auto-merge unavailable");
+  };
+  return { github, state, context, core, outputs, inspect: () => digest, merge };
 }
 
 function prepared(m) {
@@ -521,15 +536,20 @@ test("follow-up opens a next-patch bump PR on main and never repeats it", () =>
     const m = mock();
     const files = publishedFixture(m);
     await release.bumpReleasedVersion(m);
-    assert.deepEqual(m.state.calls, ["tree", "commit", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1"]);
-    assert.equal(m.state.pull.base, "main");
+    assert.deepEqual(m.state.calls, ["tree", "commit", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1", "merge:7"]);
+    assert.equal(m.state.pull.base.ref, "main");
+    assert.deepEqual(m.state.merge, { repository: "example/hindsight-memory-router", number: 7, sha });
     const tree = Object.fromEntries(m.state.tree.map((item) => [item.path, item.content]));
     assert.deepEqual(JSON.parse(tree["release-version.json"]), { version: "0.1.1" });
     assert.equal(tree["pyproject.toml"], '[project]\nversion = "0.1.1"\n');
     m.state.calls.length = 0;
     m.state.pulls = [{ number: 7 }];
     await release.bumpReleasedVersion(m);
-    assert.deepEqual(m.state.calls, [], "an open bump PR must be reused");
+    assert.deepEqual(m.state.calls, ["merge:7"], "an open bump PR must be reused and queued");
+    m.state.calls.length = 0;
+    m.state.pull.auto_merge = { merge_method: "squash" };
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, [], "already queued PRs must not be queued again");
     m.state.pulls = [];
     files["release-version.json"] = `${JSON.stringify({ version: "0.2.0" }, null, 2)}\n`;
     await release.bumpReleasedVersion(m);
@@ -537,7 +557,44 @@ test("follow-up opens a next-patch bump PR on main and never repeats it", () =>
     m.state.refs["heads/ci/bump-release-version-0-1-1"] = { object: { type: "commit", sha: base } };
     files["release-version.json"] = `${JSON.stringify({ version: "0.1.0" }, null, 2)}\n`;
     await release.bumpReleasedVersion(m);
-    assert.deepEqual(m.state.calls, ["tree", "commit", "delete:heads/ci/bump-release-version-0-1-1", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1"], "a stale bump branch must be recreated");
+    assert.deepEqual(m.state.calls, ["tree", "commit", "delete:heads/ci/bump-release-version-0-1-1", "refs/heads/ci/bump-release-version-0-1-1", "pr:ci/bump-release-version-0-1-1", "merge:7"], "a stale bump branch must be recreated");
+  }));
+
+test("follow-up retries a failed auto-merge without recreating the bump", () =>
+  fixture(async () => {
+    const m = mock();
+    publishedFixture(m);
+    m.state.failMerge = true;
+    await assert.rejects(release.bumpReleasedVersion(m), /auto-merge unavailable/);
+    m.state.calls.length = 0;
+    m.state.failMerge = false;
+    await release.bumpReleasedVersion(m);
+    assert.deepEqual(m.state.calls, ["merge:7"]);
+  }));
+
+test("follow-up refuses modified or retargeted bump PRs on retry", () =>
+  fixture(async () => {
+    const m = mock();
+    publishedFixture(m);
+    await release.bumpReleasedVersion(m);
+    m.state.calls.length = 0;
+    m.state.pull.base.ref = "release/0.1.0";
+    await assert.rejects(release.bumpReleasedVersion(m), /not the expected bump/);
+    m.state.pull.base.ref = "main";
+    m.state.pull.draft = true;
+    await assert.rejects(release.bumpReleasedVersion(m), /not the expected bump/);
+    m.state.pull.draft = false;
+    const original = (await m.github.rest.pulls.listFiles()).data;
+    for (const files of [
+      [...original, { filename: "memory_router/config.py" }],
+      [original[0], { ...original[1], patch: original[1].patch.replace('version = "0.1.1"', 'version = "0.2.0"') }],
+      [original[0], { ...original[1], patch: undefined }],
+      [original[0], original[0]],
+    ]) {
+      m.state.bumpFiles = files;
+      await assert.rejects(release.bumpReleasedVersion(m), /beyond the next patch/);
+    }
+    assert.deepEqual(m.state.calls, []);
   }));
 
 test("follow-up bump refuses unpublished versions and misaligned main files", () =>
