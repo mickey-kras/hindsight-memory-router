@@ -87,7 +87,7 @@ def test_stored_summary_scope_and_expiry_helpers() -> None:
     }
     assert _expired({"status": "pending", "expires_at": "a"}, "b")
     assert not _expired({"status": "reviewed_allowed", "expires_at": "a"}, "b")
-    assert not _same_scope({"kind": "security_event"}, {"kind": "security_event"})
+    assert _same_scope({"kind": "security_event"}, {"kind": "security_event"})
     assert _same_scope(
         {"kind": "x", "reason": "unknown_writer"}, {"kind": "y", "reason": "unknown_writer"}
     )

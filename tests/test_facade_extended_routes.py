@@ -459,7 +459,9 @@ async def test_out_of_scope_hindsight_endpoints_remain_denied(method: str, path:
     assert response.status_code == 404
     assert _payload(response) == {"error": "endpoint_not_allowed"}
     if path.startswith("/v1/default/banks/openclaw/"):
-        policy.deny_endpoint.assert_awaited_once_with(method, path, writer_id="openclaw")
+        policy.deny_endpoint.assert_awaited_once_with(
+            method, path, writer_id="openclaw", bank_id="resolved-main"
+        )
     else:
         policy.deny_endpoint.assert_awaited_once_with(method, path)
     policy.hindsight.openclaw_request.assert_not_awaited()

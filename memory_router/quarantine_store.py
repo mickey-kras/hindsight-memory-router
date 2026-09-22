@@ -7,7 +7,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from .canonical import sha256_hex
-from .dedupe import request_family_identity
+from .dedupe import request_family_identity, security_event_identity
 from .envelope import create_provider_envelope, estimate_envelope_size
 from .errors import HttpError
 from .key_wrap import RsaOaepWrapProvider, WrapProvider, provider_envelope_metadata
@@ -68,6 +68,8 @@ class QuarantineStore:
         )
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
+        if input_["kind"] == "security_event":
+            input_ = {**input_, "dedupeKey": security_event_identity(input_)}
         quarantine_id = self._resolve_id(input_)
         self._assert_item_size(input_, quarantine_id)
         existing_for_charge = await self.repository.get(quarantine_id)
@@ -102,7 +104,7 @@ class QuarantineStore:
             elif input_["kind"] in {"retain_request", "recall_request"} and item.get("dedupe_key"):
                 mode = "request"
             capacity = self.capacity
-            if input_["kind"] == "security_event":
+            if _anonymous_auth_failure(input_):
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
             await self.repository.store(item, capacity, mode=mode, at=input_["timestamp"])
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
@@ -202,7 +204,7 @@ class QuarantineStore:
         self, input_: dict[str, Any], known: bool, session: RateLimitConsumer
     ) -> None:
         window = self.limits.rate_limit_window_ms
-        auth_audit = input_["reason"] == "auth_failed"
+        auth_audit = _anonymous_auth_failure(input_)
         if known:
             key = (
                 "quarantine-requarantine-ops:auth-audit"
@@ -257,6 +259,15 @@ class QuarantineStore:
             return _deduped_id("memory", f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
         stamp = re.sub(r"[^0-9A-Za-z]", "", input_["timestamp"])
         return f"q_{stamp}_{secrets.token_hex(8)}"
+
+
+def _anonymous_auth_failure(input_: dict[str, Any]) -> bool:
+    return (
+        input_["kind"] == "security_event"
+        and input_["reason"] == "auth_failed"
+        and input_.get("writerId") is None
+        and input_.get("bankId") is None
+    )
 
 
 def _effective_writer_limit(limits: QuarantineLimits) -> int:

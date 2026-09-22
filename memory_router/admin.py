@@ -13,6 +13,7 @@ from .logging import log_event
 from .maintenance import cleanup, preview_cleanup
 from .observability import current_request_id
 from .policy import prepare_retain_body
+from .principals import SCOPE_MEMORY_RETAIN, PrincipalResolver
 from .repository import (
     PENDING,
     POSTPONED,
@@ -93,6 +94,7 @@ class QuarantineAdminService:
         limits: Any,
         max_postpones: int = 3,
         review_stale_seconds: int = REVIEW_STALE_SECONDS,
+        principal_resolver: PrincipalResolver | None = None,
     ) -> None:
         self.repository = repository
         self.hindsight = hindsight
@@ -100,6 +102,7 @@ class QuarantineAdminService:
         self.limits = limits
         self.max_postpones = max_postpones
         self.review_stale_seconds = review_stale_seconds
+        self.principal_resolver = principal_resolver
 
     async def list_queue(
         self, limit: int, offset: int, filter_: QueueFilter | None = None
@@ -155,13 +158,7 @@ class QuarantineAdminService:
         writer_id = payload.get("writer_id")
         if not isinstance(writer_id, str) or not writer_id:
             raise HttpError(400, "invalid_request", "writer_id is required")
-        writer = self.registry.writers.get(writer_id)
-        if writer is None:
-            raise HttpError(
-                409,
-                "writer_not_registered",
-                "register the writer before approving its original retain request",
-            )
+        target_bank = self._retain_target(item, payload, writer_id)
         retain_body = parse_retain_body(payload.get("body"))
         scan = await scan_request(retain_body, operation="retain", writer_id=writer_id)
         if not scan.safe and item.get("reason") != "suspicious_content":
@@ -175,10 +172,10 @@ class QuarantineAdminService:
             retain_body,
             writer_id,
             str(item.get("source") or "quarantine_review"),
-            writer.write_bank,
+            target_bank,
             decision="approved",
         )
-        details = {"writer_id": writer_id, "target_bank": writer.write_bank, "actor": actor}
+        details = {"writer_id": writer_id, "target_bank": target_bank, "actor": actor}
         if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED:
             await finish_approve_retain(
                 self.repository,
@@ -189,9 +186,70 @@ class QuarantineAdminService:
             )
         else:
             await self._execute_retain_approval(
-                quarantine_id, item, writer_id, writer.write_bank, approved_body, details
+                quarantine_id, item, writer_id, target_bank, approved_body, details
             )
-        return {"approved": True, "quarantine_id": quarantine_id, "target_bank": writer.write_bank}
+        return {"approved": True, "quarantine_id": quarantine_id, "target_bank": target_bank}
+
+    def _retain_target(self, item: dict[str, Any], payload: dict[str, Any], writer_id: str) -> str:
+        if writer_id != item.get("writer_id"):
+            raise HttpError(
+                409, "quarantine_metadata_mismatch", "retain identity differs from stored metadata"
+            )
+        completed_bank = item.get("bank_id")
+        if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED and isinstance(completed_bank, str):
+            return completed_bank
+        mode = payload.get("identity_mode")
+        if mode is None and item.get("reason") == "unknown_writer":
+            mode = "legacy"
+        if mode is None:
+            raise HttpError(
+                409,
+                "quarantine_provenance_missing",
+                "retain origin cannot be verified; reject and resubmit through the current router",
+            )
+        if mode not in ("legacy", "principal"):
+            raise HttpError(409, "invalid_quarantine_payload", "invalid retain identity mode")
+        target_bank = payload.get("target_bank")
+        if mode == "legacy" and item.get("reason") == "unknown_writer" and target_bank is None:
+            return self._legacy_retain_bank(writer_id)
+        if not isinstance(target_bank, str) or not target_bank:
+            raise HttpError(409, "invalid_quarantine_payload", "retain target bank is required")
+        if target_bank != item.get("bank_id"):
+            raise HttpError(
+                409, "quarantine_metadata_mismatch", "retain bank differs from stored metadata"
+            )
+        if mode == "principal":
+            self._require_principal_retain_grant(writer_id, target_bank)
+        elif target_bank != self._legacy_retain_bank(writer_id):
+            raise HttpError(
+                409,
+                "quarantine_target_changed",
+                "writer bank changed; restore its original bank or reject and resubmit",
+            )
+        return target_bank
+
+    def _legacy_retain_bank(self, writer_id: str) -> str:
+        writer = self.registry.writers.get(writer_id)
+        if writer is None:
+            raise HttpError(
+                409,
+                "writer_not_registered",
+                "register the writer before approving its original retain request",
+            )
+        return str(writer.write_bank)
+
+    def _require_principal_retain_grant(self, principal_id: str, target_bank: str) -> None:
+        resolver = self.principal_resolver
+        principal = resolver.registry.principals.get(principal_id) if resolver else None
+        if principal is None or not any(
+            grant.bank == target_bank and SCOPE_MEMORY_RETAIN in grant.scopes
+            for grant in principal.grants
+        ):
+            raise HttpError(
+                403,
+                "authorization_denied",
+                "original principal no longer has memory.retain for the quarantined bank",
+            )
 
     async def _execute_retain_approval(
         self,
@@ -213,6 +271,7 @@ class QuarantineAdminService:
             True,
             expected_sha256=str(item["sha256"]),
             expected_updated_at=_optional_str(item.get("updated_at")),
+            target_bank=bank,
         )
         try:
             await self.hindsight.retain(bank, approved_body)
@@ -445,10 +504,9 @@ class QuarantineAdminService:
                 actor=context.actor,
             )
             writer_id = _optional_str(context.item.get("writer_id"))
-            writer = self.registry.writers.get(writer_id) if writer_id else None
             details = {
                 "writer_id": writer_id,
-                "target_bank": writer.write_bank if writer else None,
+                "target_bank": context.item.get("bank_id"),
                 "actor": context.actor,
             }
             await finish_approve_retain(

@@ -18,6 +18,10 @@ private-key-command | memory-router-decrypt-quarantine encrypted-response.json
 
 Approval requires the complete decrypted object unchanged. Modified content returns `409 quarantine_hash_mismatch`.
 
+Retain approval preserves the encrypted origin and target bank. Principal retains require the original principal's current `memory.retain` grant for that bank; legacy retains require the writer's bank to remain unchanged. Unknown legacy writers can still be registered before approval. The resolved destination is saved before the upstream write so retries and reconciliation keep the actual bank even if the registry changes.
+
+Pending pre-upgrade `suspicious_content` retains lack verifiable origin and return `409 quarantine_provenance_missing`: reject and resubmit them. Pre-upgrade `unknown_writer` retains keep the registration flow. Completed side effects can still be finalized without replay. No database migration is required.
+
 ## Concurrency and interruption recovery
 
 Review actions claim the item in a short transaction, call Hindsight without holding a database lock, then finalize in a second transaction. Concurrent review changes return `409 quarantine_review_changed`.

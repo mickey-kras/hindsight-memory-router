@@ -191,7 +191,9 @@ async def test_put_memory_and_security_event_modes() -> None:
     store, repository, _ = store_fixture()
     await store.put(base_input("recalled_memory", sourceBank="main", sourceMemoryId="m"))
     assert repository.store.await_args.kwargs["mode"] == "memory"
-    await store.put(base_input("security_event", reason="auth_failed", dedupeKey="auth"))
+    await store.put(
+        base_input("security_event", reason="auth_failed", writerId=None, dedupeKey="auth")
+    )
     assert repository.store.await_args.kwargs["mode"] == "id"
     capacity = repository.store.await_args.args[1]
     assert capacity.max_pending_items_per_writer == 0
@@ -256,14 +258,18 @@ async def test_charge_known_disabled_auth_and_family() -> None:
     session = limiter.session
     await store._charge(base_input(), True, session)
     assert "requarantine" in str(session.count_calls[-1])
-    await store._charge(base_input(reason="auth_failed"), True, session)
+    await store._charge(
+        base_input("security_event", reason="auth_failed", writerId=None), True, session
+    )
     assert "auth-audit" in str(session.count_calls[-1])
 
     disabled, _, limiter2 = store_fixture(QuarantineLimits(rate_limit_max=0))
     await disabled._charge(base_input(), False, limiter2.session)
     assert not limiter2.session.distinct_calls
 
-    await store._charge(base_input(reason="auth_failed"), False, session)
+    await store._charge(
+        base_input("security_event", reason="auth_failed", writerId=None), False, session
+    )
     assert "auth-audit" in str(session.count_calls[-1])
     await store._charge(base_input(dedupeKey="x"), False, session)
     buckets, identities = session.distinct_calls[-1]
@@ -382,11 +388,11 @@ async def test_put_persists_canonical_bank_id() -> None:
 
 
 @pytest.mark.asyncio
-async def test_per_bank_capacity_is_opt_in_and_skipped_for_security_events() -> None:
+async def test_attributed_security_events_preserve_bank_capacity() -> None:
     store, repository, _ = store_fixture(QuarantineLimits(max_pending_items_per_bank=7))
     await store.put(base_input(bankId="main", dedupeKey="d"))
     assert repository.store.await_args.args[1].max_pending_items_per_bank == 7
     await store.put(
         base_input("security_event", reason="denied_endpoint", bankId="main", dedupeKey="s")
     )
-    assert repository.store.await_args.args[1].max_pending_items_per_bank == 0
+    assert repository.store.await_args.args[1].max_pending_items_per_bank == 7

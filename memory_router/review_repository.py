@@ -150,15 +150,19 @@ async def claim_review(
     *,
     expected_sha256: str | None = None,
     expected_updated_at: str | None = None,
+    target_bank: str | None = None,
 ) -> dict[str, Any]:
     async def apply(tx: Tx, item: dict[str, object]) -> dict[str, object]:
         if item["kind"] != kind:
             raise HttpError(409, "invalid_review_action", "invalid quarantine review action")
         status = REVIEW_SIDE_EFFECT_STARTED if side_effect else REVIEW_IN_PROGRESS
-        await tx.execute(
-            _UPDATE_STATUS,
-            (status, at, quarantine_id),
-        )
+        if target_bank is None:
+            await tx.execute(_UPDATE_STATUS, (status, at, quarantine_id))
+        else:
+            await tx.execute(
+                "UPDATE quarantine_items SET status=?,updated_at=?,bank_id=? WHERE quarantine_id=?",
+                (status, at, target_bank, quarantine_id),
+            )
         if side_effect:
             await insert_event(
                 tx,

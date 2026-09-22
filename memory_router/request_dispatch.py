@@ -278,7 +278,7 @@ class AuthenticatedRequestDispatcher:
                 method,
                 pathname,
                 writer_id=principal.principal_id,
-                bank_id=self._bank_path_segment(pathname),
+                bank_id=self._granted_denied_bank(pathname, principal),
             )
         else:
             denied_writer_id = self._known_denied_bank(pathname)
@@ -286,10 +286,17 @@ class AuthenticatedRequestDispatcher:
                 await self.deps.policy.deny_endpoint(method, pathname)
                 if denied_writer_id is None
                 else await self.deps.policy.deny_endpoint(
-                    method, pathname, writer_id=denied_writer_id
+                    method,
+                    pathname,
+                    writer_id=denied_writer_id,
+                    bank_id=self.deps.policy.registry.writers[denied_writer_id].write_bank,
                 )
             )
         return JSONResponse(denied, status_code=404)
+
+    def _granted_denied_bank(self, pathname: str, principal: PrincipalSession) -> str | None:
+        candidate = self._bank_path_segment(pathname)
+        return candidate if any(grant.bank == candidate for grant in principal.grants) else None
 
     def _bank_path_segment(self, pathname: str) -> str | None:
         match = re.match(r"/v1/default/banks/([^/]+)(?:/|$)", pathname)

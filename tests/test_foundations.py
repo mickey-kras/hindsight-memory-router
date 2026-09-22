@@ -451,14 +451,9 @@ def test_parse_rejects_routing_keys(
 def test_dedupe_helpers_and_shapes() -> None:
     key = dedupe.request_dedupe_key("retain", "main", "x", {"a": 1})
     assert key == dedupe.request_dedupe_key("retain", "main", "x", {"a": 1})
-    assert dedupe.security_event_dedupe_key("get", "/X/?q=1") == "GET:/x"
-    assert dedupe.security_event_dedupe_key("POST", "") == "POST:/"
-    cap = dedupe.SecurityEventIdentityCap()
-    first = cap.resolve(None, "x")
-    assert cap.resolve(None, "x") == first
-    for i in range(63):
-        cap.resolve("w", str(i))
-    assert cap.resolve("overflow", "x") == "aggregate"
+    assert dedupe.security_event_dedupe_key("GET", "/X/") != dedupe.security_event_dedupe_key(
+        "GET", "/x"
+    )
     assert dedupe.request_family_identity("other", "x", None, {}) is None
     a = dedupe.request_family_identity(
         "retain_request", "unknown_writer", "x", {"tags": ["B", "a"], "content": "  HELLO   world "}

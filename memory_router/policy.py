@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast, get_args, get_origin
+from typing import Any, Literal, cast, get_args, get_origin
 
 from .canonical import canonical_json, sha256_hex
-from .dedupe import SecurityEventIdentityCap, request_dedupe_key, security_event_dedupe_key
+from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
 from .hindsight import HindsightGatewayError
 from .logging import log_event
@@ -33,6 +33,7 @@ _RECALL_RESPONSE_MAP_FIELDS = tuple(
 _QUARANTINE_ERRORS: dict[str, tuple[int, str]] = {
     "quarantine_capacity_exceeded": (507, "capacity"),
     "quarantine_writer_capacity_exceeded": (507, "capacity"),
+    "quarantine_security_event_capacity_exceeded": (507, "capacity"),
     "quarantine_rate_limited": (429, "rate-limit"),
     "quarantine_item_too_large": (413, "payload-too-large"),
     "quarantine_request_in_review": (409, "conflict"),
@@ -105,7 +106,6 @@ class RouterPolicy:
         self.limits = limits
         self.store = quarantine_store
         self.repository = repository
-        self.security_event_identities = SecurityEventIdentityCap()
 
     async def retain(self, writer_id: str, body: dict[str, Any], source: str | None = None) -> Any:
         writer = self.registry.writers.get(writer_id)
@@ -119,16 +119,21 @@ class RouterPolicy:
     async def retain_bank(
         self, principal_id: str, bank: str, body: dict[str, Any], source: str
     ) -> Any:
-        return await self._retain_to_bank(principal_id, bank, body, source)
+        return await self._retain_to_bank(principal_id, bank, body, source, "principal")
 
     async def _retain_to_bank(
-        self, identity: str, target_bank: str, body: dict[str, Any], source: str
+        self,
+        identity: str,
+        target_bank: str,
+        body: dict[str, Any],
+        source: str,
+        identity_mode: Literal["legacy", "principal"] = "legacy",
     ) -> Any:
         await self.limits.consume_retain(identity)
         scan = await scan_request(body, operation="retain", writer_id=identity)
         if not scan.safe:
             return await self._quarantine_retain(
-                identity, source, "suspicious_content", body, target_bank, scan
+                identity, source, "suspicious_content", body, target_bank, scan, identity_mode
             )
         rewritten = prepare_retain_body(body, identity, source, target_bank)
         return await self.hindsight.retain(target_bank, rewritten)
@@ -237,9 +242,7 @@ class RouterPolicy:
         writer_id: str | None = None,
         bank_id: str | None = None,
     ) -> dict[str, str]:
-        dedupe = self.security_event_identities.resolve(
-            writer_id, security_event_dedupe_key(method, path)
-        )
+        dedupe = security_event_dedupe_key(method, path)
         await self.quarantine_security_event(
             {
                 "writerId": writer_id,
@@ -489,8 +492,16 @@ class RouterPolicy:
         body: dict[str, Any],
         target_bank: str | None = None,
         scan: SafetyResult | None = None,
+        identity_mode: Literal["legacy", "principal"] = "legacy",
     ) -> dict[str, Any]:
-        payload: dict[str, Any] = {"action": "retain", "writer_id": writer_id, "body": body}
+        payload: dict[str, Any] = {
+            "action": "retain",
+            "writer_id": writer_id,
+            "body": body,
+            "identity_mode": identity_mode,
+            "target_bank": target_bank,
+        }
+        dedupe_key = request_dedupe_key("retain_request", writer_id, target_bank, payload)
         payload = self._with_transformations(payload, scan)
         result = await self.quarantine_security_event(
             {
@@ -499,12 +510,7 @@ class RouterPolicy:
                 "kind": "retain_request",
                 "reason": reason,
                 "bankId": target_bank,
-                "dedupeKey": request_dedupe_key(
-                    "retain_request",
-                    writer_id,
-                    target_bank,
-                    {"action": "retain", "writer_id": writer_id, "body": body},
-                ),
+                "dedupeKey": dedupe_key,
                 "payload": payload,
             }
         )
