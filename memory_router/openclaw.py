@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 class OpenClawFacade:
-    """Policy-gated facade for the Hindsight endpoints used by the OpenClaw plugin."""
-
     def __init__(self, policy: Any) -> None:
         self.policy = policy
 

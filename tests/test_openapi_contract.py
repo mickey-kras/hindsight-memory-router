@@ -10,6 +10,7 @@ EXPECTED_ROUTES = {
     "/health/ready": {"get"},
     "/ready": {"get"},
     "/version": {"get"},
+    "/metrics": {"get"},
     "/v1/default/banks": {"get"},
     "/v1/default/banks/{writer_id}/memories": {"post"},
     "/v1/default/banks/{writer_id}/memories/recall": {"post"},
@@ -63,7 +64,11 @@ def test_openapi_paths_and_methods_match_composed_router_surface() -> None:
 def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     source = "\n".join(
         pathlib.Path(path).read_text()
-        for path in ("memory_router/app.py", "memory_router/request_dispatch.py")
+        for path in (
+            "memory_router/app.py",
+            "memory_router/request_dispatch.py",
+            "memory_router/metrics_http.py",
+        )
     )
     markers = {
         "/health": '@app.get("/health")',
@@ -71,6 +76,7 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
         "/health/ready": '@app.get("/health/ready")',
         "/ready": '@app.get("/ready")',
         "/version": 'pathname == "/version"',
+        "/metrics": 'pathname == "/metrics" and method == "GET" and enabled',
         "/v1/default/banks": 'pathname == "/v1/default/banks"',
         "/v1/default/banks/{writer_id}/memories": r"/v1/default/banks/([^/]+)/memories(?:/(recall))?",
         "/v1/default/banks/{writer_id}/memories/recall": 'action == "recall"',
@@ -88,6 +94,20 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
         assert marker in source, f"OpenAPI path has no dispatcher marker: {path}"
 
     assert "match_facade_route(method, pathname)" in source
+
+
+def test_metrics_openapi_describes_authenticated_prometheus_text() -> None:
+    from memory_router.metrics import CONTENT_TYPE
+
+    paths = _spec()["paths"]
+    assert isinstance(paths, dict)
+    operation = paths["/metrics"]["get"]
+
+    assert operation["security"] == [{"AdminToken": []}, {"PrincipalToken": []}]
+    assert operation["responses"]["200"]["content"] == {
+        CONTENT_TYPE: {"schema": {"type": "string"}}
+    }
+    assert {"401", "403", "404", "429", "503"} <= operation["responses"].keys()
 
 
 def test_version_and_recall_openapi_match_hindsight_facade() -> None:
