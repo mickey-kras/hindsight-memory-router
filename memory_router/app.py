@@ -245,6 +245,7 @@ class Runtime:
             hindsight_limits,
             settings.quarantine_max_postpones,
             self.review_stale_seconds,
+            self.principal_resolver,
         )
         self.auditor = AuthFailureAuditor(store)
         interval = settings.quarantine_sweep_interval_seconds
