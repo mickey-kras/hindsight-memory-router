@@ -284,8 +284,8 @@ async def test_cancelled_scanner_start_finishes_acquisition_before_runtime_clean
             pytest.fail("cancelled startup reached a running application")
 
     monkeypatch.setattr(app_module, "runtime", runtime)
-    monkeypatch.setattr(app_module, "start_facade_scan_executor", start_scanner)
-    monkeypatch.setattr(app_module, "shutdown_facade_scan_executor_async", stop_scanner)
+    monkeypatch.setattr(app_module, "start_scan_executor", start_scanner)
+    monkeypatch.setattr(app_module, "shutdown_scan_executor_async", stop_scanner)
     startup = asyncio.create_task(start_application())
     try:
         await asyncio.wait_for(started.wait(), timeout=2)

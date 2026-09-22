@@ -5450,7 +5450,7 @@
         }
       },
       "ScanUnavailable": {
-        "description": "Router response safety scanner worker failed, is busy, or exceeded its field/time limits",
+        "description": "Request scanner failure or saturation returns request_scan_unavailable. Response scanner failure, saturation, or field/time limit returns facade_scan_unavailable. Operational scanner failures do not quarantine content.",
         "headers": {
           "Retry-After": {
             "description": "Seconds before retrying",

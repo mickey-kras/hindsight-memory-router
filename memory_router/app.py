@@ -40,10 +40,6 @@ from .limits import HindsightLimitConfig, HindsightLimits
 from .logging import configure_logging, log_event
 from .maintenance import prune_events_before, sweep_expired
 from .observability import current_duration_ms, current_request_id
-from .openclaw import (
-    shutdown_facade_scan_executor_async,
-    start_facade_scan_executor,
-)
 from .paths import _decode_path_segment, _raw_pathname, _route_class
 from .policy import RouterPolicy
 from .principal_gate import (
@@ -74,6 +70,10 @@ from .request_dispatch import (
     DispatchDependencies,
 )
 from .review_repository import REVIEW_STALE_SECONDS, recover_interrupted
+from .scan_executor import (
+    shutdown_scan_executor_async,
+    start_scan_executor,
+)
 from .timestamps import iso_format, iso_now
 
 logger = logging.getLogger(__name__)
@@ -336,7 +336,7 @@ runtime = Runtime()
 
 async def _cleanup_failed_start(*, runtime_started: bool, scanner_started: bool) -> None:
     if scanner_started:
-        await _run_startup_cleanup(shutdown_facade_scan_executor_async())
+        await _run_startup_cleanup(shutdown_scan_executor_async())
     if runtime_started:
         await _run_startup_cleanup(runtime.stop())
 
@@ -371,7 +371,7 @@ async def _stop_runtime(*, reraise: bool) -> None:
         if reraise:
             raise
     finally:
-        await shutdown_facade_scan_executor_async()
+        await shutdown_scan_executor_async()
 
 
 @asynccontextmanager
@@ -382,7 +382,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await runtime.start()
         runtime_started = True
         scanner_start_attempted = True
-        await finish_before_cancelling(asyncio.to_thread(start_facade_scan_executor))
+        await finish_before_cancelling(asyncio.to_thread(start_scan_executor))
     except BaseException as exc:
         await _cleanup_failed_start(
             runtime_started=runtime_started,

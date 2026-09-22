@@ -21,6 +21,11 @@ and each request is authorized against the principal's per-bank grants (see
 returns only banks where the principal holds the `bank.list` scope.
 PostgreSQL-backed principal limit failures return `503 principal_rate_unavailable`
 or `503 principal_concurrency_unavailable` with `Retry-After: 1`.
+Request scan saturation, worker failure, hard timeout, or shutdown returns
+`503 request_scan_unavailable` with `Retry-After: 1`, including retain approval.
+Native recall-result and supplemental scan failures return `503 recall_scan_unavailable`;
+no partial recall content is returned. All safety scans share four worker slots.
+Operational scanner failures do not forward or quarantine the request.
 
 `/health/live` is anonymous liveness with a static `{"status": "alive"}` body. `/health/ready` is readiness; `/health` is its alias; `/ready` is deprecated. Readiness answers anonymous callers with only `{"status": ...}`; the full upstream payload requires router authentication. `/version` requires router authentication. Other router endpoints require authentication unless development-only anonymous access is enabled. Responses authenticated by the legacy `MEMORY_ROUTER_TOKEN` or `MEMORY_ROUTER_ADMIN_TOKEN` carry a `Deprecation` header; both credentials are removed at the next major release.
 
@@ -31,7 +36,7 @@ Facade contract: `openapi/openclaw.json`.
 - `{bank_id}` is a writer ID. The router resolves the Hindsight bank.
 - Every route uses router authentication, safety scanning, and a retain or recall quota. Development-only anonymous mode also applies.
 - Writes use the global JSON limit; retain has stricter limits.
-- Scanner worker, capacity, field, or time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`.
+- Response scanner worker, capacity, field, or time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`.
 - An empty upstream success body returns JSON `null` only when the route permits it. Otherwise validation returns a typed 502.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 

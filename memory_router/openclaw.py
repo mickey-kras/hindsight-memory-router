@@ -1,249 +1,20 @@
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
-import multiprocessing
-from contextlib import suppress
-from threading import BoundedSemaphore, Lock
-from typing import Any, cast
+from typing import Any
 from urllib.parse import quote, urlencode
-
-from pebble import ProcessExpired, ProcessPool
 
 from .canonical import canonical_json, sha256_hex
 from .errors import HttpError
 from .facade_routes import FacadeRoute
-from .hindsight import MAX_FACADE_RESPONSE_BYTES, HindsightGatewayError
+from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
-from .security import (
-    MAX_FACADE_SCAN_SECONDS,
-    SafetyResult,
-    scan_facade_payload,
-    scan_query_values,
-    scan_recall_body,
-    scan_retain_body,
-)
+from .scan_executor import scan_facade_response, scan_request, scan_unavailable
+from .security import SafetyResult
 
 logger = logging.getLogger(__name__)
-FACADE_SCAN_WORKERS = 4
-FACADE_SCAN_CAPACITY = 4
-FACADE_SCAN_TASK_SECONDS = MAX_FACADE_SCAN_SECONDS + 1.0
-FACADE_SCAN_WAIT_SECONDS = FACADE_SCAN_TASK_SECONDS + 1.0
-
-
-class _FacadeScannerShutdown(RuntimeError):
-    pass
-
-
-_FACADE_SCANNER_SHUT_DOWN = "facade scanner shut down"
-_RESPONSE_SCANNER_SHUT_DOWN = "response safety scanner is shut down"
-
-
-def _new_facade_scan_executor() -> ProcessPool:
-    return ProcessPool(
-        max_workers=FACADE_SCAN_WORKERS,
-        context=cast(Any, multiprocessing.get_context("spawn")),
-    )
-
-
-_FACADE_SCAN_EXECUTOR: ProcessPool | None = None
-_FACADE_SCAN_EXECUTOR_LOCK = Lock()
-_FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
-_FACADE_SCAN_GENERATION = 0
-_FACADE_SCAN_SHUTDOWN = False
-_FACADE_SCAN_FUTURES: set[Any] = set()
-
-
-def _scan_unavailable(message: str, *, error_kind: str, writer_id: str | None = None) -> HttpError:
-    log_event(
-        logger,
-        "warning",
-        "facade_scan_failed",
-        request_id=current_request_id(),
-        operation="facade_scan",
-        error_kind=error_kind,
-        outcome="failed",
-        route_class="openclaw",
-        writer_id=writer_id,
-    )
-    return HttpError(
-        503,
-        "facade_scan_unavailable",
-        message,
-        headers={"Retry-After": "1"},
-    )
-
-
-def _facade_scan_generation() -> int:
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        return _FACADE_SCAN_GENERATION
-
-
-def _facade_scan_stopped(generation: int) -> bool:
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        return _FACADE_SCAN_SHUTDOWN or generation != _FACADE_SCAN_GENERATION
-
-
-def _get_facade_scan_executor(expected_generation: int | None = None) -> ProcessPool:
-    global _FACADE_SCAN_EXECUTOR
-    stale = None
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        if _FACADE_SCAN_SHUTDOWN:
-            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
-        if expected_generation is not None and expected_generation != _FACADE_SCAN_GENERATION:
-            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
-        if _FACADE_SCAN_EXECUTOR is None or not _FACADE_SCAN_EXECUTOR.active:
-            stale = _FACADE_SCAN_EXECUTOR
-            _FACADE_SCAN_EXECUTOR = _new_facade_scan_executor()
-        executor = _FACADE_SCAN_EXECUTOR
-    if stale is not None:
-        with suppress(Exception):
-            stale.stop()  # type: ignore[no-untyped-call]
-        with suppress(Exception):
-            stale.join(timeout=5)
-    return executor
-
-
-async def _get_facade_scan_executor_async(expected_generation: int) -> ProcessPool:
-    return await asyncio.to_thread(_get_facade_scan_executor, expected_generation)
-
-
-def start_facade_scan_executor() -> None:
-    global _FACADE_SCAN_CAPACITY, _FACADE_SCAN_SHUTDOWN
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        restarting = _FACADE_SCAN_SHUTDOWN
-        _FACADE_SCAN_SHUTDOWN = False
-        if restarting:
-            _FACADE_SCAN_CAPACITY = BoundedSemaphore(value=FACADE_SCAN_CAPACITY)
-            _FACADE_SCAN_FUTURES.clear()
-    # Pebble starts workers lazily when ``active`` is first inspected. Do that
-    # during startup so the first facade request never pays process-spawn cost.
-    executor = _get_facade_scan_executor()
-    if not executor.active:
-        raise RuntimeError("facade scanner failed to start")
-
-
-def _acquire_facade_scan_capacity() -> tuple[int, BoundedSemaphore] | None:
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        if _FACADE_SCAN_SHUTDOWN:
-            raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
-        capacity = _FACADE_SCAN_CAPACITY
-        if not capacity.acquire(blocking=False):
-            return None
-        return _FACADE_SCAN_GENERATION, capacity
-
-
-def shutdown_facade_scan_executor() -> None:
-    global _FACADE_SCAN_EXECUTOR, _FACADE_SCAN_GENERATION, _FACADE_SCAN_SHUTDOWN
-    with _FACADE_SCAN_EXECUTOR_LOCK:
-        _FACADE_SCAN_SHUTDOWN = True
-        _FACADE_SCAN_GENERATION += 1
-        executor = _FACADE_SCAN_EXECUTOR
-        _FACADE_SCAN_EXECUTOR = None
-        futures = tuple(_FACADE_SCAN_FUTURES)
-    for future in futures:
-        with suppress(Exception):
-            future.cancel()
-    if executor is not None:
-        with suppress(Exception):
-            executor.stop()  # type: ignore[no-untyped-call]
-        with suppress(Exception):
-            executor.join(timeout=5)
-
-
-async def shutdown_facade_scan_executor_async() -> None:
-    await asyncio.to_thread(shutdown_facade_scan_executor)
-
-
-def _response_scanner_shutdown(writer_id: str | None) -> HttpError:
-    return _scan_unavailable(
-        _RESPONSE_SCANNER_SHUT_DOWN, error_kind="shutdown", writer_id=writer_id
-    )
-
-
-async def _scan_facade_response(  # NOSONAR
-    value: Any, *, writer_id: str | None = None
-) -> SafetyResult:
-    try:
-        admission = _acquire_facade_scan_capacity()
-    except _FacadeScannerShutdown as exc:
-        raise _response_scanner_shutdown(writer_id) from exc
-    if admission is None:
-        raise _scan_unavailable(
-            "response safety scanner is busy", error_kind="capacity", writer_id=writer_id
-        )
-    generation, capacity = admission
-    try:
-        payload = json.dumps(
-            value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-        if len(payload) > MAX_FACADE_RESPONSE_BYTES:
-            raise _scan_unavailable(
-                "response exceeded safety scan limits",
-                error_kind="response-too-large",
-                writer_id=writer_id,
-            )
-        executor = await _get_facade_scan_executor_async(generation)
-        future = executor.schedule(
-            scan_facade_payload,
-            args=[payload],
-            timeout=FACADE_SCAN_TASK_SECONDS,
-        )
-        with _FACADE_SCAN_EXECUTOR_LOCK:
-            if _FACADE_SCAN_SHUTDOWN or generation != _FACADE_SCAN_GENERATION:
-                future.cancel()  # type: ignore[no-untyped-call]
-                raise _FacadeScannerShutdown(_FACADE_SCANNER_SHUT_DOWN)
-            _FACADE_SCAN_FUTURES.add(future)
-    except (HttpError, asyncio.CancelledError):
-        capacity.release()
-        raise
-    except _FacadeScannerShutdown as exc:
-        capacity.release()
-        raise _response_scanner_shutdown(writer_id) from exc
-    except Exception as exc:
-        capacity.release()
-        raise _scan_unavailable(
-            "response safety scanner failed",
-            error_kind="unexpected",
-            writer_id=writer_id,
-        ) from exc
-
-    def release(done: Any) -> None:
-        with _FACADE_SCAN_EXECUTOR_LOCK:
-            _FACADE_SCAN_FUTURES.discard(done)
-        capacity.release()
-
-    future.add_done_callback(release)
-    try:
-        return await asyncio.wait_for(asyncio.wrap_future(future), timeout=FACADE_SCAN_WAIT_SECONDS)
-    except TimeoutError as exc:
-        future.cancel()  # type: ignore[no-untyped-call]
-        if _facade_scan_stopped(generation):
-            raise _response_scanner_shutdown(writer_id) from exc
-        raise _scan_unavailable(
-            "response safety scan timed out", error_kind="timeout", writer_id=writer_id
-        ) from exc
-    except asyncio.CancelledError as exc:  # NOSONAR
-        if _facade_scan_stopped(generation):
-            raise _response_scanner_shutdown(writer_id) from exc
-        raise
-    except ProcessExpired as exc:
-        raise _scan_unavailable(
-            "response safety scanner worker failed",
-            error_kind="worker-crash",
-            writer_id=writer_id,
-        ) from exc
-    except Exception as exc:
-        if _facade_scan_stopped(generation):
-            raise _response_scanner_shutdown(writer_id) from exc
-        raise _scan_unavailable(
-            "response safety scanner failed",
-            error_kind="unexpected",
-            writer_id=writer_id,
-        ) from exc
 
 
 class OpenClawFacade:
@@ -330,12 +101,12 @@ class OpenClawFacade:
         scan_input = {
             key: value for key, value in evidence.items() if key not in {"resource", "query"}
         }
-        scan = (
-            scan_recall_body(scan_input)
-            if route.request_scan == "recall"
-            else scan_retain_body(scan_input)
+        scan = await scan_request(
+            scan_input,
+            operation="recall" if route.request_scan == "recall" else "retain",
+            writer_id=writer_id,
+            query=query,
         )
-        scan.extend(scan_query_values(query))
         if scan.safe:
             return
         await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source, bank_id)
@@ -377,14 +148,14 @@ class OpenClawFacade:
         value: Any,
         bank_id: str | None = None,
     ) -> None:
-        response_scan = await _scan_facade_response(value, writer_id=writer_id)
+        response_scan = await scan_facade_response(value, writer_id=writer_id)
         if _only_scan_limit_findings(response_scan):
             error_kind = (
                 "timeout"
                 if any(finding.matched == "facade_time_limit" for finding in response_scan.findings)
                 else "response-too-large"
             )
-            raise _scan_unavailable(
+            raise scan_unavailable(
                 "response exceeded safety scan limits",
                 error_kind=error_kind,
                 writer_id=writer_id,

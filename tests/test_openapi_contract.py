@@ -126,8 +126,9 @@ def test_principal_endpoints_document_shared_limit_failures() -> None:
         paths["/v1/default/banks/{writer_id}/memories/recall"]["post"],
     )
     expected = {"$ref": "#/components/responses/PrincipalLimitUnavailable"}
-    for operation in principal_operations:
-        assert operation["responses"]["503"] == expected
+    assert principal_operations[0]["responses"]["503"] == expected
+    for operation in principal_operations[1:]:
+        assert operation["responses"]["503"] == {"$ref": "#/components/responses/MemoryUnavailable"}
 
     unavailable = spec["components"]["responses"]["PrincipalLimitUnavailable"]
     assert "Retry-After" in unavailable["headers"]

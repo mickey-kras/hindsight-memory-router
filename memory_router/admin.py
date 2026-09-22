@@ -39,7 +39,7 @@ from .review_repository import (
     remove,
 )
 from .review_repository import postpone as postpone_item
-from .security import scan_retain_body
+from .scan_executor import scan_request
 from .timestamps import iso_now, parse_iso
 from .validation import parse_retain_body
 
@@ -160,7 +160,8 @@ class QuarantineAdminService:
             raise HttpError(400, "invalid_request", "writer_id is required")
         target_bank = self._retain_target(item, payload, writer_id)
         retain_body = parse_retain_body(payload.get("body"))
-        if not scan_retain_body(retain_body).safe and item.get("reason") != "suspicious_content":
+        scan = await scan_request(retain_body, operation="retain", writer_id=writer_id)
+        if not scan.safe and item.get("reason") != "suspicious_content":
             raise HttpError(
                 409,
                 "quarantine_security_review_required",

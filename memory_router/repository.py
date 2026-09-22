@@ -480,16 +480,7 @@ class QuarantineRepository:
             )
             or {}
         )
-        if (
-            item["kind"] == "security_event"
-            and existing is None
-            and int(totals.get("security_event_count") or 0) >= SECURITY_EVENT_IDENTITY_LIMIT
-        ):
-            raise HttpError(
-                507,
-                "quarantine_security_event_capacity_exceeded",
-                "security event identity capacity is exhausted",
-            )
+        self._assert_security_event_capacity(item, existing, totals)
         existing_live = existing if existing and not _expired(existing, at) else None
         existing_pending = _is_pending(existing_live)
         next_pending = int(totals.get("pending_count") or 0) - int(existing_pending) + 1
@@ -511,6 +502,21 @@ class QuarantineRepository:
                 507,
                 "quarantine_writer_capacity_exceeded",
                 "writer quarantine capacity is exhausted",
+            )
+
+    @staticmethod
+    def _assert_security_event_capacity(
+        item: dict[str, Any], existing: dict[str, Any] | None, totals: dict[str, Any]
+    ) -> None:
+        if (
+            item["kind"] == "security_event"
+            and existing is None
+            and int(totals.get("security_event_count") or 0) >= SECURITY_EVENT_IDENTITY_LIMIT
+        ):
+            raise HttpError(
+                507,
+                "quarantine_security_event_capacity_exceeded",
+                "security event identity capacity is exhausted",
             )
 
     @staticmethod

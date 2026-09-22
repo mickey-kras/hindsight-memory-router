@@ -216,10 +216,10 @@ admin_review_post() {
   if [[ $# -lt 2 ]]; then
     body='{}'
   fi
-  curl --max-time 5 -fsS \
+  printf '%s' "$body" | curl --max-time 5 -fsS \
     -H "Authorization: Bearer ${admin_review_token}" \
     -H "Content-Type: application/json" \
-    -X POST "${router_url}${path}" -d "$body"
+    -X POST "${router_url}${path}" --data-binary @-
 }
 
 admin_cleanup_post() {
@@ -260,6 +260,10 @@ wrong_review_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$wrong_review_status" == "401" ]] || fail_check "read token unexpectedly accessed admin review endpoint"
 wrong_cleanup_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/cleanup" -d '{"dry_run":true}')"
 [[ "$wrong_cleanup_status" == "401" ]] || fail_check "review token unexpectedly accessed admin cleanup endpoint"
+pass_check
+
+begin_check "metadata-heavy request scanning preserves liveness responsiveness"
+python3 tests/integration/request-scanning.py "$router_url" "$router_token" retain
 pass_check
 
 begin_check "known writer retain succeeds"
@@ -518,6 +522,10 @@ if [[ "$mode" == "fake" ]]; then
   second_reject_recall="$(post_router "/v1/default/banks/main/memories/recall" '{"query":"unsafe rejected result"}')"
   printf '%s' "$second_reject_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
   grep -q '"kind":"invalidate"' "$state_file" || fail_check "fake Hindsight did not receive invalidation"
+  pass_check
+
+  begin_check "native recall scanning preserves liveness responsiveness"
+  python3 tests/integration/request-scanning.py "$router_url" "$router_token" recall
   pass_check
 
   begin_check "fake Hindsight observes approved writes and no quarantine-bank traffic"
