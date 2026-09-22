@@ -39,6 +39,7 @@ router_token="test-router-token-01234567890123456"
 admin_read_token="test-admin-read-token-012345678901"
 admin_review_token="test-admin-review-token-0123456789"
 admin_cleanup_token="test-admin-cleanup-token-01234567"
+known_marker="CI_SMOKE_${mode}_${router_db}_$(date +%s)_$RANDOM"
 unknown_marker="UNKNOWN_${mode}_${router_db}_$(date +%s)_$RANDOM"
 approved_marker="APPROVED_${mode}_${router_db}_$(date +%s)_$RANDOM"
 unknown_recall_writer="unknown-recall-${mode}-${router_db}"
@@ -267,14 +268,16 @@ python3 tests/integration/request-scanning.py "$router_url" "$router_token" reta
 pass_check
 
 begin_check "known writer retain succeeds"
-known_response="$(retry_post_router "/v1/default/banks/main/memories" '{"items":[{"content":"CI smoke known retain","context":"integration smoke","document_id":"ci-known"}],"async":true}')"
+known_response="$(retry_post_router "/v1/default/banks/main/memories" "{\"items\":[{\"content\":\"CI smoke known retain ${known_marker}\",\"context\":\"integration smoke\",\"document_id\":\"ci-known\"}],\"async\":true}")"
 printf '%s' "$known_response" | grep -Eq 'success|ok' || fail_check "known retain failed: ${known_response}"
 pass_check
 
 begin_check "safe recall endpoint succeeds"
-safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
-printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data.get("results"), list)'
-if [[ "$mode" == "fake" ]]; then
+if [[ "$mode" == "real" ]]; then
+  safe_recall="$(python3 tests/integration/recall_probe.py "$router_url" "$router_token" "$known_marker")" || fail_check "healthy recall did not return the seeded marker"
+else
+  safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
+  printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert not data.get("partial") and not data.get("failed_banks")'
   printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["results"] and data["results"][0]["text"] == "memory from physical-main"; assert {"chunks", "entities", "source_facts", "trace"} <= data.keys()'
 fi
 pass_check
@@ -299,6 +302,7 @@ if printf '%s' "$queue_response" | grep -q "$unknown_marker"; then
   fail_check "admin queue leaked plaintext"
 fi
 read_response="$(admin_get "/admin/quarantine/items/${unknown_id}")"
+printf '%s' "$read_response" | python3 -c 'import json,sys; record=json.load(sys.stdin)["record"]; assert all(value is not None for value in record.values()); assert "bank_id" not in record and "source_bank" not in record' || fail_check "admin item returned null optional metadata"
 if printf '%s' "$read_response" | grep -q "$unknown_marker"; then
   fail_check "admin item leaked plaintext"
 fi

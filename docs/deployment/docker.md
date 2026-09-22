@@ -27,7 +27,20 @@ Never copy, mount, generate, or persist the private key on the router host.
 docker compose up -d
 ```
 
-Compose requires `QUARANTINE_PUBLIC_KEY` and starts one long-running non-root Memory Router service. It does not create quarantine keys. The `${QUARANTINE_PUBLIC_KEY:?...}` guard is evaluated by Compose itself, so commands such as `docker compose down`, `ps`, and `logs` also require the variable. Keep `QUARANTINE_PUBLIC_KEY` in `.env` as the canonical Compose location.
+Compose starts one long-running non-root Memory Router service. The router validates the selected wrap provider at startup: the default `rsa-oaep` requires `QUARANTINE_PUBLIC_KEY`; `https-sidecar` requires its sidecar settings instead. Keep provider settings in `.env` (see [key wrap providers](../security/quarantine.md#pluggable-dek-wrap-providers)). Compose does not generate keys, and management commands do not require an RSA key.
+
+## Principal registry
+
+Copy `principal_registry.example.json` to `principal_registry.json` and customize the principal IDs, token hashes, and bank grants. The image does not contain a principal registry. Add this read-only mount in `compose.override.yaml`:
+
+```yaml
+services:
+  memory-router:
+    volumes:
+      - ./principal_registry.json:/app/config/principal_registry.json:ro
+```
+
+Set `MEMORY_ROUTER_PRINCIPALS=/app/config/principal_registry.json` in `.env`, leave `MEMORY_ROUTER_TOKEN` unset, and ensure uid `10001` can read the file. `docker compose up -d` automatically loads `compose.override.yaml`. See [authentication](../security/authentication.md) for token hashing and grants.
 
 ## Network exposure and TLS
 

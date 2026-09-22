@@ -156,9 +156,11 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
         for method, operation in path_item.items():
             if method not in HTTP_METHODS:
                 continue
-            assert operation["security"] == [{"RouterToken": []}]
+            assert operation["security"] == [{"RouterToken": []}, {"PrincipalToken": []}]
             responses = operation["responses"]
-            assert {"400", "401", "404", "422", "429", "4XX", "502", "503", "504"} <= set(responses)
+            assert {"400", "401", "403", "404", "422", "429", "4XX", "502", "503", "504"} <= set(
+                responses
+            )
             assert ("413" in responses) is ("requestBody" in operation)
 
 
@@ -247,3 +249,16 @@ def test_openclaw_strict_contracts_have_exact_openapi_schemas() -> None:
         "tags_match",
         "trace",
     }
+
+
+def test_retain_success_accepts_quarantine_objects_also_matching_upstream() -> None:
+    media = _spec()["paths"]["/v1/default/banks/{writer_id}/memories"]["post"]["responses"]["200"][
+        "content"
+    ]["application/json"]
+    assert media["schema"] == {
+        "anyOf": [
+            {"$ref": "#/components/schemas/QuarantinedResponse"},
+            {"$ref": "#/components/schemas/UpstreamResponse"},
+        ]
+    }
+    assert media["examples"]["quarantined"]["value"]["queued"] is True

@@ -4,10 +4,13 @@ import json
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
+from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
 
 
-def memory_request(router_url: str, token: str, operation: str) -> dict[str, object]:
+def memory_request(
+    router_url: str, token: str, operation: str, *, heavy: bool = True
+) -> dict[str, object] | None:
     body = {
         "items": [
             {
@@ -19,8 +22,10 @@ def memory_request(router_url: str, token: str, operation: str) -> dict[str, obj
             }
         ]
     }
+    if not heavy:
+        body = {"items": [{"content": "CI scanner recovery"}], "async": True}
     if operation == "recall":
-        body = {"query": "CI metadata scan"}
+        body = {"query": "CI metadata scan" if heavy else "CI scanner recovery"}
     suffix = "/recall" if operation == "recall" else ""
     request = Request(  # noqa: S310 - URL is the isolated CI router.
         f"{router_url}/v1/default/banks/main/memories{suffix}",
@@ -28,8 +33,24 @@ def memory_request(router_url: str, token: str, operation: str) -> dict[str, obj
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         method="POST",
     )
-    with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
-        return json.load(response)
+    try:
+        with build_opener(ProxyHandler({})).open(request, timeout=20) as response:
+            result = json.load(response)
+        assert isinstance(result, dict), result
+        return result
+    except HTTPError as error:
+        if not heavy:
+            raise
+        kind = "recall" if operation == "recall" else "request"
+        with error:
+            assert error.code == 503, error.code
+            assert error.headers.get("Retry-After") == "1", error.headers
+            result = json.load(error)
+        assert result == {
+            "error": f"{kind}_scan_unavailable",
+            "message": f"{kind} safety scan timed out",
+        }, result
+        return None
 
 
 def main() -> None:
@@ -46,12 +67,19 @@ def main() -> None:
                 assert json.load(response) == {"status": "alive"}
             delays.append(time.monotonic() - started)
         result = pending.result()
-    if operation == "recall":
+    assert len(delays) >= 3, delays
+    assert max(delays) < 1.0, delays
+    if result is None:
+        recovered = memory_request(router_url, token, operation, heavy=False)
+        assert recovered is not None
+        if operation == "recall":
+            assert recovered.get("results") and not recovered.get("partial"), recovered
+        else:
+            assert recovered.get("success") is True or recovered.get("ok") is True, recovered
+    elif operation == "recall":
         assert result.get("results") == [] and not result.get("partial"), result
     else:
         assert result.get("queued") is True, result
-    assert len(delays) >= 3, delays
-    assert max(delays) < 1.0, delays
 
 
 if __name__ == "__main__":

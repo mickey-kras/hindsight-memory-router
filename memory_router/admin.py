@@ -126,7 +126,9 @@ class QuarantineAdminService:
             raise HttpError(
                 409, "quarantine_payload_unavailable", "quarantine payload is no longer available"
             )
-        record = {key: value for key, value in item.items() if key != "encrypted"}
+        record = {
+            key: value for key, value in item.items() if key != "encrypted" and value is not None
+        }
         return {"record": record, "encrypted": item["encrypted"]}
 
     async def approve(

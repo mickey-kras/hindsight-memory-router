@@ -10,7 +10,7 @@ import {
   resolveUiConfig,
   THEME_VARS,
 } from "../../src/lib/config";
-import { fetchVersion, type AdminTokens } from "../../src/lib/api";
+import { fetchLiveness, type AdminTokens } from "../../src/lib/api";
 
 const host = globalThis as Record<string, unknown>;
 
@@ -110,11 +110,11 @@ describe("api client base URL", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         calls.push(String(input));
-        return new Response(JSON.stringify({ version: "0.9.0" }), { status: 200 });
+        return new Response(JSON.stringify({ status: "alive" }), { status: 200 });
       }),
     );
-    await fetchVersion();
-    expect(calls).toEqual(["https://router.example.com/version"]);
+    await fetchLiveness();
+    expect(calls).toEqual(["https://router.example.com/health/live"]);
   });
 
   it("keeps same-origin requests when nothing is injected", async () => {
@@ -129,5 +129,18 @@ describe("api client base URL", () => {
     const { listQueue } = await import("../../src/lib/api");
     await listQueue(tokens);
     expect(calls).toEqual(["/admin/quarantine/queue?limit=100&offset=0"]);
+  });
+});
+
+
+describe("anonymous liveness probe", () => {
+  it.each([
+    [503, { status: "alive" }],
+    [200, { status: "ready" }],
+    [200, { version: "old mock" }],
+    [200, null],
+  ])("rejects HTTP %i with body %j", async (status, body) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
+    await expect(fetchLiveness()).rejects.toThrow();
   });
 });

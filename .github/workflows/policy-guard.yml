@@ -40,7 +40,7 @@ jobs:
               ".github/scripts/publish-image.test.cjs": "c9cec6865bd070775b6a8e2cf393787d3fe305ad896734295cdea18b6c772311",
               ".github/workflows/publish.yml": "b267bf9e035f5d574b6a160a62fb155cfb1539fe1e95cf2fca0737065e7e6331",
               ".github/workflows/release.yml": "abbf2aad80a014dd01fa518a2a2d1160c8d7ca7038d5367aba8369e11c44b6ff",
-              ".github/workflows/ci.yml": "b7523c17090afa8aaa60bc08cb7e846ca80d5a084390cd9262ffd801402000d0"
+              ".github/workflows/ci.yml": "918648e2f6346dd989874f71ee6426abb04817e233d32c54c2f1726ccd50830e"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');

@@ -10,6 +10,7 @@ import path from "node:path";
 const FIXTURES = path.join(path.dirname(fileURLToPath(import.meta.url)), "../fixtures");
 
 const TOKENS = {
+  router: "e2e-router-token",
   read: "e2e-read-token",
   review: "e2e-review-token",
   cleanup: "e2e-cleanup-token",
@@ -105,7 +106,13 @@ export function startMockRouter(port = 8899) {
     const url = new URL(req.url, "http://mock");
     const finish = (status, body) => send(res, status, body);
 
-    if (url.pathname === "/version") return finish(200, { version: "0.9.0-e2e-mock" });
+    if (url.pathname === "/version") {
+      if (!authorized(req, "router")) {
+        return finish(401, { error: "unauthorized", message: "invalid or missing router token" });
+      }
+      return finish(200, { api_version: "0.10.1", features: {} });
+    }
+    if (url.pathname === "/health/live") return finish(200, { status: "alive" });
     if (url.pathname === "/health/ready") return finish(200, { status: "ready" });
     if (url.pathname === "/__actions") return finish(200, actions);
     if (url.pathname === "/__tokens") return finish(200, TOKENS);

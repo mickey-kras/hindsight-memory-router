@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import (
     BeforeValidator,
     Field,
@@ -444,7 +445,25 @@ def _warn_configuration(conditions: Iterable[tuple[bool, str]]) -> None:
 
 
 def _assert_hindsight_transport(settings: RouterSettings) -> None:
-    hindsight_url = urlsplit(settings.hindsight_base_url)
+    base_url = settings.hindsight_base_url
+    try:
+        httpx.URL(base_url)
+        hindsight_url = urlsplit(base_url)
+        valid = (
+            hindsight_url.scheme in {"http", "https"}
+            and bool(hindsight_url.hostname)
+            and hindsight_url.port != 0
+            and hindsight_url.username is None
+            and hindsight_url.password is None
+            and not any(character.isspace() or ord(character) < 32 for character in base_url)
+            and not any(character in base_url for character in ("?", "#", "\\"))
+        )
+    except (ValueError, httpx.InvalidURL):
+        valid = False
+    if not valid:
+        raise RuntimeError(
+            "HINDSIGHT_BASE_URL must be an absolute http(s) URL without credentials, query, or fragment"
+        )
     if hindsight_url.scheme == "http":
         if settings.hindsight_require_secure_transport:
             raise RuntimeError(

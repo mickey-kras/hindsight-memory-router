@@ -102,6 +102,9 @@ jobs:
             sleep $((attempt * 15))
           done
           exit 1
+      - name: npm audit filter tests
+        run: node --test .github/scripts/npm-audit.test.cjs
+
       - name: Release automation tests
         run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs
 

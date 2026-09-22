@@ -10,7 +10,7 @@ export default defineConfig({
   workers: 1,
   webServer: {
     command: "node tests/e2e/server.mjs",
-    url: `http://127.0.0.1:${uiPort}/version`,
+    url: `http://127.0.0.1:${uiPort}/health/live`,
     reuseExistingServer: false,
     timeout: 15_000,
   },
