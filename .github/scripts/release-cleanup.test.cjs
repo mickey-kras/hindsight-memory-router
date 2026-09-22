@@ -228,7 +228,7 @@ test("cleanupDockerHub deletes scoped tags and tolerates missing ones", async ()
   });
 });
 
-test("branch deletion skips published, advanced, and absent branches", async () => {
+test("failed release cleanup retains the exact candidate and leaves advanced or absent branches alone", async () => {
   const { core, state } = fakeCore();
   const notFound = () => Promise.reject(Object.assign(new Error("Not Found"), { status: 404 }));
   const github = (head) => {
@@ -261,7 +261,8 @@ test("branch deletion skips published, advanced, and absent branches", async () 
 
   const current = github(sha);
   await cleanup.branch({ github: current, context: fakeContext(), core });
-  assert.equal(current.deleted, true);
+  assert.equal(current.deleted, false);
+  assert.match(state.summary, /for recovery/);
 });
 
 function dispatchContext(runId = 99) {
@@ -315,7 +316,7 @@ test("preparation cleanup accepts only the main dispatch context", async () => {
   await assert.rejects(cleanup.preparation({ github, context: wrongRef, core }), /main workflow button/);
 });
 
-test("preparation cleanup deletes only this run's unpublished release branches", async () => {
+test("failed preparation retains its frozen candidate and never deletes other runs", async () => {
   const { core, state } = fakeCore();
   const branches = [
     { name: "release/0.2.0", manifest: { version: "0.2.0", preparation_run: 99 } },
@@ -328,8 +329,9 @@ test("preparation cleanup deletes only this run's unpublished release branches",
   ];
   const deleted = [];
   await cleanup.preparation({ github: preparationGithub(branches, deleted), context: dispatchContext(), core });
-  assert.deepEqual(deleted, ["heads/release/0.2.0"]);
-  assert.deepEqual(state.errors, ["Branch `release/0.4.0` cleanup failed: forbidden"]);
+  assert.deepEqual(deleted, []);
+  assert.deepEqual(state.errors, []);
+  assert.match(state.summary, /Kept `release\/0\.2\.0` for recovery/);
   assert.match(state.summary, /Kept `release\/0\.3\.1`/);
   assert.doesNotMatch(state.summary, /release\/0\.3\.0`: deleted/);
 });
@@ -340,4 +342,30 @@ test("preparation cleanup is a no-op without matching branches", async () => {
   await cleanup.preparation({ github: preparationGithub([{ name: "main" }], deleted), context: dispatchContext(), core });
   assert.deepEqual(deleted, []);
   assert.equal(state.errors.length, 0);
+});
+
+
+test("failure before a completed image push keeps registry state without requesting credentials", async () => {
+  const { core, state } = fakeCore();
+  const missing = async () => { throw Object.assign(new Error("not found"), { status: 404 }); };
+  const github = { rest: { git: { getRef: missing }, repos: { getReleaseByTag: missing } } };
+  await withEnv({}, async () => {
+    await cleanup.registries({ github, context: fakeContext(), core,
+      fetchImpl: async () => assert.fail("registry cleanup needs a recorded digest") });
+  });
+  assert.match(state.summary, /retaining registry state for retry/);
+});
+
+test("failure cleanup never removes registry state after its candidate branch advanced", async () => {
+  const { core, state } = fakeCore();
+  const missing = async () => { throw Object.assign(new Error("not found"), { status: 404 }); };
+  const github = { rest: {
+    git: { getRef: async ({ ref }) => ref.startsWith("tags/") ? missing() : { data: { object: { sha: "f".repeat(40) } } } },
+    repos: { getReleaseByTag: missing },
+  } };
+  await withEnv({ CLEANUP_DIGEST: digest }, async () => {
+    await cleanup.registries({ github, context: fakeContext(), core,
+      fetchImpl: async () => assert.fail("newer candidate registry state must remain untouched") });
+  });
+  assert.match(state.summary, /branch advanced/);
 });

@@ -1,4 +1,5 @@
-const { readFileSync, existsSync } = require("node:fs");
+const { readFileSync, existsSync, copyFileSync } = require("node:fs");
+const { join } = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { isDeepStrictEqual } = require("node:util");
@@ -283,21 +284,44 @@ async function prepare({ github, context, core, inspect }) {
   const { data: main } = await github.rest.git.getRef({ ...repository, ref: "heads/main" });
   requireValue(main.object.sha === context.sha, "Main advanced during validation; run preparation again");
   const branches = await github.paginate(github.rest.repos.listBranches, { ...repository, per_page: 100 });
-  for (const branch of branches.filter((item) => item.name.startsWith("release/"))) {
-    const existing = await optional(() =>
-      github.rest.repos.getContent({ ...repository, path: "release.json", ref: branch.name }),
-    );
-    if (existing?.encoding === "base64") {
-      const previous = JSON.parse(Buffer.from(existing.content, "base64").toString("utf8"));
-      if (previous.preparation_run === context.runId && previous.base === context.sha) {
-        await core.summary.addRaw(`Already prepared: ${branch.name}. Rerun its release workflow if needed.\n`).write();
-        return;
-      }
-    }
+  const version = releaseVersion([], []);
+  const branch = `release/${version}`;
+  const existing = branches.find((item) => item.name === branch);
+  if (existing) {
+    const { data: head } = await github.rest.git.getRef({ ...repository, ref: `heads/${branch}` });
+    requireValue(head.object.type === "commit" && commitSha.test(head.object.sha), "Invalid prepared release commit");
+    const read = async (path) => {
+      const { data: file } = await github.rest.repos.getContent({ ...repository, path, ref: head.object.sha });
+      requireValue(file.type === "file" && file.encoding === "base64", `Cannot read prepared ${path}`);
+      return Buffer.from(file.content, "base64").toString("utf8");
+    };
+    const manifest = await validate({
+      github, core, read,
+      context: { ...context, eventName: "push", workflow: "release", ref: `refs/heads/${branch}`, sha: head.object.sha },
+    });
+    requireValue(manifest.base === context.sha, "Prepared version belongs to another main snapshot; resume its release run or prepare a new version");
+    core.setOutput("resume_sha", head.object.sha);
+    core.setOutput("version", version);
+    await core.summary.addRaw(`Retained candidate: ${branch} at ${head.object.sha}. Resuming its release workflow.\n`).write();
+    return;
   }
-  const pin = await latestHindsight(github, inspect);
   const tags = await github.paginate(github.rest.repos.listTags, { ...repository, per_page: 100 });
-  const version = releaseVersion(tags, branches);
+  if (tags.some((tag) => tag.name === `v${version}`)) {
+    const { data: tag } = await github.rest.git.getRef({ ...repository, ref: `tags/v${version}` });
+    const published = await optional(() => github.rest.repos.getReleaseByTag({ ...repository, tag: `v${version}` }));
+    requireValue(tag.object.type === "commit" && commitSha.test(tag.object.sha) &&
+      published?.immutable && !published.draft && !published.prerelease,
+    "Version is reserved by an incomplete release; resume its existing release workflow");
+    const { data: file } = await github.rest.repos.getContent({ ...repository, path: "release.json", ref: tag.object.sha });
+    requireValue(file.type === "file" && file.encoding === "base64", "Published release manifest is missing");
+    const manifest = JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
+    requireValue(manifest.schema === 2 && manifest.version === version && manifest.base === context.sha,
+      "Published version belongs to another main snapshot; prepare a new version");
+    await core.summary.addRaw(`v${version} is already published at ${tag.object.sha}; no duplicate release was started.\n`).write();
+    return;
+  }
+  releaseVersion(tags, branches);
+  const pin = await latestHindsight(github, inspect);
   const packages = packageAssets();
   const manifest = { schema: 2, version, base: context.sha, preparation_run: context.runId, hindsight: pin, packages };
   if (packages.length) {
@@ -327,20 +351,20 @@ async function prepare({ github, context, core, inspect }) {
   requireValue(currentMain.object.sha === context.sha, "Main advanced while freezing inputs; run preparation again");
   await github.rest.git.createRef({ ...repository, ref: `refs/heads/release/${version}`, sha: commit.sha });
   await core.summary
-    .addRaw(`Release branch: release/${version}\nMain snapshot: ${context.sha}\nHindsight: ${pin.version}\nCommit: ${commit.sha}\n`)
+    .addRaw(`Release branch: release/${version}\nMain snapshot: ${context.sha}\nHindsight: ${pin.version}\nCommit: ${commit.sha}\nPublication is pending in the release workflow.\n`)
     .write();
 }
 
-async function validate({ github, context, core }) {
+async function validate({ github, context, core, read = (path) => readFileSync(path, "utf8") }) {
   requireValue(
     context.eventName === "push" && context.workflow === "release",
     "Publication is allowed only through the release workflow",
   );
-  const manifest = readJson("release.json");
+  const manifest = JSON.parse(await read("release.json"));
   requireValue(manifest.schema === 2 && releaseTag.test(`v${manifest.version}`), "Invalid release manifest");
   requireValue(context.ref === `refs/heads/release/${manifest.version}`, "Release branch does not match the manifest");
   requireValue(commitSha.test(manifest.base), "Invalid preparation base");
-  requireValue(readJson("release-version.json").version === manifest.version, "Repository version differs from the release");
+  requireValue(JSON.parse(await read("release-version.json")).version === manifest.version, "Repository version differs from the release");
   requireValue(
     Array.isArray(manifest.packages) &&
       manifest.packages.length === (context.repo.repo === "hindsight-memory-router-integrations" ? 2 : 0),
@@ -348,7 +372,7 @@ async function validate({ github, context, core }) {
   );
   validatePin(manifest.hindsight);
   requireValue(
-    isDeepStrictEqual(readJson("compat/hindsight.json"), { channel: "release", ...manifest.hindsight }),
+    isDeepStrictEqual(JSON.parse(await read("compat/hindsight.json")), { channel: "release", ...manifest.hindsight }),
     "Release Hindsight inputs changed",
   );
   await checkRules(github, context.repo, Number(process.env.RELEASE_APP_ID));
@@ -386,8 +410,15 @@ async function validate({ github, context, core }) {
     basehead: `${manifest.base}...main`,
   });
   requireValue(["ahead", "identical"].includes(main.status), "Preparation base is not on main");
-  const { data: branch } = await github.rest.git.getRef({ ...context.repo, ref: `heads/release/${manifest.version}` });
-  requireValue(branch.object.sha === context.sha, "Release branch advanced; wait for its new validation run");
+  const branch = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `heads/release/${manifest.version}` }));
+  if (branch) {
+    requireValue(branch.object.sha === context.sha, "Release branch advanced; wait for its new validation run");
+  } else {
+    const published = await optional(() => github.rest.repos.getReleaseByTag({ ...context.repo, tag: `v${manifest.version}` }));
+    requireValue(published?.immutable && !published.draft && !published.prerelease,
+      "Prepared release branch is missing and no immutable release exists");
+    await publishedTag(github, context.repo, manifest.version, context.sha);
+  }
   requireValue(
     JSON.stringify(packageAssets()) === JSON.stringify(manifest.packages),
     "Refresh release.json package hashes and versions with the tested package changes",
@@ -398,7 +429,7 @@ async function validate({ github, context, core }) {
     requireValue(isDeepStrictEqual(integrationUpstreams(), manifest.integration_upstreams), "Integration upstream provenance changed");
     await checkPackageReuse(github, context.repo, manifest.packages);
   } else {
-    requireValue(readFileSync("pyproject.toml", "utf8").includes(`version = "${manifest.version}"`), "Python distribution version differs from the release");
+    requireValue((await read("pyproject.toml")).includes(`version = "${manifest.version}"`), "Python distribution version differs from the release");
   }
   const tag = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `tags/v${manifest.version}` }));
   requireValue(
@@ -407,6 +438,77 @@ async function validate({ github, context, core }) {
   );
   core.setOutput("version", manifest.version);
   return manifest;
+}
+
+async function retryArtifacts({ github, context, core }) {
+  requireValue(context.eventName === "push" && context.workflow === "release" &&
+    context.ref.startsWith("refs/heads/release/") && commitSha.test(context.sha),
+    "Release artifacts may be restored only by the release workflow");
+  const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+    ...context.repo, run_id: context.runId, per_page: 100,
+  });
+  const image = artifacts.find((item) => item.name === `image-${context.sha}` && !item.expired);
+  const prefix = `image-digests-${context.sha}-`;
+  const assets = artifacts.filter((item) => !item.expired && item.name.startsWith(prefix) &&
+    /^[1-9]\d*$/.test(item.name.slice(prefix.length)))
+    .sort((left, right) => Number(right.name.slice(prefix.length)) - Number(left.name.slice(prefix.length)))[0];
+  requireValue(image || !artifacts.some((item) => item.name === `image-${context.sha}`),
+    "Saved release image expired; prepare a new version instead of rebuilding published bytes");
+  const version = publishedVersion(context);
+  const tag = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `tags/v${version}` }));
+  requireValue(!tag || (image && assets), "Publication already began but retained release bytes are missing");
+  core.setOutput("artifact", image ? String(image.id) : "");
+  core.setOutput("release_assets", assets ? String(assets.id) : "");
+}
+
+function restoreReleaseAssets({ context, directory }) {
+  const version = publishedVersion(context);
+  const paths = ["image-digests.txt", "sbom.cdx.json", ...uiPackageAssets()];
+  requireValue(paths.length === 4, "Release UI package inventory is missing");
+  const bytes = new Map(paths.map((path) => [path, readFileSync(join(directory, path))]));
+  const digests = Object.fromEntries(bytes.get("image-digests.txt").toString("utf8").trim().split("\n")
+    .map((line) => line.split("=")));
+  requireValue(digests.commit === context.sha && digests.version === version,
+    "Saved release assets belong to another commit or version");
+  for (const [path, field] of [["sbom.cdx.json", "sbom"], [paths[2], "ui-package"]]) {
+    requireValue(digests[field] === `sha256:${createHash("sha256").update(bytes.get(path)).digest("hex")}`,
+      `Saved release checksum differs: ${path}`);
+  }
+  requireValue(bytes.get(paths[3]).length > 0, "Saved UI signature bundle is empty");
+  for (const path of paths) copyFileSync(join(directory, path), path);
+}
+
+async function resumePreparedRelease({ github, context, core, version, sha }) {
+  requireValue(context.eventName === "workflow_dispatch" && context.ref === "refs/heads/main",
+    "Release recovery is allowed only from the main workflow button");
+  requireValue(releaseTag.test(`v${version}`) && commitSha.test(sha), "Invalid release recovery target");
+  const branch = `release/${version}`;
+  const current = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `heads/${branch}` }));
+  requireValue(current?.object.type === "commit" && current.object.sha === sha,
+    "Prepared branch changed before recovery; refusing to rerun a stale candidate");
+  const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+    ...context.repo, workflow_id: "release.yml", branch, event: "push", head_sha: sha, per_page: 100,
+  });
+  const run = runs.filter((item) => item.head_sha === sha && item.head_branch === branch &&
+    item.event === "push" && item.path === ".github/workflows/release.yml")
+    .sort((left, right) => right.id - left.id)[0];
+  requireValue(run, "The prepared branch has no release workflow run; inspect its Actions startup failure");
+  const link = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${run.id}`;
+  if (run.status !== "completed") {
+    await core.summary.addRaw(`Publication is ${run.status}: ${link}. No duplicate release was started.\n`).write();
+    return;
+  }
+  if (run.conclusion === "success") {
+    await core.summary.addRaw(`Release workflow already succeeded: ${link}.\n`).write();
+    return;
+  }
+  requireValue(["failure", "cancelled", "timed_out", "startup_failure", "action_required"].includes(run.conclusion),
+    `Release workflow cannot be resumed from ${run.conclusion}`);
+  const { data: head } = await github.rest.git.getRef({ ...context.repo, ref: `heads/${branch}` });
+  requireValue(head.object.sha === sha, "Prepared branch advanced before retry; refusing to rerun a stale candidate");
+  const rerun = run.conclusion === "failure" ? github.rest.actions.reRunWorkflowFailedJobs : github.rest.actions.reRunWorkflow;
+  await rerun({ ...context.repo, run_id: run.id });
+  await core.summary.addRaw(`Release retry requested: ${link}. Publication is pending. Frozen commit: ${sha}.\n`).write();
 }
 
 function shouldPromote(version, releases) {
@@ -604,6 +706,7 @@ async function bumpReleasedVersion({ github, context, core, merge = mergeVersion
 }
 
 async function deletePublishedBranch({ github, context, core }) {
+  const semver = require("semver");
   const version = publishedVersion(context);
   await publishedTag(github, context.repo, version, context.sha);
   const summary = core.summary.addHeading("Release follow-up: release branch", 3);
@@ -623,11 +726,15 @@ async function deletePublishedBranch({ github, context, core }) {
   for (const item of branches) {
     if (!item.name.startsWith("release/") || item.name === `release/${version}`) continue;
     const stale = item.name.slice("release/".length);
-    if (!releaseTag.test(`v${stale}`)) continue;
+    if (!releaseTag.test(`v${stale}`) || !semver.lt(stale, version)) continue;
     try {
       const tag = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `tags/v${stale}` }));
       if (!tag || tag.object.type !== "commit") continue;
-      if (item.commit.sha !== tag.object.sha) {
+      const published = await optional(() => github.rest.repos.getReleaseByTag({ ...context.repo, tag: `v${stale}` }));
+      if (!published?.immutable || published.draft || published.prerelease) continue;
+      const head = await optional(() => github.rest.git.getRef({ ...context.repo, ref: `heads/${item.name}` }));
+      if (!head) continue;
+      if (head.object.sha !== tag.object.sha) {
         core.warning(`Kept ${item.name}: the branch advanced past its published tag`);
         await summary.addRaw(`Kept \`${item.name}\`: the branch advanced past its published tag.\n`);
         continue;
@@ -658,6 +765,9 @@ module.exports = {
   shouldPromote,
   prepare,
   validate,
+  resumePreparedRelease,
+  retryArtifacts,
+  restoreReleaseAssets,
   finalize,
   publishedVersion,
   nextPatch,

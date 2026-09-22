@@ -214,12 +214,7 @@ jobs:
         id: candidate
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: |
-            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
-              ...context.repo, run_id: context.runId, per_page: 100,
-            });
-            const artifact = artifacts.find(item => item.name === `image-${context.sha}` && !item.expired);
-            core.setOutput('artifact', artifact ? String(artifact.id) : '');
+          script: await require('./.github/scripts/release.cjs').retryArtifacts({ github, context, core });
 
       - name: Restore previously tested image
         if: steps.candidate.outputs.artifact != ''
@@ -368,8 +363,25 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
         run: bash .github/scripts/publish-image.sh
 
+      - name: Restore prepared release assets
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: ${{ steps.candidate.outputs.release_assets }}
+          path: ${{ runner.temp }}/release-assets
+          merge-multiple: true
+
+      - name: Verify and restore release bytes
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            require('./.github/scripts/release.cjs').restoreReleaseAssets({
+              context, directory: `${process.env.RUNNER_TEMP}/release-assets`,
+            });
+
       - name: Generate CycloneDX SBOM
-        if: steps.push.outputs.published == 'true'
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets == ''
         env:
           GHCR_DIGEST: ${{ steps.push.outputs.ghcr_digest }}
         run: |
@@ -420,8 +432,6 @@ jobs:
           create-storage-record: false
 
       - name: Attest Docker Hub SBOM
-        # Same SBOM bytes cover both subjects: publish-image.sh asserts the
-        # GHCR and Docker Hub digests are identical.
         if: steps.push.outputs.published == 'true'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
@@ -440,25 +450,27 @@ jobs:
           cache-dependency-path: ui/package-lock.json
 
       - name: Build and pack the UI package
-        # npm pack runs the ui prepack build; the tarball name is derived from
-        # ui/package.json and must match release.cjs uiPackageAssets().
         if: steps.push.outputs.published == 'true'
         id: ui-package
+        env:
+          RELEASE_ASSETS: ${{ steps.candidate.outputs.release_assets }}
         run: |
-          npm ci --prefix ui
-          npm pack ./ui --pack-destination .
+          if [ -z "$RELEASE_ASSETS" ]; then
+            npm ci --prefix ui
+            npm pack ./ui --pack-destination .
+          fi
           tarball="$(node -p "const p = require('./ui/package.json'); p.name.replace(/^@/, '').replace('/', '-') + '-' + p.version + '.tgz'")"
           test -s "$tarball"
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
 
       - name: Sign the UI package
-        if: steps.push.outputs.published == 'true'
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets == ''
         env:
           UI_TARBALL: ${{ steps.ui-package.outputs.tarball }}
         run: cosign sign-blob --yes --bundle "${UI_TARBALL}.sigstore.json" "${UI_TARBALL}"
 
       - name: Record image digests
-        if: steps.push.outputs.published == 'true'
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets == ''
         env:
           CHANNEL: release
           VERSION: ${{ steps.release.outputs.version }}
@@ -487,7 +499,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image digests
-        if: steps.push.outputs.published == 'true'
+        if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: image-digests-${{ github.sha }}-${{ github.run_attempt }}
@@ -546,7 +558,10 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
       - name: Release App token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
@@ -563,7 +578,7 @@ jobs:
           github-token: ${{ steps.app.outputs.token }}
           script: await require('./.github/scripts/release.cjs').bumpReleasedVersion({ github, context, core });
       - name: Delete the published release branch
-        if: always()
+        if: success()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           github-token: ${{ steps.app.outputs.token }}
@@ -574,7 +589,7 @@ jobs:
     needs: [quality, aislop, codeql, architecture, publish, prepare-release]
     if: >-
       ${{
-        always() &&
+        !cancelled() &&
         (
           (
             github.event_name == 'push' &&
@@ -616,13 +631,6 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Release App token
-        id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: write
       - name: Remove orphaned registry tags
         if: github.event_name == 'push'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
@@ -632,17 +640,15 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         with:
           script: await require('./.github/scripts/release-cleanup.cjs').registries({ github, context, core });
-      - name: Delete the failed release branch
-        if: always() && github.event_name == 'push'
+      - name: Retain the failed release branch
+        if: ${{ !cancelled() && github.event_name == 'push' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          github-token: ${{ steps.app.outputs.token }}
           script: await require('./.github/scripts/release-cleanup.cjs').branch({ github, context, core });
-      - name: Delete failed preparation branches
-        if: always() && github.event_name == 'workflow_dispatch'
+      - name: Retain failed preparation branches
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          github-token: ${{ steps.app.outputs.token }}
           script: await require('./.github/scripts/release-cleanup.cjs').preparation({ github, context, core });
 
   report-validation-failure:
@@ -694,6 +700,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: write
     env:
       RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
       RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
@@ -715,7 +722,19 @@ jobs:
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
       - name: Freeze inputs and create release branch
+        id: prepared
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           github-token: ${{ steps.app.outputs.token }}
           script: await require('./.github/scripts/release.cjs').prepare({ github, context, core });
+      - name: Resume the prepared release
+        if: steps.prepared.outputs.resume_sha != ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          RELEASE_VERSION: ${{ steps.prepared.outputs.version }}
+          RELEASE_SHA: ${{ steps.prepared.outputs.resume_sha }}
+        with:
+          script: |
+            await require('./.github/scripts/release.cjs').resumePreparedRelease({
+              github, context, core, version: process.env.RELEASE_VERSION, sha: process.env.RELEASE_SHA,
+            });
