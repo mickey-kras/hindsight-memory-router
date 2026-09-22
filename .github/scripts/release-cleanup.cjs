@@ -1,5 +1,4 @@
 const releaseTag = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const commitSha = /^[a-f0-9]{40}$/;
 const imageDigest = /^sha256:[a-f0-9]{64}$/;
 const ghcrRepository = /^ghcr\.io\/([a-z0-9-]+\/[a-z0-9._-]+)$/;
 const hubRepository = /^docker\.io\/([a-z0-9]+\/[a-z0-9._-]+)$/;
@@ -10,16 +9,15 @@ function requireValue(condition, message) {
   if (!condition) throw new CleanupError(message);
 }
 
-function targets(context) {
-  requireValue(
-    context.eventName === "push" && context.workflow === "release" &&
-      context.ref.startsWith("refs/heads/release/"),
-    "Cleanup is allowed only through the release workflow",
-  );
-  const version = context.ref.slice("refs/heads/release/".length);
-  requireValue(releaseTag.test(`v${version}`), "Invalid release branch version");
-  requireValue(commitSha.test(context.sha), "Invalid release commit");
-  return { version, sha: context.sha };
+function targets(context, target) {
+  const { releaseTarget, ReleaseError } = require("./release.cjs");
+  try {
+    const { version, sha } = releaseTarget(context, target);
+    return { version, sha };
+  } catch (error) {
+    if (error instanceof ReleaseError) throw new CleanupError(error.message, { cause: error });
+    throw error;
+  }
 }
 
 async function published(github, repository, version) {
@@ -209,11 +207,11 @@ async function cleanupDockerHub(core, version, sha, fetchImpl) {
   return removed;
 }
 
-async function registries({ github, context, core, fetchImpl = fetch }) {
+async function registries({ github, context, core, target, fetchImpl = fetch }) {
   const summary = core.summary.addHeading("Failed release cleanup: registry tags", 3);
   try {
-    const { version, sha } = targets(context);
-    summary.addRaw(`Version \`${version}\`, commit \`${context.sha}\`.\n\n`);
+    const { version, sha } = targets(context, target);
+    summary.addRaw(`Version \`${version}\`, commit \`${sha}\`.\n\n`);
     if (await published(github, context.repo, version)) {
       await summary
         .addRaw(`\`v${version}\` already has a git tag or release; keeping every registry tag. Re-run failed jobs to finish the release.\n`)
@@ -238,8 +236,8 @@ async function registries({ github, context, core, fetchImpl = fetch }) {
   }
 }
 
-async function branch({ github, context, core }) {
-  const { version } = targets(context);
+async function branch({ github, context, core, target }) {
+  const { version, sha } = targets(context, target);
   const summary = core.summary.addHeading("Failed release cleanup: branch", 3);
   if (await published(github, context.repo, version)) {
     await summary
@@ -259,21 +257,21 @@ async function branch({ github, context, core }) {
     await summary.addRaw(`Branch \`release/${version}\` is already absent.\n`).write();
     return;
   }
-  if (current.object.sha !== context.sha) {
+  if (current.object.sha !== sha) {
     await summary
       .addRaw(`Kept \`release/${version}\`: the branch advanced past the failed run; its newest attempt owns it.\n`)
       .write();
     return;
   }
   await summary
-    .addRaw(`Kept \`release/${version}\` at ${context.sha} for recovery. Re-run failed jobs or use Create release from the same main snapshot.\n`)
+    .addRaw(`Kept \`release/${version}\` at ${sha} for recovery. Re-run failed jobs or dispatch release from the same main snapshot.\n`)
     .write();
 }
 
 async function preparation({ github, context, core }) {
   requireValue(
     context.eventName === "workflow_dispatch" && context.ref === "refs/heads/main",
-    "Preparation cleanup is allowed only from the main workflow button",
+    "Preparation cleanup is allowed only from the main release dispatch",
   );
   const summary = core.summary.addHeading("Failed release cleanup: preparation branches", 3);
   const branches = await github.paginate(github.rest.repos.listBranches, { ...context.repo, per_page: 100 });

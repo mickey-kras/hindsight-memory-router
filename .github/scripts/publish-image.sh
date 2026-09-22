@@ -8,11 +8,14 @@ set -euo pipefail
 
 [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
 
+source_sha="${SOURCE_SHA:-$GITHUB_SHA}"
+[[ "$source_sha" =~ ^[a-f0-9]{40}$ ]]
+
 local_config="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
 revision="$(docker image inspect "$SOURCE_IMAGE" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')"
-test "$revision" = "$GITHUB_SHA"
+test "$revision" = "$source_sha"
 
-tags=("$IMAGE_GHCR:$VERSION" "$IMAGE_GHCR:$GITHUB_SHA" "$IMAGE_DOCKERHUB:$VERSION" "$IMAGE_DOCKERHUB:$GITHUB_SHA")
+tags=("$IMAGE_GHCR:$VERSION" "$IMAGE_GHCR:$source_sha" "$IMAGE_DOCKERHUB:$VERSION" "$IMAGE_DOCKERHUB:$source_sha")
 missing=()
 for tag in "${tags[@]}"; do
   if docker manifest inspect "$tag" > "$RUNNER_TEMP/release-manifest.json" 2> "$RUNNER_TEMP/release-manifest.err"; then

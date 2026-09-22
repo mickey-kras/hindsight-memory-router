@@ -63,4 +63,4 @@ The router binds and publishes on `127.0.0.1` by default. To expose it on a LAN 
 
 MIT
 
-See [Releasing](docs/RELEASING.md) for the release button, pinned compatibility inputs and protected publication process.
+Use **Actions → release → Run workflow** for the unified release graph. See [Releasing](docs/RELEASING.md) for pinned inputs, recovery and publication verification.

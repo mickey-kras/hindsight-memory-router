@@ -20,6 +20,11 @@ PATHS = [
     MAIN,
     ".github/workflows/release.yml",
     ".github/workflows/ci.yml",
+    ".github/workflows/aislop.yml",
+    ".github/workflows/codeql.yml",
+    ".github/workflows/architecture.yml",
+    ".github/scripts/report-main-failures.cjs",
+    ".github/scripts/report-main-failures.test.cjs",
     ".github/workflows/dependency-review.yml",
     ".github/workflows/pr-branch-updater.yml",
     ".github/scripts/pr-branch-updater.cjs",
@@ -108,59 +113,50 @@ class ReleasePolicyTests(unittest.TestCase):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         events = main.get("on", main.get(True))
         self.assertEqual(events["push"], {"branches": ["main"]})
-        self.assertEqual(events["workflow_dispatch"]["inputs"]["create_release"]["default"], False)
-        prepare = main["jobs"]["prepare-release"]
-        for condition in ["workflow_dispatch", "refs/heads/main", "inputs.create_release"]:
-            self.assertIn(condition, prepare["if"])
-        self.assertEqual(prepare["environment"], "release-automation")
-        self.assertTrue({"quality", "aislop", "codeql"} <= set(prepare["needs"]))
+        self.assertNotIn("workflow_dispatch", events)
+        self.assertNotIn("prepare-release", main["jobs"])
         release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
-        self.assertEqual(
-            release.get("on", release.get(True)), {"push": {"branches": ["release/*"]}}
-        )
-        self.assertNotEqual(main["concurrency"]["group"], release["concurrency"]["group"])
+        self.assertEqual(release.get("on", release.get(True)), {"workflow_dispatch": None})
+        baseline = release["jobs"]["baseline"]
+        self.assertEqual(baseline["uses"], "./.github/workflows/publish.yml")
+        self.assertEqual(baseline["needs"], "entry")
+        entry = release["jobs"]["entry"]
+        self.assertEqual(entry["permissions"], {})
+        self.assertNotIn("environment", entry)
+        self.assertNotIn("secrets", entry)
+        script = entry["steps"][0]["with"]["script"]
+        self.assertIn("context.ref !== 'refs/heads/main'", script)
+        self.assertIn("throw new Error", script)
+        self.assertNotIn("actions/checkout", str(entry))
+        prepare = release["jobs"]["prepare-release"]
+        self.assertEqual(prepare["needs"], "baseline")
+        self.assertEqual(prepare["environment"], "release-automation")
+        candidate = release["jobs"]["release"]
+        self.assertEqual(candidate["needs"], "prepare-release")
+        self.assertEqual(candidate["uses"], baseline["uses"])
+        for caller in [baseline, candidate]:
+            self.assertEqual(caller["permissions"]["actions"], "read")
+        self.assertEqual(candidate["with"], {
+            "candidate_sha": "${{ needs.prepare-release.outputs.sha }}",
+            "candidate_ref": "${{ needs.prepare-release.outputs.ref }}",
+        })
         publish = main["jobs"]["publish"]
-        self.assertTrue({"quality", "aislop", "codeql"} <= set(publish["needs"]))
+        self.assertTrue({"quality", "aislop", "codeql", "architecture"} <= set(publish["needs"]))
         self.assertNotIn("sonar", publish["needs"])
         steps = {step.get("name"): step for step in publish["steps"]}
-        if ROUTER:
-            self.assertIn("publish", prepare["needs"])
-            for name in [
-                "Log in to GHCR",
-                "Log in to Docker Hub",
-                "Push the scanned image",
-                "Release App token",
-            ]:
-                self.assertEqual(steps[name]["if"], "startsWith(github.ref, 'refs/heads/release/')")
-            sonar = main["jobs"]["sonar"]
-            self.assertEqual(
-                sonar["if"],
-                "(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'",
-            )
-            self.assertNotIn("environment", sonar)
-            self.assertIn("sonar", prepare["needs"])
-            self.assertNotIn("SonarQube analysis", steps)
-            sonar_steps = {step.get("name"): step for step in sonar["steps"]}
-            for name in ["SonarQube analysis", "SonarQube quality gate", "Synchronize SonarQube findings"]:
-                self.assertIn(name, sonar_steps)
-            self.assertEqual(
-                steps["Publish immutable release"]["if"], "steps.push.outputs.published == 'true'"
-            )
-            self.assertEqual(
-                steps["Promote latest released image"]["if"],
-                "steps.finalized.outputs.latest == 'true'",
-            )
-            self.assertIn("Default Compose smoke", steps)
-            self.assertIn("Real Hindsight router-storage parity", steps)
-            self.assertIn("--exit-code 1", steps["Trivy critical gate"]["run"])
-            self.assertEqual(
-                publish["env"]["HINDSIGHT_TEST_IMAGE"],
-                "${{ needs.quality.outputs.hindsight_image }}",
-            )
-        else:
-            self.assertIn("sonar", prepare["needs"])
-            self.assertEqual(publish["if"], "startsWith(github.ref, 'refs/heads/release/')")
-            self.assertEqual(main["jobs"]["sonar"]["if"], "github.ref == 'refs/heads/main'")
+        for name in ["Log in to GHCR", "Log in to Docker Hub", "Push the scanned image", "Release App token"]:
+            self.assertEqual(steps[name]["if"], "inputs.candidate_sha != ''")
+        for name in ["sonar", "pages", "update-pr-branches"]:
+            self.assertIn("inputs.candidate_sha == ''", main["jobs"][name]["if"])
+        sonar_steps = {step.get("name"): step for step in main["jobs"]["sonar"]["steps"]}
+        self.assertIn("SonarQube quality gate", sonar_steps)
+        self.assertNotIn("SonarQube analysis", steps)
+        self.assertEqual(steps["Publish immutable release"]["if"], "steps.push.outputs.published == 'true'")
+        self.assertEqual(steps["Promote latest released image"]["if"], "steps.finalized.outputs.latest == 'true'")
+        for name in ["Default Compose smoke", "Fake Hindsight router-storage parity", "Real Hindsight router-storage parity"]:
+            self.assertIn(name, steps)
+        self.assertIn("--exit-code 1", steps["Trivy critical gate"]["run"])
+        self.assertEqual(publish["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.quality.outputs.hindsight_image }}")
 
     def test_dependency_review_contract(self):
         validation = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
@@ -238,58 +234,38 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn(".sigstore.json", script)
 
     def test_release_cleanup_contract(self):
-        if not ROUTER:
-            self.skipTest("router publish workflow required")
         main = yaml.safe_load((ROOT / MAIN).read_text())
         publish = main["jobs"]["publish"]
         self.assertEqual(publish["outputs"]["released"], "${{ steps.finalized.outputs.latest }}")
         self.assertEqual(publish["outputs"]["ghcr_digest"], "${{ steps.push.outputs.ghcr_digest }}")
         cleanup = main["jobs"]["cleanup"]
-        self.assertTrue(
-            {"quality", "aislop", "codeql", "architecture", "publish", "prepare-release"}
-            <= set(cleanup["needs"])
-        )
+        self.assertEqual(set(cleanup["needs"]), {"quality", "aislop", "codeql", "architecture", "publish"})
         self.assertIs(cleanup["continue-on-error"], True)
         condition = cleanup["if"]
-        for guard in [
-            "!cancelled()",
-            "github.event_name == 'push'",
-            "startsWith(github.ref, 'refs/heads/release/')",
-            "needs.publish.outputs.released == ''",
-            "needs.publish.result == 'failure'",
-            "needs.quality.result == 'failure'",
-        ]:
+        for guard in ["!cancelled()", "inputs.candidate_sha != ''", "needs.publish.outputs.released == ''"]:
             self.assertIn(guard, condition)
-        # Cleanup triggers strictly on failed jobs; a cancelled release run
-        # never matches, so manual cancellations cannot delete orphaned state.
-        for need in ["quality", "aislop", "codeql", "architecture", "publish"]:
+        for need in cleanup["needs"]:
             self.assertIn(f"needs.{need}.result == 'failure'", condition)
         self.assertNotIn("always()", condition)
-        # Failed preparation retains its own candidate for recovery.
-        self.assertIn("github.event_name == 'workflow_dispatch'", condition)
-        self.assertIn("github.ref == 'refs/heads/main'", condition)
-        self.assertIn("needs.prepare-release.result == 'failure'", condition)
         self.assertEqual(cleanup["environment"], "release-automation")
         self.assertEqual(cleanup["permissions"], {"contents": "read", "packages": "write"})
         steps = {step.get("name"): step for step in cleanup["steps"]}
         self.assertNotIn("Release App token", steps)
-        registries = steps["Remove orphaned registry tags"]
-        self.assertEqual(registries["if"], "github.event_name == 'push'")
-        self.assertIn("release-cleanup.cjs').registries(", registries["with"]["script"])
-        branch = steps["Retain the failed release branch"]
-        self.assertEqual(branch["if"], "${{ !cancelled() && github.event_name == 'push' }}")
-        self.assertNotIn("github-token", branch["with"])
-        self.assertIn("release-cleanup.cjs').branch(", branch["with"]["script"])
-        preparation = steps["Retain failed preparation branches"]
-        self.assertEqual(preparation["if"], "${{ !cancelled() && github.event_name == 'workflow_dispatch' }}")
-        self.assertNotIn("github-token", preparation["with"])
-        self.assertIn("release-cleanup.cjs').preparation(", preparation["with"]["script"])
+        for name in ["Remove orphaned registry tags", "Retain the failed release branch"]:
+            self.assertIn("target:", steps[name]["with"]["script"])
+            self.assertNotIn("github-token", steps[name]["with"])
+        root = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+        retained = root["jobs"]["retain-preparation"]
+        self.assertIn("!cancelled()", retained["if"])
+        self.assertIn("needs.prepare-release.result == 'failure'", retained["if"])
+        self.assertEqual(retained["permissions"], {"contents": "read"})
 
     def test_recovery_reuses_prepared_assets_and_retries_with_the_job_token(self):
         if not ROUTER:
             self.skipTest("router publish workflow required")
         main = yaml.safe_load((ROOT / MAIN).read_text())
-        prepare = main["jobs"]["prepare-release"]
+        root = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+        prepare = root["jobs"]["prepare-release"]
         self.assertEqual(prepare["permissions"], {"contents": "read", "actions": "write"})
         steps = {step.get("name"): step for step in prepare["steps"]}
         resume = steps["Resume the prepared release"]
@@ -315,8 +291,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(followup["permissions"], {"contents": "read"})
         condition = followup["if"]
         for guard in [
-            "github.event_name == 'push'",
-            "startsWith(github.ref, 'refs/heads/release/')",
+            "inputs.candidate_sha != ''",
             "needs.publish.result == 'success'",
             "needs.publish.outputs.released != ''",
         ]:
@@ -341,6 +316,9 @@ class ReleasePolicyTests(unittest.TestCase):
             self.skipTest("router publish workflow required")
         jobs = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]
         reporter = jobs["report-validation-failure"]
+        report = next(step for step in reporter["steps"] if step.get("name") == "Report each distinct failure")
+        self.assertEqual(report["env"]["REPORT_CANDIDATE_REF"], "${{ inputs.candidate_ref }}")
+        self.assertEqual(report["env"]["REPORT_CANDIDATE_SHA"], "${{ inputs.candidate_sha }}")
         condition = reporter["if"]
         self.assertIn("!cancelled() &&", condition)
         self.assertNotIn("always()", condition)
@@ -430,6 +408,57 @@ class ReleasePolicyTests(unittest.TestCase):
             with self.subTest(workflow=changed):
                 self.assertTrue(policy({MAIN: changed}))
 
+    def test_candidate_checkout_and_scanning_do_not_inherit_the_main_source(self):
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        for job in ["quality", "aislop", "codeql", "architecture"]:
+            caller = main["jobs"][job]
+            self.assertEqual(caller["with"], {
+                "candidate_sha": "${{ inputs.candidate_sha }}",
+                "candidate_ref": "${{ inputs.candidate_ref }}",
+            })
+            workflow = yaml.safe_load((ROOT / caller["uses"]).read_text())
+            for reusable in workflow["jobs"].values():
+                for step in reusable.get("steps", []):
+                    if step.get("uses", "").startswith("actions/checkout@") and "repository" not in step.get("with", {}):
+                        self.assertEqual(step["with"]["ref"], "${{ inputs.candidate_sha }}")
+                    if step.get("uses", "").startswith(("github/codeql-action/analyze@", "github/codeql-action/upload-sarif@")) and job != "quality":
+                        self.assertEqual(step["with"]["sha"], "${{ inputs.candidate_sha }}")
+                        self.assertEqual(step["with"]["ref"], "${{ inputs.candidate_ref }}")
+        publisher = main["jobs"]["publish"]
+        self.assertEqual(publisher["env"]["SOURCE_SHA"], "${{ inputs.candidate_sha || github.sha }}")
+        self.assertNotIn("GITHUB_SHA", publisher["env"])
+        steps = {step.get("name"): step for step in publisher["steps"]}
+        self.assertEqual(steps["Upload Trivy SARIF"]["with"]["sha"], "${{ inputs.candidate_sha || github.sha }}")
+        for name in ["Attest GHCR image", "Attest Docker Hub image"]:
+            self.assertEqual(steps[name]["with"]["predicate-path"], "${{ steps.provenance.outputs.path }}")
+            self.assertEqual(steps[name]["with"]["predicate-type"], "${{ steps.provenance.outputs.type }}")
+
+    def test_two_validation_stages_keep_artifacts_distinct(self):
+        ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        steps = {step.get("name"): step for step in ci["jobs"]["checks"]["steps"]}
+        self.assertIs(steps["Gitleaks"]["env"]["GITLEAKS_ENABLE_UPLOAD_ARTIFACT"], False)
+        upload = steps["Upload redacted secret scan"]
+        self.assertIn("inputs.candidate_sha || github.sha", upload["with"]["name"])
+        self.assertIn("github.run_attempt", upload["with"]["name"])
+        architecture = yaml.safe_load((ROOT / ".github/workflows/architecture.yml").read_text())
+        pages = next(step for step in architecture["jobs"]["validate"]["steps"] if step.get("name") == "Upload architecture Pages artifact")
+        self.assertIn("inputs.candidate_sha == ''", pages["if"])
+        self.assertEqual(pages["with"]["name"], "${{ steps.pages-artifact.outputs.name }}")
+        outputs = architecture.get("on", architecture.get(True))["workflow_call"]["outputs"]
+        self.assertEqual(outputs["pages_artifact_name"]["value"], "${{ jobs.validate.outputs.pages_artifact_name }}")
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        deploy = main["jobs"]["pages"]["steps"][0]
+        self.assertEqual(deploy["with"]["artifact_name"], "${{ needs.architecture.outputs.pages_artifact_name }}")
+        for filename in [MAIN, ".github/workflows/ci.yml", ".github/workflows/architecture.yml"]:
+            workflow = yaml.safe_load((ROOT / filename).read_text())
+            for job in workflow["jobs"].values():
+                for step in job.get("steps", []):
+                    if step.get("uses", "").startswith("actions/upload-artifact@"):
+                        name = step["with"]["name"]
+                        self.assertIn("candidate_sha", name)
+                        if not name.startswith("image-${{"):
+                            self.assertIn("github.run_attempt", name)
+
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])
 
@@ -437,7 +466,7 @@ class ReleasePolicyTests(unittest.TestCase):
         original = (ROOT / MAIN).read_text()
         mutations = [
             original.replace(
-                "startsWith(github.ref, 'refs/heads/release/')", "github.ref == 'refs/heads/main'"
+                "inputs.candidate_sha != ''", "github.ref == 'refs/heads/main'"
             ),
             original.replace(
                 "      - name: Release preflight",
@@ -450,13 +479,12 @@ class ReleasePolicyTests(unittest.TestCase):
                 self.assertNotEqual(content, original)
                 self.assertTrue(policy({MAIN: content}))
 
-    def test_new_manual_release_trigger_fails(self):
-        path = ".github/workflows/release.yml"
-        self.assertTrue(
-            policy(
-                {path: (ROOT / path).read_text().replace("on:\n", "on:\n  workflow_dispatch:\n")}
-            )
-        )
+    def test_automatic_release_push_and_a_second_manual_entry_fail_policy(self):
+        release = ".github/workflows/release.yml"
+        main = (ROOT / MAIN).read_text()
+        self.assertTrue(policy({MAIN: main.replace("on:\n", "on:\n  workflow_dispatch:\n")}))
+        self.assertTrue(policy({release: (ROOT / release).read_text().replace(
+            "  workflow_dispatch:", "  push:\n    branches: ['release/*']")}))
 
     def test_release_script_mutation_fails(self):
         path = ".github/scripts/release.cjs"

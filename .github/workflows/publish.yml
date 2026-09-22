@@ -2,6 +2,13 @@ name: main
 
 on:
   workflow_call:
+    inputs:
+      candidate_sha:
+        type: string
+        default: ''
+      candidate_ref:
+        type: string
+        default: ''
     secrets:
       TAILSCALE_OAUTH_CLIENT_ID:
         required: false
@@ -17,18 +24,12 @@ on:
         required: false
       DOCKERHUB_TOKEN:
         required: false
-  workflow_dispatch:
-    inputs:
-      create_release:
-        description: Create a pinned release branch and automatically release after checks
-        type: boolean
-        default: false
   push:
     branches:
       - main
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && inputs.create_release && format('dependabot-auto-merge-{0}', github.repository) || format('main-validation-{0}', github.ref) }}
+  group: main-validation-${{ inputs.candidate_ref || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -37,15 +38,18 @@ permissions:
 jobs:
   quality:
     name: quality
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: github.ref == 'refs/heads/main' || inputs.candidate_sha != ''
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/ci.yml
+    with:
+      candidate_sha: ${{ inputs.candidate_sha }}
+      candidate_ref: ${{ inputs.candidate_ref }}
 
   update-pr-branches:
     name: update PR branches
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: inputs.candidate_sha == '' && github.ref == 'refs/heads/main'
     permissions:
       contents: read
     uses: ./.github/workflows/pr-branch-updater.yml
@@ -54,31 +58,40 @@ jobs:
 
   aislop:
     name: aislop
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: github.ref == 'refs/heads/main' || inputs.candidate_sha != ''
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/aislop.yml
+    with:
+      candidate_sha: ${{ inputs.candidate_sha }}
+      candidate_ref: ${{ inputs.candidate_ref }}
 
   codeql:
     name: codeql
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: github.ref == 'refs/heads/main' || inputs.candidate_sha != ''
     permissions:
       contents: read
       security-events: write
     uses: ./.github/workflows/codeql.yml
+    with:
+      candidate_sha: ${{ inputs.candidate_sha }}
+      candidate_ref: ${{ inputs.candidate_ref }}
 
   architecture:
     name: architecture
-    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')
+    if: github.ref == 'refs/heads/main' || inputs.candidate_sha != ''
     permissions:
       contents: read
     uses: ./.github/workflows/architecture.yml
+    with:
+      candidate_sha: ${{ inputs.candidate_sha }}
+      candidate_ref: ${{ inputs.candidate_ref }}
 
   pages:
     name: pages
     needs: architecture
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       pages: write
@@ -90,11 +103,13 @@ jobs:
       - name: Deploy architecture Pages site
         id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+        with:
+          artifact_name: ${{ needs.architecture.outputs.pages_artifact_name }}
 
   sonar:
     name: sonar
     needs: [quality, aislop, codeql, architecture]
-    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -107,6 +122,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -164,7 +180,7 @@ jobs:
     name: validate image and release
     needs: [quality, aislop, codeql, architecture]
     if: >-
-      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
+      (github.ref == 'refs/heads/main' || inputs.candidate_sha != '') &&
       needs.quality.result == 'success' && needs.aislop.result == 'success' &&
       needs.codeql.result == 'success' && needs.architecture.result == 'success'
     runs-on: ubuntu-latest
@@ -189,7 +205,10 @@ jobs:
       HINDSIGHT_TEST_IMAGE: ${{ needs.quality.outputs.hindsight_image }}
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
-      SOURCE_IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+      SOURCE_IMAGE: ghcr.io/${{ github.repository }}:${{ inputs.candidate_sha || github.sha }}
+      SOURCE_SHA: ${{ inputs.candidate_sha || github.sha }}
+      RELEASE_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RELEASE_CANDIDATE_REF: ${{ inputs.candidate_ref }}
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
@@ -198,24 +217,30 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Install release tools
+        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
 
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
       - name: Release preflight
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         id: release
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: await require('./.github/scripts/release.cjs').validate({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').validate({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
       - name: Find previously tested image
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         id: candidate
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: await require('./.github/scripts/release.cjs').retryArtifacts({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').retryArtifacts({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
       - name: Restore previously tested image
         if: steps.candidate.outputs.artifact != ''
@@ -238,7 +263,7 @@ jobs:
           context: .
           load: true
           provenance: false
-          labels: org.opencontainers.image.revision=${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ inputs.candidate_sha || github.sha }}
           tags: |
             ${{ env.SOURCE_IMAGE }}
             hindsight-memory-router:ci
@@ -263,7 +288,7 @@ jobs:
         if: failure() && steps.fake-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fake-smoke-diagnostics
+          name: fake-smoke-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: |
             fake-sqlite-smoke.log
             fake-postgres-smoke.log
@@ -282,7 +307,7 @@ jobs:
         if: failure() && steps.real-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-smoke-diagnostics
+          name: real-smoke-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: |
             real-sqlite-smoke.log
             real-postgres-smoke.log
@@ -308,6 +333,8 @@ jobs:
         with:
           sarif_file: trivy-results.sarif
           category: .github/workflows/publish.yml:container
+          ref: ${{ inputs.candidate_ref || github.ref }}
+          sha: ${{ inputs.candidate_sha || github.sha }}
 
       - name: Trivy critical gate
         # Policy contract equivalent: ignore-unfixed: true.
@@ -323,21 +350,21 @@ jobs:
             "${SOURCE_IMAGE}"
 
       - name: Save tested image
-        if: startsWith(github.ref, 'refs/heads/release/') && steps.candidate.outputs.artifact == ''
+        if: inputs.candidate_sha != '' && steps.candidate.outputs.artifact == ''
         run: docker save --output "$RUNNER_TEMP/router-image.tar" "$SOURCE_IMAGE"
 
       - name: Retain tested image for retries
-        if: startsWith(github.ref, 'refs/heads/release/') && steps.candidate.outputs.artifact == ''
+        if: inputs.candidate_sha != '' && steps.candidate.outputs.artifact == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: image-${{ github.sha }}
+          name: image-${{ inputs.candidate_sha }}
           path: ${{ runner.temp }}/router-image.tar
           compression-level: 0
           retention-days: 30
           if-no-files-found: error
 
       - name: Log in to GHCR
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
@@ -345,20 +372,21 @@ jobs:
           password: ${{ github.token }}
 
       - name: Log in to Docker Hub
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Recheck release head before publication
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: await require('./.github/scripts/release.cjs').validate({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').validate({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
       - name: Push the scanned image
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         id: push
         env:
           VERSION: ${{ steps.release.outputs.version }}
@@ -378,7 +406,7 @@ jobs:
         with:
           script: |
             require('./.github/scripts/release.cjs').restoreReleaseAssets({
-              context, directory: `${process.env.RUNNER_TEMP}/release-assets`,
+              context, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF }, directory: `${process.env.RUNNER_TEMP}/release-assets`,
             });
 
       - name: Generate CycloneDX SBOM
@@ -388,7 +416,7 @@ jobs:
         run: |
           trivy image --format cyclonedx --output sbom.raw.json "${IMAGE_GHCR}@${GHCR_DIGEST}"
           SBOM_SUBJECT="${IMAGE_GHCR}@${GHCR_DIGEST}" \
-          SBOM_TIMESTAMP="$(git show -s --format=%cI "${GITHUB_SHA}")" \
+          SBOM_TIMESTAMP="$(git show -s --format=%cI "${SOURCE_SHA}")" \
             python3 .github/scripts/normalize-sbom.py sbom.raw.json sbom.cdx.json
 
       - name: Install Cosign
@@ -404,10 +432,20 @@ jobs:
           cosign sign --yes "${IMAGE_GHCR}@${GHCR_DIGEST}"
           cosign sign --yes "${IMAGE_DOCKERHUB}@${DOCKERHUB_DIGEST}"
 
+      - name: Bind provenance to the workflow and release candidate
+        if: steps.push.outputs.published == 'true'
+        id: provenance
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            await require('./.github/scripts/release.cjs').candidateProvenance({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
+
       - name: Attest GHCR image
         if: steps.push.outputs.published == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
+          predicate-type: ${{ steps.provenance.outputs.type }}
+          predicate-path: ${{ steps.provenance.outputs.path }}
           subject-name: ${{ env.IMAGE_GHCR }}
           subject-digest: ${{ steps.push.outputs.ghcr_digest }}
           push-to-registry: true
@@ -417,6 +455,8 @@ jobs:
         if: steps.push.outputs.published == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
+          predicate-type: ${{ steps.provenance.outputs.type }}
+          predicate-path: ${{ steps.provenance.outputs.path }}
           subject-name: ${{ env.IMAGE_DOCKERHUB }}
           subject-digest: ${{ steps.push.outputs.dockerhub_digest }}
           push-to-registry: true
@@ -480,7 +520,7 @@ jobs:
           UI_TARBALL: ${{ steps.ui-package.outputs.tarball }}
         run: |
           {
-            echo "commit=${GITHUB_SHA}"
+            echo "commit=${SOURCE_SHA}"
             echo "channel=${CHANNEL}"
             echo "version=${VERSION}"
             echo "ghcr=${IMAGE_GHCR}@${GHCR_DIGEST}"
@@ -503,7 +543,7 @@ jobs:
         if: steps.push.outputs.published == 'true' && steps.candidate.outputs.release_assets == ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-digests-${{ github.sha }}-${{ github.run_attempt }}
+          name: image-digests-${{ inputs.candidate_sha }}-${{ github.run_attempt }}
           path: |
             image-digests.txt
             sbom.cdx.json
@@ -511,10 +551,8 @@ jobs:
             ${{ steps.ui-package.outputs.tarball }}.sigstore.json
           if-no-files-found: error
 
-      - name: Install release tools
-        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
       - name: Release App token
-        if: startsWith(github.ref, 'refs/heads/release/')
+        if: inputs.candidate_sha != ''
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -527,7 +565,8 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           github-token: ${{ steps.app.outputs.token }}
-          script: await require('./.github/scripts/release.cjs').finalize({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').finalize({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
       - name: Promote latest released image
         if: steps.finalized.outputs.latest == 'true'
@@ -542,8 +581,7 @@ jobs:
     name: release follow-up
     needs: [publish]
     if: >-
-      github.event_name == 'push' &&
-      startsWith(github.ref, 'refs/heads/release/') &&
+      inputs.candidate_sha != '' &&
       needs.publish.result == 'success' &&
       needs.publish.outputs.released != ''
     runs-on: ubuntu-latest
@@ -553,13 +591,16 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+    env:
+      RELEASE_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RELEASE_CANDIDATE_REF: ${{ inputs.candidate_ref }}
     steps:
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1
         with:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.candidate_sha || github.sha }}
           persist-credentials: false
       - name: Install release tools
         run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
@@ -577,40 +618,25 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         with:
           github-token: ${{ steps.app.outputs.token }}
-          script: await require('./.github/scripts/release.cjs').bumpReleasedVersion({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').bumpReleasedVersion({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
       - name: Delete the published release branch
         if: success()
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           github-token: ${{ steps.app.outputs.token }}
-          script: await require('./.github/scripts/release.cjs').deletePublishedBranch({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').deletePublishedBranch({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
   cleanup:
     name: clean up failed release
-    needs: [quality, aislop, codeql, architecture, publish, prepare-release]
+    needs: [quality, aislop, codeql, architecture, publish]
     if: >-
-      ${{
-        !cancelled() &&
-        (
-          (
-            github.event_name == 'push' &&
-            startsWith(github.ref, 'refs/heads/release/') &&
-            needs.publish.outputs.released == '' &&
-            (
-              needs.quality.result == 'failure' ||
-              needs.aislop.result == 'failure' ||
-              needs.codeql.result == 'failure' ||
-              needs.architecture.result == 'failure' ||
-              needs.publish.result == 'failure'
-            )
-          ) ||
-          (
-            github.event_name == 'workflow_dispatch' &&
-            github.ref == 'refs/heads/main' &&
-            needs.prepare-release.result == 'failure'
-          )
-        )
-      }}
+      ${{ !cancelled() && inputs.candidate_sha != '' &&
+        needs.publish.outputs.released == '' &&
+        (needs.quality.result == 'failure' || needs.aislop.result == 'failure' ||
+         needs.codeql.result == 'failure' || needs.architecture.result == 'failure' ||
+         needs.publish.result == 'failure') }}
     runs-on: ubuntu-latest
     continue-on-error: true
     environment: release-automation
@@ -621,6 +647,8 @@ jobs:
       contents: read
       packages: write
     env:
+      RELEASE_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      RELEASE_CANDIDATE_REF: ${{ inputs.candidate_ref }}
       IMAGE_GHCR: ghcr.io/${{ github.repository }}
       IMAGE_DOCKERHUB: docker.io/mickeykrasilnikov/hindsight-memory-router
       CLEANUP_DIGEST: ${{ needs.publish.outputs.ghcr_digest }}
@@ -630,27 +658,22 @@ jobs:
           egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.candidate_sha || github.sha }}
           persist-credentials: false
       - name: Remove orphaned registry tags
-        if: github.event_name == 'push'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         with:
-          script: await require('./.github/scripts/release-cleanup.cjs').registries({ github, context, core });
+          script: |
+            await require('./.github/scripts/release-cleanup.cjs').registries({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
       - name: Retain the failed release branch
-        if: ${{ !cancelled() && github.event_name == 'push' }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: await require('./.github/scripts/release-cleanup.cjs').branch({ github, context, core });
-      - name: Retain failed preparation branches
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        with:
-          script: await require('./.github/scripts/release-cleanup.cjs').preparation({ github, context, core });
+          script: |
+            await require('./.github/scripts/release-cleanup.cjs').branch({ github, context, core, target: { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } });
 
   report-validation-failure:
     name: report validation failure
@@ -658,7 +681,7 @@ jobs:
     if: >-
       ${{
         !cancelled() &&
-        (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/')) &&
+        (github.ref == 'refs/heads/main' || inputs.candidate_sha != '') &&
         (
           needs.quality.result == 'failure' ||
           needs.aislop.result == 'failure' ||
@@ -688,54 +711,6 @@ jobs:
       - name: Report each distinct failure
         env:
           GH_TOKEN: ${{ github.token }}
+          REPORT_CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          REPORT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
         run: bash .github/scripts/upsert-main-failure-issue.sh
-
-  prepare-release:
-    name: create release branch
-    needs: [quality, aislop, codeql, architecture, publish, sonar]
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.create_release
-    runs-on: ubuntu-latest
-    environment: release-automation
-    concurrency:
-      group: release-preparation-${{ github.repository }}
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      actions: write
-    env:
-      RELEASE_APP_ID: ${{ vars.RELEASE_APP_ID }}
-      RELEASE_SETTINGS_REVIEW: ${{ vars.RELEASE_SETTINGS_REVIEW }}
-    steps:
-      - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
-        with:
-          egress-policy: audit
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-      - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
-      - name: Install release tools
-        run: npm ci --prefix .github/scripts --ignore-scripts --no-audit --no-fund
-      - name: Release App token
-        id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          app-id: ${{ vars.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          permission-contents: write
-      - name: Freeze inputs and create release branch
-        id: prepared
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        with:
-          github-token: ${{ steps.app.outputs.token }}
-          script: await require('./.github/scripts/release.cjs').prepare({ github, context, core });
-      - name: Resume the prepared release
-        if: steps.prepared.outputs.resume_sha != ''
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
-        env:
-          RELEASE_VERSION: ${{ steps.prepared.outputs.version }}
-          RELEASE_SHA: ${{ steps.prepared.outputs.resume_sha }}
-        with:
-          script: |
-            await require('./.github/scripts/release.cjs').resumePreparedRelease({
-              github, context, core, version: process.env.RELEASE_VERSION, sha: process.env.RELEASE_SHA,
-            });

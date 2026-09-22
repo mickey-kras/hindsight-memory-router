@@ -60,7 +60,7 @@ function diagnostics(lines) {
   return errors.length ? [[...new Set(errors)].join('\n')] : [];
 }
 
-function reportsForJob(run, job, log, fallback = '') {
+function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha }) {
   if (run.conclusion === 'cancelled' || !REPORTABLE.has(job.conclusion)) return [];
   const steps = (job.steps || []).filter(step => REPORTABLE.has(step.conclusion));
   if (!steps.length) steps.push({ name: job.conclusion, number: 0 });
@@ -80,8 +80,10 @@ function reportsForJob(run, job, log, fallback = '') {
       const evidence = clean((diagnostic || fallback || 'Job logs unavailable.').slice(0,10000));
       return { key, occurrence,
         title: clean(`[ci] ${job.name}: ${detail ? detail.split('\n')[0] : `${step.name} — diagnostics incomplete`}`).slice(0,240),
-        body: `Validation failed on ${clean(run.head_branch || 'main')}.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
-          `- Commit: ${run.head_sha}\n- Report attempt: ${run.run_attempt}\n- Run: ${run.html_url}\n` +
+        body: `Validation failed on ${clean(source.ref.replace(/^refs\/heads\//, ''))}.\n\n- Job / step: ${clean(job.name)} / ${clean(step.name)}\n` +
+          `- Failed source ref: ${clean(source.ref)}\n- Failed source commit: ${source.sha}\n` +
+          `- Workflow source: ${clean(run.head_branch || 'main')}\n- Workflow commit: ${run.head_sha}\n` +
+          `- Report attempt: ${run.run_attempt}\n- Run: ${run.html_url}\n` +
           `- Job: ${job.html_url}\n- Conclusion: ${job.conclusion}\n\n` +
           (identified ? '' : 'No reliable error signature was available; this issue is scoped to this occurrence.\n\n') +
           `\`\`\`text\n${evidence}\n\`\`\`\n` };
@@ -105,9 +107,23 @@ function logFallback(api, job, failure) {
 function trustedRun(run, repository, defaultBranch) {
   return run.repository?.full_name === repository && run.head_repository?.full_name === repository &&
     ((run.head_branch === defaultBranch && ['push', 'workflow_dispatch'].includes(run.event) &&
-      run.path === '.github/workflows/publish.yml') ||
+      (run.path === '.github/workflows/publish.yml' ||
+       (run.event === 'workflow_dispatch' && run.path === '.github/workflows/release.yml'))) ||
      (/^release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(run.head_branch) &&
       run.event === 'push' && run.path === '.github/workflows/release.yml'));
+}
+
+function reportSource(run, env, repository, defaultBranch) {
+  const ref = env.REPORT_CANDIDATE_REF || '';
+  const sha = env.REPORT_CANDIDATE_SHA || '';
+  if (!ref && !sha) return { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha };
+  if (!/^refs\/heads\/release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(ref) ||
+      !/^[a-f0-9]{40}$/.test(sha)) throw new Error('Invalid report candidate ref or commit');
+  if (!trustedRun(run, repository, defaultBranch) || run.event !== 'workflow_dispatch' ||
+      run.head_branch !== 'main' || run.path !== '.github/workflows/release.yml' || sha === run.head_sha) {
+    throw new Error('Candidate failure reports require a trusted main release dispatch');
+  }
+  return { ref, sha };
 }
 
 function main(env = process.env, execute = execFileSync,
@@ -126,6 +142,7 @@ function main(env = process.env, execute = execFileSync,
   const repo = json(root);
   if (!trustedRun(run, repository, repo.default_branch)) throw new Error('Untrusted publish run');
   if (run.conclusion === 'cancelled') return [];
+  const source = reportSource(run, env, repository, repo.default_branch);
   const pages = JSON.parse(api(`${root}/actions/runs/${id}/jobs?filter=latest&per_page=100`, ['--paginate', '--slurp']));
   const jobs = pages.flatMap(page => page.jobs);
   const issues = JSON.parse(api(`${root}/issues?state=all&per_page=100`, ['--paginate', '--slurp'])).flat();
@@ -141,7 +158,7 @@ function main(env = process.env, execute = execFileSync,
       catch (error) { failure = error; }
     }
     const fallback = log ? '' : logFallback(api, job, failure);
-    for (const report of reportsForJob(run, job, log, fallback)) {
+    for (const report of reportsForJob(run, job, log, fallback, source)) {
       // Sonar's stable finding IDs already identify individual causes.
       if (relatedSonar.length && report.body.includes(' / SonarQube quality gate\n')) continue;
       reports.push(report);
@@ -149,7 +166,7 @@ function main(env = process.env, execute = execFileSync,
   }
   if (!reports.length && !relatedSonar.length && REPORTABLE.has(run.conclusion)) {
     reports.push(...reportsForJob(run, { id: 0, name: 'publish workflow', steps: [],
-      conclusion: run.conclusion, html_url: run.html_url }, ''));
+      conclusion: run.conclusion, html_url: run.html_url }, '', '', source));
   }
   if (!reports.length) return [];
   const completed = [];
@@ -170,5 +187,5 @@ function main(env = process.env, execute = execFileSync,
   return completed;
 }
 
-module.exports = { clean, normalize, diagnostics, reportsForJob, logFallback, trustedRun, main };
+module.exports = { clean, normalize, diagnostics, reportsForJob, logFallback, trustedRun, reportSource, main };
 if (require.main === module) main();

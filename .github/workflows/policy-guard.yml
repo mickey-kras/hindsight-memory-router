@@ -29,20 +29,25 @@ jobs:
             const releaseProtected = {
               ".github/scripts/pr-branch-updater.cjs": "6a1a52b9d1f8b08ece758dcc4457e496b7b2c0c170e29f6fada8dc6e0362e685",
               ".github/workflows/pr-branch-updater.yml": "22052e109b525cea71d62e00ad0352297b3873f883c2493332c03f448ad70d0f",
-              ".github/scripts/package.json": "9c5ae4358d83ef9a326dedb33bec455aed50f32107ba0f72b502059f92a95aa5",
-              ".github/scripts/package-lock.json": "a30b945b4f5442d808fa1a690bbb5a6889d2057b7a1299d67eedf4a5ee729d6e",
-              ".github/scripts/release.cjs": "c30e260d4ae04289dc351f6ec00c6bae8d3461e70085f1b32fb530553d38188c",
+              ".github/scripts/package.json": "db0324a5389e1d9005519058dff2b4f17b2b8632c8392e87d2a0b0d1a5be3470",
+              ".github/scripts/package-lock.json": "315d29db2dc593d1d8072be2a1fc05340a43740ce820858e81223a7cea003090",
+              ".github/scripts/release.cjs": "ce032b928709906d3c4b9f3d7347332214ae0b5e51a73676774bc4d8603c09a5",
               ".github/scripts/release-settings.cjs": "e485de848409942ca37d32a4caea8a93cd4bac5e93048e7b24bf57d848372a57",
-              ".github/scripts/release.test.cjs": "c798a40c8cb1de6fe0ce5bae63374144c8e717e6286121a7bb9e7ec034620ed6",
-              ".github/scripts/release-cleanup.cjs": "99538d2bcea1f0a689419280ec7a23d93890db23091e7171518ccc15bfc442a3",
-              ".github/scripts/release-cleanup.test.cjs": "d4df80d31c5eee98cd98450d8f0d8715ffe55d77edecd9709d60c01458a168cc",
-              ".github/scripts/release-policy.test.py": "06c9c48aab74f4d4fd6c022b2d6ce54af8de9100f7e7764449f05f79bca02ab5",
+              ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
+              ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
+              ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
+              ".github/scripts/release-policy.test.py": "7c33b55b80cae27d8c657c91aa789a4465943315df35b60995b451a9ddf6396b",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
-              ".github/scripts/publish-image.sh": "0787b076528380ca6475de1a58ccd8f72f49113922c5c74974a9f8597c6dbb4c",
-              ".github/scripts/publish-image.test.cjs": "c9cec6865bd070775b6a8e2cf393787d3fe305ad896734295cdea18b6c772311",
-              ".github/workflows/publish.yml": "9c1f6dce9002c17c26086a9f4a12bccf845d775f2e4c5dacf0ae527236a58197",
-              ".github/workflows/release.yml": "fc2ce68300de8c6f014e7379aa52b9ddc978df5148d9b05aec63b76226e80f38",
-              ".github/workflows/ci.yml": "918648e2f6346dd989874f71ee6426abb04817e233d32c54c2f1726ccd50830e"
+              ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
+              ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
+              ".github/workflows/publish.yml": "3b39fb44b2d9b0f41c32db255f27adc3fff11759a8cd5086aab5c61443c15221",
+              ".github/workflows/release.yml": "6013b346b78288f2666c7fd0d1bc21d0fb80b928469848292ca251443abca151",
+              ".github/workflows/ci.yml": "3971dffcaef0a667a8491145e9271c272d7f9849f2fa6e8cf90852cff68f02c2",
+              ".github/workflows/aislop.yml": "dbc57921f92d8c45726d9ff3edb16bdc38e67e53733b6c0b7a61670bf6658492",
+              ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
+              ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
+              ".github/scripts/report-main-failures.cjs": "b4b834f8a3334e5a7e9cf95896c15e2c57da19ed55b5b3224fce46deb463cb37",
+              ".github/scripts/report-main-failures.test.cjs": "a5781a8c86b8c5e714b0b1839a3db3cfdf72dadad4a08c2b88458e6a87492dab"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');

@@ -2,6 +2,13 @@ name: ci
 
 on:
   workflow_call:
+    inputs:
+      candidate_sha:
+        type: string
+        default: ''
+      candidate_ref:
+        type: string
+        default: ''
     outputs:
       hindsight_version:
         value: ${{ jobs.hindsight.outputs.version }}
@@ -11,7 +18,7 @@ on:
         value: ${{ jobs.hindsight.outputs.image }}
 
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event_name }}-${{ inputs.candidate_ref || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -27,13 +34,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          ref: ${{ inputs.candidate_sha }}
           persist-credentials: false
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003
       - name: Resolve Hindsight once
         id: resolve
+        env:
+          RELEASE_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RELEASE_CANDIDATE_REF: ${{ inputs.candidate_ref }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
-          script: await require('./.github/scripts/release.cjs').resolve({ github, context, core });
+          script: |
+            await require('./.github/scripts/release.cjs').resolve({ github, context, core, target: process.env.RELEASE_CANDIDATE_SHA ? { sha: process.env.RELEASE_CANDIDATE_SHA, ref: process.env.RELEASE_CANDIDATE_REF } : undefined });
 
   # The required `aislop status` gate runs in aislop.yml on PRs and through publish.yml on main.
   checks:
@@ -42,6 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.candidate_sha }}
           fetch-depth: 0
 
       - uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
@@ -178,7 +191,7 @@ jobs:
         if: failure() && steps.openapi-lint.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: openapi-lint-diagnostics
+          name: openapi-lint-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: openapi-lint.log
           if-no-files-found: error
 
@@ -211,9 +224,19 @@ jobs:
           node .github/scripts/npm-audit.cjs ui
 
       - name: Gitleaks
+        id: gitleaks
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+
+      - name: Upload redacted secret scan
+        if: ${{ !cancelled() && (steps.gitleaks.outcome == 'success' || steps.gitleaks.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: gitleaks-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
+          path: results.sarif
+          if-no-files-found: error
 
       - name: Semgrep
         run: |
@@ -249,6 +272,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.candidate_sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -282,7 +306,7 @@ jobs:
         if: failure() && steps.fake-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: fake-smoke-diagnostics
+          name: fake-smoke-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: |
             fake-sqlite-smoke.log
             fake-postgres-smoke.log
@@ -301,7 +325,7 @@ jobs:
         if: failure() && steps.real-smoke.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: real-smoke-diagnostics
+          name: real-smoke-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: |
             real-sqlite-smoke.log
             real-postgres-smoke.log
