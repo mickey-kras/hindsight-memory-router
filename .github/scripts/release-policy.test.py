@@ -21,6 +21,8 @@ PATHS = [
     ".github/workflows/release.yml",
     ".github/workflows/ci.yml",
     ".github/workflows/dependency-review.yml",
+    ".github/workflows/pr-branch-updater.yml",
+    ".github/scripts/pr-branch-updater.cjs",
     ".github/scripts/release.cjs",
     ".github/scripts/release-settings.cjs",
     ".github/rulesets/protect-release-branches.json",
@@ -350,6 +352,72 @@ class ReleasePolicyTests(unittest.TestCase):
             if step.get("name") == "Synchronize SonarQube findings"
         )
         self.assertIn("!cancelled() && failure()", sonar["if"])
+
+    def test_pr_creation_and_later_updates_keep_the_release_app_identity(self):
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        caller = main["jobs"]["update-pr-branches"]
+        self.assertEqual(caller["uses"], "./.github/workflows/pr-branch-updater.yml")
+        self.assertEqual(caller["permissions"], {"contents": "read"})
+        private_key = {"RELEASE_APP_PRIVATE_KEY": "${{ secrets.RELEASE_APP_PRIVATE_KEY }}"}
+        self.assertEqual(caller["secrets"], private_key)
+        release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+        self.assertEqual(
+            release["jobs"]["release"]["secrets"]["RELEASE_APP_PRIVATE_KEY"],
+            private_key["RELEASE_APP_PRIVATE_KEY"],
+        )
+        for workflow in [main, yaml.safe_load((ROOT / caller["uses"]).read_text())]:
+            events = workflow.get("on", workflow.get(True))
+            self.assertIn("RELEASE_APP_PRIVATE_KEY", events["workflow_call"]["secrets"])
+        updater = yaml.safe_load((ROOT / caller["uses"]).read_text())
+        self.assertEqual(updater["permissions"], {"contents": "read"})
+        job = updater["jobs"]["update"]
+        self.assertEqual(job["environment"], "release-automation")
+        self.assertEqual(
+            job["if"],
+            "(github.event_name == 'push' || github.event_name == 'workflow_dispatch') && "
+            "(github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))",
+        )
+        steps = {step.get("name"): step for step in job["steps"]}
+        checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["ref"], "${{ github.workflow_sha }}")
+        self.assertIs(checkout["with"]["persist-credentials"], False)
+        preflight = steps["Validate updater context"]
+        token = steps["Release App token"]
+        self.assertLess(job["steps"].index(preflight), job["steps"].index(token))
+        self.assertIn(".validateContext(context)", preflight["with"]["script"])
+        self.assertRegex(token["uses"], r"^actions/create-github-app-token@[0-9a-f]{40}$")
+        self.assertEqual(token["id"], "app")
+        self.assertEqual(token["with"], {
+            "app-id": "${{ vars.RELEASE_APP_ID }}",
+            "private-key": private_key["RELEASE_APP_PRIVATE_KEY"],
+            "owner": "${{ github.repository_owner }}",
+            "repositories": "${{ github.event.repository.name }}",
+            "permission-contents": "write",
+            "permission-pull-requests": "write",
+        })
+        followup = main["jobs"]["release-followup"]
+        creation = next(
+            step for step in followup["steps"]
+            if step.get("name") == "Open the next version bump pull request"
+        )
+        for mutation in [creation, steps["Update open PR branches"]]:
+            self.assertEqual(mutation["with"]["github-token"], "${{ steps.app.outputs.token }}")
+        validation = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
+        for pr_job in validation["jobs"].values():
+            self.assertNotEqual(pr_job.get("uses"), caller["uses"])
+            self.assertNotIn("secrets", pr_job)
+
+    def test_pr_updater_authentication_regressions_fail_policy(self):
+        path = ".github/workflows/pr-branch-updater.yml"
+        original = (ROOT / path).read_text()
+        for changed in [
+            original.replace("github-token: ${{ steps.app.outputs.token }}", "github-token: ${{ github.token }}"),
+            original.replace(".validateContext(context)", ".validateContext({})"),
+            original.replace("permission-pull-requests: write", "permission-pull-requests: read"),
+        ]:
+            with self.subTest(workflow=changed):
+                self.assertNotEqual(changed, original)
+                self.assertTrue(policy({path: changed}))
 
     def test_cancellation_reporting_regressions_fail_policy(self):
         if not ROUTER:
