@@ -107,6 +107,7 @@ blocked_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bea
 pass_check
 
 begin_check "Extended Hindsight facade endpoints resolve through writer bank"
+facade_events_start="$(wc -l < "$state_file")"
 openclaw_request GET "/v1/default/banks/main/stats" >/dev/null
 openclaw_request GET "/v1/default/banks/main/tags?q=hello%2Fworld" >/dev/null
 openclaw_request GET "/v1/default/banks/main/memories/list?limit=10&time_field=created_at&start_date=2026-09-01T00%3A00%3A00Z&end_date=2026-09-22T00%3A00%3A00Z" >/dev/null
@@ -132,11 +133,11 @@ openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests/stats" >/dev/null
 openclaw_request GET "/v1/default/banks/main/observations/scopes?limit=1&offset=5" >/dev/null
 openclaw_request DELETE "/v1/default/banks/main/observations" >/dev/null
-python3 - "$state_file" <<'PY' || fail_check "facade events did not resolve through physical-main"
+python3 - "$state_file" "$facade_events_start" <<'PY' || fail_check "facade events did not resolve through physical-main"
 import json
 import sys
 
-events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")]
+events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")][int(sys.argv[2]):]
 facade = [event for event in events if event.get("kind") == "facade"]
 assert facade
 assert all(event.get("bank_id") == "physical-main" for event in facade)
