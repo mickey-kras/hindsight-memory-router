@@ -10,7 +10,14 @@
   branch updater never writes to Dependabot branches or posts bot commands.
 - `GITHUB_TOKEN` handles auto-merge and main-workflow dispatch. No App or PAT.
 - The refresh starts missing main validation for the current Dependabot merge.
-  Existing runs are reused; failed runs remain visible.
+  It dispatches the inputless `main` workflow on the default branch. Existing runs
+  are reused; failed runs remain visible. This dispatch cannot publish a release.
+- Dependency updates include their generated hashes in the same PR: pip hashes in
+  `requirements.txt` and `dev-requirements.txt`, and npm integrity values in each
+  `package-lock.json`. Required checks install those exact locks and verify the
+  Python locks are current before merging. Dependabot rebases rerun these checks.
+  Release-policy approval hashes still require review; frozen release manifests
+  and published artifact checksums are never refreshed by Dependabot.
 
 To re-evaluate open PRs, run **Actions → dependabot auto-merge refresh → Run
 workflow** on the default branch.

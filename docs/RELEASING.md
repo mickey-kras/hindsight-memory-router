@@ -6,9 +6,10 @@
 2. **Actions → release → Run workflow → main**.
 3. In that one run, main passes including Sonar → preparation freezes `release/X.Y.Z` → the candidate passes all release gates → images, signatures, attestations and immutable `vX.Y.Z` publish → `latest` promotes → the next-patch PR is queued and the published branch is removed.
 
-The release workflow is the publication entry point. `main` runs automatically on pushes and never
-publishes. The former **Create release** checkbox on `main` is removed. Creating or updating a new
-release branch does not start another publication run. Dispatches from any branch other than `main`
+The release workflow is the publication entry point. `main` runs automatically on pushes, or through
+its inputless validation dispatch, and never publishes. The former **Create release** checkbox on
+`main` is removed. Creating or updating a new release branch does not start another publication run.
+Release dispatches from any branch other than `main`
 fail at the entry guard, before validation, candidate checkout or release credentials are used.
 
 The workflow graph contains separate main and candidate validation stages. Candidate jobs explicitly
