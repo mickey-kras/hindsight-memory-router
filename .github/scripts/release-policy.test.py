@@ -113,7 +113,8 @@ class ReleasePolicyTests(unittest.TestCase):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         events = main.get("on", main.get(True))
         self.assertEqual(events["push"], {"branches": ["main"]})
-        self.assertNotIn("workflow_dispatch", events)
+        self.assertIn("workflow_dispatch", events)
+        self.assertIsNone(events["workflow_dispatch"])
         self.assertNotIn("prepare-release", main["jobs"])
         release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
         self.assertEqual(release.get("on", release.get(True)), {"workflow_dispatch": None})
@@ -479,10 +480,30 @@ class ReleasePolicyTests(unittest.TestCase):
                 self.assertNotEqual(content, original)
                 self.assertTrue(policy({MAIN: content}))
 
-    def test_automatic_release_push_and_a_second_manual_entry_fail_policy(self):
+    def test_dependabot_dispatch_target_validates_main_without_release_inputs(self):
+        automation = yaml.safe_load((ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text())
+        dispatch = next(
+            step["with"]["script"]
+            for step in automation["jobs"]["enable-auto-merge"]["steps"]
+            if "script" in step.get("with", {})
+        )
+        target = re.search(r"mainWorkflow: '([^']+)'", dispatch).group(1)
+        self.assertEqual(f".github/workflows/{target}", MAIN)
+        jobs = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]
+        for name in ["quality", "aislop", "codeql", "architecture"]:
+            self.assertEqual(jobs[name]["if"], "github.ref == 'refs/heads/main' || inputs.candidate_sha != ''")
+        for name in ["pages", "sonar", "update-pr-branches", "publish", "report-validation-failure"]:
+            self.assertIn("github.ref == 'refs/heads/main'", jobs[name]["if"])
+        for name in ["cleanup", "release-followup"]:
+            self.assertIn("inputs.candidate_sha != ''", jobs[name]["if"])
+
+    def test_automatic_release_push_and_manual_candidate_inputs_fail_policy(self):
         release = ".github/workflows/release.yml"
         main = (ROOT / MAIN).read_text()
-        self.assertTrue(policy({MAIN: main.replace("on:\n", "on:\n  workflow_dispatch:\n")}))
+        self.assertTrue(policy({MAIN: main.replace(
+            "  workflow_dispatch:",
+            "  workflow_dispatch:\n    inputs:\n      candidate_sha:\n        type: string",
+        )}))
         self.assertTrue(policy({release: (ROOT / release).read_text().replace(
             "  workflow_dispatch:", "  push:\n    branches: ['release/*']")}))
 
