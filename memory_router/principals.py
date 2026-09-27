@@ -373,12 +373,15 @@ class PrincipalResolver:
 
     def authorize(self, session: PrincipalSession, scope: str, bank: str) -> bool:
         granted = any(grant.bank == bank and scope in grant.scopes for grant in session.grants)
+        return granted and self._policy_allows(session.principal_id, session.source, bank)
+
+    def _policy_allows(self, principal_id: str, source: str, bank: str) -> bool:
         config = self.registry.banks.get(bank)
         policy = config.access_policy if config is not None else None
-        return granted and (
+        return (
             policy is None
-            or _is_control_plane(session.principal_id, session.source)
-            or session.principal_id in policy.allowed_principals
+            or _is_control_plane(principal_id, source)
+            or principal_id in policy.allowed_principals
         )
 
     def authorize_current(self, principal_id: str, scope: str, bank: str) -> bool:
@@ -387,22 +390,21 @@ class PrincipalResolver:
         if principal is None:
             return False
         granted = any(grant.bank == bank and scope in grant.scopes for grant in principal.grants)
-        config = self.registry.banks.get(bank)
-        policy = config.access_policy if config is not None else None
-        return granted and (
-            policy is None
-            or _is_control_plane(principal_id, principal.source)
-            or principal_id in policy.allowed_principals
-        )
+        return granted and self._policy_allows(principal_id, principal.source, bank)
 
-    def list_banks(self, session: PrincipalSession) -> list[str]:
+    def _banks_with_scope(self, session: PrincipalSession, scope: str) -> list[str]:
+        # Inspect each grant once; authorize() rescans all grants per bank.
         return sorted(
             {
                 grant.bank
                 for grant in session.grants
-                if self.authorize(session, SCOPE_BANK_LIST, grant.bank)
+                if scope in grant.scopes
+                and self._policy_allows(session.principal_id, session.source, grant.bank)
             }
         )
+
+    def list_banks(self, session: PrincipalSession) -> list[str]:
+        return self._banks_with_scope(session, SCOPE_BANK_LIST)
 
     def inherited_banks(
         self, parent: PrincipalSession, banks: Sequence[str], scope: str
@@ -411,13 +413,7 @@ class PrincipalResolver:
         return sorted({bank for bank in banks if self.authorize(parent, scope, bank)})
 
     def quarantine_review_banks(self, session: PrincipalSession) -> list[str]:
-        return sorted(
-            {
-                grant.bank
-                for grant in session.grants
-                if self.authorize(session, SCOPE_QUARANTINE_REVIEW, grant.bank)
-            }
-        )
+        return self._banks_with_scope(session, SCOPE_QUARANTINE_REVIEW)
 
 
 def scope_limit_operation(scope: str) -> LimitOperation:
