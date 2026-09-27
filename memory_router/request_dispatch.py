@@ -144,7 +144,13 @@ class AuthenticatedRequestDispatcher:
                 return await self._dispatch_legacy_memory(request, writer_id, action)
             scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
             await self.deps.principal_rate(principal, scope, route_class)
-            require_grant(session=principal, scope=scope, bank=writer_id, route_class=route_class)
+            require_grant(
+                resolver=_require(self.deps.resolver, "principal resolver"),
+                session=principal,
+                scope=scope,
+                bank=writer_id,
+                route_class=route_class,
+            )
             body_limit = principal.limits[scope_limit_operation(scope)].max_body_bytes
             if action == "recall":
                 body = parse_recall_body(await self.deps.json_body(request, max_bytes=body_limit))
@@ -199,7 +205,13 @@ class AuthenticatedRequestDispatcher:
         scope = facade_scope(route, query=query) if principal is not None else facade_scope(route)
         if principal is not None:
             await self.deps.principal_rate(principal, scope, route_class)
-            require_grant(session=principal, scope=scope, bank=bank, route_class=route_class)
+            require_grant(
+                resolver=_require(self.deps.resolver, "principal resolver"),
+                session=principal,
+                scope=scope,
+                bank=bank,
+                route_class=route_class,
+            )
         body = await self._facade_body(request, route.body, route.body_label, principal, scope)
         if route.template == "reflect" and body is not None:
             body = parse_reflect_body(body)

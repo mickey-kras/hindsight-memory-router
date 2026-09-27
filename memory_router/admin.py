@@ -242,10 +242,8 @@ class QuarantineAdminService:
 
     def _require_principal_retain_grant(self, principal_id: str, target_bank: str) -> None:
         resolver = self.principal_resolver
-        principal = resolver.registry.principals.get(principal_id) if resolver else None
-        if principal is None or not any(
-            grant.bank == target_bank and SCOPE_MEMORY_RETAIN in grant.scopes
-            for grant in principal.grants
+        if resolver is None or not resolver.authorize_current(
+            principal_id, SCOPE_MEMORY_RETAIN, target_bank
         ):
             raise HttpError(
                 403,

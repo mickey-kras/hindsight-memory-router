@@ -92,13 +92,14 @@ async def authenticate_principal(
 
 def require_grant(
     *,
+    resolver: PrincipalResolver,
     session: PrincipalSession,
     scope: str,
     bank: str,
     route_class: str,
 ) -> None:
     started = time.monotonic()
-    allowed = PrincipalResolver.authorize(session, scope, bank)
+    allowed = resolver.authorize(session, scope, bank)
     latency_ms = round((time.monotonic() - started) * 1000, 3)
     log_authorization_decision(
         route_class=route_class,
@@ -151,11 +152,12 @@ async def principal_admin_metadata_response(
         return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     if method != "GET" or pathname not in _PRINCIPAL_ADMIN_METADATA_PATHS:
         return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
-    banks = PrincipalResolver.quarantine_review_banks(principal)
+    banks = deps.resolver.quarantine_review_banks(principal)
     bank_id = request.query_params.get("bank_id")
     scoped: tuple[str, ...]
     if bank_id is not None:
         require_grant(
+            resolver=deps.resolver,
             session=principal,
             scope=SCOPE_QUARANTINE_REVIEW,
             bank=bank_id,
@@ -165,6 +167,7 @@ async def principal_admin_metadata_response(
     else:
         if not banks:
             require_grant(
+                resolver=deps.resolver,
                 session=principal,
                 scope=SCOPE_QUARANTINE_REVIEW,
                 bank="-",

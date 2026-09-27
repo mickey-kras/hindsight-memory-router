@@ -23,6 +23,8 @@ from memory_router.facade_routes import FACADE_ROUTES
 from memory_router.logging_contract import sanitize_fields
 from memory_router.principals import (
     SCOPE_VOCABULARY,
+    BankAccessPolicy,
+    BankConfiguration,
     PrincipalGrant,
     PrincipalResolver,
     facade_scope,
@@ -161,6 +163,149 @@ def test_example_registry_loads_and_authenticates() -> None:
     assert not resolver.authorize(session, "bank.admin", "project")
     assert resolver.authorize(session, "bank.config.read", "project")
     assert session.limits["retain"].rate_limit_max == 20
+
+
+def test_optional_bank_policy_and_inherited_access(tmp_path: Path) -> None:
+    value = _registry_value()
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    alpha = resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET)).session
+    reader = resolver.authenticate(_bearer("reader-1", READER_SECRET)).session
+    assert alpha is not None and reader is not None
+    assert resolver.authorize(reader, "memory.recall", "shared")
+
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=["agent-alpha"])
+    )
+    assert resolver.authorize(alpha, "memory.recall", "shared")
+    assert not resolver.authorize(reader, "memory.recall", "shared")
+    assert not resolver.authorize_current("agent-reader", "memory.retain", "shared")
+    assert not resolver.authorize(alpha, "memory.reflect", "shared")
+    assert resolver.inherited_banks(alpha, ["shared", "alpha-only"], "memory.recall") == ["shared"]
+    assert resolver.inherited_banks(reader, ["shared"], "memory.recall") == []
+
+
+def test_bank_enumeration_checks_each_grant_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = _registry_value()
+    alpha_grants = value["principals"]["agent-alpha"]["grants"]  # type: ignore[index]
+    for grant in alpha_grants:
+        grant["scopes"].append("quarantine.review")
+    value["banks"] = {"alpha-only": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}}
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    session = resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET)).session
+    assert session is not None
+
+    monkeypatch.setattr(
+        resolver, "authorize", Mock(side_effect=AssertionError("enumeration rescanned grants"))
+    )
+    assert resolver.list_banks(session) == ["alpha-only", "shared"]
+    assert resolver.quarantine_review_banks(session) == ["alpha-only", "shared"]
+
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=[])
+    )
+    assert resolver.list_banks(session) == ["alpha-only"]
+    assert resolver.quarantine_review_banks(session) == ["alpha-only"]
+
+
+def test_bank_policy_rejects_incompatible_grants(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["banks"] = {"shared": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}}
+    with pytest.raises(RuntimeError, match="conflicts with bank access policy"):
+        load_principal_registry(_write_registry(tmp_path, value))
+
+    value["banks"]["shared"]["accessPolicy"]["allowedPrincipals"].append("agent-reader")  # type: ignore[index]
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    reader = resolver.authenticate(_bearer("reader-1", READER_SECRET)).session
+    assert reader is not None
+    assert resolver.authorize(reader, "memory.recall", "shared")
+    assert not resolver.authorize(reader, "memory.retain", "shared")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method,path,body",
+    [
+        ("POST", "/v1/default/banks/shared/memories/recall", {"query": "x"}),
+        ("POST", "/v1/default/banks/shared/memories", {"items": [{"content": "x"}]}),
+        ("POST", "/v1/default/banks/shared/reflect", {"query": "x"}),
+        ("GET", "/v1/default/banks/shared/config", None),
+        ("PATCH", "/v1/default/banks/shared/config", {"retain_mission": "x"}),
+        ("GET", "/v1/default/banks/shared/mental-models", None),
+    ],
+)
+async def test_bank_policy_denies_before_every_memory_or_config_operation(
+    method: str,
+    path: str,
+    body: dict[str, object] | None,
+) -> None:
+    resolver = app_module.runtime.principal_resolver
+    assert resolver is not None
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=[])
+    )
+    with pytest.raises(HttpError) as denied:
+        await app_module.dispatch(
+            "x",
+            request(
+                method,
+                path,
+                headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+                body=body,
+            ),
+        )
+    assert denied.value.status == 403
+    app_module.runtime.policy.retain_bank.assert_not_awaited()
+    app_module.runtime.policy.recall_bank.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_bank_policy_filters_list_without_upstream_leak() -> None:
+    resolver = app_module.runtime.principal_resolver
+    assert resolver is not None
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=[])
+    )
+    response = await app_module.dispatch(
+        "x",
+        request(
+            "GET",
+            "/v1/default/banks",
+            headers={"authorization": _bearer("alpha-1", ALPHA_SECRET)},
+        ),
+    )
+    assert response.status_code == 200
+    app_module.runtime.hindsight.list_banks.assert_awaited_once()
+    assert app_module.runtime.hindsight.list_banks.await_args.args[0] == ["alpha-only"]
+
+
+def test_control_plane_requires_both_identity_and_grant(tmp_path: Path) -> None:
+    value = _registry_value()
+    value["principals"]["control-plane"] = {  # type: ignore[index]
+        "keys": [_key("operator-1", "d" * 64)],
+        "source": "control-plane",
+        "grants": [
+            {"bank": "shared", "scopes": ["bank.config.read", "bank.list", "quarantine.review"]}
+        ],
+    }
+    value["banks"] = {
+        "shared": {
+            "accessPolicy": {
+                "allowedPrincipals": [
+                    "agent-alpha",
+                    "agent-reader",
+                ]
+            }
+        }
+    }
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    session = resolver.authenticate(_bearer("operator-1", "d" * 64)).session
+    assert session is not None
+    assert resolver.authorize(session, "bank.config.read", "shared")
+    assert not resolver.authorize(session, "memory.retain", "shared")
+    assert resolver.list_banks(session) == ["shared"]
+    assert resolver.quarantine_review_banks(session) == ["shared"]
 
 
 @pytest.mark.parametrize(

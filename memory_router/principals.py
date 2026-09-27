@@ -157,11 +157,24 @@ class Principal(BaseModel):
     source: str = Field(default="application", min_length=1)
 
 
+class BankAccessPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    allowed_principals: list[str] = Field(alias="allowedPrincipals")
+
+
+class BankConfiguration(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    access_policy: BankAccessPolicy | None = Field(None, alias="accessPolicy")
+
+
 class PrincipalRegistry(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     principals: dict[str, Principal] = Field(min_length=1)
     defaults: PrincipalRegistryDefaults = Field(default_factory=PrincipalRegistryDefaults)
+    banks: dict[str, BankConfiguration] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,7 +257,28 @@ def load_principal_registry(path: str) -> PrincipalRegistry:
     for principal_id, principal in registry.principals.items():
         _validate_principal_id(principal_id)
         _validate_principal(principal, seen_key_ids)
+    for bank, config in registry.banks.items():
+        _validate_principal_id(bank)
+        policy = config.access_policy
+        if policy is None:
+            continue
+        for principal_id in policy.allowed_principals:
+            _validate_principal_id(principal_id)
+        if len(policy.allowed_principals) != len(set(policy.allowed_principals)):
+            raise RuntimeError("allowedPrincipals must be unique")
+        for principal_id, principal in registry.principals.items():
+            if _is_control_plane(principal_id, principal.source):
+                continue
+            if (
+                any(grant.bank == bank for grant in principal.grants)
+                and principal_id not in policy.allowed_principals
+            ):
+                raise RuntimeError("principal grant conflicts with bank access policy")
     return registry
+
+
+def _is_control_plane(principal_id: str, source: str) -> bool:
+    return principal_id == "control-plane" and source == "control-plane"
 
 
 def _bearer_token(authorization: str | None) -> str | None:
@@ -337,19 +371,48 @@ class PrincipalResolver:
             ),
         )
 
-    @staticmethod
-    def authorize(session: PrincipalSession, scope: str, bank: str) -> bool:
-        return any(grant.bank == bank and scope in grant.scopes for grant in session.grants)
+    def authorize(self, session: PrincipalSession, scope: str, bank: str) -> bool:
+        granted = any(grant.bank == bank and scope in grant.scopes for grant in session.grants)
+        return granted and self._policy_allows(session.principal_id, session.source, bank)
 
-    @staticmethod
-    def list_banks(session: PrincipalSession) -> list[str]:
-        return sorted({grant.bank for grant in session.grants if SCOPE_BANK_LIST in grant.scopes})
-
-    @staticmethod
-    def quarantine_review_banks(session: PrincipalSession) -> list[str]:
-        return sorted(
-            {grant.bank for grant in session.grants if SCOPE_QUARANTINE_REVIEW in grant.scopes}
+    def _policy_allows(self, principal_id: str, source: str, bank: str) -> bool:
+        config = self.registry.banks.get(bank)
+        policy = config.access_policy if config is not None else None
+        return (
+            policy is None
+            or _is_control_plane(principal_id, source)
+            or principal_id in policy.allowed_principals
         )
+
+    def authorize_current(self, principal_id: str, scope: str, bank: str) -> bool:
+        """Recheck a queued operation against the current registry and bank policy."""
+        principal = self.registry.principals.get(principal_id)
+        if principal is None:
+            return False
+        granted = any(grant.bank == bank and scope in grant.scopes for grant in principal.grants)
+        return granted and self._policy_allows(principal_id, principal.source, bank)
+
+    def _banks_with_scope(self, session: PrincipalSession, scope: str) -> list[str]:
+        return sorted(
+            {
+                grant.bank
+                for grant in session.grants
+                if scope in grant.scopes
+                and self._policy_allows(session.principal_id, session.source, grant.bank)
+            }
+        )
+
+    def list_banks(self, session: PrincipalSession) -> list[str]:
+        return self._banks_with_scope(session, SCOPE_BANK_LIST)
+
+    def inherited_banks(
+        self, parent: PrincipalSession, banks: Sequence[str], scope: str
+    ) -> list[str]:
+        """Bound future task access to the parent's effective bank permissions."""
+        return sorted({bank for bank in banks if self.authorize(parent, scope, bank)})
+
+    def quarantine_review_banks(self, session: PrincipalSession) -> list[str]:
+        return self._banks_with_scope(session, SCOPE_QUARANTINE_REVIEW)
 
 
 def scope_limit_operation(scope: str) -> LimitOperation:
