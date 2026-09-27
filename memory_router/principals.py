@@ -244,6 +244,31 @@ def _validate_principal(principal: Principal, seen_key_ids: set[str]) -> None:
         raise RuntimeError("grant banks must be unique per principal")
 
 
+def _is_control_plane(principal_id: str, source: str) -> bool:
+    return principal_id == "control-plane" and source == "control-plane"
+
+
+def _validate_bank_configuration(
+    bank: str, config: BankConfiguration, principals: dict[str, Principal]
+) -> None:
+    _validate_principal_id(bank)
+    policy = config.access_policy
+    if policy is None:
+        return
+    for principal_id in policy.allowed_principals:
+        _validate_principal_id(principal_id)
+    if len(policy.allowed_principals) != len(set(policy.allowed_principals)):
+        raise RuntimeError("allowedPrincipals must be unique")
+    for principal_id, principal in principals.items():
+        if _is_control_plane(principal_id, principal.source):
+            continue
+        if (
+            any(grant.bank == bank for grant in principal.grants)
+            and principal_id not in policy.allowed_principals
+        ):
+            raise RuntimeError("principal grant conflicts with bank access policy")
+
+
 def load_principal_registry(path: str) -> PrincipalRegistry:
     try:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -258,27 +283,8 @@ def load_principal_registry(path: str) -> PrincipalRegistry:
         _validate_principal_id(principal_id)
         _validate_principal(principal, seen_key_ids)
     for bank, config in registry.banks.items():
-        _validate_principal_id(bank)
-        policy = config.access_policy
-        if policy is None:
-            continue
-        for principal_id in policy.allowed_principals:
-            _validate_principal_id(principal_id)
-        if len(policy.allowed_principals) != len(set(policy.allowed_principals)):
-            raise RuntimeError("allowedPrincipals must be unique")
-        for principal_id, principal in registry.principals.items():
-            if _is_control_plane(principal_id, principal.source):
-                continue
-            if (
-                any(grant.bank == bank for grant in principal.grants)
-                and principal_id not in policy.allowed_principals
-            ):
-                raise RuntimeError("principal grant conflicts with bank access policy")
+        _validate_bank_configuration(bank, config, registry.principals)
     return registry
-
-
-def _is_control_plane(principal_id: str, source: str) -> bool:
-    return principal_id == "control-plane" and source == "control-plane"
 
 
 def _bearer_token(authorization: str | None) -> str | None:
