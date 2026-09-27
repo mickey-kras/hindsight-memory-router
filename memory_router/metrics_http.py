@@ -59,8 +59,9 @@ async def _principal_metrics_response(request: Request, deps: MetricsDeps) -> Re
     )
     if principal is None:
         return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
-    if not PrincipalResolver.quarantine_review_banks(principal):
+    if not resolver.quarantine_review_banks(principal):
         require_grant(
+            resolver=resolver,
             session=principal,
             scope=SCOPE_QUARANTINE_REVIEW,
             bank="-",

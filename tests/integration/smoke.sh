@@ -402,6 +402,9 @@ if [[ "$mode" == "fake" ]]; then
   reader_auth="Authorization: Bearer mr_reader-1_b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1"
   banks_response="$(curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks")"
   printf '%s' "$banks_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert [bank["bank_id"] for bank in data["banks"]] == ["alpha-only", "shared"]; assert data["total"] == 2' || fail_check "principal bank listing was not filtered to granted banks"
+  # alpha-only has an explicit policy; the listed principal still needs bank.list.
+  policy_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/alpha-only/memories/recall" -d '{"query":"x"}')"
+  [[ "$policy_denied_status" == "403" ]] || fail_check "restricted bank accepted an unlisted principal: ${policy_denied_status}"
   reader_list_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" "${principals_url}/v1/default/banks")"
   [[ "$reader_list_status" == "403" ]] || fail_check "principal without bank.list could list banks: ${reader_list_status}"
   principal_retain="$(curl --max-time 5 -fsS -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories" -d '{"items":[{"content":"principal smoke retain","context":"integration smoke","document_id":"ci-principal"}],"async":true}')"

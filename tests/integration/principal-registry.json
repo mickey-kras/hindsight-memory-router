@@ -7,6 +7,9 @@
       }
     }
   },
+  "banks": {
+    "alpha-only": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}
+  },
   "principals": {
     "agent-config": {
       "keys": [{

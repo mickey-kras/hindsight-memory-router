@@ -84,3 +84,18 @@ Legacy-mode memory operations are not logged on success; blocked or suspicious o
 - `MEMORY_ROUTER_ADMIN_TOKEN`: legacy all-scope superuser; deprecated and removed at the next major release (authenticated responses carry a `Deprecation` header)
 
 Keep tokens out of Git, files, logs, prompts, and shell history.
+# Optional bank policy
+
+In principal mode, `principal_registry.json` may restrict a bank:
+
+```json
+{"banks":{"personal":{"accessPolicy":{"allowedPrincipals":["personal-assistant"]}}}}
+```
+
+Omit `banks` to preserve existing behavior. Every bank operation requires both
+an explicit principal grant and membership in `allowedPrincipals`. The policy
+cannot create grants. Startup rejects grants to a restricted bank when the
+principal is not listed. An empty list denies agent access. The dedicated
+`control-plane` principal with `source: "control-plane"` keeps its explicit
+grants for provisioning and is audited by the same authorization gate. Future
+task access must use the parent's effective permissions via `inherited_banks`.
