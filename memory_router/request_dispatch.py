@@ -27,6 +27,7 @@ from .principals import (
 from .validation import parse_recall_body, parse_reflect_body, parse_retain_body
 
 EMPTY_BODY = object()
+_PRINCIPAL_RESOLVER_COMPONENT = "principal resolver"
 MEMORY_ROUTE = re.compile(r"/v1/default/banks/([^/]+)/memories(?:/(recall))?")
 
 
@@ -96,7 +97,7 @@ class AuthenticatedRequestDispatcher:
         route_class: str,
     ) -> Response | None:
         if principal is not None and method == "GET" and pathname == "/v1/default/banks":
-            resolver = _require(self.deps.resolver, "principal resolver")
+            resolver = _require(self.deps.resolver, _PRINCIPAL_RESOLVER_COMPONENT)
             await self.deps.principal_rate(principal, SCOPE_BANK_LIST, route_class)
             banks = resolver.list_banks(principal)
             if not banks:
@@ -145,7 +146,7 @@ class AuthenticatedRequestDispatcher:
             scope = SCOPE_MEMORY_RECALL if action == "recall" else SCOPE_MEMORY_RETAIN
             await self.deps.principal_rate(principal, scope, route_class)
             require_grant(
-                resolver=_require(self.deps.resolver, "principal resolver"),
+                resolver=_require(self.deps.resolver, _PRINCIPAL_RESOLVER_COMPONENT),
                 session=principal,
                 scope=scope,
                 bank=writer_id,
@@ -206,7 +207,7 @@ class AuthenticatedRequestDispatcher:
         if principal is not None:
             await self.deps.principal_rate(principal, scope, route_class)
             require_grant(
-                resolver=_require(self.deps.resolver, "principal resolver"),
+                resolver=_require(self.deps.resolver, _PRINCIPAL_RESOLVER_COMPONENT),
                 session=principal,
                 scope=scope,
                 bank=bank,
