@@ -184,6 +184,32 @@ def test_optional_bank_policy_and_inherited_access(tmp_path: Path) -> None:
     assert resolver.inherited_banks(reader, ["shared"], "memory.recall") == []
 
 
+def test_bank_enumeration_checks_each_grant_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    value = _registry_value()
+    alpha_grants = value["principals"]["agent-alpha"]["grants"]  # type: ignore[index]
+    for grant in alpha_grants:
+        grant["scopes"].append("quarantine.review")
+    value["banks"] = {"alpha-only": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}}
+    resolver = PrincipalResolver(load_principal_registry(_write_registry(tmp_path, value)))
+    session = resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET)).session
+    assert session is not None
+
+    # Calling authorize() per bank rescans all grants, making enumeration quadratic.
+    monkeypatch.setattr(
+        resolver, "authorize", Mock(side_effect=AssertionError("enumeration rescanned grants"))
+    )
+    assert resolver.list_banks(session) == ["alpha-only", "shared"]
+    assert resolver.quarantine_review_banks(session) == ["alpha-only", "shared"]
+
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=[])
+    )
+    assert resolver.list_banks(session) == ["alpha-only"]
+    assert resolver.quarantine_review_banks(session) == ["alpha-only"]
+
+
 def test_bank_policy_rejects_incompatible_grants(tmp_path: Path) -> None:
     value = _registry_value()
     value["banks"] = {"shared": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}}
@@ -260,7 +286,9 @@ def test_control_plane_requires_both_identity_and_grant(tmp_path: Path) -> None:
     value["principals"]["control-plane"] = {  # type: ignore[index]
         "keys": [_key("operator-1", "d" * 64)],
         "source": "control-plane",
-        "grants": [{"bank": "shared", "scopes": ["bank.config.read"]}],
+        "grants": [
+            {"bank": "shared", "scopes": ["bank.config.read", "bank.list", "quarantine.review"]}
+        ],
     }
     value["banks"] = {
         "shared": {
@@ -277,6 +305,8 @@ def test_control_plane_requires_both_identity_and_grant(tmp_path: Path) -> None:
     assert session is not None
     assert resolver.authorize(session, "bank.config.read", "shared")
     assert not resolver.authorize(session, "memory.retain", "shared")
+    assert resolver.list_banks(session) == ["shared"]
+    assert resolver.quarantine_review_banks(session) == ["shared"]
 
 
 @pytest.mark.parametrize(
