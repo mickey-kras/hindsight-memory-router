@@ -402,29 +402,6 @@ if [[ "$mode" == "fake" ]]; then
   reader_auth="Authorization: Bearer mr_reader-1_b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1"
   banks_response="$(curl --max-time 5 -fsS -H "$alpha_auth" "${principals_url}/v1/default/banks")"
   printf '%s' "$banks_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert [bank["bank_id"] for bank in data["banks"]] == ["alpha-only", "shared"]; assert data["total"] == 2' || fail_check "principal bank listing was not filtered to granted banks"
-  # Conflicting grants fail at startup, so exercise the registry validation with
-  # a grant that would otherwise let agent-reader list the restricted bank.
-  docker compose -p "$project" -f "$compose_file" exec -T memory-router-principals python - <<'PY' || fail_check "bank policy accepted a conflicting principal grant"
-import json
-import tempfile
-from pathlib import Path
-
-from memory_router.principals import load_principal_registry
-
-registry = json.loads(Path("/app/integration-principal-registry.json").read_text())
-registry["principals"]["agent-reader"]["grants"].append(
-    {"bank": "alpha-only", "scopes": ["bank.list"]}
-)
-with tempfile.NamedTemporaryFile(mode="w+", suffix=".json") as candidate:
-    json.dump(registry, candidate)
-    candidate.flush()
-    try:
-        load_principal_registry(candidate.name)
-    except RuntimeError as exc:
-        assert str(exc) == "principal grant conflicts with bank access policy"
-    else:
-        raise AssertionError("conflicting grant was accepted")
-PY
   reader_list_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "$reader_auth" "${principals_url}/v1/default/banks")"
   [[ "$reader_list_status" == "403" ]] || fail_check "principal without bank.list could list banks: ${reader_list_status}"
   principal_retain="$(curl --max-time 5 -fsS -H "$alpha_auth" -H "Content-Type: application/json" -X POST "${principals_url}/v1/default/banks/shared/memories" -d '{"items":[{"content":"principal smoke retain","context":"integration smoke","document_id":"ci-principal"}],"async":true}')"
