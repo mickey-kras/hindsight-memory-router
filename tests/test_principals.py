@@ -196,7 +196,6 @@ def test_bank_enumeration_checks_each_grant_once(
     session = resolver.authenticate(_bearer("alpha-1", ALPHA_SECRET)).session
     assert session is not None
 
-    # Calling authorize() per bank rescans all grants, making enumeration quadratic.
     monkeypatch.setattr(
         resolver, "authorize", Mock(side_effect=AssertionError("enumeration rescanned grants"))
     )
