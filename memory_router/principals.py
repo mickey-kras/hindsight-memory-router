@@ -393,7 +393,6 @@ class PrincipalResolver:
         return granted and self._policy_allows(principal_id, principal.source, bank)
 
     def _banks_with_scope(self, session: PrincipalSession, scope: str) -> list[str]:
-        # Inspect each grant once; authorize() rescans all grants per bank.
         return sorted(
             {
                 grant.bank
