@@ -367,7 +367,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertRegex(token["uses"], r"^actions/create-github-app-token@[0-9a-f]{40}$")
         self.assertEqual(token["id"], "app")
         self.assertEqual(token["with"], {
-            "app-id": "${{ vars.RELEASE_APP_ID }}",
+            "client-id": "${{ vars.RELEASE_APP_ID }}",
             "private-key": private_key["RELEASE_APP_PRIVATE_KEY"],
             "owner": "${{ github.repository_owner }}",
             "repositories": "${{ github.event.repository.name }}",
