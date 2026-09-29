@@ -11,8 +11,8 @@
     "plugin": "e48ba92673e4c6dade2ef7247088690dd88f1db9",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
     "agent_sdk": "fee62d4adc41c3c3aa66a405f07ff32c41df8473",
-    "client": "0c7142c3f2da5f0dee79dc54aabc20424da615bd",
-    "facade_spec": "4c534f18b115db74b68dd63e91c01a414d068e83"
+    "client": "af8be7d458568935d9307c6958a10da2805084e8",
+    "facade_spec": "6332bf207726808a6f4c1ebfeb00954b329bbcd2"
   },
   "plugin_client_methods": [
     "createBank",
