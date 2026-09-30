@@ -951,9 +951,9 @@ psycopg-binary==3.3.6 \
     --hash=sha256:f87dbdc42e78ee0f7ea180c03f8c78e80a949e373066629bd90fefff10552dff \
     --hash=sha256:fa34eb47969297471db7b7f193622c7e3ee839ec05abd05f1fe104d5b1b1dcf4 \
     --hash=sha256:fdccb3a0e184b03e9baa673b15a809cf36c339c85dbda0ebc25a698846dfbee8
-psycopg-pool==3.3.2 \
-    --hash=sha256:0c70903c7f50cd7173ef0f6364bb7c9271fa3810f5746e058449a77afe579f49 \
-    --hash=sha256:96971f245eee54f1632d8eaae0de5bb6e9c624c1effdd42d8d6843e534f56e07
+psycopg-pool==3.3.3 \
+    --hash=sha256:9b9cd6a4fcec47a410f7e82d408540e7f77b478509e91b44c1a5457a13e5ff37 \
+    --hash=sha256:df87b5d9d0ad7db37f6cdad4fa8ce113d250f5997f6db38e9a99192fb67f9e1d
 py-serializable==2.1.0 \
     --hash=sha256:9d5db56154a867a9b897c0163b33a793c804c80cee984116d02d49e4578fc103 \
     --hash=sha256:b56d5d686b5a03ba4f4db5e769dc32336e142fc3bd4d68a8c25579ebb0a67304
