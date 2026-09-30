@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ApiError,
   fetchStats,
@@ -39,6 +39,7 @@ export default function App() {
   const [showCleanup, setShowCleanup] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const hostSessionEpoch = useRef(0);
 
   useEffect(() => {
     if (!host.config) return;
@@ -49,6 +50,9 @@ export default function App() {
   }, [host.config]);
 
   const expireHostSession = useCallback(() => {
+    hostSessionEpoch.current += 1;
+    setLoading(false);
+    setLoadingMore(false);
     setSelected(null);
     setShowCleanup(false);
     setStats(null);
@@ -60,6 +64,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     if (!tokens) return;
+    const epoch = hostSessionEpoch.current;
     setLoading(true);
     setError(null);
     try {
@@ -67,10 +72,12 @@ export default function App() {
         listQueue(tokens, QUEUE_PAGE_SIZE),
         fetchStats(tokens),
       ]);
+      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
       setItems(queue.items);
       setTotal(queue.total);
       setStats(nextStats);
     } catch (err) {
+      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
       if (err instanceof ApiError && err.status === 401) {
         if (tokens === "host") {
           expireHostSession();
@@ -80,16 +87,18 @@ export default function App() {
         setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "refresh failed");
       }
     } finally {
-      setLoading(false);
+      if (tokens !== "host" || epoch === hostSessionEpoch.current) setLoading(false);
     }
   }, [tokens, expireHostSession]);
 
   const loadMore = useCallback(async () => {
     if (!tokens || loadingMore || items.length >= total) return;
+    const epoch = hostSessionEpoch.current;
     setLoadingMore(true);
     setError(null);
     try {
       const queue = await listQueue(tokens, QUEUE_PAGE_SIZE, items.length);
+      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
       setItems((current) => {
         const byId = new Map(current.map((item) => [item.quarantine_id, item]));
         for (const item of queue.items) byId.set(item.quarantine_id, item);
@@ -97,10 +106,11 @@ export default function App() {
       });
       setTotal(queue.total);
     } catch (err) {
+      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
       if (tokens === "host" && err instanceof ApiError && err.status === 401) expireHostSession();
       else setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");
     } finally {
-      setLoadingMore(false);
+      if (tokens !== "host" || epoch === hostSessionEpoch.current) setLoadingMore(false);
     }
   }, [items.length, loadingMore, tokens, total, expireHostSession]);
 
@@ -121,7 +131,9 @@ export default function App() {
     setItems([]);
   };
 
+  const actionEpoch = hostSessionEpoch.current;
   const onAction = (message: string) => {
+    if (tokens === "host" && actionEpoch !== hostSessionEpoch.current) return;
     setNotice(message);
     setSelected(null);
     void refresh();

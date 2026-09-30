@@ -8,20 +8,22 @@ async function host(page: Page, session = "operator") {
   if (session) await page.context().addCookies([{ name: "host-session", value: session, url: `http://127.0.0.1:${process.env.UI_PORT ?? "4173"}` }]);
   await page.addInitScript((stale) => {
     sessionStorage.setItem("mr-admin-tokens", stale);
+    const storageAccess: string[] = [];
+    Object.assign(window, { hostTokenStorageAccess: storageAccess });
     const get = Storage.prototype.getItem;
     const set = Storage.prototype.setItem;
     const remove = Storage.prototype.removeItem;
-    // Fail loudly if application code touches legacy credentials in host mode.
-    Storage.prototype.getItem = function (key: string) { if (key === "mr-admin-tokens") throw new Error("host read legacy tokens"); return get.call(this, key); };
-    Storage.prototype.setItem = function (key: string, value: string) { if (key === "mr-admin-tokens") throw new Error("host wrote legacy tokens"); set.call(this, key, value); };
-    Storage.prototype.removeItem = function (key: string) { if (key === "mr-admin-tokens") throw new Error("host removed legacy tokens"); remove.call(this, key); };
+    // Record reads even when session helpers swallow storage exceptions.
+    Storage.prototype.getItem = function (key: string) { if (key === "mr-admin-tokens") storageAccess.push("get"); return get.call(this, key); };
+    Storage.prototype.setItem = function (key: string, value: string) { if (key === "mr-admin-tokens") storageAccess.push("set"); set.call(this, key, value); };
+    Storage.prototype.removeItem = function (key: string) { if (key === "mr-admin-tokens") storageAccess.push("remove"); remove.call(this, key); };
     window.__MEMORY_ROUTER_UI_CONFIG__ = { auth: "host", baseUrl: `${location.origin}/host`, chrome: { embed: true, header: false } };
   }, STALE);
   await page.goto("/");
 }
 
-async function openItem(page: Page, phone: boolean) {
-  await page.getByTestId(`${phone ? "card" : "row"}-${ITEM}`).click();
+async function openItem(page: Page, phone: boolean, item = ITEM) {
+  await page.getByTestId(`${phone ? "card" : "row"}-${item}`).click();
   await expect(page.getByTestId("postpone")).toBeVisible();
 }
 
@@ -50,6 +52,7 @@ test("host proxy injects scoped credentials for read, review and cleanup without
   expect(auth.length).toBeGreaterThan(4);
   expect(auth.every((value) => value === undefined)).toBe(true);
   expect(errors).toEqual([]);
+  expect(await page.evaluate(() => Reflect.get(window, "hostTokenStorageAccess"))).toEqual([]);
   expect(await page.evaluate(() => Object.fromEntries(Object.entries(sessionStorage))["mr-admin-tokens"])).toBe(STALE);
 });
 
@@ -137,5 +140,38 @@ for (const chrome of [{ header: false }, { branding: false }, {}]) {
     await expect(page.getByTestId("console")).toHaveClass(/min-h-dvh/);
     await expect(page.getByTestId("refresh")).toHaveCount(chrome.header === false ? 0 : 1);
     await expect(page.getByRole("heading", { name: "Memory Router - Quarantine" })).toHaveCount(chrome.header === false || chrome.branding === false ? 0 : 1);
+  });
+}
+
+for (const pending of ["refresh", "load-more"]) {
+  test(`late ${pending} success cannot restore data after a concurrent 401`, async ({ page }, info) => {
+    if (pending === "load-more") await page.request.post(`${MOCK}/__seed-more`);
+    await host(page);
+    await expect(page.getByTestId("stats")).toBeVisible();
+    const selectedId = pending === "load-more" ? "q_retain_0123456789abcdef" : ITEM;
+    await openItem(page, info.project.name === "phone", selectedId);
+    let releaseResponse: (() => void) | undefined;
+    let markCaptured: (() => void) | undefined;
+    const captured = new Promise<void>((resolve) => { markCaptured = resolve; });
+    const delayed = new Promise<void>((resolve) => { releaseResponse = resolve; });
+    await page.route("**/host/admin/quarantine/queue?*", async (route) => {
+      const response = await route.fetch();
+      markCaptured?.();
+      await delayed;
+      await route.fulfill({ response });
+    });
+    await page.getByTestId(pending).click();
+    await captured;
+    await page.context().clearCookies();
+    await page.getByTestId("postpone").click();
+    await expect(page.getByRole("alert")).toContainText("sign in through the host");
+    const delivered = page.waitForResponse((response) => response.url().includes("/host/admin/quarantine/queue?"));
+    releaseResponse?.();
+    await (await delivered).finished();
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByTestId("refresh")).toBeEnabled();
+    await expect(page.getByTestId("stats")).toHaveCount(0);
+    await expect(page.getByTestId(`row-${selectedId}`)).toHaveCount(0);
+    await expect(page.getByTestId(`card-${selectedId}`)).toHaveCount(0);
   });
 }
