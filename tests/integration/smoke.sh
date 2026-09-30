@@ -98,8 +98,13 @@ wait_for_readiness_event() {
   local logs_start="$3"
   local deadline=$((SECONDS + 60))
   local status
+  local request_timeout
   while (( SECONDS < deadline )); do
-    status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")" || status=""
+    # Readiness refresh can take 15 seconds; wait for its response, within our deadline.
+    request_timeout=$((deadline - SECONDS))
+    (( request_timeout > 0 )) || break
+    (( request_timeout > 20 )) && request_timeout=20
+    status="$(curl --max-time "$request_timeout" -sS -o /dev/null -w '%{http_code}' "${router_url}/health/ready")" || status=""
     if [[ "$status" == "$expected_status" ]] &&
       docker logs "$router_container" 2>&1 | python3 -c 'import json,sys; events=[json.loads(line).get("event") for line in sys.stdin.read().splitlines()[int(sys.argv[2]):] if line]; sys.exit(0 if sys.argv[1] in events else 1)' "$expected_event" "$logs_start"; then
       return 0
