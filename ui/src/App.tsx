@@ -4,6 +4,7 @@ import {
   fetchStats,
   listQueue,
   type AdminTokens,
+  type AdminSession,
 } from "./lib/api";
 import { clearTokens, loadTokens, saveTokens } from "./lib/session";
 import { ConfigError, resolveUiConfig, THEME_VARS, type ResolvedUiConfig, type UiTheme } from "./lib/config";
@@ -28,7 +29,7 @@ export default function App() {
       };
     }
   });
-  const [tokens, setTokens] = useState<AdminTokens | null>(() => loadTokens());
+  const [tokens, setTokens] = useState<AdminSession | null>(() => !host.config ? null : host.config.auth === "host" ? "host" : loadTokens());
   const [stats, setStats] = useState<QuarantineStats | null>(null);
   const [items, setItems] = useState<QuarantineItemSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -47,6 +48,16 @@ export default function App() {
     }
   }, [host.config]);
 
+  const expireHostSession = useCallback(() => {
+    setSelected(null);
+    setShowCleanup(false);
+    setStats(null);
+    setItems([]);
+    setTotal(0);
+    setNotice(null);
+    setError("401 unauthorized - sign in through the host, then refresh");
+  }, []);
+
   const refresh = useCallback(async () => {
     if (!tokens) return;
     setLoading(true);
@@ -61,14 +72,17 @@ export default function App() {
       setStats(nextStats);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
-        setError("401 unauthorized - check the read token and its scope");
+        if (tokens === "host") {
+          expireHostSession();
+        }
+        setError(tokens === "host" ? "401 unauthorized - sign in through the host, then refresh" : "401 unauthorized - check the read token and its scope");
       } else {
         setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "refresh failed");
       }
     } finally {
       setLoading(false);
     }
-  }, [tokens]);
+  }, [tokens, expireHostSession]);
 
   const loadMore = useCallback(async () => {
     if (!tokens || loadingMore || items.length >= total) return;
@@ -83,11 +97,12 @@ export default function App() {
       });
       setTotal(queue.total);
     } catch (err) {
-      setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");
+      if (tokens === "host" && err instanceof ApiError && err.status === 401) expireHostSession();
+      else setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");
     } finally {
       setLoadingMore(false);
     }
-  }, [items.length, loadingMore, tokens, total]);
+  }, [items.length, loadingMore, tokens, total, expireHostSession]);
 
   useEffect(() => {
     void refresh();
@@ -120,13 +135,13 @@ export default function App() {
     );
   }
 
-  if (!tokens) return <ConnectScreen onConnect={connect} />;
+  if (!tokens) return <ConnectScreen onConnect={connect} embed={host.config.chrome.embed} />;
 
   return (
-    <div className="mx-auto flex min-h-dvh max-w-6xl flex-col gap-4 px-3 py-4 sm:px-5 sm:py-6">
-      {host.config.chrome.header && (
+    <div data-testid="console" className={host.config.chrome.embed ? "flex flex-col gap-4" : "mx-auto flex min-h-dvh max-w-6xl flex-col gap-4 px-3 py-4 sm:px-5 sm:py-6"}>
+      {(host.config.chrome.header || host.config.chrome.embed) && (
         <header className="flex flex-wrap items-center gap-2">
-          {host.config.chrome.branding && (
+          {!host.config.chrome.embed && host.config.chrome.branding && (
             <div className="flex items-center gap-2">
               <span
                 className="inline-block h-2.5 w-2.5 rounded-full"
@@ -154,12 +169,12 @@ export default function App() {
             >
               {loading ? "loading..." : "Refresh"}
             </button>
-            <button
+            {tokens !== "host" && <button
               onClick={disconnect}
               className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800"
             >
               Disconnect
-            </button>
+            </button>}
           </div>
         </header>
       )}
@@ -169,7 +184,7 @@ export default function App() {
 
       {stats && <StatsBar stats={stats} />}
 
-      {showCleanup && <CleanupPanel tokens={tokens} onDone={onAction} />}
+      {showCleanup && <CleanupPanel tokens={tokens} onDone={onAction} onUnauthorized={expireHostSession} />}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <QueueView
@@ -186,6 +201,7 @@ export default function App() {
         />
         {selected && (
           <ItemDetail
+            onUnauthorized={expireHostSession}
             item={selected}
             tokens={tokens}
             onAction={onAction}
@@ -195,7 +211,7 @@ export default function App() {
       </div>
 
       <footer className="mt-auto pt-4 text-center text-[11px] text-zinc-600">
-        Tokens in sessionStorage only. Decryption is local (WebCrypto); the router never sees the
+        {tokens === "host" ? "Authentication is managed by the host." : "Tokens in sessionStorage only."} Decryption is local (WebCrypto); the router never sees the
         decryption key.
       </footer>
     </div>

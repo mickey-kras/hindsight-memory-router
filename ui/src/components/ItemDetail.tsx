@@ -6,7 +6,7 @@ import {
   postponeItem,
   reconcileItem,
   rejectItem,
-  type AdminTokens,
+  type AdminSession,
 } from "../lib/api";
 import {
   DecryptError,
@@ -24,14 +24,15 @@ import { Banner } from "./Banner";
 
 interface Props {
   item: QuarantineItemSummary;
-  tokens: AdminTokens;
+  tokens: AdminSession;
+  onUnauthorized: () => void;
   onAction: (message: string) => void;
   onClose: () => void;
 }
 
 type PendingAction = "approve" | "reject" | ReconcileAction | null;
 
-export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
+export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: Props) {
   const [detail, setDetail] = useState<QuarantineItemResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [keyPem, setKeyPem] = useState("");
@@ -55,13 +56,14 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
       })
       .catch((error: unknown) => {
         if (active) {
+          if (tokens === "host" && error instanceof ApiError && error.status === 401) onUnauthorized();
           setLoadError(error instanceof ApiError ? `${error.code}: ${error.message}` : "load failed");
         }
       });
     return () => {
       active = false;
     };
-  }, [item.quarantine_id, tokens]);
+  }, [item.quarantine_id, tokens, onUnauthorized]);
 
   const importKey = useCallback(async () => {
     setDecryptError(null);
@@ -114,6 +116,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
           onAction(`reconciled ${item.quarantine_id} (${action})`);
         }
       } catch (error) {
+        if (tokens === "host" && error instanceof ApiError && error.status === 401) onUnauthorized();
         setBusy(false);
         setPendingAction(null);
         setDecryptError(
@@ -122,7 +125,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
         return;
       }
     },
-    [decrypted, detail, item, tokens, onAction],
+    [decrypted, detail, item, tokens, onAction, onUnauthorized],
   );
 
   const record = detail?.record ?? item;
@@ -253,10 +256,10 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
                 <>
                   <button
                     onClick={() => setPendingAction("approve")}
-                    disabled={!decrypted || busy || !tokens.review}
+                    disabled={!decrypted || busy || (tokens !== "host" && !tokens.review)}
                     data-testid="approve-open"
                     title={
-                      !decrypted ? "decrypt first" : !tokens.review ? "review token required" : ""
+                      !decrypted ? "decrypt first" : (tokens !== "host" && !tokens.review) ? "review token required" : ""
                     }
                     className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
                   >
@@ -264,7 +267,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
                   </button>
                   <button
                     onClick={() => setPendingAction("reject")}
-                    disabled={busy || !tokens.review}
+                    disabled={busy || (tokens !== "host" && !tokens.review)}
                     data-testid="reject-open"
                     className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
                   >
@@ -272,7 +275,7 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
                   </button>
                   <button
                     onClick={() => void runAction("postpone")}
-                    disabled={busy || !tokens.review}
+                    disabled={busy || (tokens !== "host" && !tokens.review)}
                     data-testid="postpone"
                     className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
                   >
@@ -284,18 +287,18 @@ export function ItemDetail({ item, tokens, onAction, onClose }: Props) {
                 <>
                   <button
                     onClick={() => setPendingAction("confirmed_applied")}
-                    disabled={busy || !tokens.review}
+                    disabled={busy || (tokens !== "host" && !tokens.review)}
                     data-testid="reconcile-applied-open"
-                    title={!tokens.review ? "review token required" : ""}
+                    title={(tokens !== "host" && !tokens.review) ? "review token required" : ""}
                     className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
                   >
                     Confirm applied
                   </button>
                   <button
                     onClick={() => setPendingAction("confirmed_not_applied")}
-                    disabled={busy || !tokens.review}
+                    disabled={busy || (tokens !== "host" && !tokens.review)}
                     data-testid="reconcile-not-applied-open"
-                    title={!tokens.review ? "review token required" : ""}
+                    title={(tokens !== "host" && !tokens.review) ? "review token required" : ""}
                     className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
                   >
                     Confirm not applied

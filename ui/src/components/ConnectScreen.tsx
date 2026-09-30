@@ -2,10 +2,11 @@ import { useEffect, useState } from "react";
 import { fetchLiveness, type AdminTokens } from "../lib/api";
 
 interface Props {
+  embed?: boolean;
   onConnect: (tokens: AdminTokens) => void;
 }
 
-export function ConnectScreen({ onConnect }: Props) {
+export function ConnectScreen({ onConnect, embed = false }: Props) {
   const [read, setRead] = useState("");
   const [review, setReview] = useState("");
   const [cleanup, setCleanup] = useState("");
@@ -25,12 +26,12 @@ export function ConnectScreen({ onConnect }: Props) {
   };
 
   return (
-    <div className="mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10">
+    <div className={embed ? "flex max-w-md flex-col" : "mx-auto flex min-h-dvh max-w-md flex-col justify-center px-4 py-10"}>
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-6 shadow-xl">
-        <div className="mb-1 flex items-center gap-2">
+        {!embed && <div className="mb-1 flex items-center gap-2">
           <span className="inline-block h-2.5 w-2.5 rounded-full bg-emerald-400" />
           <h1 className="text-lg font-semibold tracking-tight">Memory Router</h1>
-        </div>
+        </div>}
         <p className="mb-5 text-sm text-zinc-400">
           Quarantine review console. Tokens stay in this tab (sessionStorage), never in
           localStorage or cookies.

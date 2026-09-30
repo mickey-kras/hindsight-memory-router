@@ -30,10 +30,37 @@ const MIME = {
   ".ico": "image/x-icon",
 };
 
-await startMockRouter(MOCK_PORT);
+const mock = await startMockRouter(MOCK_PORT);
 
 const server = createServer((req, res) => {
   const url = new URL(req.url, "http://ui");
+
+  if (url.pathname.startsWith("/host/admin/")) {
+    const fail = (status, error) => {
+      res.writeHead(status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error, message: error }));
+    };
+    const session = (req.headers.cookie ?? "").split("; ").find((cookie) => cookie.startsWith("host-session="))?.split("=")[1];
+    if (session !== "operator" && session !== "reader") return fail(401, "host_session_required");
+    const pathname = url.pathname.slice("/host".length);
+    const scope = req.method === "GET" ? "read" : pathname === "/admin/quarantine/cleanup" ? "cleanup" : "review";
+    if (scope !== "read" && session !== "operator") return fail(403, "host_permission_denied");
+    // Test host uses exact Origin validation, including rejecting a missing Origin.
+    // UI same-origin configuration alone cannot enforce this boundary.
+    if (scope !== "read" && req.headers.origin !== `http://127.0.0.1:${UI_PORT}`) return fail(403, "host_csrf_rejected");
+    if (req.headers.authorization) return fail(400, "browser_bearer_rejected");
+    fetch(`http://127.0.0.1:${MOCK_PORT}${pathname}${url.search}`, {
+      method: req.method,
+      headers: { authorization: `Bearer ${mock.tokens[scope]}`, "content-type": "application/json" },
+      body: ["GET", "HEAD"].includes(req.method) ? undefined : req,
+      duplex: "half",
+      redirect: "error",
+    }).then(async (upstream) => {
+      res.writeHead(upstream.status, { "Content-Type": "application/json" });
+      res.end(Buffer.from(await upstream.arrayBuffer()));
+    }).catch(() => fail(502, "host_upstream_unavailable"));
+    return;
+  }
 
   if (
     url.pathname.startsWith("/admin") ||

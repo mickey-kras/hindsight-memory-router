@@ -22,10 +22,11 @@ afterEach(() => {
 describe("resolveUiConfig", () => {
   it("defaults to same-origin when the host injects nothing", () => {
     expect(resolveUiConfig()).toEqual({
+      auth: "token",
       baseUrl: "",
       productName: DEFAULT_PRODUCT_NAME,
       theme: {},
-      chrome: { header: true, branding: true },
+      chrome: { header: true, branding: true, embed: false },
     });
     expect(apiUrl("/admin/quarantine/queue")).toBe("/admin/quarantine/queue");
   });
@@ -64,11 +65,11 @@ describe("resolveUiConfig", () => {
   });
 
   it("defaults chrome flags to visible and accepts boolean overrides", () => {
-    expect(resolveUiConfig().chrome).toEqual({ header: true, branding: true });
-    host[CONFIG_KEY] = { chrome: { header: false, branding: false } };
-    expect(resolveUiConfig().chrome).toEqual({ header: false, branding: false });
+    expect(resolveUiConfig().chrome).toEqual({ header: true, branding: true, embed: false });
+    host[CONFIG_KEY] = { chrome: { header: false, branding: false, embed: false } };
+    expect(resolveUiConfig().chrome).toEqual({ header: false, branding: false, embed: false });
     host[CONFIG_KEY] = { chrome: { branding: false } };
-    expect(resolveUiConfig().chrome).toEqual({ header: true, branding: false });
+    expect(resolveUiConfig().chrome).toEqual({ header: true, branding: false, embed: false });
   });
 
   it.each([

@@ -3,7 +3,7 @@
 // window.__MEMORY_ROUTER_UI_CONFIG__ (see lib/config.ts). Tokens are supplied
 // per request, never stored here.
 
-import { apiUrl } from "./config";
+import { apiUrl, resolveUiConfig } from "./config";
 
 import type {
   CleanupRequest,
@@ -34,22 +34,27 @@ export interface AdminTokens {
   cleanup: string;
 }
 
+export type AdminSession = AdminTokens | "host";
+
 type TokenScope = keyof AdminTokens;
 
 async function request<T>(
   path: string,
   scope: TokenScope,
-  tokens: AdminTokens,
+  tokens: AdminSession,
   init?: RequestInit,
 ): Promise<T> {
-  const token = tokens[scope];
-  if (!token) throw new ApiError(0, "token_missing", `no ${scope} token configured`);
+  const config = resolveUiConfig();
+  const hostAuth = config.auth === "host";
+  const token = hostAuth || tokens === "host" ? "" : tokens[scope];
+  if (!hostAuth && !token) throw new ApiError(0, "token_missing", `no ${scope} token configured`);
   let response: Response;
   try {
     response = await fetch(apiUrl(path), {
       ...init,
+      ...(hostAuth ? { credentials: "same-origin" as const, mode: "same-origin" as const, redirect: "error" as const } : {}),
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...(!hostAuth ? { Authorization: `Bearer ${token}` } : {}),
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
       },
     });
@@ -82,23 +87,23 @@ export async function fetchLiveness(): Promise<LivenessResponse> {
 }
 
 export function listQueue(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   limit = 100,
   offset = 0,
 ): Promise<QuarantineQueueResponse> {
   return request(`/admin/quarantine/queue?limit=${limit}&offset=${offset}`, "read", tokens);
 }
 
-export function fetchStats(tokens: AdminTokens): Promise<QuarantineStats> {
+export function fetchStats(tokens: AdminSession): Promise<QuarantineStats> {
   return request("/admin/quarantine/stats", "read", tokens);
 }
 
-export function fetchItem(tokens: AdminTokens, quarantineId: string): Promise<QuarantineItemResponse> {
+export function fetchItem(tokens: AdminSession, quarantineId: string): Promise<QuarantineItemResponse> {
   return request(`/admin/quarantine/items/${encodeURIComponent(quarantineId)}`, "read", tokens);
 }
 
 export function approveItem(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   quarantineId: string,
   decrypted: DecryptedQuarantineObject,
 ): Promise<Record<string, unknown>> {
@@ -111,7 +116,7 @@ export function approveItem(
 }
 
 function reviewItem(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   quarantineId: string,
   action: "reject" | "postpone",
 ): Promise<Record<string, unknown>> {
@@ -124,21 +129,21 @@ function reviewItem(
 }
 
 export function rejectItem(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   quarantineId: string,
 ): Promise<Record<string, unknown>> {
   return reviewItem(tokens, quarantineId, "reject");
 }
 
 export function postponeItem(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   quarantineId: string,
 ): Promise<Record<string, unknown>> {
   return reviewItem(tokens, quarantineId, "postpone");
 }
 
 export function reconcileItem(
-  tokens: AdminTokens,
+  tokens: AdminSession,
   quarantineId: string,
   body: ReconcileRequest,
 ): Promise<ReconcileResponse> {
@@ -150,7 +155,7 @@ export function reconcileItem(
   );
 }
 
-export function runCleanup(tokens: AdminTokens, body: CleanupRequest): Promise<CleanupResponse> {
+export function runCleanup(tokens: AdminSession, body: CleanupRequest): Promise<CleanupResponse> {
   return request("/admin/quarantine/cleanup", "cleanup", tokens, {
     method: "POST",
     body: JSON.stringify(body),

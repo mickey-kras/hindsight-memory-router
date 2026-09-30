@@ -1,16 +1,17 @@
 import { useState } from "react";
-import { ApiError, runCleanup, type AdminTokens } from "../lib/api";
+import { ApiError, runCleanup, type AdminSession } from "../lib/api";
 import { REASONS } from "../lib/types";
 import type { CleanupResponse, ReviewReason } from "../lib/types";
 import { formatBytes } from "../lib/format";
 import { Banner } from "./Banner";
 
 interface Props {
-  tokens: AdminTokens;
+  tokens: AdminSession;
+  onUnauthorized: () => void;
   onDone: (message: string) => void;
 }
 
-export function CleanupPanel({ tokens, onDone }: Props) {
+export function CleanupPanel({ tokens, onDone, onUnauthorized }: Props) {
   const [scope, setScope] = useState<"pending" | "all">("pending");
   const [reasons, setReasons] = useState<ReviewReason[]>([]);
   const [olderThan, setOlderThan] = useState("");
@@ -48,6 +49,7 @@ export function CleanupPanel({ tokens, onDone }: Props) {
         onDone(`cleanup removed ${result.count} items (${formatBytes(result.encrypted_bytes)})`);
       }
     } catch (err) {
+      if (tokens === "host" && err instanceof ApiError && err.status === 401) onUnauthorized();
       if (!dryRun && err instanceof ApiError && err.status === 409) setPreview(null);
       setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "cleanup failed");
     } finally {
@@ -123,9 +125,9 @@ export function CleanupPanel({ tokens, onDone }: Props) {
       <div className="flex gap-2">
         <button
           onClick={() => void run(true)}
-          disabled={busy || !tokens.cleanup}
+          disabled={busy || (tokens !== "host" && !tokens.cleanup)}
           data-testid="cleanup-preview-run"
-          title={!tokens.cleanup ? "cleanup token required" : ""}
+          title={(tokens !== "host" && !tokens.cleanup) ? "cleanup token required" : ""}
           className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
         >
           Preview
