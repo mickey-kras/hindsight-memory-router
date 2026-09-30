@@ -53,8 +53,44 @@ file like above (or pin an inline snippet with a CSP hash) — an inline
   chrome; queue actions then need host wiring), `branding: false` hides only
   the product name and status dot.
 
-Unknown keys and malformed values fail closed at startup. Admin tokens still
-live in sessionStorage only; the package never bundles or persists credentials.
+Unknown keys and malformed values fail closed at startup. In the default
+`auth: "token"` mode, admin tokens live in sessionStorage only.
+
+### Authenticated host and compact layout
+
+```js
+window.__MEMORY_ROUTER_UI_CONFIG__ = {
+  auth: "host",
+  baseUrl: "https://console.example/router", // must match the page origin
+  chrome: { embed: true },
+};
+```
+
+`auth: "host"` skips Connect and never accesses `mr-admin-tokens`. Requests
+use the host session, send no UI-generated bearer header, and reject redirects.
+Omit `baseUrl` for the page origin without a path prefix. Cross-origin host mode
+is rejected. A 401 clears the displayed queue, item and cleanup state; sign in
+through the host and Refresh. Errors never fall back to stored admin tokens.
+
+The host/proxy must:
+
+- Authenticate each request and authorize each action before injecting the
+  existing router read, review or cleanup bearer credential. A read-only operator
+  must not gain review or cleanup access.
+- Protect cookie-authenticated mutations against CSRF, for example by validating
+  the exact trusted Origin and rejecting missing/opaque/foreign origins. An
+  equivalent established CSRF mechanism is also valid. Same-origin UI config is
+  not CSRF protection.
+- Keep router credentials server-side, strip browser-supplied Authorization,
+  avoid returning credentials in errors, and leave router scope checks enabled.
+
+This package adds no router cookie authentication or new token type. Deploy it
+behind that boundary; the standalone nginx example below does not provide it.
+
+`chrome.embed: true` removes the full-viewport shell and product header while
+keeping Refresh, Cleanup and review actions. Token mode also keeps Disconnect.
+It works independently of `auth` and overrides `chrome.header: false` for the
+action toolbar. With embed omitted, existing header/branding behavior is unchanged.
 
 ### Version and crypto contract
 

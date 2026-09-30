@@ -17,9 +17,11 @@ export interface UiTheme {
 export interface UiChrome {
   header?: boolean;
   branding?: boolean;
+  embed?: boolean;
 }
 
 export interface UiConfig {
+  auth?: "token" | "host";
   baseUrl?: string;
   productName?: string;
   theme?: UiTheme;
@@ -27,6 +29,7 @@ export interface UiConfig {
 }
 
 export interface ResolvedUiConfig {
+  auth: "token" | "host";
   // Empty means same-origin; otherwise an absolute http(s) origin plus
   // optional path prefix, without a trailing slash.
   baseUrl: string;
@@ -72,13 +75,13 @@ function resolveTheme(raw: unknown): UiTheme {
 }
 
 function resolveChrome(raw: unknown): Required<UiChrome> {
-  const chrome: Required<UiChrome> = { header: true, branding: true };
+  const chrome: Required<UiChrome> = { header: true, branding: true, embed: false };
   if (raw === undefined) return chrome;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ConfigError(`${CONFIG_KEY}.chrome must be an object of boolean flags`);
   }
   for (const [key, value] of Object.entries(raw)) {
-    if (key !== "header" && key !== "branding") {
+    if (key !== "header" && key !== "branding" && key !== "embed") {
       throw new ConfigError(`${CONFIG_KEY}.chrome.${key} is not a supported flag`);
     }
     if (typeof value !== "boolean") {
@@ -120,19 +123,30 @@ function resolveProductName(raw: unknown): string {
 export function resolveUiConfig(): ResolvedUiConfig {
   const raw: unknown = globalThis[CONFIG_KEY];
   if (raw === undefined) {
-    return { baseUrl: "", productName: DEFAULT_PRODUCT_NAME, theme: {}, chrome: { header: true, branding: true } };
+    return { auth: "token", baseUrl: "", productName: DEFAULT_PRODUCT_NAME, theme: {}, chrome: { header: true, branding: true, embed: false } };
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ConfigError(`${CONFIG_KEY} must be an object`);
   }
   const config = raw as Record<string, unknown>;
   for (const key of Object.keys(config)) {
-    if (!["baseUrl", "productName", "theme", "chrome"].includes(key)) {
+    if (!["auth", "baseUrl", "productName", "theme", "chrome"].includes(key)) {
       throw new ConfigError(`${CONFIG_KEY}.${key} is not a supported option`);
     }
   }
+  const auth = config["auth"] === undefined ? "token" : config["auth"];
+  if (auth !== "token" && auth !== "host") {
+    throw new ConfigError(`${CONFIG_KEY}.auth must be token or host`);
+  }
+  const baseUrl = resolveBaseUrl(config["baseUrl"]);
+  if (auth === "host" && (typeof location === "undefined" ||
+      !["http:", "https:"].includes(location.protocol) ||
+      (baseUrl !== "" && new URL(baseUrl).origin !== location.origin))) {
+    throw new ConfigError(`${CONFIG_KEY}.auth host requires a same-origin http(s) host/proxy`);
+  }
   return {
-    baseUrl: resolveBaseUrl(config["baseUrl"]),
+    auth,
+    baseUrl,
     productName: resolveProductName(config["productName"]),
     theme: resolveTheme(config["theme"]),
     chrome: resolveChrome(config["chrome"]),

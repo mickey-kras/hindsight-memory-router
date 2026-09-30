@@ -3,6 +3,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         operator = person "Operator / Reviewer" "Reviews quarantined evidence and submits review decisions."
 
         openclaw = softwareSystem "OpenClaw (Hindsight plugin)" "Current supported client integration."
+        hostProxy = softwareSystem "Authenticated Host Proxy (optional)" "Authenticates host sessions, authorizes each action, rejects CSRF mutations, and injects existing scoped admin credentials server-side."
         hindsight = softwareSystem "Hindsight" "Only implemented memory backend."
 
         memoryRouter = softwareSystem "Memory Router" "Policy and security boundary between the OpenClaw Hindsight plugin and Hindsight." {
@@ -22,8 +23,14 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             }
 
             quarantineStorage = container "Quarantine Storage" "Encrypted quarantine/review state, audit history, and shared rate-limit state when PostgreSQL is used." "SQLite (single-node) or PostgreSQL (clustered)" "Database"
+            console = container "Quarantine Console" "Standalone token session or optional same-origin host authentication. Local WebCrypto decryption; embed layout retains actions." "React / TypeScript"
             reviewTool = container "Offline Review Tooling" "Decrypts exported quarantine envelopes outside the router process. The private key is supplied locally and is never available to Memory Router." "Python CLI" "Offline"
         }
+
+        operator -> console "Reviews quarantine in the browser" "HTTPS"
+        console -> api "Standalone: existing scoped admin credentials" "HTTP/JSON + scoped Bearer"
+        console -> hostProxy "Host mode: same-origin session; no browser admin bearer" "HTTPS + host session"
+        hostProxy -> api "Authorized action with existing scoped admin credential" "HTTP/JSON + scoped Bearer"
 
         openclaw -> api "Uses Hindsight-compatible API" "HTTP/JSON + Bearer"
         api -> hindsight "Calls supported Hindsight endpoints" "HTTP/JSON"
@@ -113,12 +120,12 @@ workspace "Hindsight Memory Router" "As-built architecture" {
 
     views {
         systemContext memoryRouter "SystemContext" "Current supported topology and review boundary." {
-            include openclaw memoryRouter hindsight operator
+            include openclaw memoryRouter hindsight operator hostProxy
             autoLayout lr
         }
 
         container memoryRouter "Containers" "Memory Router runtime and dependency boundaries." {
-            include openclaw api quarantineStorage reviewTool hindsight operator
+            include openclaw api quarantineStorage reviewTool console hindsight operator hostProxy
             autoLayout lr
         }
 
