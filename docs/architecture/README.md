@@ -19,35 +19,31 @@ python3 scripts/architecture-overview.py --repository integrations --output-dir 
 
 Only each repository's own pair is committed there. The diagrams deliberately omit deployment details; README `<picture>` elements select the theme and provide a light fallback.
 
-## C1: System Context
+## Overview and detailed views
 
-Who uses Memory Router and which external systems it talks to.
+<a href="https://mickey-kras.github.io/hindsight-memory-router/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="generated/overview-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="generated/overview-light.svg">
+    <img alt="Agents use Integrations, Memory Router, and Hindsight; Memory Router and its encrypted quarantine are highlighted." src="generated/overview-light.svg">
+  </picture>
+</a>
 
-![C1: System Context](generated/SystemContext.svg)
-
-## C2: Containers
-
-Runtime processes and data stores.
-
-![C2: Containers](generated/Containers.svg)
-
-## C3: Components
-
-Responsibilities inside Memory Router API.
-
-![C3: Components](generated/Components.svg)
+- [C1: System Context](https://mickey-kras.github.io/hindsight-memory-router/#SystemContext): users and external systems.
+- [C2: Containers](https://mickey-kras.github.io/hindsight-memory-router/#Containers): runtime processes and data stores.
+- [C3: Components](https://mickey-kras.github.io/hindsight-memory-router/#Components): responsibilities inside the API.
 
 ## Dynamic views
 
-- [Principal authorization](generated/PrincipalAuthorization.svg): authenticate credentials and check bank/scope grants before memory access.
-- [Integration reads](generated/IntegrationReads.svg): client fan-out, shared budget, partial results, and authorization failure handling.
-- [Retain queue / replay](generated/RetainReplay.svg): transient outage queuing and current write-bank checks.
-- [Retain](generated/Retain.svg)
-- [Recall](generated/Recall.svg)
-- [Compatibility operations](generated/CompatibilityOperations.svg): shared flow for supported bank/config/mental-model/reflect operations used by the integrations.
-- [Quarantine / review](generated/QuarantineReview.svg): browser or CLI decryption and decision outcomes.
-- [Quarantine recovery](generated/QuarantineRecovery.svg): verified reconciliation after ambiguous side effects.
-- [Startup / shutdown](generated/StartupShutdown.svg)
+- [Principal authorization](https://mickey-kras.github.io/hindsight-memory-router/#PrincipalAuthorization): authenticate credentials and check bank/scope grants before memory access.
+- [Integration reads](https://mickey-kras.github.io/hindsight-memory-router/#IntegrationReads): client fan-out, shared budget, partial results, and authorization failure handling.
+- [Retain queue / replay](https://mickey-kras.github.io/hindsight-memory-router/#RetainReplay): transient outage queuing and current write-bank checks.
+- [Retain](https://mickey-kras.github.io/hindsight-memory-router/#Retain)
+- [Recall](https://mickey-kras.github.io/hindsight-memory-router/#Recall)
+- [Compatibility operations](https://mickey-kras.github.io/hindsight-memory-router/#CompatibilityOperations): shared flow for supported bank/config/mental-model/reflect operations used by the integrations.
+- [Quarantine / review](https://mickey-kras.github.io/hindsight-memory-router/#QuarantineReview): browser or CLI decryption and decision outcomes.
+- [Quarantine recovery](https://mickey-kras.github.io/hindsight-memory-router/#QuarantineRecovery): verified reconciliation after ambiguous side effects.
+- [Startup / shutdown](https://mickey-kras.github.io/hindsight-memory-router/#StartupShutdown)
 
 ### Implementation boundaries
 
@@ -63,8 +59,8 @@ These flows are grounded in `memory_router/principal_gate.py`, `request_dispatch
 
 ## Deployment
 
-- [Single-node + SQLite](generated/SingleNode.svg)
-- [Clustered + PostgreSQL](generated/Clustered.svg)
+- [Single-node + SQLite](https://mickey-kras.github.io/hindsight-memory-router/#SingleNode)
+- [Clustered + PostgreSQL](https://mickey-kras.github.io/hindsight-memory-router/#Clustered)
 
 ## View names
 
