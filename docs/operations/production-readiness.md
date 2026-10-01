@@ -25,9 +25,9 @@ See [Architecture and runtime diagrams](../architecture/README.md) for the as-bu
 | Non-idempotent review side-effect protection | Ready | Explicit side-effect checkpoint states prevent blind replay |
 | Ambiguous review side-effect reconciliation | Implemented | Operator-verified reconciliation finalizes applied effects or postpones unapplied effects |
 | Router provenance source | Implemented | Known writers use their registry source unless explicitly overridden |
-| Build/publish artifact identity | Implemented; live validation pending | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
-| SonarQube Community gate | Implemented; live validation pending | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
-| Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
+| Build/publish artifact identity | Verify for the selected release | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
+| SonarQube Community gate | Verify for the selected release | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
+| Structured logging / centralized logs | Deployment setup required | JSON logging is implemented; configure a logging backend and retention |
 | Production metrics/alerts | Partial | Opt-in `/metrics` endpoint covers the minimum counter set; latency/utilization metrics and alert rules remain pending |
 
 ## Reconcile ambiguous review outcomes
@@ -47,7 +47,7 @@ source commit
 -> sign/attest exact published digests
 ```
 
-Live validation remains pending for the first successful `main` publication.
+For the selected release, verify publication success, matching registry digests, signatures and attestations. See [releasing](../RELEASING.md).
 
 ## Provenance source
 
@@ -59,7 +59,7 @@ SonarQube Community is an additional `main` maintainability/code-quality gate. A
 
 ## Structured logging and centralized logs
 
-Structured JSON logging is done. Grafana Loki + Grafana deployment is pending.
+Structured JSON logging is implemented. Configure a logging backend, retention, dashboards and alerts for your deployment. Grafana Loki and Grafana are one option.
 
 Logging must expose stable machine-queryable fields such as request ID, event, operation, writer/bank identity where safe, status/error code, and duration while never logging request bodies, recalled memory content, credentials, secrets, or decrypted quarantine payloads.
 
@@ -103,8 +103,8 @@ Use metrics, not per-request logs, for quarantine 413/429/507 responses, general
 
 Work through unresolved items in this order:
 
-1. validate the build/publish and SonarQube gates on the first `main` run;
-2. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
+1. verify publication digests, signatures and the SonarQube gate for the selected release;
+2. configure a logging backend, retention and dashboards for the JSON log stream;
 3. production metrics and alerts (minimum counter set shipped behind the opt-in `/metrics`; latency/utilization metrics pending).
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.

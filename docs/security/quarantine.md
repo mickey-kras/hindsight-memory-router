@@ -4,7 +4,7 @@
 
 Unknown writers, suspicious requests, suspicious recalled memories, denied endpoints, and selected security events can be routed to encrypted quarantine.
 
-Encryption boundary:
+Default RSA encryption boundary:
 
 ```text
 payload -> canonical SHA-256 -> AES-256-GCM -> RSA-wrapped data key -> SQLite/PostgreSQL
@@ -12,7 +12,7 @@ payload -> canonical SHA-256 -> AES-256-GCM -> RSA-wrapped data key -> SQLite/Po
 
 With the default `rsa-oaep` provider, the running router receives only the RSA public key. Any environment variable whose name begins with `QUARANTINE_PRIVATE_KEY` causes configured router startup to fail.
 
-Generate the quarantine RSA keypair on a trusted admin machine. Keep the private key in a password manager, secret manager, or encrypted offline storage and provide only the public key to the router deployment. The default Docker Compose deployment never creates, mounts, or stores private review material.
+For the default `rsa-oaep` provider, generate the quarantine RSA keypair on a trusted admin machine. Keep the private key in a password manager, secret manager, or encrypted offline storage and provide only the public key to the router deployment. The default Docker Compose deployment never creates, mounts, or stores private review material.
 
 Example key generation on the trusted admin machine:
 

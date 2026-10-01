@@ -24,7 +24,7 @@ docker compose \
 
 Open `http://127.0.0.1:8080`.
 
-The UI image is pinned by both version tag and verified manifest digest. The service mounts the committed specification read-only and disables submit methods. It is intended for browsing schemas, authentication requirements, and response contracts—not for sending router or admin requests. No API keys are supplied to the Swagger container.
+The UI image is pinned by both version tag and verified manifest digest. The service mounts the committed specification read-only and disables submit methods. It is intended for browsing schemas, authentication requirements, and response contracts. It cannot send router or admin requests. No API keys are supplied to the Swagger container.
 
 Stop it with:
 

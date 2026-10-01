@@ -43,7 +43,7 @@ window.__MEMORY_ROUTER_UI_CONFIG__ = {
 ```
 
 The documented CSP is `script-src 'self'`: serve the config as an external
-file like above (or pin an inline snippet with a CSP hash) — an inline
+file like above (or pin an inline snippet with a CSP hash); an inline
 `<script>` is blocked.
 
 - `baseUrl`: absolute http(s) URL without credentials, query, or fragment.
