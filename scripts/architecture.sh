@@ -52,6 +52,7 @@ validate() {
 }
 
 generate_svg() {
+  python3 "$ROOT/scripts/architecture-overview.py"
   rm -rf "$ROOT/$GENERATED"
   mkdir -p "$ROOT/$GENERATED"
   run_structurizr export -workspace "$WORKSPACE" -format svg -mode dark -output "$GENERATED" ||
@@ -108,6 +109,9 @@ nav = """    <nav id="architecture-view-nav" aria-label="Architecture view">
     </nav>
 """
 init_call = """        if (!embed) {
+            if (!window.location.hash) {
+                window.location.hash = '#SystemContext';
+            }
             initArchitectureViewNavigation();
         }
 """
@@ -116,6 +120,9 @@ functions = """    function architectureViewLabel(view) {
             SystemContext: 'C1: System Context — Memory Router',
             Containers: 'C2: Containers — Memory Router',
             Components: 'C3: Components — Memory Router API',
+            PrincipalAuthorization: 'Dynamic: Principal Authorization',
+            IntegrationReads: 'Dynamic: Integration Reads',
+            RetainReplay: 'Dynamic: Retain Queue / Replay',
             Retain: 'Dynamic: Retain',
             Recall: 'Dynamic: Recall',
             CompatibilityOperations: 'Dynamic: Compatibility Operations',
@@ -133,6 +140,9 @@ functions = """    function architectureViewLabel(view) {
             'SystemContext',
             'Containers',
             'Components',
+            'PrincipalAuthorization',
+            'IntegrationReads',
+            'RetainReplay',
             'Retain',
             'Recall',
             'CompatibilityOperations',
@@ -218,3 +228,4 @@ case "${1:-svg}" in
     die "Usage: scripts/architecture.sh [svg|site]"
     ;;
 esac
+
