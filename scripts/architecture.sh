@@ -59,6 +59,7 @@ generate_svg() {
   rm -f "$ROOT/$GENERATED"/*-key.svg
   compgen -G "$ROOT/$GENERATED/*.svg" >/dev/null ||
     die "Structurizr SVG export produced no SVG files."
+  python3 "$ROOT/scripts/architecture-overview.py"
 }
 
 add_site_view_selector() {
@@ -108,6 +109,9 @@ nav = """    <nav id="architecture-view-nav" aria-label="Architecture view">
     </nav>
 """
 init_call = """        if (!embed) {
+            if (!window.location.hash) {
+                window.location.hash = '#SystemContext';
+            }
             initArchitectureViewNavigation();
         }
 """
@@ -116,10 +120,14 @@ functions = """    function architectureViewLabel(view) {
             SystemContext: 'C1: System Context — Memory Router',
             Containers: 'C2: Containers — Memory Router',
             Components: 'C3: Components — Memory Router API',
+            PrincipalAuthorization: 'Dynamic: Principal Authorization',
+            IntegrationReads: 'Dynamic: Integration Reads',
+            RetainReplay: 'Dynamic: Retain Queue / Replay',
             Retain: 'Dynamic: Retain',
             Recall: 'Dynamic: Recall',
             CompatibilityOperations: 'Dynamic: Compatibility Operations',
             QuarantineReview: 'Dynamic: Quarantine Review',
+            QuarantineRecovery: 'Dynamic: Quarantine Recovery',
             StartupShutdown: 'Dynamic: Startup / Shutdown',
             SingleNode: 'Deployment: Single Node',
             Clustered: 'Deployment: Clustered'
@@ -133,10 +141,14 @@ functions = """    function architectureViewLabel(view) {
             'SystemContext',
             'Containers',
             'Components',
+            'PrincipalAuthorization',
+            'IntegrationReads',
+            'RetainReplay',
             'Retain',
             'Recall',
             'CompatibilityOperations',
             'QuarantineReview',
+            'QuarantineRecovery',
             'StartupShutdown',
             'SingleNode',
             'Clustered'
@@ -218,3 +230,4 @@ case "${1:-svg}" in
     die "Usage: scripts/architecture.sh [svg|site]"
     ;;
 esac
+

@@ -12,6 +12,18 @@ Memory Router controls access to [Hindsight](https://github.com/vectorize-io/hin
 
 Hindsight is the only supported backend.
 
+## How it fits together
+
+<a href="https://mickey-kras.github.io/hindsight-memory-router/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/architecture/generated/overview-light.svg">
+    <img alt="Agents use Integrations, Memory Router, and Hindsight; Memory Router and its encrypted quarantine are highlighted." src="docs/architecture/generated/overview-light.svg">
+  </picture>
+</a>
+
+[Explore the architecture and request flows](https://mickey-kras.github.io/hindsight-memory-router/) · [Integrations repository](https://github.com/mickey-kras/hindsight-memory-router-integrations)
+
 ## Install and start
 
 Requires Docker Compose, OpenSSL and a reachable Hindsight service. Download or check out this repository, then work from its root.
@@ -49,3 +61,4 @@ The integration requires HTTPS. Add a [TLS terminator](docs/deployment/docker.md
 - [All documentation](docs/README.md), including API, architecture, operations and releases
 
 [MIT license](LICENSE) | [Third-party notices](THIRD_PARTY_NOTICES.md).
+
