@@ -34,6 +34,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
 
         operator -> console "Reviews quarantine in the browser" "HTTPS"
         console -> api "Standalone: existing scoped admin credentials" "HTTP/JSON + scoped Bearer"
+        console -> http "Reads encrypted evidence and submits scoped review actions" "HTTP/JSON + scoped Bearer"
         console -> hostProxy "Host mode: same-origin session; no browser admin bearer" "HTTPS + host session"
         hostProxy -> api "Authorized action with existing scoped admin credential" "HTTP/JSON + scoped Bearer"
 
@@ -242,24 +243,30 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             autoLayout lr
         }
 
-        dynamic api "QuarantineReview" "Quarantine admission and human review flow." {
-            policy -> quarantine "Submit unknown/suspicious evidence"
-            quarantine -> limits "Apply quarantine write/requarantine/distinct-family limits"
-            quarantine -> quarantineStorage "Encrypt with public key, enforce capacity, persist state/audit"
-            operator -> http "Read encrypted quarantine item"
-            operator -> reviewTool "Decrypt locally with private key (CLI or browser console); never on router"
-            operator -> http "Approve with exact decrypted evidence; reject/postpone use scoped admin actions"
-            http -> review "Authenticate scoped admin request and dispatch review"
-            review -> quarantine "For approval: verify exact digest; claim review state for decision"
-            review -> principals "Retain approval in principal mode: recheck original bank grant"
-            review -> registry "Retain approval in legacy mode: verify original bank mapping"
-            review -> scanning "For retain approval: parse, bound, and re-scan original request"
-            review -> gateway "When required: perform checkpointed Hindsight retain/invalidate side effect"
-            gateway -> hindsight "Retain approved request or invalidate rejected memory"
-            review -> quarantine "Recall approval allows reviewed memory; retain rejection blocks write; postpone defers"
-            review -> quarantine "Finalize completed effects; ambiguous effects stay checkpointed, never blindly replayed"
-            operator -> http "After verifying Hindsight outcome: reconcile using current digest and update timestamp"
-            http -> review "Confirmed applied: finalize without replay; not applied: postpone for normal retry"
+        dynamic api "QuarantineReview" "Encrypted evidence is decrypted locally; review decisions control release or invalidation." {
+            policy -> quarantine "Submit suspicious evidence (or unknown legacy writer)"
+            quarantine -> quarantineStorage "After admission limits: encrypt evidence and persist review state"
+            operator -> console "Open quarantine console with scoped review access"
+            console -> http "Fetch encrypted evidence; optional host mode uses authenticated proxy"
+            operator -> console "Decrypt and inspect locally with WebCrypto; private key stays in browser"
+            operator -> reviewTool "Alternative: decrypt exported envelope locally with CLI and private key"
+            operator -> http "Approve with exact decrypted evidence, or reject/postpone"
+            http -> review "Authenticate scoped admin action; verify approval digest and claim state"
+            review -> principals "Retain approval: recheck original principal grant (legacy mode rechecks registry)"
+            review -> scanning "Retain approval: parse, bound, and re-scan original request"
+            review -> gateway "Retain approval writes; recalled-memory rejection invalidates"
+            gateway -> hindsight "Perform checkpointed retain or invalidate only when required"
+            review -> quarantine "Finalize: recall approval allows; retain rejection blocks; postpone defers"
+            autoLayout lr
+        }
+
+        dynamic api "QuarantineRecovery" "Ambiguous side effects require verified reconciliation, never blind replay." {
+            review -> quarantine "Ambiguous Hindsight outcome: preserve side-effect-started checkpoint"
+            operator -> http "Independently verify Hindsight outcome, then fetch current item snapshot"
+            operator -> http "Reconcile with expected digest and update timestamp"
+            http -> review "Authenticate scoped admin action and dispatch reconciliation"
+            review -> quarantine "Compare snapshot; confirmed applied finalizes without another upstream call"
+            review -> quarantine "Confirmed not applied moves to postponed for a normal retry"
             autoLayout lr
         }
 

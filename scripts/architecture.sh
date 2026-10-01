@@ -127,6 +127,7 @@ functions = """    function architectureViewLabel(view) {
             Recall: 'Dynamic: Recall',
             CompatibilityOperations: 'Dynamic: Compatibility Operations',
             QuarantineReview: 'Dynamic: Quarantine Review',
+            QuarantineRecovery: 'Dynamic: Quarantine Recovery',
             StartupShutdown: 'Dynamic: Startup / Shutdown',
             SingleNode: 'Deployment: Single Node',
             Clustered: 'Deployment: Clustered'
@@ -147,6 +148,7 @@ functions = """    function architectureViewLabel(view) {
             'Recall',
             'CompatibilityOperations',
             'QuarantineReview',
+            'QuarantineRecovery',
             'StartupShutdown',
             'SingleNode',
             'Clustered'

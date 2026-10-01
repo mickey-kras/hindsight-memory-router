@@ -41,7 +41,8 @@ Responsibilities inside Memory Router API.
 - [Retain](generated/Retain.svg)
 - [Recall](generated/Recall.svg)
 - [Compatibility operations](generated/CompatibilityOperations.svg): shared flow for supported bank/config/mental-model/reflect operations used by the integrations.
-- [Quarantine / review](generated/QuarantineReview.svg): local decryption, decision outcomes, and side-effect reconciliation.
+- [Quarantine / review](generated/QuarantineReview.svg): browser or CLI decryption and decision outcomes.
+- [Quarantine recovery](generated/QuarantineRecovery.svg): verified reconciliation after ambiguous side effects.
 - [Startup / shutdown](generated/StartupShutdown.svg)
 
 ### Implementation boundaries
