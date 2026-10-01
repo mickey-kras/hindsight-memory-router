@@ -1,5 +1,7 @@
 # Repository secrets
 
+[Documentation](README.md) | [Repository](../README.md)
+
 Create these in GitHub:
 
 ```text

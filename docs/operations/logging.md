@@ -1,5 +1,7 @@
 # Application logs
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 One bounded JSON object is written to stdout per event. Required fields: `event`, `level`, `logger`, `timestamp`.
 
 Optional fields: `request_id`, `operation`, `request_method`, `upstream_method`, `error_kind`, `error_fingerprint`, `upstream_status`, `http_status`, `outcome`, `request_duration_ms`, `operation_duration_ms`, `route_class`, `writer_id`, `reason`, `timeout_ms`, `suppressed`.

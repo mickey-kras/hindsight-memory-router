@@ -1,5 +1,7 @@
 # Clustered deployment
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Single-node mode is the default. Enable clustered mode explicitly:
 
 ```text

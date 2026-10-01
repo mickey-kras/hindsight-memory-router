@@ -1,5 +1,7 @@
 # Releases
 
+[Documentation](README.md) | [Repository](../README.md)
+
 ## Run a release
 
 1. Merge the intended version bumps and code into `main`.

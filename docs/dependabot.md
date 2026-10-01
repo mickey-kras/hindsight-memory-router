@@ -1,5 +1,7 @@
 # Dependabot auto-merge
 
+[Documentation](README.md) | [Repository](../README.md)
+
 - All verified Dependabot updates can auto-merge, including major updates.
 - Required repository checks must pass. Merges use squash.
 - Unsigned or non-Dependabot commits require manual review.

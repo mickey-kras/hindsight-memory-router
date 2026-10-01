@@ -1,5 +1,7 @@
 # Legacy quarantine migration
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Legacy filesystem quarantine data can be imported into the current database-backed quarantine without modifying the source files.
 
 ```bash

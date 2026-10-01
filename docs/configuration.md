@@ -1,8 +1,10 @@
 # Configuration
 
-Memory Router ships with safe defaults. Environment variables override them. `QUARANTINE_PUBLIC_KEY` is required.
+[Documentation](README.md) | [Repository](../README.md)
 
-Use `.env.example` as the complete reference. Docker Compose reads your values from `.env`.
+Environment variables override built-in defaults. The default `rsa-oaep` wrap provider requires `QUARANTINE_PUBLIC_KEY`; `https-sidecar` requires its own [provider settings](security/quarantine.md#pluggable-dek-wrap-providers).
+
+Use [`.env.example`](../.env.example) as an override template. Docker Compose reads your values from `.env`.
 
 ## Listener
 

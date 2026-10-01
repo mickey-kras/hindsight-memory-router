@@ -1,5 +1,7 @@
 # Memory Router UI
 
+[Documentation](../docs/README.md) | [Repository](../README.md)
+
 Quarantine review console for hindsight-memory-router. Static export, no backend, dark only.
 
 - Same-origin with the router: nginx serves the static files and proxies `/admin`, `/health`, `/version` to the router. No CORS, no router changes.
@@ -41,7 +43,7 @@ window.__MEMORY_ROUTER_UI_CONFIG__ = {
 ```
 
 The documented CSP is `script-src 'self'`: serve the config as an external
-file like above (or pin an inline snippet with a CSP hash) — an inline
+file like above (or pin an inline snippet with a CSP hash); an inline
 `<script>` is blocked.
 
 - `baseUrl`: absolute http(s) URL without credentials, query, or fragment.
@@ -152,3 +154,4 @@ server {
 
 Expose only through a trusted private network. Cleanup and review actions need their scoped
 tokens; read-only use works with the read token alone.
+

@@ -1,5 +1,7 @@
 # Docker deployment
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 The repository includes `compose.yaml` for the default single-node deployment.
 
 ## Quarantine key material

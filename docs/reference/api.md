@@ -1,5 +1,7 @@
 # API reference
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 The canonical machine-readable API is `openapi/openapi.json`.
 
 Core endpoints:

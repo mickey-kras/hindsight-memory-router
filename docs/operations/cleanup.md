@@ -1,5 +1,7 @@
 # Quarantine cleanup
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Use the scoped cleanup token for preview and execution.
 
 Preview example:

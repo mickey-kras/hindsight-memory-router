@@ -1,5 +1,7 @@
 # Main failures
 
+[Documentation](README.md) | [Repository](../README.md)
+
 The failure reporter covers failed validation, publishing, Pages and branch-update jobs.
 It reads completed job logs with `GITHUB_TOKEN`; reporting does not turn failed gates green.
 

@@ -8,59 +8,44 @@
 [![docker image](https://img.shields.io/docker/image-size/mickeykrasilnikov/hindsight-memory-router/latest?label=docker%20image)](https://hub.docker.com/r/mickeykrasilnikov/hindsight-memory-router)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Memory Router is a policy and security boundary for the current OpenClaw Hindsight integration.
+Memory Router controls access to [Hindsight](https://github.com/vectorize-io/hindsight) memory banks for OpenClaw and compatible clients. It authenticates callers, limits requests, scans memory content and quarantines unsafe content with encryption. Use it to give agents separate write banks and selected shared reads without exposing Hindsight directly.
 
-```text
-OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
-```
+Hindsight is the only supported backend.
 
-Memory Router:
+## Install and start
 
-- proxies the allowlisted bank-scoped Hindsight API for OpenClaw and compatible clients;
-- maps writer IDs to Hindsight banks;
-- applies authentication, bounds, quotas, safety scans, and encrypted quarantine.
+Requires Docker Compose, OpenSSL and a reachable Hindsight service. Download or check out this repository, then work from its root.
 
-Cross-writer, file-transfer, import/export, webhook, upstream metrics, and deprecated endpoints are denied. Hindsight is the only supported memory backend.
+1. On a trusted admin machine, create a quarantine keypair:
 
-Setting `MEMORY_ROUTER_METRICS_ENABLED=true` exposes the router's own `GET /metrics` in Prometheus text format. The endpoint is off by default and requires an admin read-scope token (or, in principal mode, a principal holding any `quarantine.review` grant), never anonymous access.
-
-## Quick start
-
-The default deployment is single-node with embedded SQLite. Generate the quarantine keypair on a trusted admin machine, keep the private key there, and provide only the public key to the router deployment.
-
-```bash
+```sh
 umask 077
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out quarantine-private.pem
 openssl pkey -in quarantine-private.pem -pubout -out quarantine-public.pem
 base64 < quarantine-public.pem | tr -d '\n'
 ```
 
-Store `quarantine-private.pem` in your password manager, secret manager, or encrypted offline storage. Put the base64 public-key value in `.env` as `QUARANTINE_PUBLIC_KEY`, then start the router:
+2. Keep the private key in secure off-host storage. Put only the base64 public key in the deployment's `.env` as `QUARANTINE_PUBLIC_KEY`. Configure `HINDSIGHT_BASE_URL` if Hindsight is not reachable at `http://hindsight:8888` on the Compose network. Compose does not start Hindsight.
+3. Start the router and check readiness:
 
-```bash
+```sh
 docker compose up -d
 curl --fail http://localhost:8890/health/ready
 ```
 
-Router and admin capabilities remain fail-closed until their credentials are configured. The default Hindsight URL is `http://hindsight:8888`; attach a Hindsight service on the same Docker network or override that endpoint for your deployment. Plaintext `http` upstream URLs are rejected at startup unless the host is private (RFC1918/link-local, loopback, `*.internal`, or a single-label docker service name). Set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to require `https` for every upstream.
+A successful readiness check means router storage and Hindsight are reachable. Compose builds the image and stores SQLite state in a named volume. The published port is loopback-only.
 
-The router binds and publishes on `127.0.0.1` by default. To expose it on a LAN or tailnet interface, set `MEMORY_ROUTER_HOST` or the Compose publish address and terminate TLS in front; see [Docker deployment](docs/deployment/docker.md).
+## Connect an agent
+
+Configure [principal credentials and bank grants](docs/security/authentication.md) using the [Compose registry mount](docs/deployment/docker.md#principal-registry), then follow [OpenClaw setup](docs/integrations/openclaw.md). Router and admin operations fail closed until credentials are configured.
+
+The integration requires HTTPS. Add a [TLS terminator](docs/deployment/docker.md#network-exposure-and-tls) before connecting it or exposing the router beyond the host. Plain HTTP upstreams are accepted only for private hosts; set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to require HTTPS for every upstream.
 
 ## Documentation
 
-- [Getting started](docs/getting-started.md)
-- [Configuration](docs/configuration.md)
-- [Architecture](docs/architecture.md)
-- [Hindsight upstream](docs/providers/hindsight.md)
-- [OpenClaw integration](docs/integrations/openclaw.md)
-- [Docker deployment](docs/deployment/docker.md)
-- [Security](docs/security/quarantine.md)
-- [Environment variable reference](docs/reference/environment-variables.md)
-- [API reference](docs/reference/api.md)
-- [Quarantine console](ui/README.md)
+- [Getting started](docs/getting-started.md) and [configuration](docs/configuration.md)
+- [Docker deployment and upgrades](docs/deployment/docker.md)
+- [Quarantine review](docs/operations/quarantine-review.md) and [security](SECURITY.md)
+- [All documentation](docs/README.md), including API, architecture, operations and releases
 
-## License
-
-MIT
-
-Use **Actions → release → Run workflow** for the unified release graph. See [Releasing](docs/RELEASING.md) for pinned inputs, recovery and publication verification.
+[MIT license](LICENSE) | [Third-party notices](THIRD_PARTY_NOTICES.md).
