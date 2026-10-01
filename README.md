@@ -12,6 +12,8 @@ Memory Router controls access to [Hindsight](https://github.com/vectorize-io/hin
 
 Hindsight is the only supported backend.
 
+Use Memory Router with your own compatible client or the optional [agent integrations](https://github.com/mickey-kras/hindsight-memory-router-integrations). GPU Workload Supervisor is not required.
+
 ## How it fits together
 
 <a href="https://mickey-kras.github.io/hindsight-memory-router/">
