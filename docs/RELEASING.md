@@ -5,8 +5,8 @@
 ## Run a release
 
 1. Merge the intended version bumps and code into `main`.
-2. **Actions → release → Run workflow → main**.
-3. In that one run, main passes including Sonar → preparation freezes `release/X.Y.Z` → the candidate passes all release gates → images, signatures, attestations and immutable `vX.Y.Z` publish → `latest` promotes → the next-patch PR is queued and the published branch is removed.
+2. **Actions > release > Run workflow > main**.
+3. The run validates main, including Sonar, and freezes `release/X.Y.Z`. After the candidate passes all release gates, it publishes images, signatures, attestations and immutable `vX.Y.Z`, promotes `latest`, queues the next-patch PR and removes the published branch.
 
 The release workflow is the publication entry point. `main` runs automatically on pushes, or through
 its inputless validation dispatch, and never publishes. The former **Create release** checkbox on
@@ -91,7 +91,7 @@ grandfathered; reviewed exceptions go into `allow-dependencies-licenses` as exac
    node .github/scripts/release-settings.cjs YOUR_NUMERIC_APP_ID /tmp/release-rulesets
    ```
 
-4. In **Settings → Rules → Rulesets**, import/update all five generated rulesets. Only the creation
+4. In **Settings > Rules > Rulesets**, import/update all five generated rulesets. Only the creation
    rules and the deletion-only **Release branch deletion** rule permit the App bypass. Release
    branch/tag protections have no bypass. Keep main protections
    and **Enforce release tag names** accepting `vX.Y.Z`; exclude `refs/heads/release/*` from work-branch naming.
@@ -107,7 +107,7 @@ grandfathered; reviewed exceptions go into `allow-dependencies-licenses` as exac
    The flag confirms your manual immutable-setting check. Preflight rejects redacted bypass actors
    without this review, and rejects changed ruleset revisions. Recheck settings and regenerate after changes.
 6. Router: confirm `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` and Actions access to GHCR. Enable the
-   Dependency graph (Settings → Code security) so PR dependency review works. Protect registry
+   Dependency graph (Settings > Code security) so PR dependency review works. Protect registry
    version/commit tags where supported; leave `latest` mutable. Git tag rules do not protect registry tags.
 7. Verify main CI, dispatch the router release workflow, then release integrations. Verify manifests, immutable releases and registry digests.
 

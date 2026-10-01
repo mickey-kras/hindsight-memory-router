@@ -21,7 +21,7 @@
   Release-policy approval hashes still require review; frozen release manifests
   and published artifact checksums are never refreshed by Dependabot.
 
-To re-evaluate open PRs, run **Actions → dependabot auto-merge refresh → Run
+To re-evaluate open PRs, run **Actions > dependabot auto-merge refresh > Run
 workflow** on the default branch.
 
 For an existing stuck PR, use Dependabot's `@dependabot rebase` command.

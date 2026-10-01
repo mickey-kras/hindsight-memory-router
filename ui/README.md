@@ -49,8 +49,8 @@ file like above (or pin an inline snippet with a CSP hash); an inline
 - `baseUrl`: absolute http(s) URL without credentials, query, or fragment.
   Cross-origin use puts CORS and the admin session boundary on the host; the
   router stays unchanged.
-- `theme`: hex-color overrides mapped to CSS variables (`accent` →
-  `--mr-accent`, `background` → `--mr-bg`, `foreground` → `--mr-fg`).
+- `theme`: hex-color overrides mapped to CSS variables (`accent` to
+  `--mr-accent`, `background` to `--mr-bg`, `foreground` to `--mr-fg`).
 - `chrome`: `header: false` hides the whole header bar (host renders its own
   chrome; queue actions then need host wiring), `branding: false` hides only
   the product name and status dot.
