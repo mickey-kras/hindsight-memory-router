@@ -23,7 +23,6 @@ def render(focus: str, theme: str = "light") -> str:
   </defs>
   <rect width="1120" height="420" rx="20" fill="#f8fafc"/>
   <g font-family="Arial, Helvetica, sans-serif">
-    <text x="32" y="39" fill="#0f172a" font-size="20" font-weight="700">How the projects fit together</text>
     <text x="32" y="65" fill="#475569" font-size="14">Follow a request from the agent to stored memory.</text>''']
     nodes = [
         (32, "agents", "Agent clients", ["OpenClaw · coding agents", "MCP clients"]),
