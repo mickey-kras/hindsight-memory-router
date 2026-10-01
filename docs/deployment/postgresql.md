@@ -1,5 +1,7 @@
 # PostgreSQL deployment
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 PostgreSQL is an optional quarantine-storage override.
 
 Set:

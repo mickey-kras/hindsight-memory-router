@@ -1,8 +1,10 @@
 # Quarantine review
 
-Quarantine decryption happens outside the running router. The router has only the public key.
+[Documentation](../README.md) | [Repository](../../README.md)
 
-Generate and retain the quarantine private key on a trusted admin machine. Store it in a password manager, secret manager, or encrypted offline storage. Never copy, mount, generate, or persist it on the router host.
+Quarantine decryption happens outside the running router. With the default `rsa-oaep` provider, the router has only the public key. For `https-sidecar`, use the configured [key wrap provider](../security/quarantine.md#pluggable-dek-wrap-providers).
+
+For `rsa-oaep`, generate and retain the quarantine private key on a trusted admin machine. Store it in a password manager, secret manager, or encrypted offline storage. Never copy, mount, generate, or persist it on the router host.
 
 ## Review flow
 
@@ -26,6 +28,19 @@ Pending pre-upgrade `suspicious_content` retains lack verifiable origin and retu
 
 Review actions claim the item in a short transaction, call Hindsight without holding a database lock, then finalize in a second transaction. Concurrent review changes return `409 quarantine_review_changed`.
 
-A failed Hindsight call restores the previous review state and records `review_interrupted`. For timeout or network errors, verify Hindsight state before retrying because the upstream action may have completed before the response failed.
+A definite Hindsight failure restores the previous review state and records `review_interrupted`. Network errors, timeouts and ambiguous server failures keep the item in `review_side_effect_started` to prevent replay.
 
-On startup, stale `review_in_progress` items are moved to `postponed` without increasing the postpone count. A crash after Hindsight applied an action cannot be rolled back; inspect Hindsight before re-approving.
+For an ambiguous outcome:
+
+1. Inspect Hindsight to determine whether the side effect was applied.
+2. Fetch the current quarantine item and its snapshot fields.
+3. Send `POST /admin/quarantine/items/{id}/reconcile` with `expected_sha256`, `expected_updated_at` and one action:
+
+   | Action | Use when | Result |
+   | --- | --- | --- |
+   | `confirmed_applied` | You verified the upstream side effect happened. | Finalize without replaying it. |
+   | `confirmed_not_applied` | You verified it did not happen. | Move to `postponed`, allowing a normal retry. |
+
+Do not retry an uncertain write without that verification. If the side effect was already checkpointed as completed, a normal retry of the same review action can finalize it without replay.
+
+Startup moves stale `review_in_progress` items to `postponed` without increasing the postpone count. It leaves side-effect checkpoint states untouched. A crash cannot undo a committed Hindsight action.

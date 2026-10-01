@@ -1,10 +1,12 @@
 # Production readiness
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 [Application log schema and safety rules](logging.md).
 
-This document tracks production-readiness findings against the current runtime interaction map. It is intentionally separate from the architecture reference so current behavior and recommended changes remain distinct.
+Track unresolved production-readiness findings here; verify status against the deployed version before using it as an acceptance checklist.
 
-See [Runtime interaction map](../architecture/runtime-interactions.md) for the as-built workflows.
+See [Architecture and runtime diagrams](../architecture/README.md) for the as-built workflows.
 
 ## Current status
 
@@ -21,42 +23,20 @@ See [Runtime interaction map](../architecture/runtime-interactions.md) for the a
 | Health/readiness contract | Ready | `/health/live` is router liveness; `/health` and `/health/ready` require router storage + Hindsight health |
 | Review concurrency | Ready | Snapshot checks and review claims |
 | Non-idempotent review side-effect protection | Ready | Explicit side-effect checkpoint states prevent blind replay |
-| Ambiguous review side-effect reconciliation | Blocked | No supported transition out of `review_side_effect_started` after an ambiguous provider outcome |
-| Router provenance source | Needs correction | Runtime defaults policy source to `openclaw` instead of using the agent-neutral registry source |
+| Ambiguous review side-effect reconciliation | Implemented | Operator-verified reconciliation finalizes applied effects or postpones unapplied effects |
+| Router provenance source | Implemented | Known writers use their registry source unless explicitly overridden |
 | Build/publish artifact identity | Implemented; live validation pending | Workflow builds once, scans that image, pushes it to both registries, asserts digest equality, then signs/attests |
 | SonarQube Community gate | Implemented; live validation pending | `main` must pass the quality gate before publication; release tags require a successful `main` publish run for the same commit |
 | Structured logging / centralized logs | Partial | Structured JSON logging is implemented; Grafana Loki + Grafana deployment remains pending |
 | Production metrics/alerts | Partial | Opt-in `/metrics` endpoint covers the minimum counter set; latency/utilization metrics and alert rules remain pending |
 
-## Blocker: ambiguous review side-effect reconciliation
+## Reconcile ambiguous review outcomes
 
-For approved retain requests and rejected recalled memories, the router protects non-idempotent Hindsight operations using these states:
-
-```text
-pending/postponed
--> review_side_effect_started
--> Hindsight side effect
--> review_side_effect_completed
--> finalize
-```
-
-If Hindsight returns a definite failure, the previous review state can be restored safely.
-
-If the outcome is ambiguous (for example timeout, network failure, or process failure after Hindsight may have committed), the item remains in `review_side_effect_started`. This correctly prevents automatic replay, but there is currently no admin transition to reconcile the frozen item after an operator verifies Hindsight state.
-
-Required resolution:
-
-```text
-review_side_effect_started
-├─ confirmed applied     -> review_side_effect_completed -> finalize
-└─ confirmed not applied -> postponed -> normal retry path
-```
-
-Both transitions should require the expected quarantine snapshot/hash and append explicit audit events.
+An uncertain provider result leaves the item in `review_side_effect_started`, preventing automatic replay. Inspect Hindsight, then use the [review reconciliation procedure](quarantine-review.md#concurrency-and-interruption-recovery) with the expected snapshot and `confirmed_applied` or `confirmed_not_applied`. Reconciliation records an audit event. Never infer that a timeout means the write did not happen.
 
 ## Build/publish artifact identity
 
-The publish workflow now performs:
+The publish workflow performs:
 
 ```text
 source commit
@@ -69,13 +49,9 @@ source commit
 
 Live validation remains pending for the first successful `main` publication.
 
-## Provenance source mismatch
+## Provenance source
 
-The default and example writer registries identify their source as `application`, but `RouterPolicy.retain()` and `RouterPolicy.recall()` currently default their runtime source argument to `openclaw`, and HTTP dispatch does not override it.
-
-This does not bypass policy enforcement, but it produces stale product-specific provenance in injected metadata and quarantine records.
-
-Target: derive the provenance source from the resolved writer/registry policy or use an explicitly agent-neutral runtime source.
+Known writers use their registry `source` unless the caller explicitly supplies a source. Unknown-writer quarantine retains the `openclaw` fallback. Preserve configured sources when upgrading if audit filters depend on them.
 
 ## SonarQube Community
 
@@ -93,7 +69,7 @@ Metrics and tracing remain separate follow-up concerns rather than being coupled
 
 ## Health and operational telemetry
 
-Health endpoint semantics are now complete:
+Health endpoints:
 
 ```text
 /health/live  -> router process/event-loop liveness only
@@ -102,9 +78,9 @@ Health endpoint semantics are now complete:
 /ready        -> deprecated alias of /health/ready
 ```
 
-The readiness checks run router storage and Hindsight health concurrently. Success returns Hindsight's validated supported health fields; unknown upstream fields are omitted. Either dependency failing returns `503 {"status":"unhealthy"}`. All health endpoints are unauthenticated.
+The readiness checks run router storage and Hindsight health concurrently. Unauthenticated callers receive only `{"status":"healthy"}` or `{"status":"unhealthy"}`. A recognized router token or principal can receive Hindsight's validated supported health fields; unknown fields are omitted. Either dependency failing returns `503 {"status":"unhealthy"}`. Health probes do not require authentication.
 
-Operational telemetry is partially complete. With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` (admin read scope, Prometheus text format) exposes:
+Operational telemetry is partially complete. With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` (admin read scope, or a principal with any `quarantine.review` grant; Prometheus text format) exposes:
 
 - authentication failures by route class;
 - HTTP 429 responses by route class;
@@ -119,7 +95,7 @@ Still recommended on top of that minimum set:
 - quarantine utilization;
 - request count, latency, and status by route class.
 
-An alert on any sustained `review_side_effect_started` item is especially important until explicit reconciliation exists.
+Alert on sustained `review_side_effect_started` items so an operator can investigate and reconcile them.
 
 Use metrics, not per-request logs, for quarantine 413/429/507 responses, general 429 responses, and aged `review_side_effect_started` items.
 
@@ -127,10 +103,8 @@ Use metrics, not per-request logs, for quarantine 413/429/507 responses, general
 
 Work through unresolved items in this order:
 
-1. ambiguous review side-effect reconciliation;
-2. provenance source correction;
-3. validate the build/publish and SonarQube gates on the first `main` run;
-4. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
-5. production metrics and alerts (minimum counter set shipped behind the opt-in `/metrics`; latency/utilization metrics pending).
+1. validate the build/publish and SonarQube gates on the first `main` run;
+2. deploy Grafana Loki/Grafana for the completed structured JSON log stream;
+3. production metrics and alerts (minimum counter set shipped behind the opt-in `/metrics`; latency/utilization metrics pending).
 
 Update this checklist as each item is resolved and keep the runtime diagrams in the architecture document aligned with the implemented behavior.

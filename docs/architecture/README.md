@@ -1,35 +1,37 @@
 # Architecture
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Canonical model: [`workspace.dsl`](workspace.dsl)  
 Interactive architecture: [Structurizr site](https://mickey-kras.github.io/hindsight-memory-router/)
 
-C1–C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated; do not hand-edit them.
+C1 to C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated; do not hand-edit them.
 
-Dynamic views document distinct workflows rather than API inventory. Simple facade endpoints such as health/version stay in the structural/API documentation; operations with materially different routing, policy, security, or review behavior get a dynamic view. A C4 code-level view is intentionally not generated because it would be implementation-specific and does not currently add useful architectural information beyond C3.
+Dynamic views cover routing, policy, security and review workflows. Health/version endpoints stay in the structural and API references. The model stops at C3.
 
-## C1 — System Context
+## C1: System Context
 
 Who uses Memory Router and which external systems it talks to.
 
-![C1 — System Context](generated/SystemContext.svg)
+![C1: System Context](generated/SystemContext.svg)
 
-## C2 — Containers
+## C2: Containers
 
 Runtime processes and data stores.
 
-![C2 — Containers](generated/Containers.svg)
+![C2: Containers](generated/Containers.svg)
 
-## C3 — Components
+## C3: Components
 
 Responsibilities inside Memory Router API.
 
-![C3 — Components](generated/Components.svg)
+![C3: Components](generated/Components.svg)
 
 ## Dynamic views
 
 - [Retain](generated/Retain.svg)
 - [Recall](generated/Recall.svg)
-- [Compatibility operations](generated/CompatibilityOperations.svg) — shared flow for supported bank/config/mental-model/reflect operations used by OpenClaw.
+- [Compatibility operations](generated/CompatibilityOperations.svg): shared flow for supported bank/config/mental-model/reflect operations used by OpenClaw.
 - [Quarantine / review](generated/QuarantineReview.svg)
 - [Startup / shutdown](generated/StartupShutdown.svg)
 

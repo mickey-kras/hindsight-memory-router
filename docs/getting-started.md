@@ -1,12 +1,8 @@
 # Getting started
 
-Memory Router currently sits between the OpenClaw Hindsight plugin and Hindsight:
+[Documentation](README.md) | [Repository](../README.md)
 
-```text
-OpenClaw (Hindsight plugin) -> Memory Router -> Hindsight
-```
-
-It applies writer policy, request bounds, authentication, quotas, safety scanning, and encrypted quarantine around the retain/recall traffic used by that integration. A generic agent/application facade is not implemented yet.
+Use Docker Compose for a single-node router with SQLite. You need Docker Compose, OpenSSL and a reachable Hindsight service. Run deployment commands from the repository root.
 
 ## Quarantine key
 
@@ -40,9 +36,9 @@ Compose:
 - stores SQLite state in a project-scoped `memory-router-data` named volume;
 - never creates, mounts, or stores the quarantine private key.
 
-Authentication still fails closed: configure a router token before sending retain/recall traffic and scoped admin tokens before using review operations.
+Configure [principal credentials and grants](security/authentication.md) before sending memory traffic. Router and admin operations fail closed until their credentials are configured. See the [Compose principal registry mount](deployment/docker.md#principal-registry).
 
-The built-in Hindsight endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
+Compose does not start Hindsight. The built-in Hindsight endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
 
 ## Defaults
 

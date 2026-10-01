@@ -1,5 +1,7 @@
 # Repository workflow
 
+[Documentation](../docs/README.md) | [Repository](../README.md)
+
 - `main` is the only permanent branch.
 - Protect `main` from deletion and force pushes.
 - Same-repository work branches must match `^(feat|fix|refactor|docs|ci|security)/[a-z0-9]+(-[a-z0-9]+)*$`.
@@ -15,3 +17,4 @@
 - GitHub tag rulesets use `fnmatch`, so they cannot express exact SemVer. `branch-policy` and the publish workflow reject malformed `v*` tags and tags not reachable from `main` for CI/publishing, but cannot remove them after creation because native tag immutability applies immediately.
 - Automation creates protected `release/X.Y.Z` branches. Failed or cancelled candidates remain for retry; successful publication and follow-up delete the branch.
 - Architecture-affecting PRs update `docs/architecture/workspace.dsl` and refresh generated diagrams with `make architecture` in the same PR.
+

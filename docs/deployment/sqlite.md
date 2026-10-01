@@ -1,5 +1,7 @@
 # SQLite deployment
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 SQLite is the default quarantine database for single-node Memory Router deployments.
 
 Default URL:

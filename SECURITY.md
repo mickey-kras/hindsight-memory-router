@@ -1,5 +1,7 @@
 # Security Policy
 
+[Documentation](docs/README.md) | [Repository](README.md)
+
 ## Reporting
 
 Use a private GitHub security advisory.
@@ -97,3 +99,4 @@ The Python runtime authorizes admin requests with scoped tokens configured throu
 ## Non-goal
 
 The router does not secure Hindsight itself.
+

@@ -1,5 +1,7 @@
 # Authentication
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Router and quarantine credentials are separate.
 
 Set legacy router and admin tokens to at least 32 characters. Shorter tokens block startup.

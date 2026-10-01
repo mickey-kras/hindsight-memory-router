@@ -1,5 +1,7 @@
 # Environment variables
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 All tuning/deployment values below have built-in defaults. Authentication credentials remain optional and fail closed when absent. `QUARANTINE_PUBLIC_KEY` is the exception: it is required and has no default. Explicit invalid values fail startup validation.
 
 | Variable                                   |              Built-in default | Purpose                                                         |

@@ -1,5 +1,7 @@
 # Integration contract
 
+[Documentation](../../docs/README.md) | [Repository](../../README.md)
+
 The PR quality gate covers the router's externally observable endpoint/workflow surface.
 
 - Fake Hindsight runs the same router workflow suite against SQLite and PostgreSQL quarantine storage.
@@ -15,3 +17,4 @@ Real-Hindsight recall smoke retains a unique `CI_SMOKE_*` marker and waits at mo
 retried while extraction runs; partial responses, failed banks, malformed results,
 and HTTP failures fail the check. The deterministic LLM fixture extracts that
 marker only when it occurs in the retain request.
+

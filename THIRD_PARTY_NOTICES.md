@@ -25,3 +25,4 @@ The generated ASCII-confusable map uses Unicode UTS #39 data version 17.0.0.
 Source: https://www.unicode.org/Public/17.0.0/security/confusables.txt
 
 Unicode data is licensed under the Unicode License V3. The license text is included at `licenses/UNICODE-3.0.txt`.
+

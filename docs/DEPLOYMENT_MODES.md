@@ -1,5 +1,7 @@
 # Deployment modes
 
+[Documentation](README.md) | [Repository](../README.md)
+
 ## Single
 
 ```text

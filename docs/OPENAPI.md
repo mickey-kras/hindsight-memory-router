@@ -1,5 +1,7 @@
 # OpenAPI and Swagger UI
 
+[Documentation](README.md) | [Repository](../README.md)
+
 The committed API contract is `openapi/openapi.json` and uses OpenAPI 3.1.
 
 Validate it locally:

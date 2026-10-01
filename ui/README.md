@@ -1,5 +1,7 @@
 # Memory Router UI
 
+[Documentation](../docs/README.md) | [Repository](../README.md)
+
 Quarantine review console for hindsight-memory-router. Static export, no backend, dark only.
 
 - Same-origin with the router: nginx serves the static files and proxies `/admin`, `/health`, `/version` to the router. No CORS, no router changes.
@@ -152,3 +154,4 @@ server {
 
 Expose only through a trusted private network. Cleanup and review actions need their scoped
 tokens; read-only use works with the read token alone.
+

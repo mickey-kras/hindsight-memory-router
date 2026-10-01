@@ -1,5 +1,7 @@
 # Hindsight upstream
 
+[Documentation](../README.md) | [Repository](../../README.md)
+
 Hindsight is the only memory backend implemented by Memory Router today.
 
 Current topology:
