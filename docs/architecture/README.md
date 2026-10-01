@@ -5,15 +5,19 @@
 Canonical model: [`workspace.dsl`](workspace.dsl)  
 Interactive architecture: [Structurizr site](https://mickey-kras.github.io/hindsight-memory-router/)
 
-C1 to C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated; do not hand-edit them.
+C1 to C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated from the DSL or the README overview generator; do not hand-edit them.
 
 Dynamic views cover principal authorization, client coordination, routing, policy, security and review workflows. Health/version endpoints stay in the structural and API references. The model stops at C3.
 
 ## README overview
 
-The two README diagrams share one topology and highlight the owning repository. Generate both with `python3 scripts/architecture-overview.py`; copy `overview-integrations.svg` to the integrations repository as `docs/architecture-overview.svg`. `make architecture` also refreshes them. These small views deliberately omit deployment details.
+Each README uses the same topology and highlights its own repository, with separate light/dark SVG assets. Generate this repository's pair with `python3 scripts/architecture-overview.py` (also run by `make architecture`). Export the integrations pair directly into that repository:
 
-[![Memory Router ecosystem overview](overview-router.svg)](https://mickey-kras.github.io/hindsight-memory-router/)
+```sh
+python3 scripts/architecture-overview.py --repository integrations --output-dir ../hindsight-memory-router-integrations/docs/architecture
+```
+
+Only each repository's own pair is committed there. The diagrams deliberately omit deployment details; README `<picture>` elements select the theme and provide a light fallback.
 
 ## C1: System Context
 
@@ -52,6 +56,8 @@ Principal-mode requests authorize the explicit bank and operation scope. Legacy 
 Integration retain queues hold **plaintext transcripts on the agent host**. They are separate from the router's encrypted quarantine. OpenClaw and the MCP adapter use the shared coordinator where configured; coding-agent adapters also have harness-specific capture and cursor behavior.
 
 Review approval of a retained request rechecks its original destination and current grant, then writes to Hindsight. Approval of a recalled memory allows that reviewed memory without another retain; rejection invalidates it. Rejecting a retained request does not write it. Postpone defers review. After an ambiguous side effect, an operator verifies Hindsight and reconciles the current snapshot; the router does not blindly replay the operation. See [review operations](../operations/quarantine-review.md).
+
+The browser console decrypts RSA-OAEP envelopes with WebCrypto. Provider-wrapped envelopes require review tooling configured for the matching provider; see [quarantine review](../operations/quarantine-review.md).
 
 These flows are grounded in `memory_router/principal_gate.py`, `request_dispatch.py`, `policy.py`, and `admin.py`; client flows follow the integrations repository's `src/shared/recall-coordinator.ts`, `retain-coordinator.ts`, and `src/mcp/server.ts`.
 

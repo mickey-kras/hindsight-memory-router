@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Render both README emphasis variants from one small, shared SVG topology."""
+import argparse
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "docs" / "architecture"
+OUT = ROOT / "docs" / "architecture" / "generated"
 
 
-def render(focus: str) -> str:
+def render(focus: str, theme: str = "light") -> str:
     title = "Memory Router ecosystem"
     description = (
         "Agent clients use Integrations, which send authenticated requests to Memory Router. "
@@ -54,10 +55,24 @@ def render(focus: str) -> str:
         '<text x="32" y="368" font-size="14" fill="#475569">The router decides access.</text>',
         '</g></svg>\n',
     ])
-    return "\n".join(parts)
+    svg = "\n".join(parts)
+    if theme == "dark":
+        colors = {
+            "#f8fafc": "#0d1117", "#0f172a": "#f0f6fc", "#475569": "#a6b0bd",
+            "#eef2f6": "#161b22", "#94a3b8": "#6e7681", "#334155": "#c9d1d9",
+            "#64748b": "#8b949e", "#dbeafe": "#122a4f", "#1d4ed8": "#388bfd",
+            "#1e3a8a": "#cae3ff", "#ffffff": "#0d1117",
+        }
+        for light, dark in colors.items():
+            svg = svg.replace(light, dark)
+    return svg
 
 
 if __name__ == "__main__":
-    OUT.mkdir(parents=True, exist_ok=True)
-    for focus in ("router", "integrations"):
-        (OUT / f"overview-{focus}.svg").write_text(render(focus), encoding="utf-8")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repository", choices=("router", "integrations"), default="router")
+    parser.add_argument("--output-dir", type=Path, default=OUT)
+    args = parser.parse_args()
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    for theme in ("light", "dark"):
+        (args.output_dir / f"overview-{theme}.svg").write_text(render(args.repository, theme), encoding="utf-8")

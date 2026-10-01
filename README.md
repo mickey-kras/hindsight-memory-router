@@ -14,7 +14,13 @@ Hindsight is the only supported backend.
 
 ## How it fits together
 
-[![Agents connect through Integrations to Memory Router and Hindsight. Memory Router and its encrypted quarantine are highlighted.](docs/architecture/overview-router.svg)](https://mickey-kras.github.io/hindsight-memory-router/)
+<a href="https://mickey-kras.github.io/hindsight-memory-router/">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/architecture/generated/overview-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/architecture/generated/overview-light.svg">
+    <img alt="Agents use Integrations, Memory Router, and Hindsight; Memory Router and its encrypted quarantine are highlighted." src="docs/architecture/generated/overview-light.svg">
+  </picture>
+</a>
 
 [Explore the architecture and request flows](https://mickey-kras.github.io/hindsight-memory-router/) · [Integrations repository](https://github.com/mickey-kras/hindsight-memory-router-integrations)
 

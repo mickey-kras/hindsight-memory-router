@@ -248,7 +248,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             quarantine -> quarantineStorage "After admission limits: encrypt evidence and persist review state"
             operator -> console "Open quarantine console with scoped review access"
             console -> http "Fetch encrypted evidence; optional host mode uses authenticated proxy"
-            operator -> console "Decrypt and inspect locally with WebCrypto; private key stays in browser"
+            operator -> console "RSA-OAEP: decrypt locally with WebCrypto; private key stays in browser"
             operator -> reviewTool "Alternative: decrypt exported envelope locally with CLI and private key"
             operator -> http "Approve with exact decrypted evidence, or reject/postpone"
             http -> review "Authenticate scoped admin action; verify approval digest and claim state"

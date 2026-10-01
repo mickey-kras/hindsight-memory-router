@@ -52,7 +52,6 @@ validate() {
 }
 
 generate_svg() {
-  python3 "$ROOT/scripts/architecture-overview.py"
   rm -rf "$ROOT/$GENERATED"
   mkdir -p "$ROOT/$GENERATED"
   run_structurizr export -workspace "$WORKSPACE" -format svg -mode dark -output "$GENERATED" ||
@@ -60,6 +59,7 @@ generate_svg() {
   rm -f "$ROOT/$GENERATED"/*-key.svg
   compgen -G "$ROOT/$GENERATED/*.svg" >/dev/null ||
     die "Structurizr SVG export produced no SVG files."
+  python3 "$ROOT/scripts/architecture-overview.py"
 }
 
 add_site_view_selector() {
