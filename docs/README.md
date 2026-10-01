@@ -2,6 +2,8 @@
 
 [Repository](../README.md)
 
+Start with [Getting started](getting-started.md), then configure [authentication and bank grants](security/authentication.md) before connecting an agent.
+
 ## Set up
 
 - [Getting started](getting-started.md): keys, Compose and first health check

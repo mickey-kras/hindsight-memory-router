@@ -22,7 +22,7 @@ Hindsight is the only supported backend.
   </picture>
 </a>
 
-[Explore the architecture and request flows](https://mickey-kras.github.io/hindsight-memory-router/) · [Integrations repository](https://github.com/mickey-kras/hindsight-memory-router-integrations)
+[Explore the architecture and request flows](https://mickey-kras.github.io/hindsight-memory-router/) | [Integrations repository](https://github.com/mickey-kras/hindsight-memory-router-integrations)
 
 ## Install and start
 

@@ -23,6 +23,8 @@ QUARANTINE_PUBLIC_KEY=<base64-public-key>
 
 ## Docker Compose
 
+Compose does not start Hindsight. The built-in Hindsight endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env` before starting the router.
+
 ```bash
 docker compose up -d
 curl --fail http://localhost:8890/health/ready
@@ -38,8 +40,6 @@ Compose:
 
 Configure [principal credentials and grants](security/authentication.md) before sending memory traffic. Router and admin operations fail closed until their credentials are configured. See the [Compose principal registry mount](deployment/docker.md#principal-registry).
 
-Compose does not start Hindsight. The built-in Hindsight endpoint is `http://hindsight:8888`. If Hindsight is not reachable at that Docker service name, set `HINDSIGHT_BASE_URL` in `.env`.
-
 ## Defaults
 
 Normal startup uses built-in defaults:
@@ -53,6 +53,8 @@ Normal startup uses built-in defaults:
 Use `.env.example` as an override reference.
 
 ## Next
+
+The integrations require HTTPS. Configure a [TLS terminator](deployment/docker.md#network-exposure-and-tls) before connecting an agent. A successful readiness check confirms router storage and Hindsight connectivity; it does not configure credentials or TLS.
 
 - [OpenClaw integration](integrations/openclaw.md)
 - [Configuration](configuration.md)
