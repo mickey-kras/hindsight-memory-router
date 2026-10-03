@@ -18,7 +18,7 @@
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
-    "@redocly/cli": "2.54.2",
+    "@redocly/cli": "2.54.3",
     "aislop": "0.16.1"
   },
   "overrides": {
