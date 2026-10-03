@@ -27,6 +27,12 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/audit-tool/package.json": "10e831899e68131e3fa58f3c62c18aeba8fceb87199de65f9861f015b63fb709",
+              ".github/audit-tool/package-lock.json": "ac23769398329eb7cea03236037626c2197d20695c35c6f8af26ea7706b73660",
+              ".github/audit-tool/audit-ci.json": "5d31c2834a2cd56fa7c8e6a62ea015c8c07d4da5bacd1e4af779950a3842f9ec",
+              ".github/audit-tool/audit.cjs": "3302195e687c5a4940c88d32353f68bcb12b61475affc05af18cba6398cbbc31",
+              ".github/audit-tool/audit.test.cjs": "4271a0e0cabfb6e07c779fa6a15b86751ed55ed25322abdd546e56772a58956b",
+              ".github/audit-tool/audit-fixture.json": "b338f05c92807ac45b2c7d50eb8f1dbe6c8c29f671ceb2912c051e39c453ecd2",
               ".github/scripts/pr-branch-updater.cjs": "6a1a52b9d1f8b08ece758dcc4457e496b7b2c0c170e29f6fada8dc6e0362e685",
               ".github/workflows/pr-branch-updater.yml": "1f770c09321a13c6f3cf1dc8cae94aa8b162ce8743dec4c971591622a6bfdb31",
               ".github/scripts/package.json": "db0324a5389e1d9005519058dff2b4f17b2b8632c8392e87d2a0b0d1a5be3470",
@@ -42,7 +48,7 @@ jobs:
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "77965c9a68e19cbc474c97c5fb9c56d5c49ca2b502ee064ec53bea21c37439db",
               ".github/workflows/release.yml": "1c0f53465d44deaeeced2158c3dd668ca0e625acf51212357be597ffaed0094c",
-              ".github/workflows/ci.yml": "3971dffcaef0a667a8491145e9271c272d7f9849f2fa6e8cf90852cff68f02c2",
+              ".github/workflows/ci.yml": "82a056811d567b0ab82603461350833b7cc9d691474a785350ff37528d16a0ee",
               ".github/workflows/aislop.yml": "dbc57921f92d8c45726d9ff3edb16bdc38e67e53733b6c0b7a61670bf6658492",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
@@ -514,3 +520,4 @@ jobs:
             } else {
               core.info('Policy guard passed.');
             }
+

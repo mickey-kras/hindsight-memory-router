@@ -220,7 +220,10 @@ jobs:
 
       - name: Node tooling audit
         run: |
-          node .github/scripts/npm-audit.cjs
+          npm ci --prefix .github/audit-tool --ignore-scripts --no-audit --no-fund
+          npm audit --prefix .github/audit-tool --include=dev --audit-level=moderate
+          node --test .github/audit-tool/audit.test.cjs
+          node .github/audit-tool/audit.cjs .
           node .github/scripts/npm-audit.cjs ui
 
       - name: Gitleaks
@@ -365,3 +368,4 @@ jobs:
             --severity MEDIUM,HIGH,CRITICAL \
             --ignore-unfixed \
             "${SOURCE_IMAGE}"
+
