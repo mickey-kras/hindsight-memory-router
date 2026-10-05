@@ -21,13 +21,13 @@ dependencies = [
   "rfc8785==0.1.4",
   "starlette==1.7.0",
   "structlog==26.1.0",
-  "uvicorn==0.53.0",
+  "uvicorn==0.54.0",
 ]
 
 [project.optional-dependencies]
 dev = [
   "bandit==1.9.4",
-  "coverage==7.16.1",
+  "coverage==7.16.2",
   "mypy==2.3.1",
   "pip-audit==2.10.1",
   "pip-tools==7.6.1",
