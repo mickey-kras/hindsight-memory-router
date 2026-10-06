@@ -32,7 +32,7 @@ jobs:
               ".github/scripts/pr-branch-updater.cjs": "6a1a52b9d1f8b08ece758dcc4457e496b7b2c0c170e29f6fada8dc6e0362e685",
               ".github/workflows/pr-branch-updater.yml": "1f770c09321a13c6f3cf1dc8cae94aa8b162ce8743dec4c971591622a6bfdb31",
               ".github/scripts/package.json": "db0324a5389e1d9005519058dff2b4f17b2b8632c8392e87d2a0b0d1a5be3470",
-              ".github/scripts/package-lock.json": "315d29db2dc593d1d8072be2a1fc05340a43740ce820858e81223a7cea003090",
+              ".github/scripts/package-lock.json": "f550ad0ec8aec53e0aadfe7d38ce0df154daf73ef6feefc333537c2a824ec600",
               ".github/scripts/release.cjs": "ce032b928709906d3c4b9f3d7347332214ae0b5e51a73676774bc4d8603c09a5",
               ".github/scripts/release-settings.cjs": "e485de848409942ca37d32a4caea8a93cd4bac5e93048e7b24bf57d848372a57",
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
