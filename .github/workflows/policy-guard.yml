@@ -27,6 +27,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/workflows/dependency-review.yml": "0b87abc672ea46903ff062c35a11fc0ac35005678e8d3757b829392d063fb314",
+              ".github/dependency-review-config.yml": "f92f128addcb10acd3d874579771b0d44675a3db4809d5c274211c4f0bb9374f",
               ".github/scripts/pr-branch-updater.cjs": "6a1a52b9d1f8b08ece758dcc4457e496b7b2c0c170e29f6fada8dc6e0362e685",
               ".github/workflows/pr-branch-updater.yml": "1f770c09321a13c6f3cf1dc8cae94aa8b162ce8743dec4c971591622a6bfdb31",
               ".github/scripts/package.json": "db0324a5389e1d9005519058dff2b4f17b2b8632c8392e87d2a0b0d1a5be3470",
@@ -36,7 +38,7 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "4417bade8b61cfb34c83dac43003c41f1ab2048fef539f02d4dda921e114d971",
+              ".github/scripts/release-policy.test.py": "fa15b2b693228e66ee776c7a03577541e229e87ea8307ed2d7b11a05ed9b456b",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
