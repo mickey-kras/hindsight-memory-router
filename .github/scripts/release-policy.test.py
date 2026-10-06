@@ -16,6 +16,7 @@ GUARD = ROOT / ".github/workflows/policy-guard.yml"
 ROUTER = (ROOT / ".github/workflows/publish.yml").exists()
 MAIN = ".github/workflows/publish.yml" if ROUTER else ".github/workflows/main.yml"
 PATHS = [
+    ".github/dependency-review-config.yml",
     ".github/workflows/policy-guard.yml",
     MAIN,
     ".github/workflows/release.yml",
@@ -179,16 +180,23 @@ class ReleasePolicyTests(unittest.TestCase):
         config_path = ROOT / review["with"]["config-file"].removeprefix("./")
         config = yaml.safe_load(config_path.read_text())
         self.assertEqual(config["fail-on-severity"], "high")
-        self.assertGreaterEqual(len(config["deny-licenses"]), 1)
-        # Copyleft policy: every denied entry is a valid SPDX expression and the
-        # weak-copyleft LGPL families are denied in both -only and -or-later forms.
-        spdx_id = re.compile(r"^[A-Za-z0-9.-]+$")
-        for entry in config["deny-licenses"]:
-            self.assertRegex(entry, spdx_id)
-        for family in ["LGPL-2.1", "LGPL-3.0"]:
-            self.assertIn(f"{family}-only", config["deny-licenses"])
-            self.assertIn(f"{family}-or-later", config["deny-licenses"])
-        self.assertIn("allow-dependencies-licenses", config)
+        self.assertTrue(config["vulnerability-check"])
+        self.assertFalse(config["license-check"])
+        self.assertFalse(config["warn-only"])
+        self.assertEqual(set(config["fail-on-scopes"]), {"runtime", "development", "unknown"})
+
+    def test_dependency_vulnerability_bypasses_fail_policy(self):
+        path = ".github/dependency-review-config.yml"
+        original = (ROOT / path).read_text()
+        for changed in [
+            original.replace("vulnerability-check: true", "vulnerability-check: false"),
+            original.replace("warn-only: false", "warn-only: true"),
+            original.replace("high", "critical"),
+            original.replace("  - development\n", ""),
+            original + "allow-ghsas: [GHSA-xxxx-xxxx-xxxx]\n",
+        ]:
+            self.assertTrue(policy({path: changed}))
+
 
     def test_release_sbom_contract(self):
         if not ROUTER:
