@@ -29,6 +29,7 @@ def github_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_RUN_ID", "42")
     monkeypatch.setenv("SONAR_HOST_URL", "https://sonar.example")
+    monkeypatch.setenv("SONAR_ADVERTISED_HOST_URL", "https://advertised.example")
 
 
 def test_two_hotspots_create_two_stable_findings(sync_module: ModuleType) -> None:
@@ -318,3 +319,62 @@ def test_existing_closed_finding_is_reopened_not_duplicated(sync_module: ModuleT
     assert any(call[:4] == ("gh", "issue", "reopen", "180") for call in calls)
     assert any(call[:4] == ("gh", "issue", "edit", "180") for call in calls)
     assert not any(call[:3] == ("gh", "issue", "create") for call in calls)
+
+
+@pytest.mark.parametrize("configured_server", ["https://sonar.example/private", None])
+def test_public_finding_bodies_preserve_diagnostics_without_server_links(
+    sync_module: ModuleType, monkeypatch: pytest.MonkeyPatch, configured_server: str | None
+) -> None:
+    if configured_server is None:
+        monkeypatch.delenv("SONAR_HOST_URL", raising=False)
+    else:
+        monkeypatch.setenv("SONAR_HOST_URL", configured_server)
+    findings = [
+        sync_module.issue_finding(
+            {
+                "key": "issue-1",
+                "component": "project:src/app.py",
+                "line": 7,
+                "message": "Refactor this function",
+                "rule": "python:S3776",
+            },
+            "project",
+        ),
+        sync_module.hotspot_finding(
+            {
+                "key": "hotspot-1",
+                "component": "project:src/app.py",
+                "line": 8,
+                "message": "Review this expression",
+                "securityCategory": "dos",
+                "vulnerabilityProbability": "HIGH",
+            },
+            "project",
+        ),
+        sync_module.condition_finding(
+            {
+                "metricKey": "new_coverage",
+                "actualValue": "79",
+                "comparator": "LT",
+                "errorThreshold": "80",
+            },
+            "project",
+        ),
+    ]
+    for finding in findings:
+        assert "sonar.example" not in finding.body
+        assert "- SonarQube:" not in finding.body
+        assert "Detected at commit: `abc123`" in finding.body
+        assert "Workflow: https://github.com/owner/repo/actions/runs/42" in finding.body
+    assert "Finding ID: `issue-1`" in findings[0].body
+    assert "Rule: `python:S3776`" in findings[0].body
+    assert "Location: `src/app.py:7`" in findings[0].body
+    assert "Refactor this function" in findings[0].body
+    assert "Finding ID: `hotspot-1`" in findings[1].body
+    assert "Location: `src/app.py:8`" in findings[1].body
+    assert "Review this expression" in findings[1].body
+    assert "Category: `dos`" in findings[1].body
+    assert "Probability: `HIGH`" in findings[1].body
+    assert "Metric: `new_coverage`" in findings[2].body
+    assert "Actual: `79`" in findings[2].body
+    assert "actual `LT` threshold `80`" in findings[2].body
