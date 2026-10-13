@@ -242,7 +242,7 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
     rolling_windows = 0
     skip_windows = 0
     deadline = time.monotonic() + MAX_QUERY_SCAN_SECONDS
-    for index, (key, raw) in enumerate(query):
+    for index, (key, raw) in enumerate(_query_scan_values(query, result, deadline)):
         if index >= MAX_QUERY_SCAN_FIELDS:
             result.add(SafetyFinding("query_field_limit", "span_limit"))
             break
@@ -443,6 +443,36 @@ def _scan_query_window(  # NOSONAR
                 )
             )
     return False
+
+
+def _query_scan_values(
+    query: Iterable[tuple[str, str]], result: SafetyResult, deadline: float
+) -> Iterator[tuple[str, str]]:
+    for key, raw in query:
+        if key != "tag_groups":
+            yield key, raw
+            continue
+        # Decode only the semantic JSON parameter, inside the bounded scan worker.
+        if security_rules._deadline_reached(result, deadline):
+            return
+        if security_rules._string_exceeds_scan_limit(raw):
+            result.add(SafetyFinding("field_size_limit", "span_limit"))
+            return
+        try:
+            decoded: object = json.loads(raw)
+        except (ValueError, RecursionError):
+            result.add(SafetyFinding("invalid_query_json", "span_limit"))
+            return
+        # Count even empty JSON against the query field budget. Decoded fields
+        # share the normal query limits and cross-parameter reassembly state.
+        yield key, ""
+        for _, value, is_key in _walk_strings(decoded, "query.tag_groups"):
+            try:
+                value.encode("utf-8")
+            except UnicodeEncodeError:
+                result.add(SafetyFinding("invalid_query_unicode", "span_limit"))
+                return
+            yield (value, "") if is_key else ("", value)
 
 
 def _walk_strings(

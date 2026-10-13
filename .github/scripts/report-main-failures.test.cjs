@@ -14,6 +14,17 @@ const step = { name: 'smoke', number: 2, conclusion: 'failure',
 const job = { id: 7, name: 'publish', conclusion: 'failure', steps: [step], html_url: 'https://github.com/job/7' };
 const log = text => `2026-09-05T00:00:01.000Z ${text}`;
 
+test('compatibility diagnostics survive same-second post-job cleanup', () => {
+  const diagnostic = "CompatibilityError: Hindsight OpenClaw-facing upstream source changed; " +
+    "review endpoint/request/response compatibility and refresh inventory: ['client', 'facade_spec']";
+  const text = [log(diagnostic), log('##[error]Process completed with exit code 1.'),
+    ...Array.from({ length: 40 }, () => '2026-09-05T00:00:03.500Z Post job cleanup.')].join('\n');
+  const report = reportsForJob(run, job, text)[0];
+  assert.ok(report.body.includes(diagnostic));
+  assert.doesNotMatch(report.body, /Post job cleanup|diagnostics incomplete|No reliable error signature/);
+  assert.equal(report.key, reportsForJob({ ...run, id: 99 }, job, text)[0].key);
+});
+
 test('same exact error reuses signature across runs, different error does not', () => {
   const first = reportsForJob(run, job, log('ValueError: invalid bank'))[0];
   const repeated = reportsForJob({ ...run, id: 50 }, job, log('ValueError: invalid bank'))[0];

@@ -99,6 +99,8 @@ REQUIRED_WORKFLOW_CHECKS = {
     "OpenClaw conditional requests reject nested injection before Hindsight",
     "Extended Hindsight facade endpoints resolve through writer bank",
     "Denied Hindsight surfaces fail closed at the router",
+    "Compound tag filters preserve values on all supported routes",
+    "Unicode escaped compound tag injection is rejected before Hindsight",
 }
 INTEGRATION_BEHAVIOR_PATHS = {
     path

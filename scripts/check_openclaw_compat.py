@@ -21,6 +21,8 @@ MIN_FACADE_OPERATION_COUNT = 75
 REQUIRED_COVERAGE_MARKERS = frozenset(
     {
         "configured bank defaults",
+        "native_memory_provider",
+        "upstream_tag_filters",
         "auto-retain",
         "auto-recall",
         "knowledge-page list get create update delete",
@@ -212,10 +214,14 @@ def main() -> int:
 
     root = Path(sys.argv[1])
     inventory = json.loads((REPOSITORY_ROOT / "compat/openclaw.json").read_text(encoding="utf-8"))
-    sources = {
-        name: (root / path).read_text(encoding="utf-8")
-        for name, path in inventory["sources"].items()
-    }
+    sources: dict[str, str] = {}
+    for name, path in inventory["sources"].items():
+        try:
+            sources[name] = (root / path).read_text(encoding="utf-8")
+        except FileNotFoundError as exc:
+            raise SystemExit(
+                f"CompatibilityError: upstream compatibility source missing: {name} ({path}); review inventory"
+            ) from exc
 
     expected_blobs = inventory["source_blob_shas"]
     actual_blobs = {name: _git_blob_sha(source) for name, source in sources.items()}
@@ -224,19 +230,20 @@ def main() -> int:
             name for name, sha in actual_blobs.items() if expected_blobs.get(name) != sha
         )
         raise SystemExit(
-            "Hindsight OpenClaw-facing upstream source changed; review endpoint/request/response "
+            "CompatibilityError: Hindsight OpenClaw-facing upstream source changed; review endpoint/request/response "
             f"compatibility and refresh inventory: {changed}"
         )
 
     plugin = sources["plugin"]
-    sdk = sources["agent_sdk"]
 
     try:
         facade_operations = _upstream_operations(
             sources["facade_spec"], minimum=MIN_FACADE_OPERATION_COUNT
         )
     except (RecursionError, ValueError, yaml.YAMLError) as exc:
-        raise SystemExit(f"could not parse upstream facade OpenAPI: {exc}") from exc
+        raise SystemExit(
+            f"CompatibilityError: could not parse upstream facade OpenAPI: {exc}"
+        ) from exc
     missing_facade = []
     mismatched_statuses = []
     mismatched_bodies = []
@@ -264,36 +271,38 @@ def main() -> int:
         if operation["deprecated"]:
             deprecated_facade.append((route.method, path))
     if missing_facade:
-        raise SystemExit(f"facade routes missing upstream: {missing_facade}")
+        raise SystemExit(f"CompatibilityError: facade routes missing upstream: {missing_facade}")
     if mismatched_statuses:
-        raise SystemExit(f"facade success statuses differ from upstream: {mismatched_statuses}")
+        raise SystemExit(
+            f"CompatibilityError: facade success statuses differ from upstream: {mismatched_statuses}"
+        )
     if mismatched_bodies:
-        raise SystemExit(f"facade body requiredness differs from upstream: {mismatched_bodies}")
+        raise SystemExit(
+            f"CompatibilityError: facade body requiredness differs from upstream: {mismatched_bodies}"
+        )
     if mismatched_queries:
-        raise SystemExit(f"facade query parameters differ from upstream: {mismatched_queries}")
+        raise SystemExit(
+            f"CompatibilityError: facade query parameters differ from upstream: {mismatched_queries}"
+        )
     if deprecated_facade:
-        raise SystemExit(f"deprecated upstream routes are exposed by facade: {deprecated_facade}")
+        raise SystemExit(
+            f"CompatibilityError: deprecated upstream routes are exposed by facade: {deprecated_facade}"
+        )
 
     expected_plugin = set(inventory["plugin_client_methods"])
     actual_plugin = _methods(plugin, ("client", "c"))
     if actual_plugin != expected_plugin:
         raise SystemExit(
-            f"OpenClaw Hindsight client surface changed: expected {sorted(expected_plugin)}, "
+            f"CompatibilityError: OpenClaw Hindsight client surface changed: expected {sorted(expected_plugin)}, "
             f"found {sorted(actual_plugin)}"
-        )
-
-    expected_sdk = set(inventory["agent_sdk_methods"])
-    actual_sdk = _methods(sdk, ("client", "sdk"))
-    if actual_sdk != expected_sdk:
-        raise SystemExit(
-            f"OpenClaw agent SDK surface changed: expected {sorted(expected_sdk)}, "
-            f"found {sorted(actual_sdk)}"
         )
 
     required_plugin_markers = ("/health", "/version")
     for marker in required_plugin_markers:
         if marker not in plugin:
-            raise SystemExit(f"OpenClaw plugin no longer contains required probe {marker}")
+            raise SystemExit(
+                f"CompatibilityError: OpenClaw plugin no longer contains required probe {marker}"
+            )
     compatibility_tests = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (
@@ -305,7 +314,9 @@ def main() -> int:
     )
     missing_coverage = _missing_coverage_markers(compatibility_tests)
     if missing_coverage:
-        raise SystemExit(f"OpenClaw compatibility coverage markers missing: {missing_coverage}")
+        raise SystemExit(
+            f"CompatibilityError: OpenClaw compatibility coverage markers missing: {missing_coverage}"
+        )
     print("OpenClaw compatibility inventory is current")
     return 0
 

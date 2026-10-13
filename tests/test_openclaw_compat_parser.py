@@ -1,18 +1,80 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 from yaml.constructor import ConstructorError
 
+from scripts import check_openclaw_compat as compat
 from scripts.check_openclaw_compat import (
     REQUIRED_COVERAGE_MARKERS,
     _missing_coverage_markers,
     _supports_status,
     _upstream_operations,
 )
+
+
+def test_inventory_reports_removed_upstream_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "compat").mkdir()
+    (tmp_path / "compat/openclaw.json").write_text(
+        json.dumps(
+            {
+                "sources": {"memory_provider": "missing.ts"},
+                "source_blob_shas": {},
+            }
+        )
+    )
+    monkeypatch.setattr(compat, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_openclaw_compat.py", str(tmp_path)])
+
+    with pytest.raises(SystemExit, match="upstream compatibility source missing: memory_provider"):
+        compat.main()
+
+
+def test_inventory_rejects_unreviewed_upstream_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "compat").mkdir()
+    (tmp_path / "plugin.ts").write_text("changed upstream behavior")
+    (tmp_path / "compat/openclaw.json").write_text(
+        json.dumps(
+            {
+                "sources": {"plugin": "plugin.ts"},
+                "source_blob_shas": {"plugin": "0" * 40},
+            }
+        )
+    )
+    monkeypatch.setattr(compat, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_openclaw_compat.py", str(tmp_path)])
+
+    with pytest.raises(SystemExit, match="refresh inventory: \\['plugin'\\]"):
+        compat.main()
+
+
+def test_upstream_canary_runs_independently_with_read_only_resolved_sources() -> None:
+    root = Path(__file__).parents[1]
+    workflow = yaml.safe_load((root / ".github/workflows/upstream-compatibility.yml").read_text())
+    triggers = workflow[True]
+    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert triggers["schedule"]
+    assert workflow["permissions"] == {"contents": "read"}
+    job = workflow["jobs"]["compatibility"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert "permissions" not in job
+    upstream = next(step for step in job["steps"] if step.get("with", {}).get("repository"))
+    assert upstream["with"] == {
+        "repository": "vectorize-io/hindsight",
+        "ref": "${{ steps.upstream.outputs.sha }}",
+        "path": ".upstream/hindsight",
+        "persist-credentials": False,
+    }
+    assert job["steps"][-1]["run"] == "python scripts/check_openclaw_compat.py .upstream/hindsight"
 
 
 def test_compat_script_invokes_main_when_executed() -> None:

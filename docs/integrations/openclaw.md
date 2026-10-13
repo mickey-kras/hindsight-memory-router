@@ -18,7 +18,6 @@ bankId = <writer_id>
 bankIdPrefix = unset
 autoRecall = true
 autoRetain = true
-enableKnowledgeTools = false initially
 ```
 
 Writer IDs must exist in the configured Memory Router registry or their requests follow the unknown-writer quarantine policy.
@@ -26,3 +25,5 @@ Writer IDs must exist in the configured Memory Router registry or their requests
 Compatible clients in legacy token mode use the same values: router URL, router token, and writer ID as bank ID.
 
 Denied: webhooks, file transfer, import/export, upstream metrics, LLM health, cross-writer listings and deprecated endpoints. The router's own opt-in metrics endpoint has separate [admin authorization](../reference/api.md).
+
+Compatibility is reviewed against Hindsight v1.0.0, including native memory-provider search and get. Legacy mental-model routes remain supported. CI and the daily upstream compatibility workflow check the latest stable release; source drift requires review before inventory hashes are updated.
