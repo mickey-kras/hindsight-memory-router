@@ -49,7 +49,7 @@ jobs:
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
               ".github/scripts/report-main-failures.cjs": "b4b834f8a3334e5a7e9cf95896c15e2c57da19ed55b5b3224fce46deb463cb37",
-              ".github/scripts/report-main-failures.test.cjs": "a5781a8c86b8c5e714b0b1839a3db3cfdf72dadad4a08c2b88458e6a87492dab"
+              ".github/scripts/report-main-failures.test.cjs": "83eca6e6108360a386fc3a711e47768031525f69614a1d338773c22f6afc8fcc"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');

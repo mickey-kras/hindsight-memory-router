@@ -1915,6 +1915,43 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ]
+            }
+          },
+          {
+            "name": "tag_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded compound tag filter."
           }
         ],
         "responses": {
@@ -2011,6 +2048,43 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ]
+            }
+          },
+          {
+            "name": "tag_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded compound tag filter."
           }
         ],
         "responses": {
@@ -2083,6 +2157,43 @@
           },
           {
             "$ref": "#/components/parameters/EntityId"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ]
+            }
+          },
+          {
+            "name": "tag_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded compound tag filter."
           }
         ],
         "responses": {
@@ -2738,6 +2849,43 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ]
+            }
+          },
+          {
+            "name": "tag_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded compound tag filter."
           }
         ],
         "responses": {
@@ -2807,6 +2955,43 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/BankId"
+          },
+          {
+            "name": "tags",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "style": "form",
+            "explode": true
+          },
+          {
+            "name": "tags_match",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "any",
+                "all",
+                "any_strict",
+                "all_strict",
+                "exact"
+              ]
+            }
+          },
+          {
+            "name": "tag_groups",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "JSON-encoded compound tag filter."
           }
         ],
         "responses": {
