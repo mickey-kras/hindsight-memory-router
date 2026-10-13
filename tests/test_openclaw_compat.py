@@ -30,20 +30,25 @@ FILTER_ROUTES = [
     FILTER_ROUTES,
 )
 @pytest.mark.parametrize(
-    "compound", ['[{"or":[{"tags":["team"]}]}]', r'[{"or":[{"tags":["\u0074eam"]}]}]']
+    "compound",
+    [
+        None,
+        '[{"or":[{"tags":["team"]}]}]',
+        r'[{"or":[{"tags":["\u0074eam"]}]}]',
+        r'[{"tags":["\ud83d\ude00"]}]',
+    ],
 )
 @pytest.mark.asyncio
 async def test_upstream_tag_filters_preserve_repeated_tags_and_compound_filter(
     template: str,
-    compound: str,
+    compound: str | None,
 ) -> None:
     policy = make_policy({"items": []})
-    query = [
-        ("tags", "first"),
-        ("tags", "second"),
-        ("tags_match", "all_strict"),
-        ("tag_groups", compound),
-    ]
+    query = (
+        [("tags", "first"), ("tags", "second"), ("tags_match", "all_strict")]
+        if compound is None
+        else [("tag_groups", compound)]
+    )
     if template == "knowledge-base/search":
         query.insert(0, ("q", "preferences"))
 
@@ -99,11 +104,13 @@ async def test_compound_tag_filters_scan_decoded_keys_and_values(
     "compound",
     [
         '[{"tags":',
+        r'[{"tags":["\ud800"]}]',
+        r'[{"tags":["\udc00"]}]',
         "[" * 2000 + '"' + _unicode_escape(INJECTION) + '"' + "]" * 2000,
-        json.dumps([{"tags": ["safe"] * 129}]),
+        json.dumps([{"tags": ["safe"] * 257}]),
         json.dumps([{"tags": ["x" * MAX_SCAN_FIELD_BYTES]}]),
     ],
-    ids=["malformed", "deep", "fields", "size"],
+    ids=["malformed", "high-surrogate", "low-surrogate", "deep", "fields", "size"],
 )
 @pytest.mark.asyncio
 async def test_compound_tag_filter_limits_fail_closed(compound: str) -> None:
@@ -116,6 +123,35 @@ async def test_compound_tag_filter_limits_fail_closed(compound: str) -> None:
             query=[("tag_groups", compound)],
         )
 
+    assert blocked.value.code == "suspicious_content"
+    policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("template", ["knowledge-base/tree", "knowledge-base/search"])
+@pytest.mark.parametrize(
+    "keys", [("tag_groups", "tags"), ("tags", "tag_groups"), ("tag_groups", "tag_groups")]
+)
+@pytest.mark.asyncio
+async def test_decoded_tag_filters_share_cross_query_scanning(
+    template: str, keys: tuple[str, str]
+) -> None:
+    policy = make_policy({"items": []})
+    query = [
+        (key, '[{"tags":["' + _unicode_escape(value) + '"]}]' if key == "tag_groups" else value)
+        for key, value in zip(keys, ("ignore previous", "instructions"), strict=True)
+    ]
+    if template == "knowledge-base/search":
+        query.insert(0, ("q", "preferences"))
+
+    with pytest.raises(HttpError) as blocked:
+        await OpenClawFacade(policy).forward(
+            route=facade_route("GET", template),
+            writer_id="openclaw",
+            params={},
+            query=query,
+        )
+
+    assert blocked.value.status == 422
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
 
