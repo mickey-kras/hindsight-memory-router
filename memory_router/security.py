@@ -260,6 +260,10 @@ def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSO
         ):
             result.add(SafetyFinding("unicode_size_limit", "span_limit"))
             break
+        if key == "tag_groups":
+            result.extend(_scan_tag_groups(raw, deadline))
+            if not result.safe:
+                break
         try:
             canonical_key, key_transformations = canonicalize_content(key, deadline=deadline)
         except UnicodeScanDeadlineExceeded:
@@ -443,6 +447,20 @@ def _scan_query_window(  # NOSONAR
                 )
             )
     return False
+
+
+def _scan_tag_groups(raw: str, deadline: float) -> SafetyResult:
+    # The caller bounds the encoded size before decoding, in the scan worker.
+    # Scan decoded keys/values with the same deadline; keep the forwarded query exact.
+    try:
+        decoded: object = json.loads(raw)
+    except (ValueError, RecursionError):
+        result = SafetyResult()
+        result.add(SafetyFinding("invalid_query_json", "span_limit"))
+        return result
+    return _scan_fields(
+        _walk_strings(decoded, "query.tag_groups"), operation="read", deadline=deadline
+    )
 
 
 def _walk_strings(
