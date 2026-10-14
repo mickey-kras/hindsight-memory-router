@@ -81,8 +81,6 @@ def _capacity() -> HttpError:
 
 
 class HumanAuthStore:
-    """Shared, short transactions; callers perform identity-provider I/O after claim_login."""
-
     def __init__(self, db: Database, generation: str) -> None:
         self.db = db
         self.generation = generation
