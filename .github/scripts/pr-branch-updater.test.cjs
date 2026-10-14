@@ -27,7 +27,8 @@ function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user
         return { data: { ahead_by: args.basehead.endsWith('...base') ? 0 : ahead } };
       } },
     },
-    request: async (_route, args) => {
+    request: async (route, args) => {
+      assert.equal(route, 'PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch');
       if (fail) throw new Error('API unavailable');
       calls.updates.push(args);
     },
@@ -132,6 +133,27 @@ test('revoking auto-merge during unknown-state retry stops the update', async ()
   assert.deepEqual(calls.updates, []);
   assert.deepEqual(calls.failures, []);
 });
+for (const [name, patch] of [
+  ['closed', { state: 'closed' }],
+  ['retargeted', { base: { ref: 'release/1.2.3' } }],
+  ['forked', { head: { sha: 'head', repo: { full_name: 'other/repo' } } }],
+]) {
+  test(`unknown-state retry stops when the PR becomes ${name}`, async () => {
+    const { args, calls } = fixture({ mergeable: null });
+    const get = args.github.rest.pulls.get;
+    args.github.rest.pulls.get = async (options) => {
+      const result = await get(options);
+      if (calls.reads.length > 1) Object.assign(result.data, patch);
+      return result;
+    };
+    await run(args);
+    assert.deepEqual(calls.sleeps, [5000]);
+    assert.deepEqual(calls.comparisons, ['head...current-main']);
+    assert.deepEqual(calls.updates, []);
+    assert.deepEqual(calls.logs, ['#1: ineligible']);
+    assert.deepEqual(calls.failures, []);
+  });
+}
 for (const [eventName, ref] of [
   ['pull_request', 'refs/heads/main'],
   ['pull_request_target', 'refs/heads/main'],
