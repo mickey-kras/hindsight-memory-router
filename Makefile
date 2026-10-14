@@ -13,9 +13,8 @@ requirements:
 		--output-file requirements.txt pyproject.toml
 
 build-requirements:
-	python -m pip install --require-hashes --only-binary=:all: --force-reinstall -r build-requirements.txt
 	pip-compile --generate-hashes --no-reuse-hashes --strip-extras --no-header --no-annotate \
-		--allow-unsafe --only-build-deps --all-build-deps --no-build-isolation \
+		--allow-unsafe --only-build-deps --all-build-deps --build-isolation \
 		--output-file build-requirements.txt pyproject.toml
 
 format:
