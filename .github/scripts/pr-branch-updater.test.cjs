@@ -2,34 +2,39 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { run } = require('./pr-branch-updater.cjs');
 
-function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user } = {}) {
-  const calls = { updates: [], sleeps: [], failures: [], comparisons: [], logs: [] };
+function fixture({ mergeable = true, ahead = 1, fail = false, fork = false, user,
+  autoMerge = { merge_method: 'squash' } } = {}) {
+  const calls = { updates: [], sleeps: [], failures: [], comparisons: [], logs: [], lists: [], reads: [] };
   let reads = 0;
-  const pull = { number: 1, user, state: 'open', base: { ref: 'main', sha: 'base' },
+  const pull = { number: 1, user, auto_merge: autoMerge, state: 'open', base: { ref: 'main', sha: 'base' },
     head: { sha: 'head', repo: { full_name: fork ? 'other/repo' : 'owner/repo' } } };
   const github = {
-    paginate: async () => [pull],
+    paginate: async (_method, options) => { calls.lists.push(options); return [pull]; },
     rest: {
       git: { getRef: async (args) => {
         assert.equal(args.ref, 'heads/main');
         return { data: { object: { sha: 'current-main' } } };
       } },
-      pulls: { list: () => {}, get: async () => ({ data: { ...pull,
-        mergeable: Array.isArray(mergeable) ? mergeable[Math.min(reads++, mergeable.length - 1)] : mergeable,
-        mergeable_state: 'blocked',
-      } }) },
+      pulls: { list: () => {}, get: async (options) => {
+        calls.reads.push(options.pull_number);
+        return { data: { ...pull,
+          mergeable: Array.isArray(mergeable) ? mergeable[Math.min(reads++, mergeable.length - 1)] : mergeable,
+          mergeable_state: 'blocked',
+        } };
+      } },
       repos: { compareCommitsWithBasehead: async (args) => {
         calls.comparisons.push(args.basehead);
         return { data: { ahead_by: args.basehead.endsWith('...base') ? 0 : ahead } };
       } },
     },
-    request: async (_route, args) => {
+    request: async (route, args) => {
+      assert.equal(route, 'PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch');
       if (fail) throw new Error('API unavailable');
       calls.updates.push(args);
     },
   };
   const summary = { addHeading: () => summary, addTable: () => summary, write: async () => {} };
-  return { calls, args: { github, context: {
+  return { calls, args: { github, mode: 'automatic', context: {
     repo: { owner: 'owner', repo: 'repo' }, eventName: 'push', ref: 'refs/heads/main',
   },
     core: { info: (s) => calls.logs.push(s), summary, setFailed: (s) => calls.failures.push(s) },
@@ -41,12 +46,114 @@ test('updates against current main despite stale PR base metadata and blocked ch
   assert.deepEqual(calls.comparisons, ['head...current-main']);
   assert.equal(calls.updates[0].expected_head_sha, 'head');
 });
-test('a manual main dispatch updates branches through the same guarded API', async () => {
+test('a direct manual dispatch refreshes exactly its selected PR without auto-merge', async () => {
+  const { args, calls } = fixture({ autoMerge: null });
+  args.context.eventName = 'workflow_dispatch';
+  args.mode = 'manual';
+  args.pullNumber = '17';
+  await run(args);
+  assert.deepEqual(calls.lists, []);
+  assert.deepEqual(calls.reads, [17]);
+  assert.equal(calls.updates[0].pull_number, 17);
+  assert.equal(calls.updates[0].expected_head_sha, 'head');
+});
+for (const pullNumber of [undefined, '', '0', '-1', '01', '1.5', '1e2', ' 1', '1 ', '1;process.exit()', '9007199254740992', 1]) {
+  test(`rejects direct manual selector ${JSON.stringify(pullNumber)} before accessing GitHub`, async () => {
+    const { args } = fixture();
+    args.context.eventName = 'workflow_dispatch';
+    args.mode = 'manual';
+    args.pullNumber = pullNumber;
+    args.github = new Proxy({}, { get() { assert.fail('GitHub accessed before selector validation'); } });
+    await assert.rejects(run(args), /manual PR refresh requires/);
+  });
+}
+for (const mode of [undefined, '', 'all']) {
+  test(`rejects invalid refresh mode ${JSON.stringify(mode)} before accessing GitHub`, async () => {
+    const { args } = fixture();
+    args.mode = mode;
+    args.github = new Proxy({}, { get() { assert.fail('GitHub accessed before mode validation'); } });
+    await assert.rejects(run(args), /invalid PR refresh mode/);
+  });
+}
+test('manual refresh cannot run on a push', async () => {
+  const { args } = fixture();
+  args.mode = 'manual';
+  args.pullNumber = '1';
+  args.github = new Proxy({}, { get() { assert.fail('GitHub accessed on manual push'); } });
+  await assert.rejects(run(args), /manual PR refresh requires/);
+});
+for (const inputs of [{}, { candidate_sha: 'candidate', candidate_ref: 'release/1.2.3' }, { pull_number: '99' }]) {
+  test(`inherited dispatch stays automatic with caller inputs ${JSON.stringify(inputs)}`, async () => {
+    const { args, calls } = fixture({ autoMerge: null });
+    args.context.eventName = 'workflow_dispatch';
+    args.context.payload = { inputs };
+    await run(args);
+    assert.equal(calls.lists.length, 1);
+    assert.deepEqual(calls.reads, [1]);
+    assert.deepEqual(calls.updates, []);
+    assert.deepEqual(calls.failures, []);
+  });
+}
+test('an inherited baseline dispatch can refresh auto-merge PRs without a manual selector', async () => {
   const { args, calls } = fixture();
   args.context.eventName = 'workflow_dispatch';
   await run(args);
   assert.equal(calls.updates.length, 1);
 });
+test('automatic pushes leave manual PRs untouched', async () => {
+  const { args, calls } = fixture({ autoMerge: null });
+  await run(args);
+  assert.deepEqual(calls.comparisons, []);
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.logs, ['#1: awaiting explicit refresh']);
+});
+test('automatic eligibility uses freshly read auto-merge state rather than the list snapshot', async () => {
+  for (const [listed, fresh, expected] of [[null, {}, 1], [{}, null, 0]]) {
+    const { args, calls } = fixture({ autoMerge: listed });
+    const get = args.github.rest.pulls.get;
+    args.github.rest.pulls.get = async (options) => {
+      const result = await get(options);
+      result.data.auto_merge = fresh;
+      return result;
+    };
+    await run(args);
+    assert.equal(calls.updates.length, expected);
+  }
+});
+test('revoking auto-merge during unknown-state retry stops the update', async () => {
+  const { args, calls } = fixture({ mergeable: null });
+  const get = args.github.rest.pulls.get;
+  args.github.rest.pulls.get = async (options) => {
+    const result = await get(options);
+    if (calls.reads.length > 1) result.data.auto_merge = null;
+    return result;
+  };
+  await run(args);
+  assert.deepEqual(calls.sleeps, [5000]);
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.failures, []);
+});
+for (const [name, patch] of [
+  ['closed', { state: 'closed' }],
+  ['retargeted', { base: { ref: 'release/1.2.3' } }],
+  ['forked', { head: { sha: 'head', repo: { full_name: 'other/repo' } } }],
+]) {
+  test(`unknown-state retry stops when the PR becomes ${name}`, async () => {
+    const { args, calls } = fixture({ mergeable: null });
+    const get = args.github.rest.pulls.get;
+    args.github.rest.pulls.get = async (options) => {
+      const result = await get(options);
+      if (calls.reads.length > 1) Object.assign(result.data, patch);
+      return result;
+    };
+    await run(args);
+    assert.deepEqual(calls.sleeps, [5000]);
+    assert.deepEqual(calls.comparisons, ['head...current-main']);
+    assert.deepEqual(calls.updates, []);
+    assert.deepEqual(calls.logs, ['#1: ineligible']);
+    assert.deepEqual(calls.failures, []);
+  });
+}
 for (const [eventName, ref] of [
   ['pull_request', 'refs/heads/main'],
   ['pull_request_target', 'refs/heads/main'],
@@ -75,6 +182,74 @@ test('retries unknown mergeability and then updates', async () => {
 test('persistent unknown fails after bounded retries', async () => {
   const { args, calls } = fixture({ mergeable: null }); await run(args);
   assert.equal(calls.sleeps.length, 3); assert.equal(calls.failures.length, 1);
+});
+for (const [name, patch] of [
+  ['closed', { state: 'closed' }],
+  ['retargeted', { base: { ref: 'release/1.2.3' } }],
+  ['fork', { head: { sha: 'head', repo: { full_name: 'other/repo' } } }],
+]) {
+  test(`explicit manual refresh rejects a freshly ${name} PR`, async () => {
+    const { args, calls } = fixture({ autoMerge: null });
+    args.mode = 'manual';
+    args.pullNumber = '1';
+    args.context.eventName = 'workflow_dispatch';
+    const get = args.github.rest.pulls.get;
+    args.github.rest.pulls.get = async (options) => ({ data: { ...(await get(options)).data, ...patch } });
+    await run(args);
+    assert.deepEqual(calls.comparisons, []);
+    assert.deepEqual(calls.updates, []);
+    assert.deepEqual(calls.logs, ['#1: ineligible']);
+  });
+}
+for (const [name, mergeable, sleeps, failures] of [['conflicting', false, 0, 0], ['unknown', null, 3, 1]]) {
+  test(`explicit manual refresh preserves ${name} mergeability handling`, async () => {
+    const { args, calls } = fixture({ autoMerge: null, mergeable });
+    args.mode = 'manual';
+    args.pullNumber = '1';
+    args.context.eventName = 'workflow_dispatch';
+    await run(args);
+    assert.deepEqual(calls.updates, []);
+    assert.equal(calls.sleeps.length, sleeps);
+    assert.equal(calls.failures.length, failures);
+  });
+}
+test('unknown-state retry compares fresh head and base tips before requesting an update', async () => {
+  const { args, calls } = fixture({ mergeable: [null, true] });
+  const get = args.github.rest.pulls.get;
+  args.github.rest.pulls.get = async (options) => {
+    const result = await get(options);
+    result.data.head = { ...result.data.head, sha: `head-${calls.reads.length}` };
+    return result;
+  };
+  args.github.rest.git.getRef = async () => ({ data: { object: { sha: `base-${calls.reads.length}` } } });
+  await run(args);
+  assert.deepEqual(calls.comparisons, ['head-1...base-1', 'head-2...base-2']);
+  assert.equal(calls.updates[0].expected_head_sha, 'head-2');
+});
+test('unknown-state retry stops when a concurrent refresh makes the branch current', async () => {
+  const { args, calls } = fixture({ mergeable: null });
+  args.github.rest.repos.compareCommitsWithBasehead = async () => ({ data: {
+    ahead_by: calls.reads.length === 1 ? 1 : 0,
+  } });
+  await run(args);
+  assert.deepEqual(calls.sleeps, [5000]);
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.failures, []);
+  assert.deepEqual(calls.logs, ['#1: current']);
+});
+test('expected-head rejection stays unresolved without retrying against an unreviewed head', async () => {
+  const { args, calls } = fixture();
+  let requests = 0;
+  args.github.request = async (_route, options) => {
+    requests++;
+    assert.equal(options.expected_head_sha, 'head');
+    throw Object.assign(new Error('head changed during comparison'), { status: 422 });
+  };
+  await run(args);
+  assert.equal(requests, 1);
+  assert.deepEqual(calls.sleeps, []);
+  assert.deepEqual(calls.failures, ['1 PR branch update(s) unresolved']);
+  assert.deepEqual(calls.logs, ['#1: unresolved: head changed during comparison']);
 });
 for (const [name, options] of Object.entries({ current: { ahead: 0 }, conflict: { mergeable: false }, fork: { fork: true } })) {
   test(`does not update ${name}`, async () => {
@@ -111,6 +286,15 @@ test('leaves stale Dependabot branches to scheduled native rebasing', async () =
   await run(args);
   assert.deepEqual(calls.updates, []);
   assert.deepEqual(calls.failures, []);
+});
+test('explicit manual refresh also leaves Dependabot to native rebasing', async () => {
+  const { args, calls } = fixture({ autoMerge: null, user: { login: 'dependabot[bot]', id: 49699333 } });
+  args.mode = 'manual';
+  args.pullNumber = '1';
+  args.context.eventName = 'workflow_dispatch';
+  await run(args);
+  assert.deepEqual(calls.updates, []);
+  assert.deepEqual(calls.logs, ['#1: managed by scheduled Dependabot rebasing']);
 });
 test('does not involve Dependabot when its branch is current', async () => {
   const { args, calls } = fixture({ user: { login: 'dependabot[bot]', id: 49699333 }, ahead: 0 });
