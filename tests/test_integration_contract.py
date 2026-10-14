@@ -82,6 +82,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "PostgreSQL quota admission preserves boundaries, concurrency, rollback and SQLite parity",
     "principal quarantine approval preserves original bank",
     "principal facade content requires memory recall",
     "security audit capacity is scoped and durable across replicas",
