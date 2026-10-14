@@ -308,7 +308,6 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             }
 
             def run_step(name):
-                # Execute only the repository's reviewed workflow shell in a fixture directory.
                 return subprocess.run(  # noqa: S603
                     ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", steps[name]["run"]],
                     cwd=directory, env=env, text=True, capture_output=True, timeout=10,
@@ -374,7 +373,6 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         self.assertIn("Aislop SARIF: 0 finding(s).", findings.stdout)
 
     def test_aislop_score_and_scanner_failures_keep_their_exit_status(self):
-        # A successful parser must never turn the scanner's failure into success.
         for exit_code in [1, 2, 127]:
             with self.subTest(exit_code=exit_code):
                 scan, findings = self.run_aislop_steps(self.aislop_report(), exit_code)
@@ -395,7 +393,6 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         scan, findings = self.run_aislop_steps(self.aislop_report([skipped]))
         self.assertEqual((scan.returncode, findings.returncode), (0, 0))
         self.assertIn("required CI audit remains authoritative", findings.stderr)
-        # This exception applies only to findings; a score failure still fails quality.
         scan, findings = self.run_aislop_steps(self.aislop_report([skipped]), exit_code=1)
         self.assertEqual((scan.returncode, findings.returncode), (1, 0))
         for rule in ["security/dependency-audit-skipped-extra", "security/vulnerable-dependency"]:

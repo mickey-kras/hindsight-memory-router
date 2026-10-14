@@ -26,7 +26,6 @@ test('pinned ci --sarif preserves the score threshold with warning-only findings
 
     for (const [threshold, expectedStatus] of [[100, 1], [0, 0]]) {
       writeFileSync(resolve(directory, '.aislop/config.yml'), [
-        // The fixture needs only one warning; unrelated engines and network audits add no coverage.
         'engines:', '  format: false', '  lint: false', '  code-quality: false', '  ai-slop: false',
         '  security: true', 'security:', '  audit: false',
         'ci:', `  failBelow: ${threshold}`, 'telemetry:', '  enabled: false',

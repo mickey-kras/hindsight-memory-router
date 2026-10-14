@@ -40,7 +40,6 @@ jobs:
       - run: npm ci
 
       - name: Aislop quality gate
-        # Pinned aislop ci preserves its score exit status with SARIF output.
         run: npm run --silent aislop:ci -- --sarif > aislop.sarif
 
       - name: Aislop findings gate
@@ -65,7 +64,6 @@ jobs:
             const location = finding.locations?.[0]?.physicalLocation;
             const file = JSON.stringify(location?.artifactLocation?.uri ?? 'unknown');
             const line = Number.isInteger(location?.region?.startLine) ? location.region.startLine : '?';
-            // Quoted strings keep multiline report text on one log line.
             console.log(`${finding.level} ${JSON.stringify(finding.ruleId)} at ${file}:${line}: ${JSON.stringify(finding.message.text)}`);
           }
           const ignored = allFindings.filter(
