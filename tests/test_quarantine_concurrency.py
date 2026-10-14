@@ -21,8 +21,6 @@ from tests.test_quarantine_store import FakePostgresDatabase, FakePostgresTx, ba
 
 
 class PooledLimiterDatabase(FakePostgresDatabase):
-    """Model connection checkout around the real PostgreSQL limiter transaction."""
-
     def __init__(self) -> None:
         super().__init__()
         self.slots = asyncio.Semaphore(5)
