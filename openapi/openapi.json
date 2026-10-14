@@ -509,7 +509,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -569,7 +580,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -604,7 +626,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -742,6 +775,9 @@
         "security": [
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "responses": {
@@ -784,6 +820,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "parameters": [
@@ -871,6 +910,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "parameters": [
@@ -937,6 +979,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "responses": {
@@ -1225,7 +1270,8 @@
       "HumanToken": {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "mrh_<key-id>_<secret>"
+        "bearerFormat": "mrh_<key-id>_<secret>",
+        "description": "Short-lived, revocable human session returned by interactive OIDC login. Bank operations require the corresponding configured human grant; admin, metrics, bank administration, and config writes are excluded."
       }
     },
     "parameters": {

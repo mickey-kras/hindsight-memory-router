@@ -7,6 +7,8 @@ import json
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -15,6 +17,7 @@ from joserfc import jwt
 from joserfc.jwk import RSAKey
 
 from memory_router import app as app_module
+from memory_router import probes
 from memory_router.config import RouterSettings, assert_auth_environment
 from memory_router.db import create_database
 from memory_router.errors import HttpError
@@ -481,6 +484,51 @@ async def test_http_dispatch_disabled_enabled_and_human_admin_denial(
     from memory_router.principal_gate import principal_token_present
 
     assert not principal_token_present("Bearer " + str(issued["token"]))
+
+
+@pytest.mark.parametrize("path", ["/health", "/health/ready", "/ready"])
+@pytest.mark.parametrize("invalidation", ["expired", "revoked"])
+async def test_human_readiness_authentication_and_privileged_route_exclusion(
+    service: HumanAuth,
+    provider: Provider,
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    invalidation: str,
+) -> None:
+    issued = await service.exchange(await start(service, provider))
+    headers = {"authorization": "Bearer " + str(issued["token"])}
+    upstream = {"status": "healthy", "database": "connected", "db_acquire_ms": 0.4}
+    monkeypatch.setattr(app_module.runtime, "router_token", None)
+    monkeypatch.setattr(app_module.runtime, "allow_anonymous", False)
+    monkeypatch.setattr(app_module.runtime, "principal_resolver", service.resolver)
+    monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=AsyncMock()))
+    monkeypatch.setattr(
+        app_module.runtime, "hindsight", SimpleNamespace(health=AsyncMock(return_value=upstream))
+    )
+    monkeypatch.setattr(
+        app_module.runtime, "auditor", SimpleNamespace(log_failure=Mock(), persist=AsyncMock())
+    )
+    monkeypatch.setattr(app_module.runtime, "auth_prefilter", InMemoryRateLimiter())
+    monkeypatch.setattr(app_module.runtime, "auth_limiter", InMemoryRateLimiter())
+    monkeypatch.setattr(app_module.runtime, "admin_tokens", {})
+    monkeypatch.setattr(app_module.runtime, "metrics_enabled", True)
+    monkeypatch.setattr(probes.readiness, "cache", None)
+
+    response = await app_module.health_ready(request("GET", path, headers=headers))
+    assert response.status_code == 200 and json.loads(response.body) == upstream
+    for privileged_path in ("/admin/quarantine/stats", "/metrics"):
+        response = await app_module.dispatch(
+            privileged_path.lstrip("/"), request("GET", privileged_path, headers=headers)
+        )
+        assert response.status_code == 401
+
+    if invalidation == "revoked":
+        await service.store.revoke(str(issued["token"]).split("_")[1])
+    else:
+        async with service.store.db.transaction() as tx:
+            await tx.execute("UPDATE human_auth_sessions SET expires_at_ms=0")
+    response = await app_module.health_ready(request("GET", path, headers=headers))
+    assert response.status_code == 200 and json.loads(response.body) == {"status": "healthy"}
 
 
 def test_config_and_conditional_principal_keys(tmp_path: Path, service: HumanAuth) -> None:

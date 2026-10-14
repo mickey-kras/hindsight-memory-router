@@ -64,6 +64,50 @@ def test_openapi_paths_and_methods_match_composed_router_surface() -> None:
     assert _methods(_openclaw_spec()) == OPENCLAW_ROUTES
 
 
+def test_human_security_schemes_match_eligible_operations() -> None:
+    from memory_router.facade_routes import FACADE_ROUTES
+    from memory_router.principals import facade_scope
+
+    core = _spec()
+    facade = _openclaw_spec()
+    assert isinstance(core["components"], dict) and isinstance(facade["components"], dict)
+    assert (
+        core["components"]["securitySchemes"]["HumanToken"]
+        == facade["components"]["securitySchemes"]["HumanToken"]
+    )
+    human = {"HumanToken": []}
+    readiness = {"/health", "/health/ready", "/ready"}
+    eligible = readiness | {
+        "/version",
+        "/v1/default/banks",
+        "/v1/default/banks/{writer_id}/memories",
+        "/v1/default/banks/{writer_id}/memories/recall",
+        "/auth/human/sign-out",
+    }
+    paths = core["paths"]
+    assert isinstance(paths, dict)
+    for path, operations in paths.items():
+        for method in EXPECTED_ROUTES[path]:
+            security = operations[method]["security"]
+            assert (human in security) == (path in eligible), (path, method)
+            if path in readiness:
+                assert {} in security
+
+    safe_scopes = {
+        "bank.list",
+        "bank.config.read",
+        "memory.recall",
+        "memory.retain",
+        "memory.reflect",
+    }
+    paths = facade["paths"]
+    assert isinstance(paths, dict)
+    for route in FACADE_ROUTES:
+        path = "/v1/default/banks/{bank_id}" + ("/" + route.template if route.template else "")
+        security = paths[path][route.method.lower()]["security"]
+        assert (human in security) == (facade_scope(route) in safe_scopes), (path, route.method)
+
+
 def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     source = "\n".join(
         pathlib.Path(path).read_text()
@@ -123,7 +167,7 @@ def test_version_and_recall_openapi_match_hindsight_facade() -> None:
     assert isinstance(paths, dict)
     version = paths["/version"]["get"]
     assert "503" in version["responses"]
-    assert version["security"] == [{"RouterToken": []}, {"PrincipalToken": []}]
+    assert version["security"] == [{"RouterToken": []}, {"PrincipalToken": []}, {"HumanToken": []}]
     assert version["responses"]["401"] == {"$ref": "#/components/responses/Unauthorized"}
     assert {"200", "401", "4XX", "502", "503", "504"} <= set(version["responses"])
 
@@ -183,7 +227,7 @@ def test_openclaw_openapi_documents_auth_blocking_and_upstream_statuses() -> Non
         for method, operation in path_item.items():
             if method not in HTTP_METHODS:
                 continue
-            assert operation["security"] == [{"RouterToken": []}, {"PrincipalToken": []}]
+            assert operation["security"][:2] == [{"RouterToken": []}, {"PrincipalToken": []}]
             responses = operation["responses"]
             assert {"400", "401", "403", "404", "422", "429", "4XX", "502", "503", "504"} <= set(
                 responses
