@@ -399,29 +399,29 @@ class QuarantineRepository:
                     "matching quarantine item changed during wrapping; retry from a fresh snapshot",
                 )
             await self._assert_capacity(tx, item, existing, capacity, at)
-            if existing:
-                if _expired(existing, at):
-                    await self._reopen_expired(tx, existing["quarantine_id"], item)
-                    return
-                if mode == "request" and existing["status"] not in REVIEWABLE_STATUSES:
-                    return
-                if mode == "memory" and existing["status"] == REVIEWED_ALLOWED:
-                    await self._reopen_reviewed_memory(
-                        tx,
-                        existing["quarantine_id"],
-                        item,
-                        content_changed=existing.get("source_content_sha256")
-                        != item.get("source_content_sha256"),
-                    )
-                    return
-                await self._refresh(
+            if not existing:
+                await self.insert_item(tx, item)
+                return
+            if _expired(existing, at):
+                await self._reopen_expired(tx, existing["quarantine_id"], item)
+                return
+            if mode == "request" and existing["status"] not in REVIEWABLE_STATUSES:
+                return
+            if mode == "memory" and existing["status"] == REVIEWED_ALLOWED:
+                await self._reopen_reviewed_memory(
                     tx,
                     existing["quarantine_id"],
                     item,
-                    int(existing.get("requarantine_count") or 0) + 1,
+                    content_changed=existing.get("source_content_sha256")
+                    != item.get("source_content_sha256"),
                 )
-            else:
-                await self.insert_item(tx, item)
+                return
+            await self._refresh(
+                tx,
+                existing["quarantine_id"],
+                item,
+                int(existing.get("requarantine_count") or 0) + 1,
+            )
 
     async def _find_existing(
         self, tx: Tx, item: dict[str, Any], mode: str

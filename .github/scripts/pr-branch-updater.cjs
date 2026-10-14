@@ -1,18 +1,25 @@
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function validateContext(context) {
+function validateContext(context, { mode, pullNumber } = {}) {
   if (!['push', 'workflow_dispatch'].includes(context.eventName) ||
       !/^refs\/heads\/(main|release\/(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$/.test(context.ref)) {
     throw new Error('PR updates require a push or dispatch on main or a release branch');
   }
+  if (!['automatic', 'manual'].includes(mode)) throw new Error('invalid PR refresh mode');
+  if (mode === 'manual' && (context.eventName !== 'workflow_dispatch' ||
+      typeof pullNumber !== 'string' || !/^[1-9]\d*$/.test(pullNumber) ||
+      !Number.isSafeInteger(Number(pullNumber)))) {
+    throw new Error('manual PR refresh requires a dispatch with a positive PR number');
+  }
   return context.ref.slice('refs/heads/'.length);
 }
 
-async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
+async function updatePull({ github, owner, repo, number, sleep, baseBranch, mode }) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: number });
     if (pull.state !== 'open' || pull.base.ref !== baseBranch ||
         pull.head.repo?.full_name !== `${owner}/${repo}`) return 'ineligible';
+    if (mode === 'automatic' && !pull.auto_merge) return 'awaiting explicit refresh';
     // PR base metadata can lag behind the branch tip after a merge.
     const { data: main } = await github.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
     const { data: comparison } = await github.rest.repos.compareCommitsWithBasehead({
@@ -39,10 +46,11 @@ async function updatePull({ github, owner, repo, number, sleep, baseBranch }) {
   throw new Error('mergeability remained unknown after 4 attempts');
 }
 
-async function run({ github, context, core, sleep = pause }) {
-  const baseBranch = validateContext(context);
+async function run({ github, context, core, mode, pullNumber, sleep = pause }) {
+  const baseBranch = validateContext(context, { mode, pullNumber });
   const { owner, repo } = context.repo;
-  const pulls = await github.paginate(github.rest.pulls.list, {
+  const pulls = mode === 'manual' ? [{ number: Number(pullNumber) }]
+    : await github.paginate(github.rest.pulls.list, {
     owner, repo, state: 'open', base: baseBranch, per_page: 100,
   });
   const results = [];
@@ -50,9 +58,7 @@ async function run({ github, context, core, sleep = pause }) {
   for (const pull of pulls) {
     let status;
     try {
-      status = pull.head.repo?.full_name === `${owner}/${repo}`
-        ? await updatePull({ github, owner, repo, number: pull.number, sleep, baseBranch })
-        : 'ineligible';
+      status = await updatePull({ github, owner, repo, number: pull.number, sleep, baseBranch, mode });
     } catch (error) {
       status = `unresolved: ${error.message}`;
       unresolved++;
