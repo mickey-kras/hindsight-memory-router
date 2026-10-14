@@ -137,6 +137,59 @@ test('quality correlation does not cross release validation scopes or hide setup
   assert.equal(qualityReportFixture([qualityWorker, { ...qualityGate, steps: [] }], { 7: workerFailure, 8: '' }).length, 2);
 });
 
+const hindsightWorker = { ...qualityWorker, id: 10, name: 'quality / hindsight', steps: [{ ...step, name: 'Resolve Hindsight once' }] };
+const skippedPython = { ...qualityWorker, conclusion: 'skipped' };
+const skippedContainer = { ...qualityWorker, id: 9, name: 'quality / container', conclusion: 'skipped' };
+const hindsightFailure = log('ValueError: Hindsight resolution failed');
+const dependencySkips = [log('##[error]hindsight: expected success, got failure'),
+  log('##[error]python: expected success, got skipped'),
+  log('##[error]container: expected success, got skipped')].join('\n');
+
+test('reported Hindsight failures cover confirmed dependent skips regardless of job ordering', () => {
+  for (const jobs of [[qualityGate, skippedPython, skippedContainer, hindsightWorker],
+    [hindsightWorker, skippedContainer, skippedPython, qualityGate]]) {
+    const reports = qualityReportFixture(jobs, { 10: hindsightFailure, 8: dependencySkips });
+    assert.equal(reports.length, 1);
+    assert.match(reports[0].body, /ValueError: Hindsight resolution failed/);
+  }
+});
+
+test('dependent skips remain actionable without a reported same-scope Hindsight cause', () => {
+  for (const cause of [[], [{ ...hindsightWorker, conclusion: 'success' }],
+    [{ ...hindsightWorker, conclusion: 'cancelled' }],
+    [{ ...hindsightWorker, name: 'validate main / quality / hindsight' }]]) {
+    const reports = qualityReportFixture([qualityGate, skippedPython, skippedContainer, ...cause],
+      { 10: hindsightFailure, 8: dependencySkips });
+    const aggregate = reports.find(report => report.body.includes('- Job / step: quality / checks'));
+    assert.ok(aggregate);
+    assert.match(aggregate.body, /python: expected success, got skipped/);
+    assert.match(aggregate.body, /container: expected success, got skipped/);
+  }
+  for (const dependent of [null, { ...skippedPython, conclusion: null },
+    { ...skippedPython, conclusion: 'success' }]) {
+    const reports = qualityReportFixture([hindsightWorker, qualityGate, ...(dependent ? [dependent] : [])],
+      { 10: hindsightFailure, 8: log('##[error]python: expected success, got skipped') });
+    assert.equal(reports.length, 2);
+  }
+});
+
+test('Hindsight skip correlation preserves independent, missing and mixed aggregate faults', () => {
+  for (const fault of [log('##[error]ui: expected success, got skipped'),
+    log('##[error]release: expected success, got skipped'),
+    log('##[error]security: expected success, got skipped'),
+    log('##[error]python: expected success, got missing'),
+    log('##[error]python: expected success, got null'),
+    log('##[error]container: expected skipped, got failure'),
+    log('##[error]Unexpected quality gate: unreviewed')]) {
+    const reports = qualityReportFixture([qualityGate, skippedPython, skippedContainer, hindsightWorker],
+      { 10: hindsightFailure, 8: `${dependencySkips}\n${fault}` });
+    assert.equal(reports.length, 2);
+    const aggregate = reports.find(report => report.body.includes('- Job / step: quality / checks'));
+    assert.ok(aggregate.body.includes(fault.split('Z ')[1]));
+    assert.doesNotMatch(aggregate.body, /hindsight: expected success, got failure|python: expected success, got skipped|container: expected success, got skipped/);
+  }
+});
+
 test('passed steps and shell command echoes cannot supply the failure signature', () => {
   const text = '2026-09-04T23:59:59Z ValueError: unrelated\n' + log('echo ValueError: not an error');
   assert.match(reportsForJob(run, job, text)[0].body, /No reliable error signature/);

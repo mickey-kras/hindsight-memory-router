@@ -60,7 +60,7 @@ function diagnostics(lines) {
   return errors.length ? [[...new Set(errors)].join('\n')] : [];
 }
 
-function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha }, reportedJobs = new Set()) {
+function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha }, reportedJobs = new Set(), skippedJobs = new Set()) {
   if (run.conclusion === 'cancelled' || !REPORTABLE.has(job.conclusion)) return [];
   const steps = (job.steps || []).filter(step => REPORTABLE.has(step.conclusion));
   if (!steps.length) steps.push({ name: job.conclusion, number: 0 });
@@ -71,7 +71,11 @@ function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads
       if (!qualityPrefix || step.name !== 'Require every quality gate' ||
           job.conclusion !== 'failure' || step.conclusion !== 'failure') return true;
       const failed = line.match(/^##\[error\](hindsight|python|ui|release|security|container): expected success, got failure$/);
-      return !failed || !reportedJobs.has(`${qualityPrefix}${failed[1]}`);
+      if (failed && reportedJobs.has(`${qualityPrefix}${failed[1]}`)) return false;
+      // Only these two jobs depend on Hindsight; independent or missing gates stay actionable.
+      const skipped = line.match(/^##\[error\](python|container): expected success, got skipped$/);
+      return !skipped || !reportedJobs.has(`${qualityPrefix}hindsight`) ||
+        !skippedJobs.has(`${qualityPrefix}${skipped[1]}`);
     });
     const details = diagnostics(lines);
     // Keep aggregate faults, but do not open another issue for a reported cause.
@@ -159,6 +163,7 @@ function main(env = process.env, execute = execFileSync,
     issue.body.includes(`- Detected at commit: \`${run.head_sha}\``) && issue.body.includes(`- Workflow: ${run.html_url}`));
   const reports = [];
   const reportedJobs = new Set();
+  const skippedJobs = new Set(jobs.filter(job => job.conclusion === 'skipped').map(job => job.name));
   const failedJobs = jobs.filter(job => REPORTABLE.has(job.conclusion));
   // API job order is unspecified; collect source failures before their aggregate.
   failedJobs.sort((a, b) => Number(a.name.endsWith('quality / checks')) - Number(b.name.endsWith('quality / checks')));
@@ -171,7 +176,7 @@ function main(env = process.env, execute = execFileSync,
       catch (error) { failure = error; }
     }
     const fallback = log ? '' : logFallback(api, job, failure);
-    for (const report of reportsForJob(run, job, log, fallback, source, reportedJobs)) {
+    for (const report of reportsForJob(run, job, log, fallback, source, reportedJobs, skippedJobs)) {
       // Sonar's stable finding IDs already identify individual causes.
       if (relatedSonar.length && report.body.includes(' / SonarQube quality gate\n')) continue;
       reports.push(report);
