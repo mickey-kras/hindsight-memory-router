@@ -410,7 +410,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 2ce5166097828f4f1c300481d19049194d9deb6ae8510eaa63c209e86c853045
+# integration-behavior-sha256: cbc03a556181881d7ff3e3d04ba301f2a530bc8a98dd69beb38666e193542fbf
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -592,11 +592,12 @@ fi
 
 begin_check "application logs are safe structured JSON after authenticated traffic"
 router_logs="$(docker logs "$router_container" 2>&1)"
-event_catalog="$(docker exec "$router_container" python -c 'import json; from memory_router.logging import event_catalog; catalog=event_catalog(); required={"application_stop_failed","runtime_message","storage_readiness_failed","storage_readiness_recovered"}; assert required <= catalog; print(json.dumps(sorted(catalog)))')"
+event_catalog="$(docker exec "$router_container" python -c 'import json; from memory_router.logging import event_catalog; from memory_router.logging_contract import THROTTLED_EVENTS; catalog=event_catalog(); required={"application_stop_failed","runtime_message","storage_readiness_failed","storage_readiness_recovered","readiness_orchestration_failed"}; assert required <= catalog; assert "readiness_orchestration_failed" in THROTTLED_EVENTS; print(json.dumps(sorted(catalog)))')"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; lines=[line for line in sys.stdin.read().splitlines() if line]; assert lines and all(isinstance(json.loads(line),dict) for line in lines)' || fail_check "memory-router emitted a non-JSON log line"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; catalog=set(json.loads(sys.argv[1])); records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(record.get("event") in catalog for record in records)' "$event_catalog" || fail_check "memory-router emitted an event outside the catalog"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; forbidden={"headers","url","path","body","query","memory","decrypted","exception","exc_info","stack_info"}; records=[json.loads(line) for line in sys.stdin.read().splitlines() if line]; assert all(not (forbidden & record.keys()) for record in records)' || fail_check "memory-router emitted a forbidden log field"
 printf '%s\n' "$router_logs" | python3 -c 'import json,sys; mode=sys.argv[1]; events=[json.loads(line).get("event") for line in sys.stdin.read().splitlines() if line]; assert "application_started" in events; assert mode != "fake" or {"hindsight_readiness_failed","hindsight_readiness_recovered"} <= set(events)' "$mode" || fail_check "memory-router logs were missing required lifecycle or dependency events"
+printf '%s\n' "$router_logs" | python3 -c 'import json,sys; events=[json.loads(line).get("event") for line in sys.stdin.read().splitlines() if line]; assert "readiness_orchestration_failed" not in events' || fail_check "ordinary dependency probes emitted an orchestration failure"
 for secret in "$router_token" "$admin_read_token" "$admin_review_token" "$admin_cleanup_token"; do
   if printf '%s' "$router_logs" | grep -Fq "$secret"; then
     fail_check "memory-router logs exposed a sentinel credential"
