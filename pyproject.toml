@@ -8,9 +8,9 @@ version = "0.1.10"
 license-files = ["LICENSE", "licenses/*.txt"]
 requires-python = ">=3.12"
 dependencies = [
-  "agent-memory-guard==0.3.2",
+  "agent-memory-guard==0.3.3",
   "aiosqlite==0.22.1",
-  "Pebble==5.2.2",
+  "Pebble==5.2.3",
   "cryptography==50.0.2",
   "fastapi==0.142.2",
   "httpx==0.28.1",
@@ -28,14 +28,14 @@ dependencies = [
 dev = [
   "bandit==1.9.4",
   "coverage==7.16.2",
-  "mypy==2.3.1",
+  "mypy==2.4.0",
   "pip-audit==2.10.1",
   "pip-tools==7.6.1",
   "pytest==9.1.1",
   "pytest-asyncio==1.4.0",
   "pytest-httpx==0.36.2",
   "pyyaml==6.0.3",
-  "ruff==0.16.9",
+  "ruff==0.16.10",
 ]
 
 [project.scripts]
