@@ -1,6 +1,9 @@
 const { execFileSync } = require('node:child_process');
+const YAML = require('yaml');
 
 const BOT = { login: 'dependabot[bot]', id: 49699333 };
+const AUTOMATION = { login: 'github-actions[bot]', id: 41898282 };
+const ALLOWED_UPDATES = new Set(['version-update:semver-patch', 'version-update:semver-minor']);
 
 function isDependabot(user) {
   return user?.login === BOT.login && user?.id === BOT.id;
@@ -8,6 +11,47 @@ function isDependabot(user) {
 
 function verifiedCommits(commits) {
   return commits.length > 0 && commits.every(c => isDependabot(c.author) && c.commit.verification?.verified);
+}
+
+function automationOwned(pull) {
+  const user = pull.auto_merge?.enabled_by;
+  return user?.login === AUTOMATION.login && user?.id === AUTOMATION.id;
+}
+
+// Dependabot/fetch-metadata uses this YAML document from the signed commit,
+// rather than mutable PR titles, bodies or labels. Missing classifications
+// deliberately require human review; do not infer a type from version strings.
+function classifiedUpdate(message) {
+  if (typeof message !== 'string') return false;
+  const fragments = [...message.matchAll(/^---\n([\s\S]*?)^\.\.\.(?:\n|$)/gm)];
+  if (fragments.length !== 1) return false;
+  try {
+    const document = YAML.parseDocument(fragments[0][1], { uniqueKeys: true, stringKeys: true });
+    if (document.errors.length || document.warnings.length) return false;
+    const metadata = document.toJS({ maxAliasCount: 0 });
+    const dependencies = metadata?.['updated-dependencies'];
+    return Array.isArray(dependencies) && dependencies.length > 0 && dependencies.every(dependency =>
+      dependency && typeof dependency['dependency-name'] === 'string' &&
+      dependency['dependency-name'].trim().length > 0 && ALLOWED_UPDATES.has(dependency['update-type']));
+  } catch {
+    return false;
+  }
+}
+
+function eligibleCommits(commits, head) {
+  return verifiedCommits(commits) && commits.at(-1).sha === head &&
+    commits.every(commit => classifiedUpdate(commit.commit.message));
+}
+
+async function disableAutoMerge(github, pull) {
+  // GitHub has no conditional disable mutation. The caller rechecks the head
+  // and enabled_by immediately before this request; a later concurrent manual
+  // decision cannot be protected by an API compare-and-swap.
+  await github.graphql(`mutation($pullRequestId: ID!) {
+    disablePullRequestAutoMerge(input: {pullRequestId: $pullRequestId}) {
+      pullRequest { number }
+    }
+  }`, { pullRequestId: pull.node_id });
 }
 
 function trustedPull(pull, repository, branch) {
@@ -56,23 +100,37 @@ async function run({ github, context, core, mainWorkflow, merge = mergeCommand }
     try {
       const params = { ...context.repo, pull_number: candidate.number };
       const { data: pull } = await github.rest.pulls.get(params);
-      if (!trustedPull(pull, repository, branch)) continue;
-      if (pull.auto_merge) {
-        core.info(`#${pull.number}: auto-merge is already enabled`);
-        continue;
-      }
-      const commits = await github.paginate(github.rest.pulls.listCommits, { ...params, per_page: 100 });
-      if (!verifiedCommits(commits)) {
-        core.info(`#${pull.number}: unsigned or non-Dependabot commits require manual review`);
-        continue;
+      if (!isDependabot(pull.user) || pull.state !== 'open') continue;
+      // A human's auto-merge decision is outside this automation's ownership.
+      if (pull.auto_merge && !automationOwned(pull)) continue;
+      let eligible = false;
+      try {
+        if (trustedPull(pull, repository, branch)) {
+          const commits = await github.paginate(github.rest.pulls.listCommits, { ...params, per_page: 100 });
+          eligible = eligibleCommits(commits, pull.head.sha);
+        }
+      } catch (error) {
+        failed = true;
+        core.warning(`#${pull.number}: metadata lookup failed (${error.name}); requires manual review`);
       }
       const { data: current } = await github.rest.pulls.get(params);
-      if (!trustedPull(current, repository, branch) || current.head.sha !== pull.head.sha) {
+      if (current.state !== 'open' || current.head.sha !== pull.head.sha ||
+          (current.auto_merge && !automationOwned(current)) ||
+          (pull.auto_merge && !current.auto_merge)) {
         core.info(`#${pull.number}: changed during evaluation; retry on the next event or refresh`);
         continue;
       }
+      if (!eligible || !trustedPull(current, repository, branch)) {
+        if (automationOwned(current)) await disableAutoMerge(github, current);
+        core.info(`#${pull.number}: untrusted, major or unclassified update requires manual review`);
+        continue;
+      }
+      if (current.auto_merge) {
+        core.info(`#${pull.number}: classified patch/minor auto-merge is already enabled`);
+        continue;
+      }
       merge(repository, pull.number, ['--auto', '--squash', '--match-head-commit', pull.head.sha]);
-      core.info(`#${pull.number}: verified Dependabot update queued for squash merge`);
+      core.info(`#${pull.number}: verified patch/minor Dependabot update queued for squash merge`);
     } catch (error) {
       failed = true;
       core.warning(`#${candidate.number}: auto-merge evaluation failed (${error.name}); left for retry`);
@@ -82,4 +140,4 @@ async function run({ github, context, core, mainWorkflow, merge = mergeCommand }
   if (failed) core.setFailed('Some Dependabot PRs could not be evaluated; see warnings');
 }
 
-module.exports = { run, trustedPull, verifiedCommits, ensureMainRun };
+module.exports = { run, trustedPull, verifiedCommits, eligibleCommits, classifiedUpdate, automationOwned, ensureMainRun };
