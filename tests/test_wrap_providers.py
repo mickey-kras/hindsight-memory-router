@@ -330,6 +330,7 @@ async def test_store_put_with_sidecar_provider_stores_provider_envelope(
     repository = SimpleNamespace(
         get=AsyncMock(return_value=None),
         find_memory_state=AsyncMock(return_value=None),
+        find_request_state=AsyncMock(return_value=None),
         store=AsyncMock(),
     )
     limiter = SimpleNamespace(
