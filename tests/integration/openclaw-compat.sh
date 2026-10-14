@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 60021f51c02554ab160b4633bece3f3438adfa23ab2ca6c81a33e031cb7fa85c
+# integration-behavior-sha256: d4b8cb26e4520e96831cfee0a0f556c1cd83e322867fcf1bba880ac3470c2da6
 
 openclaw_request() {
   local method="$1"
@@ -218,6 +218,8 @@ PYFILTER
 )"
 compound_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" --get --data-urlencode "tag_groups=${escaped_filter}" --data-urlencode "tags=instructions" "${router_url}/v1/default/banks/main/knowledge-base/tree")"
 [[ "$compound_status" == "422" ]] || fail_check "escaped compound tag injection was not blocked: ${compound_status}"
+surrogate_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" --get --data-urlencode 'tag_groups=[{"tags":["\ud800"]}]' "${router_url}/v1/default/banks/main/entities")"
+[[ "$surrogate_status" == "422" ]] || fail_check "unpaired JSON surrogate was not rejected cleanly: ${surrogate_status}"
 [[ "$(wc -l < "$state_file")" == "$events_before_compound" ]] || fail_check "escaped compound tag injection reached Hindsight"
 pass_check
 
