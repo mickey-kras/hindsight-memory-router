@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const { mkdtempSync, writeFileSync, readFileSync, rmSync } = require("node:fs");
 const { tmpdir } = require("node:os");
 const { join } = require("node:path");
-const { attestImage, validateStatement, SBOM_TYPE } = require("./attest-image.cjs");
+const { attestImage, validateStatement, execute, SBOM_TYPE } = require("./attest-image.cjs");
 const { PREDICATE_TYPE } = require("./provenance.cjs");
 
 const context = { repo: { owner: "example", repo: "router" }, ref: "refs/heads/main", sha: "a".repeat(40) };
@@ -125,3 +125,19 @@ test("invalid release inputs fail before signing", () => fixture(async state => 
   ]) await assert.rejects(attestImage({ ...state, ...invalid }), /Invalid release attestation input/);
   assert.deepEqual(state.calls, []);
 }));
+
+test("real subprocess verification captures a CycloneDX result larger than the default pipe buffer", () => {
+  const output = execute(process.execPath, ["-e", `
+    const predicate = { bomFormat: "CycloneDX", components: Array.from({ length: 5000 }, (_, index) => ({
+      type: "library", name: "component-" + index, version: "1.0.0", description: "x".repeat(100),
+    })) };
+    const statement = { predicateType: "https://cyclonedx.org/bom", predicate };
+    const bundle = { dsseEnvelope: { payload: Buffer.from(JSON.stringify(statement)).toString("base64") } };
+    process.stdout.write(JSON.stringify([{ attestation: { bundle }, verificationResult: { statement } }]));
+  `]);
+  assert.ok(Buffer.byteLength(output) > 1024 * 1024);
+  const result = JSON.parse(output)[0];
+  const encoded = JSON.parse(Buffer.from(result.attestation.bundle.dsseEnvelope.payload, "base64").toString());
+  assert.deepEqual(encoded, result.verificationResult.statement);
+  assert.equal(encoded.predicate.components.length, 5000);
+});

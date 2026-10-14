@@ -1,4 +1,5 @@
-const { readFileSync, mkdirSync } = require("node:fs");
+const { readFileSync, mkdirSync, mkdtempSync, openSync, closeSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
 const { join } = require("node:path");
 const { execFileSync } = require("node:child_process");
 const { isDeepStrictEqual } = require("node:util");
@@ -17,9 +18,20 @@ const SBOM_TYPE = "https://cyclonedx.org/bom";
 
 /** @param {string} command @param {string[]} args */
 function execute(command, args) {
-  // Do not print attestation payloads or command failures containing captured output.
-  try { return execFileSync(command, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); }
-  catch (cause) { throw new Error(`${command} ${args[0]} failed`, { cause }); }
+  // Verification includes both the decoded SBOM and its base64 bundle. Capture
+  // stdout on disk so legitimate large SBOMs do not hit execFileSync's 1 MiB limit.
+  const directory = mkdtempSync(join(tmpdir(), "release-attestation-"));
+  const output = join(directory, "stdout");
+  const descriptor = openSync(output, "wx", 0o600);
+  try {
+    execFileSync(command, args, { stdio: ["ignore", descriptor, "pipe"] });
+    return readFileSync(output, "utf8");
+  } catch (cause) {
+    throw new Error(`${command} ${args[0]} failed`, { cause });
+  } finally {
+    closeSync(descriptor);
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 /** @param {Bundle} bundle @param {string} image @param {string} digest
@@ -80,4 +92,4 @@ async function attestImage({ github, context, image, digest, predicatePath, pred
   return bundlePath;
 }
 
-module.exports = { attestImage, validateStatement, SBOM_TYPE };
+module.exports = { attestImage, validateStatement, execute, SBOM_TYPE };

@@ -37,6 +37,13 @@ if ROUTER:
     PATHS.append(".github/scripts/publish-image.sh")
     PATHS.append(".github/scripts/release-cleanup.cjs")
     PATHS.append(".github/scripts/release-cleanup.test.cjs")
+    PATHS.extend([
+        ".github/scripts/provenance.cjs",
+        ".github/scripts/provenance.test.cjs",
+        ".github/scripts/attest-image.cjs",
+        ".github/scripts/attest-image.test.cjs",
+        ".github/scripts/attestation-smoke.sh",
+    ])
 
 
 def policy(overrides=None):
@@ -538,6 +545,27 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(
             policy({path: (ROOT / path).read_text().replace("if (!condition)", "if (false)")})
         )
+
+    def test_attestation_verification_and_regression_checks_cannot_be_neutralized(self):
+        if not ROUTER:
+            self.skipTest("router attestation helpers required")
+        mutations = [
+            ("provenance.cjs", 'issuer: ISSUER, audience: AUDIENCE, algorithms: ["RS256"],', ''),
+            ("attest-image.cjs", '  run("gh", [...verify, "--bundle", bundlePath]);', ''),
+            ("provenance.test.cjs", 'test("', 'test.skip("'),
+            ("attest-image.test.cjs", 'test("', 'test.skip("'),
+            ("attestation-smoke.sh", "cosign verify-attestation", "true verify-attestation"),
+        ]
+        for filename, before, after in mutations:
+            path = f".github/scripts/{filename}"
+            with self.subTest(path=path):
+                original = (ROOT / path).read_text()
+                changed = original.replace(before, after, 1)
+                self.assertNotEqual(changed, original)
+                self.assertIn(
+                    f"{path}: release automation must match its reviewed policy",
+                    "\n".join(policy({path: changed})),
+                )
 
     def test_scan_neutralization_fails(self):
         path = ".github/workflows/ci.yml"
