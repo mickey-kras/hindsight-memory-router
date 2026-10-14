@@ -58,6 +58,25 @@ STAT_KEYS = (
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
+_SUMMARY_COLUMNS = (
+    "quarantine_id",
+    "created_at",
+    "updated_at",
+    "kind",
+    "reason",
+    "writer_id",
+    "source",
+    "source_bank",
+    "source_memory_id",
+    "dedupe_key",
+    "sha256",
+    "status",
+    "postpone_count",
+    "requarantine_count",
+    "encrypted_bytes",
+    "expires_at",
+    "bank_id",
+)
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
     "WHERE status IN ('pending','postponed') "
@@ -221,14 +240,19 @@ class QuarantineRepository:
     ) -> list[dict[str, Any]]:
         clause, params = _filter_clause(filter_) if filter_ is not None else ("", [])
         statement = (
-            "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "  # nosec B608  # noqa: S608
+            "SELECT "  # nosec B608  # noqa: S608
+            + ",".join(_SUMMARY_COLUMNS)
+            + " FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "
             "AND NOT(expires_at IS NOT NULL AND expires_at<=?)"
             + clause
             + " ORDER BY created_at ASC, quarantine_id ASC LIMIT ? OFFSET ?"
         )
         async with self.db.transaction() as tx:
             rows = await tx.fetchall(statement, (at, *params, limit, offset))
-        return [_summary(stored(row) or {}) for row in rows]
+        for row in rows:
+            row["postpone_count"] = int(row.get("postpone_count") or 0)
+            row["requarantine_count"] = int(row.get("requarantine_count") or 0)
+        return [_summary(row) for row in rows]
 
     async def count_reviewable(self, at: str, filter_: QueueFilter) -> int:
         clause, params = _filter_clause(filter_)
@@ -591,26 +615,7 @@ def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
 
 
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "quarantine_id",
-        "created_at",
-        "updated_at",
-        "kind",
-        "reason",
-        "writer_id",
-        "source",
-        "source_bank",
-        "source_memory_id",
-        "dedupe_key",
-        "sha256",
-        "status",
-        "postpone_count",
-        "requarantine_count",
-        "encrypted_bytes",
-        "expires_at",
-        "bank_id",
-    )
-    return {key: item[key] for key in keys if item.get(key) is not None}
+    return {key: item[key] for key in _SUMMARY_COLUMNS if item.get(key) is not None}
 
 
 def is_expired(item: dict[str, Any], at: str) -> bool:
