@@ -60,13 +60,22 @@ function diagnostics(lines) {
   return errors.length ? [[...new Set(errors)].join('\n')] : [];
 }
 
-function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha }) {
+function reportsForJob(run, job, log, fallback = '', source = { ref: `refs/heads/${run.head_branch || 'main'}`, sha: run.head_sha }, reportedJobs = new Set()) {
   if (run.conclusion === 'cancelled' || !REPORTABLE.has(job.conclusion)) return [];
   const steps = (job.steps || []).filter(step => REPORTABLE.has(step.conclusion));
   if (!steps.length) steps.push({ name: job.conclusion, number: 0 });
   return steps.flatMap(step => {
-    const lines = stepLines(log, step);
+    const original = stepLines(log, step);
+    const qualityPrefix = job.name.match(/^((?:.* \/ )?quality \/ )checks$/)?.[1];
+    const lines = original.filter(line => {
+      if (!qualityPrefix || step.name !== 'Require every quality gate' ||
+          job.conclusion !== 'failure' || step.conclusion !== 'failure') return true;
+      const failed = line.match(/^##\[error\](hindsight|python|ui|release|security|container): expected success, got failure$/);
+      return !failed || !reportedJobs.has(`${qualityPrefix}${failed[1]}`);
+    });
     const details = diagnostics(lines);
+    // Keep aggregate faults, but do not open another issue for a reported cause.
+    if (lines.length !== original.length && !details.length) return [];
     return (details.length ? details : [null]).map(detail => {
       const incompleteSmoke = detail?.startsWith('{"mode":') && !JSON.parse(detail).message;
       const identified = detail && !incompleteSmoke;
@@ -149,7 +158,11 @@ function main(env = process.env, execute = execFileSync,
   const relatedSonar = issues.filter(issue => !issue.pull_request && issue.body?.includes('<!-- sonar-finding:') &&
     issue.body.includes(`- Detected at commit: \`${run.head_sha}\``) && issue.body.includes(`- Workflow: ${run.html_url}`));
   const reports = [];
-  for (const job of jobs.filter(job => REPORTABLE.has(job.conclusion))) {
+  const reportedJobs = new Set();
+  const failedJobs = jobs.filter(job => REPORTABLE.has(job.conclusion));
+  // API job order is unspecified; collect source failures before their aggregate.
+  failedJobs.sort((a, b) => Number(a.name.endsWith('quality / checks')) - Number(b.name.endsWith('quality / checks')));
+  for (const job of failedJobs) {
     // Just-finished jobs often 404 on log download while the run is still open.
     let log = '', failure;
     for (let attempt = 0; attempt < 3 && !log; attempt += 1) {
@@ -158,10 +171,11 @@ function main(env = process.env, execute = execFileSync,
       catch (error) { failure = error; }
     }
     const fallback = log ? '' : logFallback(api, job, failure);
-    for (const report of reportsForJob(run, job, log, fallback, source)) {
+    for (const report of reportsForJob(run, job, log, fallback, source, reportedJobs)) {
       // Sonar's stable finding IDs already identify individual causes.
       if (relatedSonar.length && report.body.includes(' / SonarQube quality gate\n')) continue;
       reports.push(report);
+      reportedJobs.add(job.name);
     }
   }
   if (!reports.length && !relatedSonar.length && REPORTABLE.has(run.conclusion)) {
