@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import create_database
 from memory_router.envelope import create_envelope, decrypt_envelope
@@ -16,24 +14,12 @@ from memory_router.legacy_migration import (
     migrate_legacy_quarantine,
 )
 from memory_router.repository import QuarantineRepository
+from tests.key_material import rsa_keypair
 
 
 @pytest.mark.asyncio
 async def test_legacy_quarantine_migration(tmp_path) -> None:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = (
-        key.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
-    private_pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    public_pem, private_pem = rsa_keypair()
     decrypted = {
         "quarantine_id": "q_legacy_0123456789abcdef",
         "created_at": "2026-08-08T00:00:00.000Z",
@@ -106,12 +92,7 @@ def test_legacy_queue_validation_and_helpers(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_legacy_quarantine_migration_skips_non_importable_records(tmp_path) -> None:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    private_pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    _, private_pem = rsa_keypair()
     queue = tmp_path / "review.jsonl"
     queue.write_text(
         "\n".join(

@@ -11,7 +11,7 @@ from typing import get_args
 import pytest
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from memory_router import auth, openclaw, policy
@@ -26,24 +26,7 @@ from memory_router.envelope import (
     decrypt_envelope,
     estimate_envelope_size,
 )
-
-
-def keypair(key_size: int = 2048) -> tuple[str, str]:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
-    private_pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
-    public_pem = (
-        private.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
-    return public_pem, private_pem
+from tests.key_material import rsa_keypair as keypair
 
 
 def decrypted() -> dict[str, object]:
@@ -98,20 +81,7 @@ def test_envelope_round_trip_preserves_existing_format() -> None:
 
 
 def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=1024)  # noqa: S505
-    private_pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
-    public_pem = (
-        private.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
+    public_pem, private_pem = keypair(1024)
 
     with pytest.raises(ValueError, match="at least 2048 bits"):
         decode_public_key(public_pem)
@@ -146,15 +116,7 @@ def test_security_event_producer_reasons_are_accepted(reason: str) -> None:
 def test_envelope_size_estimate_matches_serialized_envelope(
     key_size: int, metadata: dict[str, str]
 ) -> None:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=key_size)
-    public = (
-        private.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
+    public, _ = keypair(key_size)
     value = {
         "quarantine_id": "q_20260808_0123456789abcdef",
         "created_at": "2026-08-08T05:00:00.000Z",
@@ -175,6 +137,16 @@ def test_authenticated_metadata_tampering_fails() -> None:
     envelope["reason"] = "unknown_writer"
     with pytest.raises(InvalidTag):
         decrypt_envelope(envelope, private)
+
+
+def test_reused_test_key_does_not_make_wrong_key_decryption_succeed() -> None:
+    public, private = keypair()
+    _, wrong_private = keypair(identity="wrong")
+    assert private != wrong_private
+    envelope = create_envelope(decrypted(), public)
+    with pytest.raises(ValueError):
+        decrypt_envelope(envelope, wrong_private)
+    assert decrypt_envelope(envelope, private) == decrypted()
 
 
 @pytest.mark.parametrize("key_size", [1024, 2048])

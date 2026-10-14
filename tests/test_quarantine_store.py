@@ -5,8 +5,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import PostgresTx
 from memory_router.errors import HttpError
@@ -16,15 +14,11 @@ from memory_router.quarantine_store import (
     _effective_writer_limit,
 )
 from memory_router.rate_limit import PostgresRateLimiter
+from tests.key_material import rsa_keypair
 
 
 def public_key() -> str:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    return (
-        private.public_key()
-        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        .decode()
-    )
+    return rsa_keypair()[0]
 
 
 class Session:

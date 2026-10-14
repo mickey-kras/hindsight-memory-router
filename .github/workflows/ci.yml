@@ -128,7 +128,8 @@ jobs:
       - run: mypy memory_router
 
       - name: Tests and coverage
-        run: coverage run -m pytest && coverage report --fail-under=90
+        # Each pytest worker can start four scanner processes; keep the worker count bounded.
+        run: python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=90 --durations=30
 
   ui:
     runs-on: ubuntu-latest

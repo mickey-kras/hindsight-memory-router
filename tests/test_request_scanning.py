@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from concurrent.futures import Future
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -23,6 +26,7 @@ from memory_router.security import (
     scan_retain_body,
 )
 from tests.fakes import FakeHindsight
+from tests.scan_sync import blocked_scan, synchronized_scan
 from tests.test_admin import ACTOR, QID, exact_item, service
 from tests.test_policy import policy
 
@@ -58,7 +62,9 @@ async def test_request_workers_preserve_body_and_query_findings(operation, body,
     assert await scan_executor.scan_request(body, operation=operation, query=query) == expected
 
 
-async def test_metadata_heavy_retain_keeps_event_loop_responsive() -> None:
+async def test_metadata_heavy_retain_keeps_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     body = {
         "items": [
             {
@@ -73,53 +79,80 @@ async def test_metadata_heavy_retain_keeps_event_loop_responsive() -> None:
     assert len(json.dumps(body)) < 100_000
     hindsight = FakeHindsight()
     router, _, _, _ = policy(hindsight)
-    tick_times = [time.monotonic()]
-
-    async def heartbeat() -> None:
-        while True:
-            await asyncio.sleep(0.02)
-            tick_times.append(time.monotonic())
-
-    pulse = asyncio.create_task(heartbeat())
+    entered, release = tmp_path / "entered", tmp_path / "release"
+    monkeypatch.setattr(
+        scan_executor,
+        "_scan_request_payload",
+        partial(synchronized_scan, kind="request", entered=entered, release=release),
+    )
+    # The synchronization adds a controlled wait; dedicated tests exercise real deadlines.
+    monkeypatch.setattr(scan_executor, "CORE_SCAN_TASK_SECONDS", 30.0)
+    request = asyncio.create_task(router.retain("main", body))
     try:
-        result = await router.retain("main", body)
+        async with asyncio.timeout(10):
+            while not entered.exists():
+                await asyncio.sleep(0.01)
+            assert int(entered.read_text()) != os.getpid()
+            # A scheduled heartbeat must run while the real scanner process is blocked.
+            heartbeat = asyncio.Event()
+            asyncio.get_running_loop().call_soon(heartbeat.set)
+            async with asyncio.timeout(1):
+                await heartbeat.wait()
+            assert not request.done()
+        release.touch()
+        result = await request
     finally:
-        tick_times.append(time.monotonic())
-        pulse.cancel()
-        await asyncio.gather(pulse, return_exceptions=True)
+        release.touch()
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
     assert result["queued"] is True
     assert hindsight.retain_calls == []
-    assert len(tick_times) > 10
-    assert max(end - start for start, end in zip(tick_times, tick_times[1:], strict=False)) < 1.0
 
 
 async def test_request_capacity_is_shared_with_responses_and_recovers_after_cancellation(
-    monkeypatch,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original = scan_executor._scan_request_payload
-    monkeypatch.setattr(scan_executor, "_scan_request_payload", _slow_scan)
+    entered_dir = tmp_path / "workers"
+    entered_dir.mkdir()
+    release = tmp_path / "release"
+    monkeypatch.setattr(
+        scan_executor,
+        "_scan_request_payload",
+        partial(blocked_scan, entered_dir=entered_dir, release=release),
+    )
     tasks = [
         asyncio.create_task(scan_executor.scan_request({}, operation="retain")) for _ in range(4)
     ]
     try:
-        await _wait_for_workers(4)
-        for call in [
-            scan_executor.scan_request({}, operation="recall"),
-            scan_executor.scan_facade_response({}),
-            scan_executor.scan_recalled({}),
-        ]:
-            with pytest.raises(HttpError) as busy:
-                await call
-            assert busy.value.status == 503
-            assert busy.value.headers == {"Retry-After": "1"}
+        try:
+            # Wait for all four real processes, not just admission into the pending queue.
+            async with asyncio.timeout(10):
+                while sum(path.name.isdigit() for path in entered_dir.iterdir()) != 4:
+                    await asyncio.sleep(0.01)
+            await _wait_for_workers(4)
+            for call in [
+                scan_executor.scan_request({}, operation="recall"),
+                scan_executor.scan_facade_response({}),
+                scan_executor.scan_recalled({}),
+            ]:
+                with pytest.raises(HttpError) as busy:
+                    await call
+                assert busy.value.status == 503
+                assert busy.value.headers == {"Retry-After": "1"}
+        finally:
+            for task in tasks:
+                task.cancel()
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        assert all(isinstance(result, asyncio.CancelledError) for result in results)
+        await _wait_for_workers(0)
+        monkeypatch.setattr(scan_executor, "_scan_request_payload", original)
+        assert (await scan_executor.scan_request({}, operation="retain")).safe
     finally:
-        for task in tasks:
-            task.cancel()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-    assert all(isinstance(result, asyncio.CancelledError) for result in results)
-    await _wait_for_workers(0)
-    monkeypatch.setattr(scan_executor, "_scan_request_payload", original)
-    assert (await scan_executor.scan_request({}, operation="retain")).safe
+        # Recovery must happen before release; otherwise cancellation could be a no-op.
+        release.touch()
 
 
 async def test_request_timeout_kills_worker_and_allows_following_scan(monkeypatch) -> None:

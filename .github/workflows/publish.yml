@@ -154,8 +154,7 @@ jobs:
           python -m pip install --require-hashes -r requirements.txt
           python -m pip install --require-hashes -r dev-requirements.txt
           python -m pip install --no-deps -e .
-          coverage run -m pytest
-          coverage xml
+          python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=xml --cov-fail-under=90 --durations=30
 
       - name: Mask advertised SonarQube endpoint
         env:
