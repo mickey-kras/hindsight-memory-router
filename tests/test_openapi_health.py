@@ -13,9 +13,15 @@ def test_health_openapi_contract() -> None:
     paths = document["paths"]
     assert isinstance(paths, dict)
 
-    for path in ("/health", "/health/ready", "/health/live", "/ready"):
+    assert paths["/health/live"]["get"]["security"] == []
+    for path in ("/health", "/health/ready", "/ready"):
         operation = paths[path]["get"]
-        assert operation["security"] == []
+        assert operation["security"] == [
+            {},
+            {"RouterToken": []},
+            {"PrincipalToken": []},
+            {"HumanToken": []},
+        ]
 
     health = paths["/health"]["get"]
     ready = paths["/health/ready"]["get"]

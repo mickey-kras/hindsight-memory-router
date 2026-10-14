@@ -189,6 +189,12 @@ done
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
+if [[ "$mode" == "fake" && "$router_db" == "postgres" ]]; then
+  begin_check "human login consumption and revocation are shared in PostgreSQL"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router python < tests/integration/human-auth-postgres.py
+  pass_check
+fi
+
 begin_check "authentication and network boundaries hold"
 anonymous_version_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/version")"
 [[ "$anonymous_version_status" == "401" ]] || fail_check "expected unauthenticated /version 401, got ${anonymous_version_status}"
@@ -399,7 +405,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 2aeea8cc4950def3b3163434cced53bbc883dc496b2dce2fbbe9f618ef4016bf
+# integration-behavior-sha256: 4a218b11fbc57dd63545b52a093287ae258f277ddf6a7e182ffbf4ac0cb0824b
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

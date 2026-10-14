@@ -27,6 +27,10 @@
     {
       "name": "Quarantine administration",
       "description": "Capability-scoped manual review operations. Use read, review, or cleanup credentials according to the endpoint; the legacy admin credential is migration-only."
+    },
+    {
+      "name": "Human authentication",
+      "description": "Optional interactive OIDC login; disabled unless configured."
     }
   ],
   "paths": {
@@ -505,7 +509,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -565,7 +580,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -600,7 +626,18 @@
         "tags": [
           "Service"
         ],
-        "security": [],
+        "security": [
+          {},
+          {
+            "RouterToken": []
+          },
+          {
+            "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
+          }
+        ],
         "responses": {
           "200": {
             "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
@@ -711,22 +748,36 @@
           {
             "name": "q",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "limit",
             "in": "query",
-            "schema": { "type": "integer", "minimum": 0, "maximum": 500, "default": 100 }
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500,
+              "default": 100
+            }
           },
           {
             "name": "offset",
             "in": "query",
-            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
           }
         ],
         "security": [
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "responses": {
@@ -769,6 +820,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "parameters": [
@@ -856,6 +910,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "parameters": [
@@ -922,6 +979,9 @@
           },
           {
             "PrincipalToken": []
+          },
+          {
+            "HumanToken": []
           }
         ],
         "responses": {
@@ -973,6 +1033,218 @@
           }
         }
       }
+    },
+    "/auth/human/start": {
+      "post": {
+        "operationId": "startHumanLogin",
+        "summary": "startHumanLogin",
+        "tags": [
+          "Human authentication"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "transaction_id",
+                    "authorization_url"
+                  ],
+                  "properties": {
+                    "transaction_id": {
+                      "type": "string"
+                    },
+                    "authorization_url": {
+                      "type": "string",
+                      "format": "uri"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Login required."
+          },
+          "404": {
+            "description": "Human authentication disabled or route unknown."
+          },
+          "413": {
+            "description": "Request exceeds 8 KiB."
+          },
+          "429": {
+            "description": "Login rate, concurrency, or storage capacity exhausted."
+          },
+          "503": {
+            "description": "Identity provider, shared state, or active policy unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanLoginStart"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/human/exchange": {
+      "post": {
+        "operationId": "exchangeHumanLogin",
+        "summary": "exchangeHumanLogin",
+        "tags": [
+          "Human authentication"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "token",
+                    "token_type",
+                    "principal_id",
+                    "grants",
+                    "expires_at"
+                  ],
+                  "properties": {
+                    "token": {
+                      "type": "string"
+                    },
+                    "token_type": {
+                      "const": "Bearer"
+                    },
+                    "principal_id": {
+                      "type": "string"
+                    },
+                    "grants": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "bank",
+                          "scopes"
+                        ],
+                        "properties": {
+                          "bank": {
+                            "type": "string"
+                          },
+                          "scopes": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    },
+                    "expires_at": {
+                      "type": "integer",
+                      "description": "UNIX seconds; at most one hour after issuance."
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Login required."
+          },
+          "404": {
+            "description": "Human authentication disabled or route unknown."
+          },
+          "413": {
+            "description": "Request exceeds 8 KiB."
+          },
+          "429": {
+            "description": "Login rate, concurrency, or storage capacity exhausted."
+          },
+          "503": {
+            "description": "Identity provider, shared state, or active policy unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanLoginExchange"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/human/sign-out": {
+      "post": {
+        "operationId": "signOutHumanSession",
+        "summary": "signOutHumanSession",
+        "tags": [
+          "Human authentication"
+        ],
+        "security": [
+          {
+            "HumanToken": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "signed_out"
+                  ],
+                  "properties": {
+                    "signed_out": {
+                      "const": true
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "Login required."
+          },
+          "404": {
+            "description": "Human authentication disabled or route unknown."
+          },
+          "413": {
+            "description": "Request exceeds 8 KiB."
+          },
+          "429": {
+            "description": "Login rate, concurrency, or storage capacity exhausted."
+          },
+          "503": {
+            "description": "Identity provider, shared state, or active policy unavailable."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -994,6 +1266,12 @@
         "scheme": "bearer",
         "bearerFormat": "mr_<key-id>_<256-bit-secret-hex>",
         "description": "Per-agent principal token from MEMORY_ROUTER_PRINCIPALS. The registry stores SHA-256 digests only."
+      },
+      "HumanToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "mrh_<key-id>_<secret>",
+        "description": "Short-lived, revocable human session returned by interactive OIDC login. Bank operations require the corresponding configured human grant; admin, metrics, bank administration, and config writes are excluded."
       }
     },
     "parameters": {
@@ -2181,9 +2459,13 @@
             "type": "array",
             "items": {
               "type": "object",
-              "required": ["bank_id"],
+              "required": [
+                "bank_id"
+              ],
               "properties": {
-                "bank_id": { "type": "string" }
+                "bank_id": {
+                  "type": "string"
+                }
               },
               "additionalProperties": true
             }
@@ -2202,6 +2484,77 @@
           }
         },
         "additionalProperties": false
+      },
+      "HumanLoginStart": {
+        "additionalProperties": false,
+        "properties": {
+          "redirect_uri": {
+            "maxLength": 128,
+            "title": "Redirect Uri",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "State",
+            "type": "string"
+          },
+          "code_challenge": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code Challenge",
+            "type": "string"
+          }
+        },
+        "required": [
+          "redirect_uri",
+          "state",
+          "code_challenge"
+        ],
+        "title": "StartLogin",
+        "type": "object"
+      },
+      "HumanLoginExchange": {
+        "additionalProperties": false,
+        "properties": {
+          "transaction_id": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Transaction Id",
+            "type": "string"
+          },
+          "code": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "State",
+            "type": "string"
+          },
+          "code_verifier": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code Verifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "code",
+          "state",
+          "code_verifier"
+        ],
+        "title": "ExchangeLogin",
+        "type": "object"
       }
     }
   }

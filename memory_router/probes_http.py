@@ -13,7 +13,7 @@ from . import probes
 from .auth import AuthFailureAuditor, router_authorized
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .logging import log_event
-from .principal_gate import authenticate_principal, principal_token_present
+from .principal_gate import authenticate_principal
 from .principals import PrincipalResolver
 from .repository import QuarantineRepository
 
@@ -81,7 +81,7 @@ async def _full_readiness_authorized(request: Request, deps: ProbesDeps) -> bool
     authorization = request.headers.get("authorization")
     if router_authorized(authorization, deps.router_token, deps.allow_anonymous):
         return True
-    if deps.resolver is None or not principal_token_present(authorization):
+    if deps.resolver is None or not (authorization or "").startswith(("Bearer mr_", "Bearer mrh_")):
         return False
     principal = await authenticate_principal(
         request,

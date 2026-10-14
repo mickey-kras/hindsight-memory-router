@@ -37,10 +37,12 @@ docker compose \
 
 ## Authentication model
 
-The contract defines two bearer mechanisms:
+The contracts define four bearer mechanisms:
 
 - `RouterToken` for `/version` and normal retain/recall operations.
 - `AdminToken` for `/admin/quarantine/*` operations.
+- `PrincipalToken` for configured application principals and their granted operations.
+- `HumanToken` for short-lived interactive sessions and their granted bank read, retain, recall, and reflect operations. Human sessions cannot administer banks, write bank configuration, or access quarantine administration or metrics.
 
 `AdminToken` is a generic OpenAPI bearer slot. The credential accepted by a concrete operation is capability-scoped:
 
@@ -49,7 +51,7 @@ The contract defines two bearer mechanisms:
 - cleanup accepts the cleanup token;
 - the legacy admin token is accepted everywhere only during migration.
 
-`GET /health/live`, `GET /health`, `GET /health/ready`, and deprecated `GET /ready` are anonymous.
+`GET /health/live`, `GET /health`, `GET /health/ready`, and deprecated `GET /ready` accept anonymous requests. Readiness responses expose full upstream details only to an authenticated router, application, or human principal (or when anonymous access is explicitly enabled).
 
 Admin credentials are for human-operated or tightly controlled service clients only and must not be exposed to agents. Configure scoped credentials, migrate clients, then leave `MEMORY_ROUTER_ADMIN_TOKEN` unset.
 
@@ -57,7 +59,7 @@ Admin credentials are for human-operated or tightly controlled service clients o
 
 When the HTTP surface changes:
 
-1. Update `openapi/openapi.json` in the same pull request.
+1. Update `openapi/openapi.json` and, for facade operations, `openapi/openclaw.json` in the same pull request.
 2. Update the route/auth contract tests.
 3. Run `npm run openapi:lint` and `python -m pytest`.
 

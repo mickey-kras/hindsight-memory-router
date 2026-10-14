@@ -9,6 +9,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         }
         hostProxy = softwareSystem "Authenticated Host Proxy (optional)" "Authenticates host sessions, authorizes each action, rejects CSRF mutations, and injects existing scoped admin credentials server-side."
         hindsight = softwareSystem "Hindsight" "Only implemented memory backend."
+        identityProvider = softwareSystem "OIDC Identity Provider (optional)" "Configured issuer for native human login using authorization code and S256 PKCE."
 
         memoryRouter = softwareSystem "Memory Router" "Principal authorization, policy, and security boundary between agent integrations and Hindsight." {
             api = container "Memory Router API" "Hindsight-compatible HTTP facade, routing, policy, security, quarantine, and review API." "Python 3.12 / FastAPI / Uvicorn" {
@@ -16,6 +17,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
                 http = component "HTTP/API Entry & Auth" "Bounds request bodies, parses strict JSON, normalizes paths, authenticates router/admin requests, and dispatches supported routes."
                 facade = component "Hindsight Compatibility Facade" "Handles supported bank, config, document, mental-model, and reflect endpoints and preserves their response contracts."
                 principals = component "Principal Authentication / Grants" "Authenticates principal credentials and authorizes each bank and operation scope; denied requests stop before Hindsight."
+                humanAuth = component "Human Login / Sessions" "Verifies OIDC identity, maps exact subjects to human grants, and issues revocable one-hour sessions without administrative authority."
                 registry = component "Legacy Writer Registry" "Maps legacy writer IDs to configured write/read banks; principal mode uses explicitly authorized banks."
                 policy = component "Policy Orchestration" "Coordinates retain/recall decisions, recall fan-out, suppression, and degradation rules."
                 scanning = component "Security Scanning" "Applies router deterministic rules plus Agent Memory Guard/OWASP-oriented checks, canonicalization, cross-field scanning, and encoded-payload inspection."
@@ -51,6 +53,12 @@ workspace "Hindsight Memory Router" "As-built architecture" {
 
         bridge -> http "Sends supported Hindsight-compatible requests" "HTTP/JSON + Bearer"
         http -> principals "Authenticates principal token and checks bank/scope grant"
+        http -> humanAuth "Dispatches bounded optional login and sign-out"
+        principals -> humanAuth "Checks human session expiry, revocation, and active policy generation"
+        humanAuth -> identityProvider "Redeems PKCE-bound code and verifies issuer-signed identity" "HTTPS / OIDC"
+        humanAuth -> quarantineStorage "Atomically consumes login state and persists revocable sessions and policy generation" "SQL"
+        humanAuth -> limits "Applies shared login rate and provider concurrency bounds"
+        bridge -> identityProvider "Opens external browser; receives code on loopback callback" "OIDC / PKCE"
         principals -> observability "Records bounded authorization decisions"
         http -> facade "Dispatches supported compatibility routes"
         http -> policy "Dispatches retain/recall"

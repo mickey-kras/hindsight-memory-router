@@ -142,6 +142,7 @@ class RouterSettings(BaseSettings):
     )
     memory_router_registry: str | None = Field(None, validation_alias="MEMORY_ROUTER_REGISTRY")
     memory_router_principals: str | None = Field(None, validation_alias="MEMORY_ROUTER_PRINCIPALS")
+    memory_router_human_auth: str | None = Field(None, validation_alias="MEMORY_ROUTER_HUMAN_AUTH")
     memory_router_deployment_mode: Literal["single", "cluster"] = Field(
         "single", validation_alias="MEMORY_ROUTER_DEPLOYMENT_MODE"
     )
@@ -485,6 +486,8 @@ def _assert_hindsight_transport(settings: RouterSettings) -> None:
 
 
 def assert_auth_environment(settings: RouterSettings) -> None:
+    if settings.memory_router_human_auth and not settings.memory_router_principals:
+        raise RuntimeError("MEMORY_ROUTER_HUMAN_AUTH requires MEMORY_ROUTER_PRINCIPALS")
     _assert_hindsight_transport(settings)
     if settings.memory_router_principals:
         if secret_value(settings.memory_router_token):

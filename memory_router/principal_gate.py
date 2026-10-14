@@ -70,7 +70,7 @@ async def authenticate_principal(
     route_class: str,
     on_failure: Callable[[], Awaitable[None]],
 ) -> PrincipalSession | None:
-    result = resolver.authenticate(request.headers.get("authorization"))
+    result = await resolver.authenticate_request(request.headers.get("authorization"))
     if result.status == "ok" and result.session is not None:
         session = result.session
         claimed = request.headers.get(CLAIMED_AGENT_HEADER)
