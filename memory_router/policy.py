@@ -38,6 +38,7 @@ _QUARANTINE_ERRORS: dict[str, tuple[int, str]] = {
     "quarantine_item_too_large": (413, "payload-too-large"),
     "quarantine_request_in_review": (409, "conflict"),
     "quarantine_item_in_review": (409, "conflict"),
+    "quarantine_write_stale": (409, "conflict"),
 }
 
 
