@@ -7,16 +7,7 @@ const { ISSUER, PREDICATE_TYPE } = require("./provenance.cjs");
 
 const SBOM_TYPE = "https://cyclonedx.org/bom";
 
-/**
- * @typedef {{payloadType: string, payload: string, signatures: {sig: string, keyid?: string}[]}} Envelope
- * @typedef {{mediaType: string, dsseEnvelope: Envelope}} Bundle
- * @typedef {{repo: {owner: string, repo: string}, ref: string, sha: string}} Context
- * @typedef {{github: {request(route: string, body: {owner: string, repo: string, bundle: Bundle}):
- * Promise<{status: number}>}, context: Context, image: string, digest: string, predicatePath: string,
- * predicateType: string, label: string, run?: (command: string, args: string[]) => string, directory?: string}} AttestOptions
- */
 
-/** @param {string} command @param {string[]} args */
 function execute(command, args) {
   // Verification includes both the decoded SBOM and its base64 bundle. Capture
   // stdout on disk so legitimate large SBOMs do not hit execFileSync's 1 MiB limit.
@@ -34,8 +25,6 @@ function execute(command, args) {
   }
 }
 
-/** @param {Bundle} bundle @param {string} image @param {string} digest
- * @param {string} predicateType @param {unknown} predicate */
 function validateStatement(bundle, image, digest, predicateType, predicate) {
   if (bundle.mediaType !== "application/vnd.dev.sigstore.bundle.v0.3+json" ||
       bundle.dsseEnvelope?.payloadType !== "application/vnd.in-toto+json") {
@@ -52,7 +41,6 @@ function validateStatement(bundle, image, digest, predicateType, predicate) {
   }
 }
 
-/** @param {string} output @param {Bundle} bundle */
 function verifyDiscoveredBundle(output, bundle) {
   const results = JSON.parse(output);
   if (!Array.isArray(results) || !results.some(result =>
@@ -61,7 +49,6 @@ function verifyDiscoveredBundle(output, bundle) {
   }
 }
 
-/** @param {AttestOptions} options */
 async function attestImage({ github, context, image, digest, predicatePath, predicateType, label,
   run = execute, directory = join(process.env.RUNNER_TEMP, "attestations") }) {
   const repository = `${context.repo.owner}/${context.repo.repo}`;

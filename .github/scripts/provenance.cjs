@@ -4,7 +4,6 @@ const PREDICATE_TYPE = "https://slsa.dev/provenance/v1";
 const CLAIMS = ["ref", "sha", "repository", "event_name", "job_workflow_ref", "workflow_ref",
   "repository_id", "repository_owner_id", "runner_environment", "run_id", "run_attempt"];
 
-/** @param {string} token @param {import('jose').JWTVerifyGetKey} keys */
 async function verifyClaims(token, keys) {
   const { jwtVerify } = await import("jose");
   const { payload } = await jwtVerify(token, keys, {
@@ -31,11 +30,6 @@ async function githubKeys() {
   return createRemoteJWKSet(new URL(config.jwks_uri));
 }
 
-/**
- * @param {{core: {getIDToken(audience: string): Promise<string>}, context: {
- * repo: {owner: string, repo: string}, ref: string, sha: string, eventName: string, runId: number},
- * keys?: import('jose').JWTVerifyGetKey}} options
- */
 async function buildProvenance({ core, context, keys }) {
   const claims = await verifyClaims(await core.getIDToken(AUDIENCE), keys || await githubKeys());
   const repository = `${context.repo.owner}/${context.repo.repo}`;
