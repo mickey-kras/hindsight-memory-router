@@ -269,11 +269,7 @@ class _PostgresSession:
             by_scope[scope].append((identity, maximum, window))
         for scope, values in by_scope.items():
             await self._check_distinct_scope(scope, values, now)
-        for key, _, _ in normalized_buckets:
-            await self.tx.execute(
-                "INSERT INTO quarantine_rate_limit_events(bucket,occurred_at_ms) VALUES(?,?)",
-                (key, now),
-            )
+        await self._insert_buckets(normalized_buckets, now)
         for scope, identity, _, _ in normalized_identities:
             await self.tx.execute(
                 "INSERT INTO quarantine_rate_limit_identities(scope,identity,occurred_at_ms) VALUES(?,?,?) "
@@ -282,19 +278,32 @@ class _PostgresSession:
             )
 
     async def _check_buckets(self, buckets: list[Bucket], now: int) -> None:
-        for key, maximum, window in buckets:
-            await self.tx.execute(
-                "DELETE FROM quarantine_rate_limit_events WHERE bucket=? AND occurred_at_ms<=?",
-                (key, now - window),
-            )
-            row = (
-                await self.tx.fetchone(
-                    "SELECT COUNT(*) count FROM quarantine_rate_limit_events WHERE bucket=?", (key,)
-                )
-                or {}
-            )
-            if int(row.get("count") or 0) >= maximum:
+        if not buckets:
+            return
+        keys = [key for key, _, _ in buckets]
+        await self.tx.execute(
+            "DELETE FROM quarantine_rate_limit_events AS events "
+            "USING unnest(?::text[],?::bigint[]) AS expired(bucket,cutoff) "
+            "WHERE events.bucket=expired.bucket AND events.occurred_at_ms<=expired.cutoff",
+            (keys, [now - window for _, _, window in buckets]),
+        )
+        rows = await self.tx.fetchall(
+            "SELECT bucket,COUNT(*) count FROM quarantine_rate_limit_events "
+            "WHERE bucket=ANY(?::text[]) GROUP BY bucket",
+            (keys,),
+        )
+        counts = {row["bucket"]: int(row["count"]) for row in rows}
+        for key, maximum, _ in buckets:
+            if counts.get(key, 0) >= maximum:
                 raise rate_limited()
+
+    async def _insert_buckets(self, buckets: list[Bucket], now: int) -> None:
+        if buckets:
+            await self.tx.execute(
+                "INSERT INTO quarantine_rate_limit_events(bucket,occurred_at_ms) "
+                "SELECT bucket,? FROM unnest(?::text[]) AS admitted(bucket)",
+                (now, [key for key, _, _ in buckets]),
+            )
 
     async def _lock_scopes(self, buckets: list[Bucket], identities: list[Distinct]) -> None:
         keys = {f"rate-limit:{key}" for key, _, _ in buckets}

@@ -147,6 +147,10 @@ class FakeRateLimitTx(PostgresTx):
     async def execute(self, sql: str, params: object = None) -> None:
         self.executed.append((sql, params))
 
+    async def fetchall(self, sql: str, params: object = None) -> list[dict[str, object]]:
+        self.executed.append((sql, params))
+        return []
+
     async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
         self.executed.append((sql, params))
         if "clock_timestamp" in sql:
