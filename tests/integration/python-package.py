@@ -1,6 +1,7 @@
 import importlib.metadata
 import importlib.resources
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -27,7 +28,12 @@ installed = {
 dev = {
     requirement.split("==")[0] for requirement in project["project"]["optional-dependencies"]["dev"]
 }
-assert not installed & (dev | {"setuptools", "wheel", "build"}), installed
+runtime = {
+    name.lower().replace("_", "-")
+    for name in re.findall(r"^([a-zA-Z0-9_.-]+)==", (source / "requirements.txt").read_text(), re.M)
+}
+# Some dev extras are also required runtime libraries, including PyYAML.
+assert not installed & ((dev - runtime) | {"setuptools", "wheel", "build"}), installed
 if "--container" in sys.argv:
     assert os.getuid() == 10001, "runtime must use the unprivileged app user"
     assert "pip" not in installed, "runtime must not ship pip"

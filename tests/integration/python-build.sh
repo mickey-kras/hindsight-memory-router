@@ -45,6 +45,8 @@ PIP_NO_INDEX=1 "$builder" -m pip wheel --disable-pip-version-check --no-cache-di
 
 "$python" -m venv "$work/runtime"
 "$work/runtime/bin/python" -m pip install --disable-pip-version-check \
+  --require-hashes -r "$repo/requirements.txt"
+"$work/runtime/bin/python" -m pip install --disable-pip-version-check \
   --no-index --no-deps "$work"/wheels/*.whl
 cd "$work"
 "$work/runtime/bin/python" -I "$repo/tests/integration/python-package.py" "$repo"
