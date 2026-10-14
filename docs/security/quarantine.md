@@ -65,7 +65,7 @@ Attributed security events consume the same writer/principal and bank pending ca
 
 Pending and postponed items expire after `QUARANTINE_ITEM_TTL_DAYS`; `0` disables expiry. The sweeper runs every `QUARANTINE_SWEEP_INTERVAL_SECONDS`; `0` disables it. Expired items stop counting toward capacity immediately and are later removed with a `cleanup` event.
 
-Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry. Set `QUARANTINE_EVENT_EXPORT_PATH` to append each pruned batch to a JSONL export file before deletion when long-term audit history is required.
+Events older than `QUARANTINE_EVENT_RETENTION_DAYS` are pruned in batches of 1000; `0` keeps forever. Pruning is destructive and independent of item expiry. Set `QUARANTINE_EVENT_EXPORT_PATH` to append each pruned batch to a JSONL export file before deletion when long-term audit history is required. Export runs in a worker thread and completes before deletion; cancellation drains the worker before rolling back the batch. Completed records are exported at least once, so retry consumers must deduplicate by `event_id`. Write failures can leave a partial final record; see [cleanup](../operations/cleanup.md) for retry and durability limits.
 
 Limit failures remain fail-closed:
 
