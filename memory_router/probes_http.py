@@ -70,7 +70,17 @@ async def readiness_response(deps: ProbesDeps) -> Response:
                 status_code, payload = 503, {"status": "unhealthy"}
             else:
                 payload = hindsight_check.value
-        except Exception:
+        except Exception as exc:
+            log_event(
+                logger,
+                "warning",
+                "readiness_orchestration_failed",
+                error=exc,
+                operation="readiness_refresh",
+                error_kind="timeout" if isinstance(exc, TimeoutError) else "unexpected",
+                outcome="unhealthy",
+                route_class="readiness",
+            )
             status_code, payload = 503, {"status": "unhealthy"}
         return JSONResponse(payload, status_code=status_code)
 
