@@ -43,6 +43,14 @@ SCHEMA = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_bank ON quarantine_items(bank_id, status, created_at) WHERE bank_id IS NOT NULL",
+    # Partial covering indexes keep retained review decisions out of admission scans.
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_pending ON quarantine_items(status, expires_at) WHERE status IN ('pending','postponed')",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_writer ON quarantine_items(writer_id, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer'",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_unknown ON quarantine_items(reason, status, expires_at) WHERE status IN ('pending','postponed') AND reason='unknown_writer'",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_family ON quarantine_items(writer_id, kind, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer' AND writer_id IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bank ON quarantine_items(bank_id, status, expires_at) WHERE status IN ('pending','postponed') AND bank_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bytes ON quarantine_items(encrypted_bytes, status, expires_at) WHERE encrypted_bytes<>0",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_security ON quarantine_items(kind) WHERE kind='security_event'",
 ]
 
 _BANK_ID_BACKFILL = (
