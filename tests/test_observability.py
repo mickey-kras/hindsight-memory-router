@@ -446,7 +446,9 @@ async def test_readiness_ttl_expiry_refetches_dependencies(
 
 
 @pytest.mark.asyncio
-async def test_readiness_refresh_timeout_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_readiness_refresh_timeout_fails_closed(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
     started = asyncio.Event()
 
     async def hangs() -> None:
@@ -461,6 +463,147 @@ async def test_readiness_refresh_timeout_fails_closed(monkeypatch: pytest.Monkey
 
     assert started.is_set()
     assert response.status_code == 503
+    assert json.loads(response.body) == {"status": "unhealthy"}
+    record = next(
+        record for record in caplog.records if record.msg == "readiness_orchestration_failed"
+    )
+    assert record.error_kind == "timeout"  # type: ignore[attr-defined]
+    assert record.error_fingerprint == "TimeoutError"  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize("component", ["repository", "hindsight"])
+async def test_readiness_missing_component_logs_outer_failure(
+    component: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=AsyncMock()))
+    monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=AsyncMock()))
+    monkeypatch.setattr(app_module.runtime, component, None)
+
+    response = await probes_http.readiness_response(app_module._probes_deps())
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == {"status": "unhealthy"}
+    assert [record.msg for record in caplog.records] == ["readiness_orchestration_failed"]
+    record = caplog.records[0]
+    assert record.levelno == logging.WARNING
+    assert record.operation == "readiness_refresh"  # type: ignore[attr-defined]
+    assert record.route_class == "readiness"  # type: ignore[attr-defined]
+    assert record.outcome == "unhealthy"  # type: ignore[attr-defined]
+    assert record.error_kind == "unexpected"  # type: ignore[attr-defined]
+    assert record.error_fingerprint == "RuntimeError"  # type: ignore[attr-defined]
+
+
+async def test_readiness_orchestration_failure_redacts_exception_and_payload(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    private_failure = type(_SENTINEL, (Exception,), {})
+
+    async def fails(_: Any) -> probes.ProbeResult[None]:
+        raise private_failure(f"Bearer {_SENTINEL} postgres://user:{_SENTINEL}@private/db")
+
+    monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=AsyncMock()))
+    monkeypatch.setattr(
+        app_module.runtime,
+        "hindsight",
+        SimpleNamespace(health=AsyncMock(return_value={"secret": _SENTINEL})),
+    )
+    monkeypatch.setattr(probes_http, "_database_health", fails)
+
+    response = await probes_http.readiness_response(app_module._probes_deps())
+
+    assert response.status_code == 503
+    assert json.loads(response.body) == {"status": "unhealthy"}
+    assert [record.msg for record in caplog.records] == ["readiness_orchestration_failed"]
+    record = caplog.records[0]
+    assert record.error_fingerprint.startswith("site:")  # type: ignore[attr-defined]
+    assert record.exc_info is None
+    assert record.stack_info is None
+    assert record.args == ()
+    assert _SENTINEL not in repr(vars(record))
+
+
+async def test_readiness_orchestration_failure_throttles_across_refreshes(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = 1.0
+    monkeypatch.setattr("memory_router.logging.time.monotonic", lambda: now)
+    monkeypatch.setattr(app_module.runtime, "repository", None)
+
+    for _ in range(3):
+        probes.readiness.cache = None
+        response = await probes_http.readiness_response(app_module._probes_deps())
+        assert response.status_code == 503
+    assert [record.msg for record in caplog.records] == ["readiness_orchestration_failed"]
+
+    now += LOG_THROTTLE_INTERVAL_SECONDS
+    probes.readiness.cache = None
+    await probes_http.readiness_response(app_module._probes_deps())
+    assert [record.msg for record in caplog.records] == [
+        "readiness_orchestration_failed",
+        "readiness_orchestration_failed",
+    ]
+    assert caplog.records[-1].suppressed == 2  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("dependency", "expected_event"),
+    [("repository", "storage_readiness_failed"), ("hindsight", "hindsight_readiness_failed")],
+)
+async def test_readiness_dependency_failures_do_not_emit_orchestration_logs(
+    dependency: str,
+    expected_event: str,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ping = AsyncMock()
+    health = AsyncMock(return_value={"status": "healthy"})
+    monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=ping))
+    monkeypatch.setattr(app_module.runtime, "hindsight", SimpleNamespace(health=health))
+    operation = ping if dependency == "repository" else health
+    operation.side_effect = RuntimeError(_SENTINEL)
+
+    for _ in range(3):
+        probes.readiness.cache = None
+        response = await probes_http.readiness_response(app_module._probes_deps())
+        assert response.status_code == 503
+        assert json.loads(response.body) == {"status": "unhealthy"}
+
+    assert [record.msg for record in caplog.records] == [expected_event]
+    assert _SENTINEL not in repr([vars(record) for record in caplog.records])
+
+
+async def test_readiness_refresh_cancellation_propagates_without_failure_log(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = asyncio.Event()
+    cleaned_up = asyncio.Event()
+
+    async def hangs() -> None:
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned_up.set()
+
+    monkeypatch.setattr(app_module.runtime, "repository", SimpleNamespace(ping=hangs))
+    monkeypatch.setattr(
+        app_module.runtime,
+        "hindsight",
+        SimpleNamespace(health=AsyncMock(return_value={"status": "healthy"})),
+    )
+    task = asyncio.create_task(probes_http.readiness_response(app_module._probes_deps()))
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cleaned_up.is_set()
+    assert probes.readiness.cache is None
+    assert probes.readiness.lock is not None and not probes.readiness.lock.locked()
+    assert not caplog.records
 
 
 @pytest.mark.asyncio
