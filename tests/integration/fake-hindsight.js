@@ -74,6 +74,7 @@ createServer(async (req, res) => {
     if (method === "GET" && url.pathname === "/version") {
       return send(res, 200, {
         api_version: "0.9.0",
+        build_info: { revision: "fake-next" },
         features: {
           observations: true,
           mcp: true,
@@ -83,9 +84,11 @@ createServer(async (req, res) => {
           file_upload_api: true,
           document_export_api: true,
           document_import_api: true,
-          audit_log: true,
+          audit_log: false,
           llm_trace: true,
           store_document_text: true,
+          future_feature: true,
+          feature_metadata: { enabled: true },
         },
       });
     }

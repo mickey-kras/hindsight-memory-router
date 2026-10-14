@@ -102,6 +102,39 @@ async def test_health_validates_contract_and_drops_unrecognized_upstream_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("extra_at", ["root", "features", "both"])
+async def test_version_discards_additive_upstream_fields(extra_at: str) -> None:
+    response = _version_response()
+    features = response["features"]
+    assert isinstance(features, dict)
+    if extra_at in {"root", "both"}:
+        response["build_info"] = {"revision": "new", "metadata": [1, None]}
+    if extra_at in {"features", "both"}:
+        features["new_capability"] = True
+        features["capability_metadata"] = {"enabled": True}
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    try:
+        assert await gateway.version() == _facade_version_response()
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_version_preserves_false_upstream_capabilities() -> None:
+    response = _version_response()
+    features = response["features"]
+    assert isinstance(features, dict)
+    response["features"] = dict.fromkeys(features, False)
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    try:
+        assert await gateway.version() == response
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "response",
     [
@@ -143,7 +176,9 @@ async def test_version_validates_current_hindsight_contract_and_reports_facade_f
     [
         {"api_version": "0.9.0"},
         {"api_version": "0.9.0", "features": {}},
-        {**_version_response(), "router": "memory-router"},
+        {"features": _version_response()["features"]},
+        *({**_version_response(), "api_version": value} for value in [1, True, None, [], {}]),
+        *({**_version_response(), "features": value} for value in [None, [], "invalid"]),
         {
             **_version_response(),
             "features": {**_version_response()["features"], "observations": "yes"},  # type: ignore[dict-item]
@@ -160,6 +195,47 @@ async def test_version_rejects_non_hindsight_success_response(response: object) 
         assert exc.value.kind == "invalid-response"
         assert exc.value.context["operation"] == "version"
         assert exc.value.context["method"] == "GET"
+    finally:
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "feature",
+    [
+        "observations",
+        "mcp",
+        "worker",
+        "bank_config_api",
+        "bank_llm_health",
+        "file_upload_api",
+        "document_export_api",
+        "document_import_api",
+        "audit_log",
+        "llm_trace",
+        "store_document_text",
+    ],
+)
+@pytest.mark.parametrize(
+    ("missing", "value"), [(True, None), (False, "true"), (False, 0), (False, 1), (False, None)]
+)
+async def test_version_requires_strict_boolean_features(
+    feature: str, missing: bool, value: object
+) -> None:
+    response = _version_response()
+    features = response["features"]
+    assert isinstance(features, dict)
+    if missing:
+        del features[feature]
+    else:
+        features[feature] = value
+    gateway = HindsightGateway("http://hindsight", None)
+    gateway._request = AsyncMock(return_value=response)  # type: ignore[method-assign]
+    try:
+        with pytest.raises(HindsightGatewayError) as exc:
+            await gateway.version()
+        assert exc.value.code == "hindsight_invalid_response"
+        assert exc.value.context["operation"] == "version"
     finally:
         await gateway.close()
 
