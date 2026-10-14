@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import secrets
 from dataclasses import dataclass
@@ -8,7 +10,7 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity, security_event_identity
-from .envelope import create_provider_envelope, estimate_envelope_size
+from .envelope import canonical_decrypted, create_provider_envelope, estimate_envelope_size
 from .errors import HttpError
 from .key_wrap import RsaOaepWrapProvider, WrapProvider, provider_envelope_metadata
 from .rate_limit import Bucket, Distinct, RateLimitConsumer, RateLimiter
@@ -16,12 +18,15 @@ from .repository import (
     PENDING,
     REVIEW_IN_PROGRESS,
     REVIEWABLE_STATUSES,
+    AdmissionEvidence,
+    AdmissionSnapshot,
     Capacity,
     QuarantineRepository,
 )
 from .timestamps import iso_format, parse_iso
 
 _DEDUPE_DIGEST_PREFIX_LENGTH = 48
+_MAX_CONCURRENT_WRAPS = 5
 
 
 def _deduped_id(prefix: str, key: str) -> str:
@@ -60,6 +65,8 @@ class QuarantineStore:
         self.repository = repository
         self.limits = limits
         self.rate_limiter = rate_limiter
+        # Bound provider work without borrowing shared limiter connections.
+        self._wrap_slots = asyncio.Semaphore(_MAX_CONCURRENT_WRAPS)
         self.capacity = Capacity(
             limits.max_pending_items,
             _effective_writer_limit(limits),
@@ -71,47 +78,76 @@ class QuarantineStore:
         if input_["kind"] == "security_event":
             input_ = {**input_, "dedupeKey": security_event_identity(input_)}
         quarantine_id = self._resolve_id(input_)
+        mode = "id"
+        if input_["kind"] == "recalled_memory":
+            mode = "memory"
+            bank = input_.get("sourceBank")
+            memory = input_.get("sourceMemoryId")
+            existing_for_charge = (
+                await self.repository.find_memory_state(bank, memory)
+                if bank is not None and memory is not None
+                else None
+            )
+        elif input_["kind"] in {"retain_request", "recall_request"} and input_.get("dedupeKey"):
+            mode = "request"
+            existing_for_charge = await self.repository.find_request_state(input_["dedupeKey"])
+        else:
+            existing_for_charge = await self.repository.get(quarantine_id)
+        snapshot = AdmissionSnapshot.capture(existing_for_charge)
+        if existing_for_charge is not None:
+            quarantine_id = str(existing_for_charge["quarantine_id"])
         self._assert_item_size(input_, quarantine_id)
-        existing_for_charge = await self.repository.get(quarantine_id)
-        known = await self._known_identity(input_, existing_for_charge is not None)
+        known = self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
+        self._assert_writable(input_, existing_for_charge)
+
+        async with self._wrap_slots:
+            evidence = AdmissionEvidence(
+                canonical_decrypted(self._decrypted(input_, quarantine_id))
+            )
+            encrypted = await self._encrypt(input_, quarantine_id, evidence=evidence)
+        item = self._build_item(input_, quarantine_id, encrypted)
 
         async def operation(_session: RateLimitConsumer) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
-            if (
-                input_["kind"] in {"retain_request", "recall_request"}
-                and input_.get("dedupeKey")
-                and existing
-                and existing["status"] not in REVIEWABLE_STATUSES
-            ):
-                raise HttpError(
-                    409,
-                    "quarantine_request_in_review",
-                    "matching quarantine request is already being reviewed",
-                )
-            if existing and existing["status"] == REVIEW_IN_PROGRESS:
-                raise HttpError(
-                    409,
-                    "quarantine_item_in_review",
-                    "matching quarantine item is already being reviewed",
-                )
-
-            encrypted = await self._encrypt(input_, quarantine_id)
-            item = self._build_item(input_, quarantine_id, encrypted)
-            mode = "id"
-            if input_["kind"] == "recalled_memory":
-                mode = "memory"
-            elif input_["kind"] in {"retain_request", "recall_request"} and item.get("dedupe_key"):
-                mode = "request"
+            self._assert_writable(input_, existing)
             capacity = self.capacity
             if _anonymous_auth_failure(input_):
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
-            await self.repository.store(item, capacity, mode=mode, at=input_["timestamp"])
+            await self.repository.store(
+                item,
+                capacity,
+                mode=mode,
+                at=input_["timestamp"],
+                require_reviewable_request=True,
+                expected_snapshot=snapshot,
+                incoming_evidence=evidence,
+            )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
         return cast(
             dict[str, str], await self.rate_limiter.with_identity_lock(quarantine_id, operation)
         )
+
+    @staticmethod
+    def _assert_writable(input_: dict[str, Any], existing: dict[str, Any] | None) -> None:
+        if (
+            input_["kind"] in {"retain_request", "recall_request"}
+            and input_.get("dedupeKey")
+            and existing
+            and existing["status"] not in REVIEWABLE_STATUSES
+        ):
+            raise HttpError(
+                409,
+                "quarantine_request_in_review",
+                "matching quarantine request is already being reviewed",
+            )
+        if existing and existing["status"] == REVIEW_IN_PROGRESS:
+            raise HttpError(
+                409,
+                "quarantine_item_in_review",
+                "matching quarantine item is already being reviewed",
+            )
 
     def _decrypted(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
         decrypted: dict[str, Any] = {
@@ -141,9 +177,16 @@ class QuarantineStore:
                 "encrypted quarantine item exceeds configured size limit",
             )
 
-    async def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
+    async def _encrypt(
+        self,
+        input_: dict[str, Any],
+        quarantine_id: str,
+        *,
+        evidence: AdmissionEvidence | None = None,
+    ) -> dict[str, Any]:
         return await create_provider_envelope(
-            self._decrypted(input_, quarantine_id), self.wrap_provider
+            json.loads(evidence.plaintext) if evidence else self._decrypted(input_, quarantine_id),
+            self.wrap_provider,
         )
 
     def _build_item(
@@ -180,7 +223,7 @@ class QuarantineStore:
             item["expires_at"] = iso_format(created + timedelta(days=self.limits.item_ttl_days))
         return item
 
-    async def _known_identity(self, input_: dict[str, Any], item_exists: bool) -> bool:
+    def _known_identity(self, input_: dict[str, Any], item_exists: bool) -> bool:
         if input_.get("dedupeKey") and input_["kind"] in {
             "security_event",
             "retain_request",
@@ -192,12 +235,7 @@ class QuarantineStore:
             and input_.get("sourceBank") is not None
             and input_.get("sourceMemoryId") is not None
         ):
-            return (
-                await self.repository.find_memory_state(
-                    input_["sourceBank"], input_["sourceMemoryId"]
-                )
-                is not None
-            )
+            return item_exists
         return False
 
     async def _charge(
