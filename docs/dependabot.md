@@ -2,10 +2,15 @@
 
 [Documentation](README.md) | [Repository](../README.md)
 
-- All verified Dependabot updates can auto-merge, including major updates.
+- Only verified Dependabot updates with signed commit metadata classifying every
+  updated dependency as a semantic-version patch or minor update can auto-merge.
+  Major updates and missing, invalid or unclassified metadata require human review.
 - Required repository checks must pass. Merges use squash.
 - Unsigned or non-Dependabot commits require manual review.
-- PR events and the 30-minute refresh use the same implementation.
+- PR events and the 30-minute refresh use the same implementation. Auto-merge
+  decisions enabled by `github-actions[bot]` are re-evaluated and withdrawn when
+  the update is ineligible. Decisions enabled by human users are preserved, as is
+  a disable observed during evaluation.
 - Dependabot handles its own branch updates with `rebase-strategy: auto`.
   Each ecosystem runs daily on a staggered cron schedule, so stale PRs are
   rebased by Dependabot and trigger normal PR checks. The general PR
