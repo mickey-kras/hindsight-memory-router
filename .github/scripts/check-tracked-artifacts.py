@@ -1,5 +1,3 @@
-"""Reject generated Python artifacts in the Git index, allowing local build output."""
-
 from __future__ import annotations
 
 import os

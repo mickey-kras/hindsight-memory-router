@@ -1,5 +1,3 @@
-"""Exercise the artifact guard against real Git indexes and local generated files."""
-
 from __future__ import annotations
 
 import subprocess
@@ -88,7 +86,6 @@ class TrackedArtifactsTests(unittest.TestCase):
         path = ".pytest_cache/nodeids"
         self.write(path)
         self.git("add", "--", path)
-        # A missing working-tree file remains tracked until its index entry is removed.
         (self.root / path).unlink()
         self.assertEqual(self.guard().returncode, 1)
         self.git("rm", "--cached", "--", path)
