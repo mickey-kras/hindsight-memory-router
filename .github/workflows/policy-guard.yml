@@ -27,6 +27,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/scripts/ci-impact.cjs": "5eb80b1d7919f7aba77d8a5b23ce18b6f742c1de19e28e39e1e11f6b6b8ac1ff",
+              ".github/scripts/ci-impact.test.cjs": "a21ffa77343aec7db37ea66b89070a7e802dd470d7325581b64efc50cf888a8f",
               ".github/workflows/dependency-review.yml": "0b87abc672ea46903ff062c35a11fc0ac35005678e8d3757b829392d063fb314",
               ".github/dependency-review-config.yml": "f92f128addcb10acd3d874579771b0d44675a3db4809d5c274211c4f0bb9374f",
               ".github/scripts/pr-branch-updater.cjs": "fadcbf9a09c8fb44a64c3b5a876dfb00aa1e9ab3e13e326a99c2ef1bb8274e59",
@@ -43,14 +45,14 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "cd8b67a86cdd082f27dbd7d06f96ff82f4d612ee8d80c2b286e5645c7d7f0e8a",
+              ".github/scripts/release-policy.test.py": "04f8c8c9243d3b33e3bf6084a883cb765f77fedbf54516cef63768e9370eb645",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "49b192c0d8e5740e8ab5b9e0df41e6fc8029f894682a5005c29f2eadf09ca8e5",
               ".github/workflows/release.yml": "1c0f53465d44deaeeced2158c3dd668ca0e625acf51212357be597ffaed0094c",
-              ".github/workflows/ci.yml": "5fb076d73cf9fc223a453f6f0e55d67e9d9291252239a06f7d2ca63328cf4ab4",
+              ".github/workflows/ci.yml": "abb295bf236a0665afaff4eb77c775a5495fd4e882e4c99bf954e4cabcb9d33d",
               ".github/workflows/aislop.yml": "0ecc80af57e081678cb78f6c088eb9f89f10b497d7c8105b4b74b88a0ce9a724",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
