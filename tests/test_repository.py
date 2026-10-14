@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -137,13 +139,159 @@ async def test_list_reviewable_has_stable_tiebreaker_and_complete_summary(
 ) -> None:
     capacity = Capacity(10, 10, 100_000)
     for qid in ("q_b", "q_a"):
-        value = item(qid, expires="2027-01-01T00:00:00.000Z")
+        value = {
+            **item(
+                qid,
+                dedupe=f"dedupe-{qid}",
+                bank=f"source-{qid}",
+                memory=f"memory-{qid}",
+                expires="2027-01-01T00:00:00.000Z",
+                status="postponed",
+            ),
+            "source_content_sha256": "private-source-hash",
+            "bank_id": "bank-a",
+            "postpone_count": 2,
+            "requarantine_count": 3,
+        }
         await repository.store(value, capacity, mode="id", at="2026-01-01T00:00:00.000Z")
 
     rows = await repository.list_reviewable(10, 0, "2026-01-02T00:00:00.000Z")
     assert [row["quarantine_id"] for row in rows] == ["q_a", "q_b"]
-    assert rows[0]["encrypted_bytes"] > 0
-    assert rows[0]["expires_at"] == "2027-01-01T00:00:00.000Z"
+    assert rows[0] == {
+        "quarantine_id": "q_a",
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "updated_at": "2026-01-01T00:00:00.000Z",
+        "kind": "retain_request",
+        "reason": "suspicious_content",
+        "writer_id": "main",
+        "source": "http",
+        "source_bank": "source-q_a",
+        "source_memory_id": "memory-q_a",
+        "dedupe_key": "dedupe-q_a",
+        "sha256": "abc",
+        "status": "postponed",
+        "postpone_count": 2,
+        "requarantine_count": 3,
+        "encrypted_bytes": len(b'{"v":1,"data":"q_a"}'),
+        "expires_at": "2027-01-01T00:00:00.000Z",
+        "bank_id": "bank-a",
+    }
+    assert await repository.list_reviewable(1, 1, "2026-01-02T00:00:00.000Z") == rows[1:]
+
+
+@pytest.mark.asyncio
+async def test_queue_does_not_parse_poisoned_envelopes(
+    repository: QuarantineRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    await repository.store(item(QID), Capacity(10, 10, 100_000), mode="id", at=at)
+    async with repository.db.transaction() as tx:
+        await tx.execute(
+            "UPDATE quarantine_items SET encrypted_envelope=? WHERE quarantine_id=?",
+            ("not-json", QID),
+        )
+
+    service = QuarantineAdminService(repository, None, None, None)
+    with monkeypatch.context() as patch:
+
+        def fail_decode(_: str) -> Any:
+            pytest.fail("queue decoded an encrypted envelope")
+
+        patch.setattr("memory_router.repository.json.loads", fail_decode)
+        queue = await service.list_queue(10, 0)
+        assert queue["total"] == 1
+        assert queue["items"][0]["quarantine_id"] == QID
+        assert queue["items"][0]["postpone_count"] == 0
+        assert queue["items"][0]["requarantine_count"] == 0
+        assert "encrypted" not in queue["items"][0]
+        assert await service.list_queue(10, 0, QueueFilter(writer_id="main")) == queue
+
+    with pytest.raises(json.JSONDecodeError):
+        await service.read_item(QID)
+
+
+@pytest.mark.asyncio
+async def test_queue_fetches_only_summary_columns(
+    repository: QuarantineRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    await repository.store(item(QID), Capacity(10, 10, 100_000), mode="id", at=at)
+    fetchall = SqliteTx.fetchall
+    fetched: list[dict[str, Any]] = []
+
+    async def capture_fetchall(
+        tx: SqliteTx, sql: str, params: Iterable[Any] = ()
+    ) -> list[dict[str, Any]]:
+        projection = sql.split(" FROM ", 1)[0]
+        assert "*" not in projection
+        assert "encrypted_envelope" not in projection
+        assert "source_content_sha256" not in projection
+        rows = await fetchall(tx, sql, params)
+        fetched.extend(rows)
+        rows[0]["postpone_count"] = None
+        rows[0]["requarantine_count"] = "2"
+        return rows
+
+    monkeypatch.setattr(SqliteTx, "fetchall", capture_fetchall)
+    rows = await repository.list_reviewable(10, 0, at)
+    assert len(fetched) == 1
+    assert set(fetched[0]) == set(rows[0]) | {
+        "source_bank",
+        "source_memory_id",
+        "dedupe_key",
+        "expires_at",
+        "bank_id",
+    }
+    assert "encrypted" not in fetched[0]
+    assert rows[0]["postpone_count"] == 0
+    assert rows[0]["requarantine_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_queue_filter_scope_status_expiry_and_pagination_parity(
+    repository: QuarantineRepository,
+) -> None:
+    at = "2026-01-01T00:00:00.000Z"
+    capacity = Capacity(20, 20, 100_000)
+    for qid, bank_id, writer, kind, status, expires in (
+        ("a", "bank-a", "main", "retain_request", "pending", None),
+        ("b", "bank-b", "main", "recall_request", "postponed", None),
+        ("c", "bank-a", "other", "recalled_memory", "review_side_effect_started", None),
+        ("d", None, None, "security_event", "pending", None),
+        ("expired", "bank-a", "main", "retain_request", "pending", at),
+        ("expired-stuck", "bank-a", "main", "retain_request", "review_side_effect_started", at),
+        ("reviewing", "bank-a", "main", "retain_request", "review_in_progress", None),
+        ("completed", "bank-a", "main", "retain_request", "review_side_effect_completed", None),
+        ("allowed", "bank-a", "main", "retain_request", "reviewed_allowed", None),
+        ("blocked", "bank-a", "main", "retain_request", "reviewed_blocked", None),
+    ):
+        value = {
+            **item(qid, writer=writer, status=status, expires=expires),
+            "bank_id": bank_id,
+            "kind": kind,
+        }
+        await repository.store(value, capacity, mode="id", at=at)
+
+    for filter_, expected in (
+        (QueueFilter(), ["a", "b", "c", "d"]),
+        (QueueFilter(bank_id="bank-a"), ["a", "c"]),
+        (QueueFilter(bank_ids=("bank-a", "bank-b")), ["a", "b", "c"]),
+        (QueueFilter(bank_ids=()), []),
+        (QueueFilter(writer_id="main"), ["a", "b"]),
+        (QueueFilter(principal_id="main"), ["a", "b"]),
+        (QueueFilter(kind="recall_request"), ["b"]),
+        (QueueFilter(status="pending"), ["a", "d"]),
+        (QueueFilter(status="postponed"), ["b"]),
+        (QueueFilter(status="review_side_effect_started"), ["c"]),
+        (QueueFilter(status="reviewed_allowed"), []),
+        (QueueFilter(bank_ids=("bank-a",), principal_id="main", status="pending"), ["a"]),
+        (QueueFilter(bank_id="bank-b", bank_ids=("bank-a",)), []),
+    ):
+        rows = await repository.list_reviewable(20, 0, at, filter_)
+        assert [row["quarantine_id"] for row in rows] == expected
+        assert await repository.count_reviewable(at, filter_) == len(expected)
+        page = await repository.list_reviewable(1, 1, at, filter_)
+        assert page == rows[1:2]
 
 
 @pytest.mark.asyncio
