@@ -201,7 +201,7 @@ anonymous_version_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}'
 version="$(curl --max-time 5 -fsS -D "${tmp_dir}/version.headers" -H "Authorization: Bearer ${router_token}" "${router_url}/version")"
 grep -qi '^Deprecation: true' "${tmp_dir}/version.headers" || fail_check "legacy token mode /version response missed the Deprecation header"
 upstream_version="$(docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; print(urllib.request.urlopen('http://hindsight:8888/version', timeout=2).read().decode())")"
-python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","bank_config_api","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==set(upstream["features"]); assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose Hindsight-compatible facade capabilities"
+python3 -c 'import json,sys; router=json.loads(sys.argv[1]); upstream=json.loads(sys.argv[2]); unsupported={"mcp","bank_llm_health","file_upload_api","document_export_api","document_import_api"}; passthrough={"observations","worker","bank_config_api","audit_log","llm_trace","store_document_text"}; assert set(router)=={"api_version","features"}; assert router["api_version"]==upstream["api_version"]; assert set(router["features"])==unsupported|passthrough; assert all(router["features"][key] is False for key in unsupported); assert all(router["features"][key]==upstream["features"][key] for key in passthrough)' "$version" "$upstream_version" || fail_check "router /version did not expose known facade capabilities and discard upstream extensions"
 retain_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/memories" -d '{"items":[{"content":"unauthenticated"}]}' )"
 [[ "$retain_status" == "401" ]] || fail_check "expected unauthenticated retain 401, got ${retain_status}"
 if curl --max-time 2 -fsS "http://127.0.0.1:8888/health" >/dev/null 2>&1; then
@@ -405,7 +405,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 60ebc2b1c22107be309da6e9aec970aca8f9edee39a79d497426cfb46e5240a5
+# integration-behavior-sha256: 48da4f009845669e21eb55309f5dd487c126c87353be7bb344a02d4dd838b2cc
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

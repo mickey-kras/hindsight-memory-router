@@ -40,7 +40,7 @@ class _HindsightHealthResponse(BaseModel):
 
 
 class _HindsightFeaturesInfo(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     observations: StrictBool
     mcp: StrictBool
@@ -56,7 +56,7 @@ class _HindsightFeaturesInfo(BaseModel):
 
 
 class _HindsightVersionResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     api_version: StrictStr
     features: _HindsightFeaturesInfo
