@@ -26,6 +26,7 @@ PATHS = [
     ".github/workflows/architecture.yml",
     ".github/scripts/report-main-failures.cjs",
     ".github/scripts/report-main-failures.test.cjs",
+    ".github/scripts/aislop-cli.test.cjs",
     ".github/workflows/dependency-review.yml",
     ".github/workflows/pr-branch-updater.yml",
     ".github/scripts/pr-branch-updater.cjs",
@@ -116,7 +117,145 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
         return [] if result.returncode == 0 else [result.stdout + result.stderr]
 
 
+def quality_gate(needs, event="pull_request"):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    script = workflow["jobs"]["checks"]["steps"][0]["with"]["script"]
+    driver = r"""
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const failures = [];
+const core = {setFailed: message => failures.push(message)};
+new Function('core', input.script)(core);
+process.stdout.write(JSON.stringify(failures));
+"""
+    result = subprocess.run(
+        ["node", "-e", driver],
+        input=json.dumps({"script": script}),
+        env={**os.environ, "NEEDS_JSON": json.dumps(needs), "EVENT_NAME": event},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 class ReleasePolicyTests(unittest.TestCase):
+    def test_parallel_quality_jobs_preserve_required_identities_and_hindsight(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        jobs = workflow["jobs"]
+        self.assertEqual(workflow["name"], "ci")
+        self.assertEqual(set(jobs), {"hindsight", "python", "ui", "release", "security", "checks", "container"})
+        self.assertEqual(set(jobs["checks"]["needs"]), set(jobs) - {"checks"})
+        self.assertEqual(jobs["checks"]["if"], "always()")
+        self.assertEqual(jobs["checks"].get("name", "checks"), "checks")
+        self.assertEqual(jobs["container"]["name"], "container")
+        self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request'")
+        for name in ["ui", "release", "security"]:
+            self.assertNotIn("needs", jobs[name])
+        for name in ["python", "container"]:
+            self.assertEqual(jobs[name]["needs"], "hindsight")
+        for name in ["hindsight", "python", "ui", "release", "security"]:
+            self.assertNotIn("if", jobs[name])
+        for job in jobs.values():
+            self.assertNotIn("continue-on-error", job)
+            for step in job["steps"]:
+                self.assertNotIn("continue-on-error", step)
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    self.assertIs(step["with"]["persist-credentials"], False)
+        self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in jobs["checks"]["steps"]))
+        gate = jobs["checks"]["steps"][0]
+        self.assertEqual(gate["env"], {"NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}"})
+        outputs = workflow.get("on", workflow.get(True))["workflow_call"]["outputs"]
+        for name, source in [("version", "version"), ("sha", "sha"), ("image", "image")]:
+            self.assertEqual(outputs[f"hindsight_{name}"]["value"], f"${{{{ jobs.hindsight.outputs.{source} }}}}")
+        resolve = next(step for step in jobs["hindsight"]["steps"] if step.get("id") == "resolve")
+        self.assertEqual(resolve["env"], {"RELEASE_CANDIDATE_SHA": "${{ inputs.candidate_sha }}", "RELEASE_CANDIDATE_REF": "${{ inputs.candidate_ref }}"})
+        upstream = next(step for step in jobs["python"]["steps"] if step.get("name") == "Checkout current Hindsight OpenClaw sources")
+        self.assertEqual(upstream["with"]["ref"], "${{ needs.hindsight.outputs.sha }}")
+        self.assertEqual(jobs["container"]["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.hindsight.outputs.image }}")
+
+    def test_quality_gate_rejects_failed_cancelled_missing_and_skipped_jobs(self):
+        names = ["hindsight", "python", "ui", "release", "security", "container"]
+        passing = {name: {"result": "success", "outputs": {}} for name in names}
+        self.assertEqual(quality_gate(passing), [])
+        for name in names:
+            for state in ["failure", "cancelled", "skipped", "neutral", "", None]:
+                with self.subTest(job=name, state=state):
+                    changed = {**passing, name: {"result": state}}
+                    self.assertTrue(quality_gate(changed))
+            self.assertTrue(quality_gate({key: value for key, value in passing.items() if key != name}))
+            self.assertTrue(quality_gate({**passing, name: {"outputs": {}}}))
+        self.assertTrue(quality_gate({**passing, "unreviewed": {"result": "success"}}))
+        self.assertTrue(quality_gate({}))
+
+    def test_quality_gate_allows_only_the_known_non_pr_container_skip_and_reruns(self):
+        passing = {name: {"result": "success"} for name in ["hindsight", "python", "ui", "release", "security", "container"]}
+        for event in ["push", "workflow_dispatch"]:
+            with self.subTest(event=event):
+                baseline = {**passing, "container": {"result": "skipped"}}
+                self.assertEqual(quality_gate(baseline, event), [])
+                self.assertTrue(quality_gate({**baseline, "security": {"result": "skipped"}}, event))
+                for state in ["success", "failure", "cancelled", None]:
+                    self.assertTrue(quality_gate({**baseline, "container": {"result": state}}, event))
+                self.assertTrue(quality_gate({key: value for key, value in baseline.items() if key != "container"}, event))
+                self.assertTrue(quality_gate({**baseline, "python": {"result": "failure"}}, event))
+                # A failed-job rerun may retain successful results from the first attempt.
+                self.assertEqual(quality_gate(baseline, event), [])
+        self.assertTrue(quality_gate({**passing, "ui": {"result": "cancelled"}}))
+        self.assertEqual(quality_gate(passing), [])
+
+    def test_quality_worker_gates_and_diagnostics_remain_local(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+        required = {
+            "python": ["Python runtime lock is current", "Python dev lock is current", "No legacy TypeScript runtime or tests", "OpenClaw compatibility inventory", "Unicode confusables map is reproducible", "Tests and coverage"],
+            "ui": ["Aislop CLI regression tests", "UI unit, crypto, and build checks", "UI package consumer check", "Install Playwright Chromium", "UI browser tests", "OpenAPI contract", "Upload OpenAPI diagnostics"],
+            "release": ["npm audit filter tests", "Release automation tests", "Attestation CLI and registry compatibility", "Release policy tests", "PR branch updater tests", "Failure reporter tests"],
+            "security": ["Audit release tools", "Python dependency audit", "Bandit", "Node tooling audit", "Gitleaks", "Upload redacted secret scan", "Semgrep", "Hadolint"],
+            "container": ["Default Compose smoke", "Fake Hindsight router-storage parity", "Real Hindsight router-storage parity", "Trivy PR gate"],
+        }
+        for name, gates in required.items():
+            steps = {step.get("name"): step for step in jobs[name]["steps"]}
+            for gate in gates:
+                self.assertIn(gate, steps)
+        coverage = next(step for step in jobs["python"]["steps"] if step.get("name") == "Tests and coverage")
+        self.assertEqual(coverage["run"], "coverage run -m pytest && coverage report --fail-under=90")
+        ui_steps = jobs["ui"]["steps"]
+        npm_install = next(index for index, step in enumerate(ui_steps) if step.get("run") == "npm ci")
+        aislop_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "Aislop CLI regression tests")
+        self.assertLess(npm_install, aislop_test)
+        self.assertEqual(ui_steps[aislop_test]["run"], "node --test .github/scripts/aislop-cli.test.cjs")
+        self.assertNotIn("if", ui_steps[aislop_test])
+        runtime_install = next(index for index, step in enumerate(ui_steps) if step.get("run") == "python -m pip install --require-hashes -r requirements.txt")
+        ui_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "UI unit, crypto, and build checks")
+        self.assertLess(runtime_install, ui_test)
+        self.assertTrue(any(step.get("uses", "").startswith("actions/setup-python@") for step in ui_steps[:runtime_install]))
+        for job in jobs.values():
+            steps = {step.get("name"): step for step in job["steps"]}
+            step_ids = {step["id"] for step in job["steps"] if "id" in step}
+            for name, step in steps.items():
+                if name and name.startswith("Upload"):
+                    for source in re.findall(r"steps\.([\w-]+)\.outcome", step.get("if", "")):
+                        self.assertIn(source, step_ids)
+                    if step.get("uses", "").startswith("actions/upload-artifact@"):
+                        self.assertEqual(step["with"]["if-no-files-found"], "error")
+
+    def test_parallel_quality_bypasses_fail_reviewed_policy(self):
+        path = ".github/workflows/ci.yml"
+        original = (ROOT / path).read_text()
+        mutations = [
+            original.replace("    if: always()", "    if: success()"),
+            original.replace("needs: [hindsight, python, ui, release, security, container]", "needs: [hindsight, python, ui, release, security]"),
+            original.replace("result !== expected", "false"),
+            original.replace("  security:\n", "  security:\n    continue-on-error: true\n"),
+            original.replace("  ui:\n", "  ui:\n    if: false\n"),
+            original.replace("coverage report --fail-under=90", "coverage report --fail-under=0"),
+            original.replace("ref: ${{ inputs.candidate_sha }}", "ref: main"),
+            original.replace("github.run_attempt", "github.run_id"),
+        ]
+        for changed in mutations:
+            with self.subTest(mutation=changed):
+                self.assertNotEqual(changed, original)
+                self.assertTrue(policy({path: changed}))
+
     @staticmethod
     def aislop_report(findings=None):
         return {
@@ -139,7 +278,7 @@ class ReleasePolicyTests(unittest.TestCase):
             }}],
         }
 
-    def run_aislop_steps(self, report, exit_code=0, event="pull_request"):
+    def run_aislop_steps(self, report, exit_code=0):
         workflow = yaml.safe_load((ROOT / ".github/workflows/aislop.yml").read_text())
         steps = {step.get("name"): step for step in workflow["jobs"]["status"]["steps"]}
         with tempfile.TemporaryDirectory(prefix="aislop-workflow-") as temporary:
@@ -163,7 +302,6 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             env = {
                 **os.environ,
                 "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}",
-                "EVENT_NAME": event,
                 "AISLOP_TEST_REPORT": report if isinstance(report, str) else json.dumps(report),
                 "AISLOP_TEST_MISSING": str(report is None).lower(),
                 "AISLOP_TEST_EXIT": str(exit_code),
@@ -209,12 +347,31 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         config = yaml.safe_load((ROOT / ".aislop/config.yml").read_text())
         self.assertEqual(config["ci"]["failBelow"], 100)
 
-    def test_aislop_clean_report_uses_one_scan_for_each_event(self):
-        for event in ["pull_request", "push", "workflow_dispatch"]:
-            with self.subTest(event=event):
-                scan, findings = self.run_aislop_steps(self.aislop_report(), event=event)
-                self.assertEqual((scan.returncode, findings.returncode), (0, 0))
-                self.assertIn("Aislop SARIF: 0 finding(s).", findings.stdout)
+    def test_aislop_callers_and_checkout_keep_candidate_attribution(self):
+        path = ".github/workflows/aislop.yml"
+        workflow = yaml.safe_load((ROOT / path).read_text())
+        inputs = workflow.get("on", workflow.get(True))["workflow_call"]["inputs"]
+        self.assertEqual(inputs, {
+            "candidate_sha": {"type": "string", "default": ""},
+            "candidate_ref": {"type": "string", "default": ""},
+        })
+        checkout = next(step for step in workflow["jobs"]["status"]["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["ref"], "${{ inputs.candidate_sha }}")
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        pr = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())["jobs"]["aislop"]
+        self.assertEqual(pr["uses"], f"./{path}")
+        self.assertNotIn("with", pr)
+        candidate = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["aislop"]
+        self.assertEqual(candidate["uses"], f"./{path}")
+        self.assertEqual(candidate["with"], {
+            "candidate_sha": "${{ inputs.candidate_sha }}",
+            "candidate_ref": "${{ inputs.candidate_ref }}",
+        })
+
+    def test_aislop_clean_report_uses_one_scan(self):
+        scan, findings = self.run_aislop_steps(self.aislop_report())
+        self.assertEqual((scan.returncode, findings.returncode), (0, 0))
+        self.assertIn("Aislop SARIF: 0 finding(s).", findings.stdout)
 
     def test_aislop_score_and_scanner_failures_keep_their_exit_status(self):
         # A successful parser must never turn the scanner's failure into success.
@@ -238,6 +395,9 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         scan, findings = self.run_aislop_steps(self.aislop_report([skipped]))
         self.assertEqual((scan.returncode, findings.returncode), (0, 0))
         self.assertIn("required CI audit remains authoritative", findings.stderr)
+        # This exception applies only to findings; a score failure still fails quality.
+        scan, findings = self.run_aislop_steps(self.aislop_report([skipped]), exit_code=1)
+        self.assertEqual((scan.returncode, findings.returncode), (1, 0))
         for rule in ["security/dependency-audit-skipped-extra", "security/vulnerable-dependency"]:
             with self.subTest(rule=rule):
                 scan, findings = self.run_aislop_steps(self.aislop_report([skipped, self.aislop_finding(rule)]))
@@ -279,6 +439,18 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
                     "aislop.yml: one full-repository SARIF scan must preserve the CLI quality exit status",
                     "\n".join(policy({path: changed})),
                 )
+
+    def test_aislop_cli_regression_gate_and_test_are_protected(self):
+        path = ".github/workflows/ci.yml"
+        original = (ROOT / path).read_text()
+        changed = original.replace("node --test .github/scripts/aislop-cli.test.cjs", "true")
+        self.assertIn("ci.yml: pinned Aislop CLI regression tests must stay present", "\n".join(policy({path: changed})))
+        path = ".github/scripts/aislop-cli.test.cjs"
+        original = (ROOT / path).read_text()
+        self.assertIn(
+            f"{path}: release automation must match its reviewed policy",
+            "\n".join(policy({path: original + "\n// Mutated regression coverage.\n"})),
+        )
 
     def test_workflow_release_contract(self):
         main = yaml.safe_load((ROOT / MAIN).read_text())
@@ -632,7 +804,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
 
     def test_two_validation_stages_keep_artifacts_distinct(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        steps = {step.get("name"): step for step in ci["jobs"]["checks"]["steps"]}
+        steps = {step.get("name"): step for job in ci["jobs"].values() for step in job["steps"]}
         self.assertIs(steps["Gitleaks"]["env"]["GITLEAKS_ENABLE_UPLOAD_ARTIFACT"], False)
         upload = steps["Upload redacted secret scan"]
         self.assertIn("inputs.candidate_sha || github.sha", upload["with"]["name"])
