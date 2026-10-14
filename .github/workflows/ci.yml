@@ -122,7 +122,7 @@ jobs:
         run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs .github/scripts/provenance.test.cjs .github/scripts/attest-image.test.cjs
 
       - name: Install Cosign for local attestation smoke
-        uses: sigstore/cosign-installer@84205a0ae0aa7e3c3263e83062bb19d7cee28ad4
+        uses: sigstore/cosign-installer@b9c35392b7c1401bcc77d30c9b07cf4b1c7a7b07
         with:
           cosign-release: v3.1.3
 
