@@ -40,25 +40,8 @@ jobs:
       - run: npm ci
 
       - name: Aislop quality gate
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "${EVENT_NAME}" = pull_request ]; then
-            npm run aislop:ci -- --human
-          else
-            npm run aislop:ci:human
-          fi
-
-      - name: Aislop SARIF
-        if: always()
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          if [ "${EVENT_NAME}" = pull_request ]; then
-            npm run --silent aislop:ci -- --sarif > aislop.sarif
-          else
-            npm run --silent aislop:ci:sarif > aislop.sarif
-          fi
+        # Pinned aislop ci preserves its score exit status with SARIF output.
+        run: npm run --silent aislop:ci -- --sarif > aislop.sarif
 
       - name: Aislop findings gate
         if: always()
@@ -67,7 +50,24 @@ jobs:
           import { readFileSync } from 'node:fs';
 
           const sarif = JSON.parse(readFileSync('aislop.sarif', 'utf8'));
-          const allFindings = sarif.runs.flatMap((run) => run.results ?? []);
+          if (sarif?.version !== '2.1.0' || !Array.isArray(sarif.runs) || sarif.runs.length === 0 ||
+              sarif.runs.some((run) => run?.tool?.driver?.name !== 'aislop' || !Array.isArray(run.results))) {
+            throw new Error('Aislop produced an invalid SARIF report.');
+          }
+          const allFindings = sarif.runs.flatMap((run) => run.results);
+          if (allFindings.some((finding) => !finding || typeof finding.ruleId !== 'string' ||
+              finding.ruleId.length === 0 || typeof finding.message?.text !== 'string' ||
+              !['error', 'warning', 'note'].includes(finding.level))) {
+            throw new Error('Aislop produced an invalid SARIF finding.');
+          }
+          console.log(`Aislop SARIF: ${allFindings.length} finding(s).`);
+          for (const finding of allFindings) {
+            const location = finding.locations?.[0]?.physicalLocation;
+            const file = JSON.stringify(location?.artifactLocation?.uri ?? 'unknown');
+            const line = Number.isInteger(location?.region?.startLine) ? location.region.startLine : '?';
+            // Quoted strings keep multiline report text on one log line.
+            console.log(`${finding.level} ${JSON.stringify(finding.ruleId)} at ${file}:${line}: ${JSON.stringify(finding.message.text)}`);
+          }
           const ignored = allFindings.filter(
             (finding) => finding.ruleId === 'security/dependency-audit-skipped',
           );

@@ -3,9 +3,9 @@
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
-import subprocess
 import unittest
 from pathlib import Path
 
@@ -117,6 +117,169 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
 
 
 class ReleasePolicyTests(unittest.TestCase):
+    @staticmethod
+    def aislop_report(findings=None):
+        return {
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "aislop", "version": "0.18.1", "rules": []}},
+                "results": findings or [],
+            }],
+        }
+
+    @staticmethod
+    def aislop_finding(rule="test/finding", level="warning"):
+        return {
+            "ruleId": rule,
+            "level": level,
+            "message": {"text": "Finding details"},
+            "locations": [{"physicalLocation": {
+                "artifactLocation": {"uri": "src/example.js"},
+                "region": {"startLine": 7},
+            }}],
+        }
+
+    def run_aislop_steps(self, report, exit_code=0, event="pull_request"):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/aislop.yml").read_text())
+        steps = {step.get("name"): step for step in workflow["jobs"]["status"]["steps"]}
+        with tempfile.TemporaryDirectory(prefix="aislop-workflow-") as temporary:
+            directory = Path(temporary)
+            npm = directory / "npm"
+            npm.write_text("""#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+with open('invocations.jsonl', 'a') as log:
+    log.write(json.dumps(sys.argv[1:]) + '\\n')
+if os.environ['AISLOP_TEST_MISSING'] == 'true':
+    Path('aislop.sarif').unlink(missing_ok=True)
+else:
+    sys.stdout.write(os.environ['AISLOP_TEST_REPORT'])
+sys.stderr.write('scanner diagnostic\\n')
+sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
+""")
+            npm.chmod(0o755)
+            env = {
+                **os.environ,
+                "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}",
+                "EVENT_NAME": event,
+                "AISLOP_TEST_REPORT": report if isinstance(report, str) else json.dumps(report),
+                "AISLOP_TEST_MISSING": str(report is None).lower(),
+                "AISLOP_TEST_EXIT": str(exit_code),
+            }
+
+            def run_step(name):
+                # Execute only the repository's reviewed workflow shell in a fixture directory.
+                return subprocess.run(  # noqa: S603
+                    ["/bin/bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", steps[name]["run"]],
+                    cwd=directory, env=env, text=True, capture_output=True, timeout=10,
+                    check=False,
+                )
+            scan = run_step("Aislop quality gate")
+            findings = run_step("Aislop findings gate")
+            invocations = [json.loads(line) for line in (directory / "invocations.jsonl").read_text().splitlines()]
+            self.assertEqual(invocations, [["run", "--silent", "aislop:ci", "--", "--sarif"]])
+            self.assertIn("scanner diagnostic", scan.stderr)
+            if report is not None:
+                expected = report if isinstance(report, str) else json.dumps(report)
+                self.assertEqual((directory / "aislop.sarif").read_text(), expected)
+            return scan, findings
+
+    def test_aislop_single_scan_contract(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/aislop.yml").read_text())
+        steps = workflow["jobs"]["status"]["steps"]
+        scans = [step for step in steps if "aislop:ci" in step.get("run", "")]
+        self.assertEqual(len(scans), 1)
+        self.assertEqual(scans[0]["name"], "Aislop quality gate")
+        self.assertNotIn("if", scans[0])
+        self.assertFalse(scans[0].get("continue-on-error", False))
+        named = {step.get("name"): step for step in steps}
+        self.assertEqual(named["Aislop findings gate"]["if"], "always()")
+        self.assertFalse(named["Aislop findings gate"].get("continue-on-error", False))
+        upload = named["Upload Aislop SARIF"]
+        self.assertIn("always()", upload["if"])
+        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", upload["if"])
+        self.assertEqual(upload["with"], {
+            "sarif_file": "aislop.sarif",
+            "category": ".github/workflows/publish.yml:status",
+            "ref": "${{ inputs.candidate_ref }}",
+            "sha": "${{ inputs.candidate_sha }}",
+        })
+        config = yaml.safe_load((ROOT / ".aislop/config.yml").read_text())
+        self.assertEqual(config["ci"]["failBelow"], 100)
+
+    def test_aislop_clean_report_uses_one_scan_for_each_event(self):
+        for event in ["pull_request", "push", "workflow_dispatch"]:
+            with self.subTest(event=event):
+                scan, findings = self.run_aislop_steps(self.aislop_report(), event=event)
+                self.assertEqual((scan.returncode, findings.returncode), (0, 0))
+                self.assertIn("Aislop SARIF: 0 finding(s).", findings.stdout)
+
+    def test_aislop_score_and_scanner_failures_keep_their_exit_status(self):
+        # A successful parser must never turn the scanner's failure into success.
+        for exit_code in [1, 2, 127]:
+            with self.subTest(exit_code=exit_code):
+                scan, findings = self.run_aislop_steps(self.aislop_report(), exit_code)
+                self.assertEqual(scan.returncode, exit_code)
+                self.assertEqual(findings.returncode, 0)
+
+    def test_aislop_findings_fail_even_when_scanner_score_passes(self):
+        for level in ["error", "warning", "note"]:
+            with self.subTest(level=level):
+                scan, findings = self.run_aislop_steps(self.aislop_report([self.aislop_finding(level=level)]))
+                self.assertEqual((scan.returncode, findings.returncode), (0, 1))
+                self.assertIn('"src/example.js":7', findings.stdout)
+                self.assertIn("Finding details", findings.stdout)
+                self.assertIn("Aislop reported 1 finding(s): test/finding", findings.stderr)
+
+    def test_aislop_audit_exception_matches_only_its_exact_rule(self):
+        skipped = self.aislop_finding("security/dependency-audit-skipped")
+        scan, findings = self.run_aislop_steps(self.aislop_report([skipped]))
+        self.assertEqual((scan.returncode, findings.returncode), (0, 0))
+        self.assertIn("required CI audit remains authoritative", findings.stderr)
+        for rule in ["security/dependency-audit-skipped-extra", "security/vulnerable-dependency"]:
+            with self.subTest(rule=rule):
+                scan, findings = self.run_aislop_steps(self.aislop_report([skipped, self.aislop_finding(rule)]))
+                self.assertEqual((scan.returncode, findings.returncode), (0, 1))
+                self.assertIn(f"Aislop reported 1 finding(s): {rule}", findings.stderr)
+
+    def test_aislop_summary_uses_all_runs_and_keeps_report_text_on_one_line(self):
+        report = self.aislop_report([self.aislop_finding("security/dependency-audit-skipped")])
+        finding = self.aislop_finding()
+        finding["message"]["text"] = "First line\n::error::embedded report text"
+        report["runs"].extend(self.aislop_report([finding])["runs"])
+        scan, findings = self.run_aislop_steps(report)
+        self.assertEqual((scan.returncode, findings.returncode), (0, 1))
+        self.assertIn("Aislop SARIF: 2 finding(s).", findings.stdout)
+        self.assertIn("First line\\n::error::embedded report text", findings.stdout)
+        self.assertNotIn("\n::error::", findings.stdout)
+
+    def test_aislop_malformed_empty_and_missing_reports_fail_closed(self):
+        invalid_run = self.aislop_report()
+        del invalid_run["runs"][0]["results"]
+        invalid_finding = self.aislop_report([{"ruleId": "security/dependency-audit-skipped"}])
+        for report in [None, "", "{", "null", {}, {"version": "2.1.0", "runs": []}, invalid_run, invalid_finding]:
+            with self.subTest(report=report):
+                scan, findings = self.run_aislop_steps(report)
+                self.assertEqual(scan.returncode, 0)
+                self.assertNotEqual(findings.returncode, 0)
+                self.assertNotIn("Aislop SARIF:", findings.stdout)
+        scan, findings = self.run_aislop_steps("", exit_code=2)
+        self.assertEqual(scan.returncode, 2)
+        self.assertNotEqual(findings.returncode, 0)
+
+    def test_aislop_quality_command_bypasses_fail_semantic_policy(self):
+        path = ".github/workflows/aislop.yml"
+        original = (ROOT / path).read_text()
+        for command in ["aislop:ci -- --human", "aislop:ci -- --sarif || true", "aislop:ci -- --sarif --changes"]:
+            with self.subTest(command=command):
+                changed = original.replace("aislop:ci -- --sarif", command)
+                self.assertIn(
+                    "aislop.yml: one full-repository SARIF scan must preserve the CLI quality exit status",
+                    "\n".join(policy({path: changed})),
+                )
+
     def test_workflow_release_contract(self):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         events = main.get("on", main.get(True))
