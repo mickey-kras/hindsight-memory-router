@@ -314,6 +314,7 @@ if printf '%s' "$queue_response" | grep -q "$unknown_marker"; then
 fi
 read_response="$(admin_get "/admin/quarantine/items/${unknown_id}")"
 printf '%s' "$read_response" | python3 -c 'import json,sys; record=json.load(sys.stdin)["record"]; assert all(value is not None for value in record.values()); assert "bank_id" not in record and "source_bank" not in record' || fail_check "admin item returned null optional metadata"
+printf '%s\n%s\n' "$queue_response" "$read_response" | python3 -c 'import json,sys; queue=json.loads(sys.stdin.readline()); detail=json.loads(sys.stdin.readline()); summary=next(item for item in queue["items"] if item["quarantine_id"] == sys.argv[1]); assert {"encrypted", "encrypted_envelope", "source_content_sha256"}.isdisjoint(summary); assert type(summary["postpone_count"]) is int and type(summary["requarantine_count"]) is int; assert summary == {key: detail["record"][key] for key in summary}; assert isinstance(detail["encrypted"], dict) and detail["encrypted"]' "$unknown_id" || fail_check "admin queue summary differs from detail metadata or exposes ciphertext"
 if printf '%s' "$read_response" | grep -q "$unknown_marker"; then
   fail_check "admin item leaked plaintext"
 fi
@@ -405,7 +406,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 86b4c978c139b7740797f13c5b8d22931ea58163558d0530a9b5ef4948476445
+# integration-behavior-sha256: 485ef3170450b5caad34478eef60a410b3537edb7f305507793f033123f3e490
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

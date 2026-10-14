@@ -21,7 +21,7 @@ Unknown fields and invalid numbers are dropped. Invalid enums use their safe fal
 ## Events
 
 - info: `application_started`, `hindsight_readiness_recovered`, `storage_readiness_recovered`
-- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `facade_scan_failed`, `hindsight_readiness_failed`, `hindsight_request_failed`, `principal_throttled`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `storage_readiness_failed`
+- warning: `authentication_failed`, `bank_unavailable`, `configuration_warning`, `facade_scan_failed`, `hindsight_readiness_failed`, `hindsight_request_failed`, `principal_throttled`, `quarantine_placeholder_unavailable`, `quarantine_write_unavailable`, `readiness_orchestration_failed`, `storage_readiness_failed`
 - error: `application_start_failed`, `application_stop_failed`, `authentication_audit_failed`, `logging_contract_violation`, `openclaw_security_audit_failed`, `principal_concurrency_release_failed`, `principal_concurrency_unavailable`, `principal_rate_unavailable`, `quarantine_sweeper_failed`, `recall_supplemental_audit_unavailable`, `request_failed`
 - Uvicorn: `runtime_message` with a bounded `reason`; original text is dropped
 
@@ -35,7 +35,7 @@ Use `python -m memory_router` or the `memory-router` script. Direct Uvicorn CLI 
 
 - High-volume events: one per `(event, route_class, error_kind)` per minute. The next record includes `suppressed=N`.
 - Uvicorn warning/error noise: one per `reason` per minute. Critical records are never throttled.
-- Readiness log transitions require two matching observations. HTTP readiness responses use each probe result immediately.
+- Dependency readiness log transitions require two matching observations. Unexpected readiness orchestration failures emit `readiness_orchestration_failed` immediately, then use the per-category minute throttle above. HTTP readiness responses use each probe result immediately.
 - Readiness and anonymous `/version`: cache success and failure for one second; serve stale data for at most five seconds during one bounded refresh; cold concurrent callers get 503.
 - Auth failures are logged before the process-local in-memory failure gate. Only admitted invalid-token attempts are persisted.
 - Each worker maintains its own cache and throttle state.
