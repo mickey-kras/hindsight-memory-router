@@ -158,7 +158,10 @@ class ReleasePolicyTests(unittest.TestCase):
         for job in jobs.values():
             self.assertNotIn("continue-on-error", job)
             for step in job["steps"]:
-                self.assertNotIn("continue-on-error", step)
+                if step.get("id") == "build":
+                    self.assertIs(step["continue-on-error"], True)
+                else:
+                    self.assertNotIn("continue-on-error", step)
                 if step.get("uses", "").startswith("actions/checkout@"):
                     self.assertIs(step["with"]["persist-credentials"], False)
         self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in jobs["checks"]["steps"]))
@@ -506,7 +509,8 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         trusted = "type=gha,version=2,scope=router-linux-amd64-main-v1"
         pr = "type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1"
         export = ",mode=max,ignore-error=true,timeout=30s"
-        self.assertEqual(builds[0]["with"]["cache-from"].splitlines(), [pr + ",timeout=30s", trusted + ",timeout=30s"])
+        pr_import = "${{ github.head_ref == 'ci/scoped-docker-build-cache' && 'type=gha,scope' || format('type=gha,version=2,scope=router-linux-amd64-pr-{0}-v1,timeout=30s', github.event.pull_request.number) }}"
+        self.assertEqual(builds[0]["with"]["cache-from"].splitlines(), [pr_import, trusted + ",timeout=30s"])
         self.assertEqual(builds[0]["with"]["cache-to"], pr + export)
         self.assertEqual(builds[1]["with"]["cache-from"], trusted + ",timeout=30s")
         self.assertEqual(
@@ -523,7 +527,36 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             self.assertIs(build["with"]["load"], True)
             self.assertIs(build["with"]["provenance"], False)
             self.assertEqual(build["with"]["no-cache-filters"], "runtime")
-            self.assertNotIn("continue-on-error", build)
+            self.assertIs(build["continue-on-error"], True)
+
+    def test_docker_cache_failure_retries_identical_source_without_cache_and_fails_closed(self):
+        for path, job_name in [(".github/workflows/ci.yml", "container"), (MAIN, "publish")]:
+            steps = yaml.safe_load((ROOT / path).read_text())["jobs"][job_name]["steps"]
+            cached_index = next(index for index, step in enumerate(steps) if step.get("id") == "build")
+            cached = steps[cached_index]
+            fallback = steps[cached_index + 1]
+            self.assertEqual(fallback["id"], "build_uncached")
+            self.assertEqual(fallback["if"], "steps.build.outcome == 'failure'")
+            self.assertNotIn("continue-on-error", fallback)
+            self.assertEqual(fallback["uses"], cached["uses"])
+            common = {key: value for key, value in cached["with"].items() if key not in {"cache-from", "cache-to", "no-cache-filters"}}
+            self.assertEqual(fallback["with"], {**common, "no-cache": True})
+            self.assertGreater(next(index for index, step in enumerate(steps) if step.get("name") == "Default Compose smoke"), cached_index + 1)
+            cases = [{"build": {"outcome": outcome, "conclusion": "success" if outcome == "failure" else outcome}} for outcome in ["failure", "success", "skipped", "cancelled"]]
+            result = subprocess.run(
+                ["node", "-e", "const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8')); const decide = new Function('steps', 'return (' + input.condition + ')'); process.stdout.write(JSON.stringify(input.cases.map(decide)));"],
+                input=json.dumps({"condition": fallback["if"], "cases": cases}),
+                text=True, capture_output=True, check=True,
+            )
+            self.assertEqual(json.loads(result.stdout), [True, False, False, False])
+            original = (ROOT / path).read_text()
+            mutations = [
+                original.replace("if: steps.build.outcome == 'failure'", "if: steps.build.conclusion == 'failure'"),
+                original.replace("        id: build_uncached\n", "        id: build_uncached\n        continue-on-error: true\n"),
+                original.replace("          no-cache: true", "          no-cache: false"),
+            ]
+            for changed in mutations:
+                self.assertIn(f"{path}: release automation must match its reviewed policy", "\n".join(policy({path: changed})))
 
     def test_docker_cache_keeps_runtime_updates_and_image_gates_fresh(self):
         dockerfile = (ROOT / "Dockerfile").read_text()

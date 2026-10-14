@@ -269,7 +269,21 @@ decrypt_local() {
   printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i \
     -v "${input_file}:/input.json:ro" \
     hindsight-memory-router:ci \
-    python -c 'import base64,json,sys; from pathlib import Path; from memory_router.envelope import decrypt_envelope; private_key=base64.b64decode(sys.stdin.read()).decode(); value=json.loads(Path("/input.json").read_text()); print(json.dumps(decrypt_envelope(value["encrypted"], private_key), separators=(",", ":")))'
+    python -c '
+import base64,json,sys
+from pathlib import Path
+from memory_router.canonical import sha256_hex
+from memory_router.envelope import canonical_decrypted, decrypt_envelope, estimate_envelope_size
+private_key=base64.b64decode(sys.stdin.read()).decode()
+value=json.loads(Path(sys.argv[1]).read_text())
+envelope=value["encrypted"]
+decrypted=decrypt_envelope(envelope, private_key)
+assert sha256_hex(canonical_decrypted(decrypted)) == envelope["sha256"] == value["record"]["sha256"]
+wrapped_bytes=len(base64.b64decode(envelope["encryption"]["wrapped_key_b64"]))
+serialized_bytes=len(json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+assert estimate_envelope_size(decrypted, wrapped_bytes) == serialized_bytes == value["record"]["encrypted_bytes"]
+print(json.dumps(decrypted, separators=(",", ":")))
+' /input.json
 }
 
 begin_check "scoped admin tokens enforce read review and cleanup boundaries"
@@ -413,7 +427,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 42e9951e5ccdb20279cd711778fe47eeaa060d29d2df221be11f39184dcc8585
+# integration-behavior-sha256: fcdeab0572517fea58b1cec837b1af5d38ad75c3866cb9fa08eb280eb30d96ef
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

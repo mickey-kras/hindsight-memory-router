@@ -431,6 +431,8 @@ jobs:
       - uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
 
       - name: Build image once
+        id: build
+        continue-on-error: true
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
@@ -438,10 +440,34 @@ jobs:
           provenance: false
           no-cache-filters: runtime
           cache-from: |
-            type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1,timeout=30s
+            ${{ github.head_ref == 'ci/scoped-docker-build-cache' && 'type=gha,scope' || format('type=gha,version=2,scope=router-linux-amd64-pr-{0}-v1,timeout=30s', github.event.pull_request.number) }}
             type=gha,version=2,scope=router-linux-amd64-main-v1,timeout=30s
           cache-to: type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1,mode=max,ignore-error=true,timeout=30s
           tags: ${{ env.SOURCE_IMAGE }}
+
+      - name: Build image without cache after failure
+        id: build_uncached
+        if: steps.build.outcome == 'failure'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          load: true
+          provenance: false
+          no-cache: true
+          tags: ${{ env.SOURCE_IMAGE }}
+
+      - name: Verify injected cache failure used the uncached image
+        if: github.head_ref == 'ci/scoped-docker-build-cache' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          CACHED_BUILD_OUTCOME: ${{ steps.build.outcome }}
+          UNCACHED_BUILD_OUTCOME: ${{ steps.build_uncached.outcome }}
+          BENCHMARK_SOURCE_SHA: ${{ inputs.candidate_sha || github.sha }}
+        run: |
+          test "$CACHED_BUILD_OUTCOME" = failure
+          test "$UNCACHED_BUILD_OUTCOME" = success
+          test "$(git rev-parse HEAD)" = "$BENCHMARK_SOURCE_SHA"
+          printf 'BENCHMARK_GATE_IMAGE_ID=%s\n' "$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')" >> "$GITHUB_ENV"
+          printf 'BENCHMARK_SOURCE_SHA=%s\n' "$BENCHMARK_SOURCE_SHA" >> "$GITHUB_ENV"
 
       - name: Installed Python package and runtime contents
         run: |
