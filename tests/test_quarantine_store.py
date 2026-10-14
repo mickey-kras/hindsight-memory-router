@@ -65,14 +65,23 @@ class FakePostgresTx(PostgresTx):
         elif "INSERT INTO quarantine_rate_limit_events" in sql:
             events = self.state["events"]
             assert isinstance(events, list)
-            events.append((str(values[0]), int(values[1])))
-        elif "DELETE FROM quarantine_rate_limit_events WHERE bucket" in sql:
+            events.extend((bucket, int(values[0])) for bucket in values[1])
+        elif "DELETE FROM quarantine_rate_limit_events AS events" in sql:
             events = self.state["events"]
             assert isinstance(events, list)
-            bucket, cutoff = str(values[0]), int(values[1])
+            cutoffs = dict(zip(values[0], values[1], strict=True))
             self.state["events"] = [
-                event for event in events if event[0] != bucket or event[1] > cutoff
+                event for event in events if event[0] not in cutoffs or event[1] > cutoffs[event[0]]
             ]
+
+    async def fetchall(self, sql: str, params: object = None) -> list[dict[str, object]]:
+        values = tuple(params or ())  # type: ignore[arg-type]
+        events = self.state["events"]
+        assert isinstance(events, list)
+        return [
+            {"bucket": bucket, "count": sum(1 for event in events if event[0] == bucket)}
+            for bucket in values[0]
+        ]
 
     async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
         values = tuple(params or ())  # type: ignore[arg-type]

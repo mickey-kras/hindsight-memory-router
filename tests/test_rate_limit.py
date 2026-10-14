@@ -11,6 +11,7 @@ from memory_router.rate_limit import (
     Bucket,
     ConcurrencyLeaseLost,
     ConcurrencyLeaseRefreshFailed,
+    Distinct,
     InMemoryConcurrencyLimiter,
     InMemoryRateLimiter,
     PostgresConcurrencyLimiter,
@@ -265,3 +266,72 @@ async def test_in_memory_limiter_periodically_prunes_untouched_keys() -> None:
         await limiter.consume_many([Bucket(f"live-{index}", 1, 10_000)], at_ms=100)
     assert "stale" not in limiter.events
     assert "stale" not in limiter.event_windows
+
+
+@pytest.mark.asyncio
+async def test_postgres_batches_normalized_buckets_after_sorted_locks_and_database_clock() -> None:
+    tx = FakeRateLimitTx()
+    await _PostgresSession(tx, max_window_cache=[60_000]).consume_many(
+        [
+            Bucket("z", 2, 20),
+            Bucket("a", 1, 10),
+            Bucket("z", 3, 30),
+            Bucket("disabled", 0, 10),
+            Bucket("no-window", 1, 0),
+        ]
+    )
+
+    assert len(tx.executed) == 6
+    assert [params for _, params in tx.executed[:2]] == [("rate-limit:a",), ("rate-limit:z",)]
+    assert all("pg_advisory_xact_lock" in sql for sql, _ in tx.executed[:2])
+    assert "clock_timestamp" in tx.executed[2][0]
+    delete_sql, delete_params = tx.executed[3]
+    assert "unnest(?::text[],?::bigint[])" in delete_sql
+    assert "events.occurred_at_ms<=expired.cutoff" in delete_sql
+    assert delete_params == (["a", "z"], [90, 70])
+    count_sql, count_params = tx.executed[4]
+    assert "bucket=ANY(?::text[]) GROUP BY bucket" in count_sql
+    assert count_params == (["a", "z"],)
+    insert_sql, insert_params = tx.executed[5]
+    assert "unnest(?::text[])" in insert_sql
+    assert insert_params == (100, ["a", "z"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("full_bucket", ["a", "z"])
+async def test_postgres_any_full_bucket_prevents_all_event_inserts(full_bucket: str) -> None:
+    class FullBucketTx(FakeRateLimitTx):
+        async def fetchall(self, sql: str, params: object = None) -> list[dict[str, object]]:
+            await super().fetchall(sql, params)
+            return [{"bucket": full_bucket, "count": 2}]
+
+    tx = FullBucketTx()
+    with pytest.raises(HttpError) as throttled:
+        await _PostgresSession(tx).consume_many([Bucket("z", 2, 20), Bucket("a", 2, 10)], at_ms=100)
+    assert throttled.value.code == "quarantine_rate_limited"
+    assert not any("INSERT INTO" in sql for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_postgres_distinct_rejection_prevents_batched_bucket_charging() -> None:
+    class FullDistinctTx(FakeRateLimitTx):
+        async def fetchone(self, sql: str, params: object = None) -> dict[str, int] | None:
+            if "COUNT(*)" in sql:
+                return {"count": 1}
+            return await super().fetchone(sql, params)
+
+    tx = FullDistinctTx()
+    with pytest.raises(HttpError):
+        await _PostgresSession(tx).consume_many_distinct(
+            [Bucket("a", 2, 10), Bucket("z", 2, 20)],
+            [Distinct("scope", "new", 1, 10)],
+            at_ms=100,
+        )
+    assert not any("INSERT INTO" in sql for sql, _ in tx.executed)
+
+
+@pytest.mark.asyncio
+async def test_postgres_distinct_only_does_not_issue_empty_bucket_batches() -> None:
+    tx = FakeRateLimitTx()
+    await _PostgresSession(tx).consume_many_distinct([], [Distinct("s", "a", 1, 10)], at_ms=100)
+    assert not any("quarantine_rate_limit_events" in sql for sql, _ in tx.executed)

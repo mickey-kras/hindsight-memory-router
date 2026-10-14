@@ -713,8 +713,23 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             events = workflow.get("on", workflow.get(True))
             self.assertIn("RELEASE_APP_PRIVATE_KEY", events["workflow_call"]["secrets"])
         updater = yaml.safe_load((ROOT / caller["uses"]).read_text())
+        events = updater.get("on", updater.get(True))
+        self.assertEqual(events["workflow_call"]["inputs"], {
+            "refresh_mode": {"type": "string", "default": "automatic"},
+        })
+        self.assertEqual(events["workflow_dispatch"]["inputs"], {
+            "pull_number": {
+                "description": "PR number to refresh against the selected base branch",
+                "type": "string",
+                "required": True,
+            },
+        })
         self.assertEqual(updater["permissions"], {"contents": "read"})
         job = updater["jobs"]["update"]
+        self.assertEqual(job["env"], {
+            "PR_REFRESH_MODE": "${{ inputs.refresh_mode || 'manual' }}",
+            "PR_REFRESH_NUMBER": "${{ inputs.pull_number || '' }}",
+        })
         self.assertEqual(job["environment"], "release-automation")
         self.assertEqual(
             job["if"],
@@ -728,7 +743,13 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         preflight = steps["Validate updater context"]
         token = steps["Release App token"]
         self.assertLess(job["steps"].index(preflight), job["steps"].index(token))
-        self.assertIn(".validateContext(context)", preflight["with"]["script"])
+        self.assertIn(".validateContext(context, {", preflight["with"]["script"])
+        for step in [preflight, steps["Update open PR branches"]]:
+            self.assertIn(
+                "mode: process.env.PR_REFRESH_MODE, pullNumber: process.env.PR_REFRESH_NUMBER",
+                step["with"]["script"],
+            )
+            self.assertNotIn("context.payload.inputs", step["with"]["script"])
         self.assertRegex(token["uses"], r"^actions/create-github-app-token@[0-9a-f]{40}$")
         self.assertEqual(token["id"], "app")
         self.assertEqual(token["with"], {
@@ -756,8 +777,11 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         original = (ROOT / path).read_text()
         for changed in [
             original.replace("github-token: ${{ steps.app.outputs.token }}", "github-token: ${{ github.token }}"),
-            original.replace(".validateContext(context)", ".validateContext({})"),
+            original.replace(".validateContext(context, {", ".validateContext({}, {"),
             original.replace("permission-pull-requests: write", "permission-pull-requests: read"),
+            original.replace("default: automatic", "default: manual"),
+            original.replace("inputs.refresh_mode || 'manual'", "github.event_name == 'workflow_dispatch' && 'manual' || 'automatic'"),
+            original.replace("pullNumber: process.env.PR_REFRESH_NUMBER", "pullNumber: context.payload.inputs.pull_number"),
         ]:
             with self.subTest(workflow=changed):
                 self.assertNotEqual(changed, original)
