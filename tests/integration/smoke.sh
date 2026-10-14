@@ -189,6 +189,12 @@ done
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
+if [[ "$mode" == "fake" && "$router_db" == "postgres" ]]; then
+  begin_check "human login consumption and revocation are shared in PostgreSQL"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router python < tests/integration/human-auth-postgres.py
+  pass_check
+fi
+
 begin_check "authentication and network boundaries hold"
 anonymous_version_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' "${router_url}/version")"
 [[ "$anonymous_version_status" == "401" ]] || fail_check "expected unauthenticated /version 401, got ${anonymous_version_status}"

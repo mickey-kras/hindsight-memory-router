@@ -5,6 +5,9 @@ import pathlib
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "trace"}
 EXPECTED_ROUTES = {
+    "/auth/human/start": {"post"},
+    "/auth/human/exchange": {"post"},
+    "/auth/human/sign-out": {"post"},
     "/health": {"get"},
     "/health/live": {"get"},
     "/health/ready": {"get"},
@@ -68,9 +71,13 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
             "memory_router/app.py",
             "memory_router/request_dispatch.py",
             "memory_router/metrics_http.py",
+            "memory_router/human_auth.py",
         )
     )
     markers = {
+        "/auth/human/start": 'operation == "start"',
+        "/auth/human/exchange": "self.exchange(ExchangeLogin.model_validate(value))",
+        "/auth/human/sign-out": 'operation == "sign-out"',
         "/health": '@app.get("/health")',
         "/health/live": '@app.get("/health/live")',
         "/health/ready": '@app.get("/health/ready")',

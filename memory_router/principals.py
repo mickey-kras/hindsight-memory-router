@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -151,10 +151,26 @@ class PrincipalRegistryDefaults(BaseModel):
 class Principal(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    keys: list[PrincipalKey] = Field(min_length=1)
+    keys: list[PrincipalKey] = Field(default_factory=list)
     grants: list[PrincipalGrant] = Field(default_factory=list)
     limits: PrincipalLimits = Field(default_factory=PrincipalLimits)
     source: str = Field(default="application", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_credential_kind(self) -> Principal:
+        if self.source == "human":
+            allowed = {
+                SCOPE_BANK_LIST,
+                SCOPE_MEMORY_RECALL,
+                SCOPE_MEMORY_RETAIN,
+                SCOPE_MEMORY_REFLECT,
+                SCOPE_BANK_CONFIG_READ,
+            }
+            if self.keys or any(set(grant.scopes) - allowed for grant in self.grants):
+                raise ValueError("human principals require no keys and only human scopes")
+        elif not self.keys:
+            raise ValueError("application principals require at least one key")
+        return self
 
 
 class BankAccessPolicy(BaseModel):
@@ -312,11 +328,19 @@ def token_digest(secret: str) -> bytes:
 class PrincipalResolver:
     def __init__(self, registry: PrincipalRegistry) -> None:
         self.registry = registry
+        self.human_authenticate: Callable[[str], Awaitable[Authentication]] | None = None
         self._index: dict[str, tuple[str, PrincipalKey]] = {
             key.id: (principal_id, key)
             for principal_id, principal in registry.principals.items()
             for key in principal.keys
         }
+
+    async def authenticate_request(self, authorization: str | None) -> Authentication:
+        if authorization is not None and authorization.startswith("Bearer mrh_"):
+            if self.human_authenticate is None:
+                return Authentication("invalid-format")
+            return await self.human_authenticate(authorization)
+        return self.authenticate(authorization)
 
     @staticmethod
     def _merge_limit(

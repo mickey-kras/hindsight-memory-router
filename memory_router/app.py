@@ -34,6 +34,9 @@ from .config import (
 from .db import Database, PostgresDatabase, create_backend, validate_storage
 from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
+from .human_auth import HumanAuth
+from .human_auth_config import generation_for, load_human_config
+from .human_auth_store import HumanAuthStore
 from .key_wrap import SidecarWrapProvider, WrapProvider
 from .lifecycle import cleanup_result, finish_before_cancelling
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -139,6 +142,7 @@ class Runtime:
         self.sweeper: asyncio.Task[None] | None = None
         self.settings: RouterSettings | None = None
         self.principal_resolver: PrincipalResolver | None = None
+        self.human_auth: HumanAuth | None = None
         self._lifecycle_lock = asyncio.Lock()
         if settings is None:
             self._apply_request_settings(RouterSettings.model_construct())
@@ -208,6 +212,21 @@ class Runtime:
         self.principal_concurrency_limiter = (
             backend.concurrency_limiter or InMemoryConcurrencyLimiter()
         )
+        if settings.memory_router_human_auth:
+            resolver = _require_runtime(self.principal_resolver, "principal resolver")
+            human_config = load_human_config(settings.memory_router_human_auth, resolver.registry)
+            human_store = HumanAuthStore(
+                self.database, generation_for(human_config, resolver.registry)
+            )
+            await human_store.initialize()
+            self.human_auth = HumanAuth(
+                human_config,
+                human_store,
+                resolver,
+                self.principal_limiter,
+                self.principal_concurrency_limiter,
+            )
+            resolver.human_authenticate = self.human_auth.authenticate
         limits = QuarantineLimits(
             max_item_bytes=settings.quarantine_max_item_bytes,
             max_pending_items=settings.quarantine_max_pending_items,
@@ -283,6 +302,8 @@ class Runtime:
             resources.push_async_callback(self.wrap_provider.close)
         if self.hindsight:
             resources.push_async_callback(self.hindsight.close)
+        if self.human_auth:
+            resources.push_async_callback(self.human_auth.close)
         if self.sweeper:
             resources.push_async_callback(self._stop_sweeper, self.sweeper)
         try:
@@ -297,6 +318,7 @@ class Runtime:
             self.policy = None
             self.admin = None
             self.auditor = None
+            self.human_auth = None
 
     @staticmethod
     async def _stop_sweeper(sweeper: asyncio.Task[None]) -> None:
@@ -313,6 +335,8 @@ class Runtime:
             await asyncio.sleep(interval)
             at = iso_now()
             try:
+                if self.human_auth is not None:
+                    await self.human_auth.store.prune()
                 await recover_interrupted(repository, at, self.review_stale_seconds)
                 await sweep_expired(repository, at)
                 if retention_days > 0:
@@ -878,6 +902,12 @@ async def dispatch(path: str, request: Request) -> Response:
     del path
     pathname = _raw_pathname(request)
     method = request.method
+    if pathname.startswith("/auth/human/"):
+        if runtime.human_auth is None:
+            return JSONResponse(
+                {"error": "not_found"}, status_code=404, headers={"Cache-Control": "no-store"}
+            )
+        return await runtime.human_auth.dispatch(request, pathname[len("/auth/human/") :])
     admin_response = await _dispatch_admin(request, pathname, method)
     if admin_response is not None:
         return admin_response

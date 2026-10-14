@@ -16,3 +16,9 @@ Cluster mode fails startup unless both conditions are met:
 PostgreSQL supplies shared quarantine, Hindsight quota, and principal rate/concurrency state across replicas. Principal traffic fails closed with `503` if shared limit storage is unavailable. Built-in authentication-failure and admin throttling remain process-local; a shared external admin limiter is mandatory in cluster mode.
 
 Do not use SQLite for multi-replica deployment.
+
+Optional human login uses PostgreSQL for one-use exchanges, session revocation,
+and shared rate/concurrency limits. All replicas must use the same active human
+policy generation. Run `memory-router-human-auth activate` when changing that
+configuration; it invalidates prior sessions and stale replicas immediately.
+Human traffic fails closed if the shared state is unavailable or mismatched.

@@ -17,6 +17,21 @@ POST /v1/default/banks/{writer}/memories
 POST /v1/default/banks/{writer}/memories/recall
 ```
 
+Optional human authentication (`MEMORY_ROUTER_HUMAN_AUTH`):
+
+| POST endpoint | JSON request | Success response |
+| --- | --- | --- |
+| `/auth/human/start` | `redirect_uri`, `state`, `code_challenge` | `transaction_id`, `authorization_url` |
+| `/auth/human/exchange` | `transaction_id`, `code`, `state`, `code_verifier` | `token`, `token_type: "Bearer"`, `principal_id`, `grants`, `expires_at` |
+| `/auth/human/sign-out` | No body; human bearer Authorization header | `signed_out: true` |
+
+`expires_at` is an integer UNIX timestamp in seconds. Grants are `{bank, scopes}`
+objects. These endpoints return `404` when disabled; malformed requests return
+`400`/`413`, authentication failures `401`, exhausted limits `429`, and unavailable
+identity/shared storage or inactive policy `503`. All responses are `no-store`.
+Only start and exchange permit unauthenticated requests. See the
+[protocol and client requirements](../security/authentication.md#optional-human-login-protocol-contract).
+
 With `MEMORY_ROUTER_PRINCIPALS` set, `{writer}` path segments are target banks
 and each request is authorized against the principal's per-bank grants (see
 [authentication](../security/authentication.md)); `GET /v1/default/banks`
