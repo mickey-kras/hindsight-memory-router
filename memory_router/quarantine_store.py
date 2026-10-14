@@ -78,7 +78,6 @@ class QuarantineStore:
         if input_["kind"] == "security_event":
             input_ = {**input_, "dedupeKey": security_event_identity(input_)}
         quarantine_id = self._resolve_id(input_)
-        self._assert_item_size(input_, quarantine_id)
         mode = "id"
         if input_["kind"] == "recalled_memory":
             mode = "memory"
@@ -97,7 +96,7 @@ class QuarantineStore:
         snapshot = AdmissionSnapshot.capture(existing_for_charge)
         if existing_for_charge is not None:
             quarantine_id = str(existing_for_charge["quarantine_id"])
-            self._assert_item_size(input_, quarantine_id)
+        self._assert_item_size(input_, quarantine_id)
         known = self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
         self._assert_writable(input_, existing_for_charge)

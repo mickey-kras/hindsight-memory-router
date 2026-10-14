@@ -5,21 +5,23 @@ import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import SqliteDatabase, initialize_schema
-from memory_router.envelope import decrypt_envelope
+from memory_router.envelope import decrypt_envelope, estimate_envelope_size
 from memory_router.errors import HttpError
+from memory_router.key_wrap import provider_envelope_metadata
 from memory_router.policy import RouterPolicy
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import InMemoryRateLimiter
 from memory_router.repository import Capacity, QuarantineRepository
 from tests.fakes import FakeHindsight, FakeLimits, registry
 from tests.test_quarantine_concurrency import FirstBlockedWrapProvider
-from tests.test_quarantine_store import base_input, public_key
+from tests.test_quarantine_store import Limiter, base_input, public_key
 
 
 @pytest.fixture
@@ -328,3 +330,62 @@ async def test_duplicate_proof_uses_row_locked_evidence_after_a_third_admission(
     finally:
         provider.release.set()
         await asyncio.gather(first, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["retain_request", "recall_request", "recalled_memory"])
+async def test_legacy_identity_size_boundary_precedes_quota_and_wrapping(
+    repository: QuarantineRepository, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    key = public_key()
+    seed_store = QuarantineStore(key, repository, QuarantineLimits(), InMemoryRateLimiter())
+    input_ = base_input(kind, dedupeKey="legacy", sourceBank="main", sourceMemoryId="m")
+    legacy_id = "q_legacy_0123456789abcdef"
+    encrypted = await seed_store._encrypt(input_, legacy_id)
+    await repository.store(
+        seed_store._build_item(input_, legacy_id, encrypted),
+        seed_store.capacity,
+        mode="memory" if kind == "recalled_memory" else "request",
+        at=str(input_["timestamp"]),
+    )
+    provider = seed_store.wrap_provider
+
+    def size(quarantine_id: str) -> int:
+        return estimate_envelope_size(
+            seed_store._decrypted(input_, quarantine_id),
+            provider.wrapped_key_bytes,
+            key_wrap=provider.key_wrap,
+            provider=provider_envelope_metadata(provider.envelope_provider()),
+        )
+
+    actual_size = size(legacy_id)
+    assert actual_size < size(seed_store._resolve_id(input_))
+    limiter = Limiter()
+    store = QuarantineStore(key, repository, QuarantineLimits(max_item_bytes=actual_size), limiter)
+    wrap = MagicMock(wraps=store.wrap_provider.wrap)
+    monkeypatch.setattr(store.wrap_provider, "wrap", wrap)
+    lookup_name = "find_memory_state" if kind == "recalled_memory" else "find_request_state"
+    lookup = AsyncMock(wraps=getattr(repository, lookup_name))
+    monkeypatch.setattr(repository, lookup_name, lookup)
+    result = await store.put(input_)
+    assert result["quarantine_id"] == legacy_id
+    saved = await repository.get(legacy_id)
+    assert saved and saved["sha256"] == result["sha256"]
+    lookup.assert_awaited_once()
+    wrap.assert_called_once()
+    assert len(limiter.session.count_calls) == 1
+    before = saved
+    wrap.reset_mock()
+    with pytest.raises(HttpError) as oversized:
+        await store.put({**input_, "payload": {"content": "x" * actual_size}})
+    assert oversized.value.code == "quarantine_item_too_large"
+    assert lookup.await_count == 2
+    wrap.assert_not_called()
+    assert len(limiter.session.count_calls) == 1 and not limiter.session.distinct_calls
+    assert await repository.get(legacy_id) == before
+    with pytest.raises(ValueError):
+        await store.put({**input_, "payload": {"content": object()}})
+    assert lookup.await_count == 3
+    wrap.assert_not_called()
+    assert len(limiter.session.count_calls) == 1 and not limiter.session.distinct_calls
+    assert await repository.get(legacy_id) == before
