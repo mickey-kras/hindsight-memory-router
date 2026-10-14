@@ -190,6 +190,10 @@ docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 
 pass_check
 
 if [[ "$mode" == "fake" && "$router_db" == "postgres" ]]; then
+  begin_check "blocked quarantine wrapping preserves shared PostgreSQL admission and dedupe"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 30 python < tests/integration/quarantine-wrap-postgres.py
+  pass_check
+
   begin_check "human login consumption and revocation are shared in PostgreSQL"
   docker compose -p "$project" -f "$compose_file" exec -T memory-router python < tests/integration/human-auth-postgres.py
   pass_check
@@ -406,7 +410,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: f0c67870794e386c4e2d3eae8468c4cdf3245e99c3b6159c6efd3fdba06a35f8
+# integration-behavior-sha256: f43a5a4775f5c594ac6dd923bfc71412a2fda2f147b47d72e84261a67f4fb987
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

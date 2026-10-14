@@ -5,8 +5,10 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from .canonical import canonical_json, sha256_hex
 from .db import Database, Tx
 from .errors import HttpError
+from .timestamps import parse_iso
 
 SECURITY_EVENT_IDENTITY_LIMIT = 64
 
@@ -100,6 +102,37 @@ class Capacity:
     max_pending_items_per_writer: int
     max_encrypted_bytes: int
     max_pending_items_per_bank: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionSnapshot:
+    fingerprint: str | None
+
+    @classmethod
+    def capture(cls, item: dict[str, Any] | None) -> AdmissionSnapshot:
+        return cls(sha256_hex(canonical_json(item)) if item is not None else None)
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionEvidence:
+    plaintext: str
+
+    def matches(self, incoming_sha: str, existing: dict[str, Any]) -> bool:
+        if sha256_hex(self.plaintext) != incoming_sha:
+            return False
+        envelope = existing.get("encrypted")
+        if not isinstance(envelope, dict):
+            return False
+        created_at = envelope.get("created_at")
+        if not isinstance(created_at, str):
+            return False
+        try:
+            parse_iso(created_at)
+            value = json.loads(self.plaintext)
+            value["created_at"] = created_at
+            return sha256_hex(canonical_json(value)) == existing.get("sha256")
+        except (ValueError, TypeError):
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,6 +278,10 @@ class QuarantineRepository:
         async with self.db.transaction() as tx:
             return stored(await tx.fetchone(_MEMORY_SELECT, (bank_id, memory_id)))
 
+    async def find_request_state(self, dedupe_key: str) -> dict[str, Any] | None:
+        async with self.db.transaction() as tx:
+            return stored(await tx.fetchone(_REQUEST_SELECT, (dedupe_key,)))
+
     async def list_reviewable(
         self, limit: int, offset: int, at: str, filter_: QueueFilter | None = None
     ) -> list[dict[str, Any]]:
@@ -329,14 +366,47 @@ class QuarantineRepository:
             for row in rows
         ]
 
-    async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
+    async def store(
+        self,
+        item: dict[str, Any],
+        capacity: Capacity,
+        *,
+        mode: str,
+        at: str,
+        require_reviewable_request: bool = False,
+        expected_snapshot: AdmissionSnapshot | None = None,
+        incoming_evidence: AdmissionEvidence | None = None,
+    ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
+            # A review can finish after put's preflight; check its row-locked snapshot.
+            if (
+                require_reviewable_request
+                and mode == "request"
+                and existing
+                and existing["status"] not in REVIEWABLE_STATUSES
+            ):
+                raise HttpError(
+                    409,
+                    "quarantine_request_in_review",
+                    "matching quarantine request is already being reviewed",
+                )
             if existing and existing["status"] in IN_REVIEW_STATUSES:
                 raise HttpError(
                     409,
                     "quarantine_item_in_review",
                     "matching quarantine item is already being reviewed",
+                )
+            if (
+                expected_snapshot is not None
+                and existing is not None
+                and expected_snapshot != AdmissionSnapshot.capture(existing)
+                and not _same_evidence(item, existing, incoming_evidence)
+            ):
+                raise HttpError(
+                    409,
+                    "quarantine_write_stale",
+                    "matching quarantine item changed during wrapping; retry from a fresh snapshot",
                 )
             await self._assert_capacity(tx, item, existing, capacity, at)
             if existing:
@@ -574,6 +644,32 @@ class QuarantineRepository:
                 "quarantine_bank_capacity_exceeded",
                 "bank quarantine capacity is exhausted",
             )
+
+
+def _same_evidence(
+    item: dict[str, Any],
+    existing: dict[str, Any],
+    incoming_evidence: AdmissionEvidence | None,
+) -> bool:
+    same_metadata = all(
+        item.get(key) == existing.get(key)
+        for key in (
+            "quarantine_id",
+            "kind",
+            "reason",
+            "writer_id",
+            "source",
+            "source_bank",
+            "source_memory_id",
+            "source_content_sha256",
+            "dedupe_key",
+            "bank_id",
+        )
+    )
+    return same_metadata and (
+        item.get("sha256") == existing.get("sha256")
+        or (incoming_evidence is not None and incoming_evidence.matches(item["sha256"], existing))
+    )
 
 
 def _is_pending(item: dict[str, Any] | None) -> bool:
