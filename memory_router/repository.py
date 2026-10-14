@@ -295,9 +295,29 @@ class QuarantineRepository:
             for row in rows
         ]
 
-    async def store(self, item: dict[str, Any], capacity: Capacity, *, mode: str, at: str) -> None:
+    async def store(
+        self,
+        item: dict[str, Any],
+        capacity: Capacity,
+        *,
+        mode: str,
+        at: str,
+        require_reviewable_request: bool = False,
+    ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
+            # A review can finish after put's preflight; check its row-locked snapshot.
+            if (
+                require_reviewable_request
+                and mode == "request"
+                and existing
+                and existing["status"] not in REVIEWABLE_STATUSES
+            ):
+                raise HttpError(
+                    409,
+                    "quarantine_request_in_review",
+                    "matching quarantine request is already being reviewed",
+                )
             if existing and existing["status"] in IN_REVIEW_STATUSES:
                 raise HttpError(
                     409,

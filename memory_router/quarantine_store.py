@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import secrets
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from .repository import (
 from .timestamps import iso_format, parse_iso
 
 _DEDUPE_DIGEST_PREFIX_LENGTH = 48
+_MAX_CONCURRENT_WRAPS = 5
 
 
 def _deduped_id(prefix: str, key: str) -> str:
@@ -60,6 +62,8 @@ class QuarantineStore:
         self.repository = repository
         self.limits = limits
         self.rate_limiter = rate_limiter
+        # Bound provider work without borrowing shared limiter connections.
+        self._wrap_slots = asyncio.Semaphore(_MAX_CONCURRENT_WRAPS)
         self.capacity = Capacity(
             limits.max_pending_items,
             _effective_writer_limit(limits),
@@ -75,29 +79,15 @@ class QuarantineStore:
         existing_for_charge = await self.repository.get(quarantine_id)
         known = await self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
+        self._assert_writable(input_, existing_for_charge)
+
+        async with self._wrap_slots:
+            encrypted = await self._encrypt(input_, quarantine_id)
+        item = self._build_item(input_, quarantine_id, encrypted)
 
         async def operation(_session: RateLimitConsumer) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
-            if (
-                input_["kind"] in {"retain_request", "recall_request"}
-                and input_.get("dedupeKey")
-                and existing
-                and existing["status"] not in REVIEWABLE_STATUSES
-            ):
-                raise HttpError(
-                    409,
-                    "quarantine_request_in_review",
-                    "matching quarantine request is already being reviewed",
-                )
-            if existing and existing["status"] == REVIEW_IN_PROGRESS:
-                raise HttpError(
-                    409,
-                    "quarantine_item_in_review",
-                    "matching quarantine item is already being reviewed",
-                )
-
-            encrypted = await self._encrypt(input_, quarantine_id)
-            item = self._build_item(input_, quarantine_id, encrypted)
+            self._assert_writable(input_, existing)
             mode = "id"
             if input_["kind"] == "recalled_memory":
                 mode = "memory"
@@ -106,12 +96,38 @@ class QuarantineStore:
             capacity = self.capacity
             if _anonymous_auth_failure(input_):
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
-            await self.repository.store(item, capacity, mode=mode, at=input_["timestamp"])
+            await self.repository.store(
+                item,
+                capacity,
+                mode=mode,
+                at=input_["timestamp"],
+                require_reviewable_request=True,
+            )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
         return cast(
             dict[str, str], await self.rate_limiter.with_identity_lock(quarantine_id, operation)
         )
+
+    @staticmethod
+    def _assert_writable(input_: dict[str, Any], existing: dict[str, Any] | None) -> None:
+        if (
+            input_["kind"] in {"retain_request", "recall_request"}
+            and input_.get("dedupeKey")
+            and existing
+            and existing["status"] not in REVIEWABLE_STATUSES
+        ):
+            raise HttpError(
+                409,
+                "quarantine_request_in_review",
+                "matching quarantine request is already being reviewed",
+            )
+        if existing and existing["status"] == REVIEW_IN_PROGRESS:
+            raise HttpError(
+                409,
+                "quarantine_item_in_review",
+                "matching quarantine item is already being reviewed",
+            )
 
     def _decrypted(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
         decrypted: dict[str, Any] = {
