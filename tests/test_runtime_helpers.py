@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from pytest_httpx import HTTPXMock
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
 from memory_router import db as db_module
+from memory_router.db import SqliteDatabase, initialize_schema
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.maintenance import (
@@ -23,6 +25,7 @@ from memory_router.maintenance import (
     prune_events_before,
     sweep_expired,
 )
+from memory_router.repository import QuarantineRepository
 from memory_router.timestamps import parse_iso
 from tests.fakes import (
     TxContext,
@@ -210,7 +213,7 @@ def test_cleanup_params_validation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_maintenance_preview_cleanup_sweep_and_prune() -> None:
+async def test_maintenance_preview_cleanup_and_prune() -> None:
     tx = Tx(one={"count": 2, "encrypted_bytes": 9})
     assert await preview_cleanup(Repo(tx), "pending", None, None) == {
         "count": 2,
@@ -231,12 +234,106 @@ async def test_maintenance_preview_cleanup_sweep_and_prune() -> None:
         await cleanup(Repo(Tx(many=rows)), "all", None, None, 1, "now")
     assert getattr(changed.value, "code", None) == "quarantine_cleanup_changed"
 
-    expired = [{"quarantine_id": "a", "expires_at": "old"}]
-    assert await sweep_expired(Repo(Tx(dialect="postgres", many=expired)), "now") == 1
-    assert await sweep_expired(Repo(Tx(many=[])), "now") == 0
     events = [{"event_id": "1"}, {"event_id": "2"}]
     assert await prune_events_before(Repo(Tx(many=events)), "old", "now") == 2
     assert await prune_events_before(Repo(Tx(many=[])), "old", "now") == 0
+
+
+@pytest.fixture
+async def sweep_repository() -> AsyncIterator[QuarantineRepository]:
+    database = SqliteDatabase(":memory:")
+    await database.initialize()
+    try:
+        await initialize_schema(database)
+        yield QuarantineRepository(database)
+    finally:
+        await database.close()
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_deletes_only_expired_reviewable_items_and_audits_each(
+    sweep_repository: QuarantineRepository,
+) -> None:
+    at = "2026-01-02T00:00:00.000Z"
+    past = "2026-01-01T00:00:00.000Z"
+    future = "2026-01-03T00:00:00.000Z"
+    expired = {
+        "pending_expired": past,
+        "postponed_expired": past,
+        "pending_boundary": at,
+        "postponed_boundary": at,
+    }
+    survivors: list[tuple[str, str, str | None]] = [
+        ("pending_future", "pending", future),
+        ("postponed_future", "postponed", future),
+        ("pending_no_expiry", "pending", None),
+        ("postponed_no_expiry", "postponed", None),
+        ("review_in_progress", "review_in_progress", past),
+        ("review_side_effect_started", "review_side_effect_started", past),
+        ("review_side_effect_completed", "review_side_effect_completed", past),
+        ("reviewed_allowed", "reviewed_allowed", past),
+        ("reviewed_blocked", "reviewed_blocked", past),
+    ]
+    rows = [
+        ("pending_expired", "pending", past),
+        ("postponed_expired", "postponed", past),
+        ("pending_boundary", "pending", at),
+        ("postponed_boundary", "postponed", at),
+        *survivors,
+    ]
+    async with sweep_repository.db.transaction() as tx:
+        for quarantine_id, status, expires_at in rows:
+            await tx.execute(
+                "INSERT INTO quarantine_items "
+                "(quarantine_id, created_at, updated_at, kind, reason, sha256, status, expires_at) "
+                "VALUES (?, ?, ?, 'retain_request', 'suspicious_content', 'abc', ?, ?)",
+                (quarantine_id, past, past, status, expires_at),
+            )
+
+    assert await sweep_expired(sweep_repository, at) == len(expired)
+    async with sweep_repository.db.transaction() as tx:
+        remaining = await tx.fetchall(
+            "SELECT quarantine_id, status, expires_at FROM quarantine_items ORDER BY quarantine_id"
+        )
+        events = await tx.fetchall(
+            "SELECT quarantine_id, occurred_at, event_type, details "
+            "FROM quarantine_events ORDER BY quarantine_id"
+        )
+
+    assert remaining == [
+        {"quarantine_id": quarantine_id, "status": status, "expires_at": expires_at}
+        for quarantine_id, status, expires_at in sorted(survivors)
+    ]
+    assert [{**event, "details": json.loads(event["details"])} for event in events] == [
+        {
+            "quarantine_id": quarantine_id,
+            "occurred_at": at,
+            "event_type": "cleanup",
+            "details": {"reason": "expired", "expires_at": expires_at},
+        }
+        for quarantine_id, expires_at in sorted(expired.items())
+    ]
+
+    assert await sweep_expired(sweep_repository, at) == 0
+    async with sweep_repository.db.transaction() as tx:
+        assert (
+            await tx.fetchall(
+                "SELECT quarantine_id, occurred_at, event_type, details "
+                "FROM quarantine_events ORDER BY quarantine_id"
+            )
+            == events
+        )
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_locks_selected_postgres_rows() -> None:
+    tx = Tx(dialect="postgres", many=[{"quarantine_id": "a", "expires_at": "old"}])
+
+    assert await sweep_expired(Repo(tx), "now") == 1
+
+    query, params = tx.calls[0]
+    assert query.endswith(" FOR UPDATE")
+    assert params == ("now", 1000)
 
 
 @pytest.mark.asyncio
@@ -509,9 +606,16 @@ async def test_runtime_stop_and_sweep(
             raise RuntimeError("stop")
 
     monkeypatch.setattr(app_module.asyncio, "sleep", fake_sleep)
-    monkeypatch.setattr(app_module, "sweep_expired", AsyncMock(side_effect=RuntimeError("boom")))
+    at = "2026-01-02T00:00:00.000Z"
+    recover = AsyncMock()
+    sweep = AsyncMock(side_effect=RuntimeError("boom"))
+    monkeypatch.setattr(app_module, "iso_now", lambda: at)
+    monkeypatch.setattr(app_module, "recover_interrupted", recover)
+    monkeypatch.setattr(app_module, "sweep_expired", sweep)
     with pytest.raises(RuntimeError, match="stop"):
         await rt._sweep_loop(1, 0)
+    recover.assert_awaited_once_with(repo, at, rt.review_stale_seconds)
+    sweep.assert_awaited_once_with(repo, at)
     assert "quarantine_sweeper_failed" in caplog.text
 
 
