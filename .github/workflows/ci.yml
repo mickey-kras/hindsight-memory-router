@@ -119,7 +119,15 @@ jobs:
         run: node --test .github/scripts/npm-audit.test.cjs
 
       - name: Release automation tests
-        run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs
+        run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs .github/scripts/provenance.test.cjs .github/scripts/attest-image.test.cjs
+
+      - name: Install Cosign for local attestation smoke
+        uses: sigstore/cosign-installer@84205a0ae0aa7e3c3263e83062bb19d7cee28ad4
+        with:
+          cosign-release: v3.1.3
+
+      - name: Attestation CLI and registry compatibility
+        run: bash .github/scripts/attestation-smoke.sh
 
       - name: Release policy tests
         run: python3 .github/scripts/release-policy.test.py
