@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
 from .errors import HttpError
+from .lifecycle import finish_before_cancelling
 from .repository import (
     CLEANUP_FILTER_SQL,
     PENDING,
@@ -135,7 +137,9 @@ async def prune_events_before(
             else:
                 rows = await tx.fetchall(_EVENT_EXPORT_SELECT, (cutoff, BATCH_LIMIT))
                 if rows:
-                    append_event_export(export_path, rows)
+                    await finish_before_cancelling(
+                        asyncio.to_thread(append_event_export, export_path, rows)
+                    )
             for row in rows:
                 await tx.execute(
                     "DELETE FROM quarantine_events WHERE event_id=?", (row["event_id"],)
