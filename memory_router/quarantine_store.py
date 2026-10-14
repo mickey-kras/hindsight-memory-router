@@ -102,6 +102,7 @@ class QuarantineStore:
                 mode=mode,
                 at=input_["timestamp"],
                 require_reviewable_request=True,
+                reject_stale_updates=True,
             )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 

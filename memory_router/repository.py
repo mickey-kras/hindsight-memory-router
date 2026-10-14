@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from .db import Database, Tx
 from .errors import HttpError
+from .timestamps import parse_iso
 
 SECURITY_EVENT_IDENTITY_LIMIT = 64
 
@@ -303,6 +305,7 @@ class QuarantineRepository:
         mode: str,
         at: str,
         require_reviewable_request: bool = False,
+        reject_stale_updates: bool = False,
     ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
@@ -324,6 +327,8 @@ class QuarantineRepository:
                     "quarantine_item_in_review",
                     "matching quarantine item is already being reviewed",
                 )
+            if reject_stale_updates:
+                _assert_write_freshness(item, existing)
             await self._assert_capacity(tx, item, existing, capacity, at)
             if existing:
                 if _expired(existing, at):
@@ -564,6 +569,42 @@ class QuarantineRepository:
                 "quarantine_bank_capacity_exceeded",
                 "bank quarantine capacity is exhausted",
             )
+
+
+def _write_timestamp(value: Any, *, stored_item: bool = False) -> datetime:
+    try:
+        parsed = parse_iso(str(value))
+        if parsed.tzinfo is None:
+            raise ValueError("timestamp requires a timezone")
+    except ValueError as exc:
+        if stored_item:
+            raise HttpError(
+                409,
+                "quarantine_write_stale",
+                "stored quarantine timestamp cannot be compared safely",
+            ) from exc
+        raise HttpError(
+            400,
+            "invalid_quarantine_timestamp",
+            "quarantine timestamp must be an ISO timestamp with a timezone",
+        ) from exc
+    return parsed
+
+
+def _assert_write_freshness(item: dict[str, Any], existing: dict[str, Any] | None) -> None:
+    incoming = _write_timestamp(item.get("updated_at"))
+    if existing is None:
+        return
+    current = _write_timestamp(existing.get("updated_at"), stored_item=True)
+    same_evidence = item.get("sha256") == existing.get("sha256") and item.get(
+        "source_content_sha256"
+    ) == existing.get("source_content_sha256")
+    if incoming < current or (incoming == current and not same_evidence):
+        raise HttpError(
+            409,
+            "quarantine_write_stale",
+            "matching quarantine item has newer or conflicting evidence; retry with a fresh timestamp",
+        )
 
 
 def _is_pending(item: dict[str, Any] | None) -> bool:

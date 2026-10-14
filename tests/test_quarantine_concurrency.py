@@ -56,6 +56,21 @@ class BlockedWrapProvider(RsaOaepWrapProvider):
             self.active -= 1
 
 
+class FirstBlockedWrapProvider(RsaOaepWrapProvider):
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.block_next = False
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def wrap(self, dek: bytes) -> bytes:
+        if self.block_next:
+            self.block_next = False
+            self.started.set()
+            await self.release.wait()
+        return await super().wrap(dek)
+
+
 @pytest.fixture
 async def repository(tmp_path: Path) -> AsyncIterator[QuarantineRepository]:
     database = SqliteDatabase(str(tmp_path / "concurrency.db"))
@@ -295,3 +310,174 @@ async def test_active_and_waiting_wrap_cancellation_release_slots_and_keep_attem
     finally:
         provider.release.set()
         await asyncio.gather(*replacements)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("different_stores", [False, True])
+@pytest.mark.parametrize("equal_timestamps", [False, True])
+async def test_slower_wrap_cannot_overwrite_newer_recalled_evidence(
+    repository: QuarantineRepository,
+    existing: bool,
+    different_stores: bool,
+    equal_timestamps: bool,
+) -> None:
+    key = public_key()
+    provider = FirstBlockedWrapProvider(key)
+    limiter = InMemoryRateLimiter()
+    store = QuarantineStore(key, repository, QuarantineLimits(), limiter, provider)
+    peer_database = None
+    newer_store = store
+    if different_stores:
+        assert isinstance(repository.db, SqliteDatabase)
+        peer_database = SqliteDatabase(repository.db.path)
+        await peer_database.initialize()
+        newer_store = QuarantineStore(
+            key,
+            QuarantineRepository(peer_database),
+            QuarantineLimits(),
+            InMemoryRateLimiter(),
+            provider,
+        )
+
+    def evidence(digest: str, timestamp: str) -> dict[str, object]:
+        return base_input(
+            "recalled_memory",
+            sourceBank="main",
+            sourceMemoryId="m",
+            sourceContentSha256=digest,
+            payload={"content": digest},
+            timestamp=timestamp,
+        )
+
+    older_timestamp = "2026-08-09T00:00:00.000Z"
+    newer_timestamp = older_timestamp if equal_timestamps else "2026-08-10T00:00:00.000Z"
+    if existing:
+        await store.put(evidence("seed", "2026-08-08T00:00:00.000Z"))
+    provider.block_next = True
+    older = asyncio.create_task(store.put(evidence("older", older_timestamp)))
+    try:
+        await asyncio.wait_for(provider.started.wait(), 2)
+        newer = await asyncio.wait_for(newer_store.put(evidence("newer", newer_timestamp)), 2)
+        before = await repository.get(newer["quarantine_id"])
+        provider.release.set()
+        with pytest.raises(HttpError) as stale:
+            await asyncio.wait_for(older, 2)
+        assert stale.value.status == 409 and stale.value.code == "quarantine_write_stale"
+        saved = await repository.get(newer["quarantine_id"])
+        assert saved == before
+        assert saved and saved["source_content_sha256"] == "newer"
+        assert saved["sha256"] == newer["sha256"]
+        assert saved["updated_at"] == newer_timestamp
+        assert saved["requarantine_count"] == int(existing)
+        stats = await repository.stats(newer_timestamp)
+        assert stats["pending_items"] == 1 and stats["event_count"] == 1 + int(existing)
+        charge_key = "quarantine-requarantine-ops" if existing else "quarantine-writes"
+        assert limiter.events[charge_key]
+        assert not limiter.locks
+    finally:
+        provider.release.set()
+        await asyncio.gather(older, return_exceptions=True)
+        if peer_database is not None:
+            await peer_database.close()
+
+
+@pytest.mark.asyncio
+async def test_equal_timestamp_digest_conflict_keeps_first_commit_and_allows_fresh_retry(
+    repository: QuarantineRepository,
+) -> None:
+    limiter = InMemoryRateLimiter()
+    store = QuarantineStore(public_key(), repository, QuarantineLimits(), limiter)
+    original_input = base_input(
+        "recalled_memory", sourceBank="main", sourceMemoryId="m", sourceContentSha256="first"
+    )
+    first = await store.put(original_input)
+    with pytest.raises(HttpError) as conflict:
+        await store.put({**original_input, "sourceContentSha256": "second"})
+    assert conflict.value.status == 409 and conflict.value.code == "quarantine_write_stale"
+    saved = await repository.get(first["quarantine_id"])
+    assert saved and saved["source_content_sha256"] == "first" and saved["requarantine_count"] == 0
+    assert saved["sha256"] == first["sha256"]
+    repeated = await store.put(original_input)
+    assert repeated == first
+    retried = await store.put(
+        {
+            **original_input,
+            "sourceContentSha256": "second",
+            "timestamp": "2026-08-08T00:00:01.000Z",
+        }
+    )
+    saved = await repository.get(retried["quarantine_id"])
+    assert saved and saved["source_content_sha256"] == "second" and saved["requarantine_count"] == 2
+    assert len(limiter.events["quarantine-requarantine-ops"]) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("incoming_timestamp", "rejected"),
+    [
+        ("2026-08-09T01:00:00.000+02:00", True),
+        ("2026-08-09T02:00:00.000+02:00", True),
+        ("2026-08-08T23:30:00.000-01:00", False),
+    ],
+)
+async def test_freshness_compares_timestamp_instants(
+    repository: QuarantineRepository, incoming_timestamp: str, rejected: bool
+) -> None:
+    store = QuarantineStore(public_key(), repository, QuarantineLimits(), InMemoryRateLimiter())
+    original_input = base_input(
+        "recalled_memory",
+        sourceBank="main",
+        sourceMemoryId="m",
+        sourceContentSha256="first",
+        timestamp="2026-08-09T00:00:00.000Z",
+    )
+    first = await store.put(original_input)
+    replacement = {
+        **original_input,
+        "sourceContentSha256": "second",
+        "timestamp": incoming_timestamp,
+    }
+    if rejected:
+        with pytest.raises(HttpError) as stale:
+            await store.put(replacement)
+        assert stale.value.code == "quarantine_write_stale"
+    else:
+        await store.put(replacement)
+    saved = await repository.get(first["quarantine_id"])
+    assert saved and saved["source_content_sha256"] == ("first" if rejected else "second")
+    assert saved["updated_at"] == (original_input["timestamp"] if rejected else incoming_timestamp)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timestamp", ["bad", "2026-08-09T00:00:00.000"])
+async def test_malformed_write_timestamp_has_typed_error_and_keeps_attempt_charge(
+    repository: QuarantineRepository, timestamp: str
+) -> None:
+    limiter = InMemoryRateLimiter()
+    store = QuarantineStore(public_key(), repository, QuarantineLimits(), limiter)
+    with pytest.raises(HttpError) as invalid:
+        await store.put(base_input(timestamp=timestamp))
+    assert invalid.value.status == 400 and invalid.value.code == "invalid_quarantine_timestamp"
+    stats = await repository.stats("2026-08-09T00:00:00.000Z")
+    assert stats["total_items"] == stats["event_count"] == 0
+    assert len(limiter.events["quarantine-writes"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_stored_timestamp_rejects_replacement_without_mutation(
+    repository: QuarantineRepository,
+) -> None:
+    store = QuarantineStore(public_key(), repository, QuarantineLimits(), InMemoryRateLimiter())
+    original = await store.put(base_input(dedupeKey="same"))
+    async with repository.db.transaction() as tx:
+        await tx.execute(
+            "UPDATE quarantine_items SET updated_at='bad' WHERE quarantine_id=?",
+            (original["quarantine_id"],),
+        )
+    with pytest.raises(HttpError) as stale:
+        await store.put(base_input(dedupeKey="same", timestamp="2026-08-09T00:00:00.000Z"))
+    assert stale.value.status == 409 and stale.value.code == "quarantine_write_stale"
+    saved = await repository.get(original["quarantine_id"])
+    assert saved and saved["updated_at"] == "bad" and saved["requarantine_count"] == 0
+    assert saved["sha256"] == original["sha256"]

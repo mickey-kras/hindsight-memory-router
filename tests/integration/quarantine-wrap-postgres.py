@@ -10,6 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import create_backend
+from memory_router.errors import HttpError
 from memory_router.key_wrap import RsaOaepWrapProvider
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import Bucket
@@ -21,10 +22,15 @@ class BlockedWrapProvider(RsaOaepWrapProvider):
         super().__init__(key)
         self.release = asyncio.Event()
         self.started: asyncio.Queue[None] = asyncio.Queue()
+        self.block_all = True
+        self.block_next = False
 
     async def wrap(self, dek: bytes) -> bytes:
+        blocked = self.block_all or self.block_next
+        self.block_next = False
         self.started.put_nowait(None)
-        await self.release.wait()
+        if blocked:
+            await self.release.wait()
         return await super().wrap(dek)
 
 
@@ -34,6 +40,10 @@ async def verify() -> None:
     async with AsyncExitStack() as resources:
         resources.push_async_callback(backend.database.close)
         resources.push_async_callback(backend.rate_limit_database.close)
+        peer_backend = await create_backend(os.environ["QUARANTINE_DATABASE_URL"])
+        assert peer_backend.rate_limit_database is not None
+        resources.push_async_callback(peer_backend.database.close)
+        resources.push_async_callback(peer_backend.rate_limit_database.close)
         repo = QuarantineRepository(backend.database)
         key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
         pem = key.public_bytes(
@@ -42,6 +52,13 @@ async def verify() -> None:
         provider = BlockedWrapProvider(pem)
         store = QuarantineStore(
             pem, repo, QuarantineLimits(rate_limit_max=0), backend.rate_limiter, provider
+        )
+        peer_store = QuarantineStore(
+            pem,
+            QuarantineRepository(peer_backend.database),
+            QuarantineLimits(rate_limit_max=0),
+            peer_backend.rate_limiter,
+            provider,
         )
         prefix = f"wrap-smoke-{uuid.uuid4().hex}"
 
@@ -87,6 +104,46 @@ async def verify() -> None:
             assert repeated[0] == repeated[1]
             saved = await repo.get(repeated[0]["quarantine_id"])
             assert saved and saved["requarantine_count"] == 1
+            provider.block_all = False
+            for equal_timestamps in (False, True):
+                provider.release.clear()
+                provider.block_next = True
+                older_input = {
+                    **request(f"reorder-{equal_timestamps}"),
+                    "kind": "recalled_memory",
+                    "sourceBank": prefix,
+                    "sourceMemoryId": f"reorder-{equal_timestamps}",
+                    "sourceContentSha256": "older",
+                    "payload": {"content": "older"},
+                }
+                newer_input = {
+                    **older_input,
+                    "sourceContentSha256": "newer",
+                    "payload": {"content": "newer"},
+                    "timestamp": (
+                        older_input["timestamp"] if equal_timestamps else "2026-10-14T00:00:01.000Z"
+                    ),
+                }
+                older = asyncio.create_task(store.put(older_input))
+                try:
+                    await asyncio.wait_for(provider.started.get(), 5)
+                    newer = await asyncio.wait_for(peer_store.put(newer_input), 5)
+                    created.add(newer["quarantine_id"])
+                    await provider.started.get()
+                    before = await repo.get(newer["quarantine_id"])
+                    provider.release.set()
+                    try:
+                        await asyncio.wait_for(older, 5)
+                    except HttpError as exc:
+                        assert exc.status == 409 and exc.code == "quarantine_write_stale"
+                    else:
+                        raise AssertionError("older wrap replaced newer evidence")
+                    saved = await repo.get(newer["quarantine_id"])
+                    assert saved and saved == before and saved["source_content_sha256"] == "newer"
+                    assert saved["updated_at"] == newer_input["timestamp"]
+                finally:
+                    older.cancel()
+                    await asyncio.gather(older, return_exceptions=True)
         finally:
             async with backend.database.transaction(capacity_lock=True) as tx:
                 for quarantine_id in created:
