@@ -64,6 +64,7 @@ Reviewed recall approvals pin stable memory identity/content (`id` + `text`). Wh
 
 ## CI dependency trust
 
+- `build-requirements.txt` hash-locks the Python build backend separately from runtime and development dependencies. Regenerate it with `make build-requirements` when changing `build-system.requires`. Container builds install only verified backend wheels and build the project without networking or build isolation; build tools stay in the builder stage.
 - `scripts/generate_confusables_ascii.py` generates `memory_router/confusables_ascii.json` from Unicode UTS #39 17.0.0. Update the map, license, and `THIRD_PARTY_NOTICES.md` together.
 - Pebble 5.2.1 runs facade scans in replaceable workers. Published images include its notice, LGPL-3.0/GPL-3.0 text, and source URL.
 - Aislop is an exact npm dev dependency and runs through local npm scripts; Dependabot updates it.

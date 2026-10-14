@@ -66,6 +66,7 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: |
+            build-requirements.txt
             requirements.txt
             dev-requirements.txt
 
@@ -78,9 +79,22 @@ jobs:
             ui/package-lock.json
 
       - run: python -m pip install 'pip==26.2.1'
+      - name: Install verified Python build backend
+        run: python -m pip install --require-hashes --only-binary=':all:' --force-reinstall -r build-requirements.txt
       - run: python -m pip install --require-hashes -r requirements.txt
       - run: python -m pip install --require-hashes -r dev-requirements.txt
-      - run: python -m pip install --no-deps -e .
+      - run: python -m pip install --no-build-isolation --no-deps -e .
+
+      - name: Python builder lock is current
+        run: |
+          cp build-requirements.txt build-requirements.expected.txt
+          pip-compile --generate-hashes --no-reuse-hashes --strip-extras --no-header --no-annotate \
+            --allow-unsafe --only-build-deps --all-build-deps --no-build-isolation \
+            --output-file build-requirements.txt pyproject.toml
+          diff -u build-requirements.expected.txt build-requirements.txt
+
+      - name: Offline Python wheel and backend hash rejection
+        run: bash tests/integration/python-build.sh
 
       - name: Python runtime lock is current
         run: |
@@ -293,6 +307,12 @@ jobs:
           load: true
           provenance: false
           tags: ${{ env.SOURCE_IMAGE }}
+
+      - name: Installed Python package and runtime contents
+        run: |
+          docker run --rm --network none --entrypoint python \
+            --mount "type=bind,src=$PWD,dst=/source,readonly" \
+            "$SOURCE_IMAGE" -I /source/tests/integration/python-package.py /source --container
 
       - name: Default Compose smoke
         run: bash tests/integration/default-compose-smoke.sh
