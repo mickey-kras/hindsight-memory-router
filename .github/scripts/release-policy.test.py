@@ -499,6 +499,76 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         self.assertIn("--exit-code 1", steps["Trivy critical gate"]["run"])
         self.assertEqual(publish["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.quality.outputs.hindsight_image }}")
 
+    def test_docker_cache_scopes_separate_pr_writes_from_trusted_main(self):
+        ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["container"]
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        builds = [next(step for step in job["steps"] if step.get("name") == "Build image once") for job in [ci, publish]]
+        trusted = "type=gha,version=2,scope=router-linux-amd64-main-v1"
+        pr = "type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1"
+        export = ",mode=max,ignore-error=true,timeout=30s"
+        self.assertEqual(builds[0]["with"]["cache-from"].splitlines(), [pr + ",timeout=30s", trusted + ",timeout=30s"])
+        self.assertEqual(builds[0]["with"]["cache-to"], pr + export)
+        self.assertEqual(builds[1]["with"]["cache-from"], trusted + ",timeout=30s")
+        self.assertEqual(
+            builds[1]["with"]["cache-to"],
+            "${{ inputs.candidate_sha == '' && github.ref == 'refs/heads/main' && '" + trusted + export + "' || '' }}",
+        )
+        self.assertNotIn("if", builds[0])
+        self.assertEqual(builds[1]["if"], "steps.candidate.outputs.artifact == ''")
+        self.assertEqual(builds[0]["with"]["tags"], "${{ env.SOURCE_IMAGE }}")
+        self.assertEqual(builds[1]["with"]["tags"].splitlines(), ["${{ env.SOURCE_IMAGE }}", "hindsight-memory-router:ci"])
+        self.assertEqual(builds[1]["with"]["labels"], "org.opencontainers.image.revision=${{ inputs.candidate_sha || github.sha }}")
+        for build in builds:
+            self.assertEqual(build["with"]["context"], ".")
+            self.assertIs(build["with"]["load"], True)
+            self.assertIs(build["with"]["provenance"], False)
+            self.assertEqual(build["with"]["no-cache-filters"], "runtime")
+            self.assertNotIn("continue-on-error", build)
+
+    def test_docker_cache_keeps_runtime_updates_and_image_gates_fresh(self):
+        dockerfile = (ROOT / "Dockerfile").read_text()
+        runtime = re.split(r"^FROM .+ AS runtime$", dockerfile, flags=re.MULTILINE)
+        self.assertEqual(len(runtime), 2)
+        self.assertIn("RUN apk upgrade --no-cache", runtime[1])
+        for path, job_name, gate in [(".github/workflows/ci.yml", "container", "Trivy PR gate"), (MAIN, "publish", "Trivy critical gate")]:
+            job = yaml.safe_load((ROOT / path).read_text())["jobs"][job_name]
+            steps = {step.get("name"): step for step in job["steps"]}
+            for name in ["Default Compose smoke", "Fake Hindsight router-storage parity", "Real Hindsight router-storage parity", "Trivy image report", gate]:
+                self.assertNotIn("if", steps[name])
+                self.assertNotIn("continue-on-error", steps[name])
+            report = steps["Trivy image report"]["with"]
+            self.assertEqual(report["image-ref"], "${{ env.SOURCE_IMAGE }}")
+            self.assertNotEqual(report.get("cache"), "false")
+            self.assertIsNot(report.get("cache"), False)
+            self.assertEqual(steps[gate]["env"]["TRIVY_CACHE_DIR"], "${{ github.workspace }}/.cache/trivy")
+            self.assertIn('"${SOURCE_IMAGE}"', steps[gate]["run"])
+            self.assertNotRegex((ROOT / path).read_text(), r"(?i)(skip-db-update|skip-java-db-update|TRIVY_SKIP_DB_UPDATE)")
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        self.assertEqual(publish["env"]["SOURCE_IMAGE"], "ghcr.io/${{ github.repository }}:${{ inputs.candidate_sha || github.sha }}")
+        self.assertEqual(steps["Load previously tested image"]["if"], "steps.candidate.outputs.artifact != ''")
+        self.assertIn('docker tag "$SOURCE_IMAGE" hindsight-memory-router:ci', steps["Load previously tested image"]["run"])
+        self.assertIn('"$SOURCE_IMAGE"', steps["Save tested image"]["run"])
+
+    def test_docker_cache_trust_and_gate_bypasses_fail_reviewed_policy(self):
+        for path in [".github/workflows/ci.yml", MAIN]:
+            original = (ROOT / path).read_text()
+            mutations = [
+                original.replace("          no-cache-filters: runtime\n", ""),
+                original.replace("      - name: Trivy image report\n", "      - name: Trivy image report\n        if: false\n"),
+                original.replace("      - name: Default Compose smoke\n", "      - name: Default Compose smoke\n        if: false\n"),
+                original.replace("version=2", "version=1"),
+            ]
+            if path == MAIN:
+                mutations.append(original.replace("inputs.candidate_sha == '' && github.ref == 'refs/heads/main' && 'type=gha", "'type=gha"))
+                mutations.append(original.replace("cache-from: type=gha,version=2,scope=router-linux-amd64-main-v1", "cache-from: type=gha,version=2,scope=router-linux-amd64-pr-1-v1"))
+            else:
+                mutations.append(original.replace("cache-to: type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1", "cache-to: type=gha,version=2,scope=router-linux-amd64-main-v1"))
+            for changed in mutations:
+                with self.subTest(path=path):
+                    self.assertNotEqual(original, changed)
+                    self.assertIn(f"{path}: release automation must match its reviewed policy", "\n".join(policy({path: changed})))
+
     def test_dependency_review_contract(self):
         validation = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
         self.assertEqual(

@@ -436,6 +436,11 @@ jobs:
           context: .
           load: true
           provenance: false
+          no-cache-filters: runtime
+          cache-from: |
+            type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1,timeout=30s
+            type=gha,version=2,scope=router-linux-amd64-main-v1,timeout=30s
+          cache-to: type=gha,version=2,scope=router-linux-amd64-pr-${{ github.event.pull_request.number }}-v1,mode=max,ignore-error=true,timeout=30s
           tags: ${{ env.SOURCE_IMAGE }}
 
       - name: Installed Python package and runtime contents
@@ -523,3 +528,22 @@ jobs:
             --severity MEDIUM,HIGH,CRITICAL \
             --ignore-unfixed \
             "${SOURCE_IMAGE}"
+
+      - name: Measure isolated Docker cache builds
+        id: cache-benchmark
+        if: github.head_ref == 'ci/scoped-docker-build-cache' && github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 20
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          CACHE_GITHUB_TOKEN: ${{ github.token }}
+        with:
+          script: |
+            require('node:child_process').execFileSync('python3', ['.github/scripts/docker-cache-benchmark.py'], {stdio: 'inherit'});
+
+      - name: Upload Docker cache measurements
+        if: ${{ !cancelled() && (steps.cache-benchmark.outcome == 'success' || steps.cache-benchmark.outcome == 'failure') }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: docker-cache-benchmark-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/docker-cache-benchmark
+          if-no-files-found: error

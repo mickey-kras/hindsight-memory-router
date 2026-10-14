@@ -273,6 +273,9 @@ jobs:
           context: .
           load: true
           provenance: false
+          no-cache-filters: runtime
+          cache-from: type=gha,version=2,scope=router-linux-amd64-main-v1,timeout=30s
+          cache-to: ${{ inputs.candidate_sha == '' && github.ref == 'refs/heads/main' && 'type=gha,version=2,scope=router-linux-amd64-main-v1,mode=max,ignore-error=true,timeout=30s' || '' }}
           labels: org.opencontainers.image.revision=${{ inputs.candidate_sha || github.sha }}
           tags: |
             ${{ env.SOURCE_IMAGE }}
