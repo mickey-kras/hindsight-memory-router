@@ -1,9 +1,28 @@
 const ISSUER = "https://token.actions.githubusercontent.com";
 const AUDIENCE = "nobody";
 const PREDICATE_TYPE = "https://slsa.dev/provenance/v1";
+/** @typedef {"ref" | "sha" | "repository" | "event_name" | "job_workflow_ref" | "workflow_ref" | "repository_id" | "repository_owner_id" | "runner_environment" | "run_id" | "run_attempt"} ClaimName */
+/** @typedef {import("jose").JWTPayload & Record<ClaimName, string>} GitHubClaims */
+/** @typedef {{repo: {owner: string, repo: string}, ref: string, sha: string, eventName: string, runId: number}} WorkflowContext */
+/**
+ * @typedef {object} ProvenancePredicate
+ * @property {string} type
+ * @property {{buildDefinition: {
+ *   buildType: string,
+ *   externalParameters: {workflow: {ref: string, repository: string, path: string}},
+ *   internalParameters: {github: {event_name: string, repository_id: string, repository_owner_id: string, runner_environment: string}},
+ *   resolvedDependencies: {uri: string, digest: {gitCommit: string}}[]
+ * }, runDetails: {builder: {id: string}, metadata: {invocationId: string}}}} params
+ */
+/** @type {ClaimName[]} */
 const CLAIMS = ["ref", "sha", "repository", "event_name", "job_workflow_ref", "workflow_ref",
   "repository_id", "repository_owner_id", "runner_environment", "run_id", "run_attempt"];
 
+/**
+ * @param {string} token
+ * @param {import("jose").JWTVerifyGetKey} keys
+ * @returns {Promise<GitHubClaims>}
+ */
 async function verifyClaims(token, keys) {
   const { jwtVerify } = await import("jose");
   const { payload } = await jwtVerify(token, keys, {
@@ -15,14 +34,17 @@ async function verifyClaims(token, keys) {
       throw new Error(`Invalid OIDC claim: ${name}`);
     }
   }
-  return payload;
+  return /** @type {GitHubClaims} */ (payload);
 }
 
+/** @returns {Promise<import("jose").JWTVerifyGetKey>} */
 async function githubKeys() {
   const response = await fetch(`${ISSUER}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`OIDC discovery failed: ${response.status}`);
+  /** @type {unknown} */
   const config = await response.json();
-  if (config.issuer !== ISSUER || typeof config.jwks_uri !== "string" ||
+  if (typeof config !== "object" || config === null || !("issuer" in config) ||
+      config.issuer !== ISSUER || !("jwks_uri" in config) || typeof config.jwks_uri !== "string" ||
       new URL(config.jwks_uri).origin !== ISSUER) {
     throw new Error("Invalid GitHub OIDC discovery document");
   }
@@ -30,9 +52,14 @@ async function githubKeys() {
   return createRemoteJWKSet(new URL(config.jwks_uri));
 }
 
+/**
+ * @param {{core: {getIDToken(audience: string): Promise<string>}, context: WorkflowContext, keys?: import("jose").JWTVerifyGetKey}} options
+ * @returns {Promise<ProvenancePredicate>}
+ */
 async function buildProvenance({ core, context, keys }) {
   const claims = await verifyClaims(await core.getIDToken(AUDIENCE), keys || await githubKeys());
   const repository = `${context.repo.owner}/${context.repo.repo}`;
+  /** @type {Partial<Record<ClaimName, string | undefined>>} */
   const expected = {
     repository, ref: context.ref, sha: context.sha, event_name: context.eventName,
     workflow_ref: `${repository}/.github/workflows/release.yml@${context.ref}`,
