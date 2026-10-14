@@ -63,7 +63,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "unknown writer is encrypted only in quarantine database",
     frozenset(
         {"method=='POST'", "pathname=='/admin/quarantine/cleanup'"}
-    ): "bulk cleanup uses dry-run count confirmation",
+    ): "bulk cleanup validates reasons and uses dry-run count confirmation",
     frozenset(
         {"method=='GET'", "action is None"}
     ): "admin queue and item expose metadata plus ciphertext only",

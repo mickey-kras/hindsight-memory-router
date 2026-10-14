@@ -413,7 +413,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 920ae51cd4ffe109f56c3e979a168bfb786e53288160a2159376b1b14cbbe673
+# integration-behavior-sha256: f503c9357cb179855e33ae41fca4fa56253c07670826f47f0fd315c02f855f10
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -574,7 +574,18 @@ PY
   pass_check
 fi
 
-begin_check "bulk cleanup uses dry-run count confirmation"
+begin_check "bulk cleanup validates reasons and uses dry-run count confirmation"
+for cleanup_dry_run in true false; do
+  invalid_cleanup_status="$(curl --max-time 5 -sS -o "$tmp_dir/invalid-cleanup.json" -w '%{http_code}' \
+    -H "Authorization: Bearer ${admin_cleanup_token}" -H "Content-Type: application/json" \
+    -X POST "${router_url}/admin/quarantine/cleanup" \
+    -d "{\"reasons\":[\"auth_failed\",\"unknown_reason\"],\"dry_run\":${cleanup_dry_run},\"expected_count\":0}")"
+  [[ "$invalid_cleanup_status" == "400" ]] || fail_check "unknown cleanup reason was accepted"
+  python3 - "$tmp_dir/invalid-cleanup.json" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))["error"] == "invalid_cleanup"
+PY
+done
 cleanup_preview="$(admin_cleanup_post "/admin/quarantine/cleanup" '{"scope":"pending","dry_run":true}')"
 cleanup_count="$(printf '%s' "$cleanup_preview" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')"
 cleanup_result="$(admin_cleanup_post "/admin/quarantine/cleanup" "{\"scope\":\"pending\",\"dry_run\":false,\"expected_count\":${cleanup_count}}")"

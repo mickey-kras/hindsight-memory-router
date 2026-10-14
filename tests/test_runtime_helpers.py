@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import httpx
@@ -14,6 +15,7 @@ from pytest_httpx import HTTPXMock
 from memory_router import __main__ as main_module
 from memory_router import app as app_module
 from memory_router import db as db_module
+from memory_router.envelope import QuarantineReason
 from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, HindsightGatewayError
 from memory_router.maintenance import (
@@ -176,9 +178,9 @@ class Repo:
 
 
 def test_cleanup_params_validation() -> None:
-    where, params = cleanup_params("pending", ["a"], "2020")
+    where, params = cleanup_params("pending", ["auth_failed"], "2020")
     assert where == "status IN ('pending','postponed') AND reason IN (?) AND created_at < ?"
-    assert params == ["a", "2020"]
+    assert params == ["auth_failed", "2020"]
 
     where, params = cleanup_params("all", None, None)
     assert where == (
@@ -199,7 +201,7 @@ def test_cleanup_params_validation() -> None:
         cleanup_params("all", ["a", 1], None)  # type: ignore[list-item]
     assert invalid_reason_item.value.status == 400
 
-    reasons = [str(i) for i in range(7)]
+    reasons = list(get_args(QuarantineReason))[:7]
     where, params = cleanup_params("all", reasons, None)
     assert where == (
         "status NOT IN ('review_in_progress','review_side_effect_started',"
@@ -222,7 +224,7 @@ async def test_maintenance_preview_cleanup_sweep_and_prune() -> None:
         {"quarantine_id": "b", "encrypted_bytes": 5},
     ]
     tx = Tx(many=rows)
-    assert await cleanup(Repo(tx), "all", ["x"], None, 2, "now") == {
+    assert await cleanup(Repo(tx), "all", ["auth_failed"], None, 2, "now") == {
         "count": 2,
         "encrypted_bytes": 9,
     }
