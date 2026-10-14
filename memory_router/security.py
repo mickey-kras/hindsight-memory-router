@@ -466,13 +466,17 @@ def _query_scan_values(
         # Count even empty JSON against the query field budget. Decoded fields
         # share the normal query limits and cross-parameter reassembly state.
         yield key, ""
-        for _, value, is_key in _walk_strings(decoded, "query.tag_groups"):
-            try:
-                value.encode("utf-8")
-            except UnicodeEncodeError:
-                result.add(SafetyFinding("invalid_query_unicode", "span_limit"))
-                return
-            yield (value, "") if is_key else ("", value)
+        try:
+            yield from _decoded_query_values(decoded)
+        except UnicodeEncodeError:
+            result.add(SafetyFinding("invalid_query_unicode", "span_limit"))
+            return
+
+
+def _decoded_query_values(decoded: object) -> Iterator[tuple[str, str]]:
+    for _, value, is_key in _walk_strings(decoded, "query.tag_groups"):
+        value.encode("utf-8")
+        yield (value, "") if is_key else ("", value)
 
 
 def _walk_strings(
