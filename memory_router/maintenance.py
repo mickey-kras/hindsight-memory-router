@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, get_args
 
+from .envelope import QuarantineReason
 from .errors import HttpError
 from .lifecycle import finish_before_cancelling
 from .repository import (
@@ -169,6 +170,10 @@ def cleanup_params(
     selected = reasons or []
     if any(not isinstance(reason, str) for reason in selected):
         raise HttpError(400, "invalid_cleanup", "cleanup reasons must contain strings")
+    if any(reason not in get_args(QuarantineReason) for reason in selected):
+        raise HttpError(
+            400, "invalid_cleanup", "cleanup reasons must be supported quarantine reasons"
+        )
     clauses = [REVIEWABLE_FILTER_SQL if scope == PENDING else CLEANUP_FILTER_SQL]
     params: list[Any] = []
     if selected:

@@ -5,6 +5,7 @@ import hmac
 import json
 import os
 import re
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, get_args
 
 if TYPE_CHECKING:
@@ -91,7 +92,13 @@ def parse_decrypted(value: Any) -> dict[str, Any]:
     return result
 
 
-def canonical_decrypted(value: dict[str, Any]) -> str:
+@dataclass(frozen=True, slots=True)
+class _PreparedDecrypted:
+    plaintext: str
+    metadata: tuple[tuple[str, str], ...]
+
+
+def _prepare_decrypted(value: dict[str, Any]) -> _PreparedDecrypted:
     value = parse_decrypted(value)
     result: dict[str, Any] = {
         "quarantine_id": value["quarantine_id"],
@@ -102,8 +109,13 @@ def canonical_decrypted(value: dict[str, Any]) -> str:
         result["writer_id"] = value["writer_id"]
     if "source" in value:
         result["source"] = value["source"]
+    metadata = tuple(result.items())
     result["payload"] = value["payload"]
-    return canonical_json(result)
+    return _PreparedDecrypted(canonical_json(result), metadata)
+
+
+def canonical_decrypted(value: dict[str, Any]) -> str:
+    return _prepare_decrypted(value).plaintext
 
 
 def _pem_bytes(trimmed: str, *, marker: str) -> bytes:
@@ -221,10 +233,23 @@ def estimate_envelope_size(
     """Return the exact serialized size of a v1 envelope (upper bound for provider envelopes)."""
     if wrapped_key_bytes <= 0:
         raise ValueError("wrapped key size must be positive")
-    parsed = parse_decrypted(value)
-    plaintext_bytes = len(canonical_decrypted(parsed).encode("utf-8"))
+    return _estimate_prepared_envelope_size(
+        _prepare_decrypted(value), wrapped_key_bytes, key_wrap=key_wrap, provider=provider
+    )
+
+
+def _estimate_prepared_envelope_size(
+    prepared: _PreparedDecrypted,
+    wrapped_key_bytes: int,
+    *,
+    key_wrap: str = DEFAULT_KEY_WRAP,
+    provider: dict[str, Any] | None = None,
+) -> int:
+    if wrapped_key_bytes <= 0:
+        raise ValueError("wrapped key size must be positive")
+    plaintext_bytes = len(prepared.plaintext.encode("utf-8"))
     envelope = _envelope_metadata(
-        parsed,
+        dict(prepared.metadata),
         "0" * 64,
         "A" * _base64_length(wrapped_key_bytes),
         "A" * _base64_length(12),
@@ -237,8 +262,8 @@ def estimate_envelope_size(
 
 
 def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, Any]:
-    parsed = parse_decrypted(value)
-    plaintext = canonical_decrypted(parsed).encode("utf-8")
+    prepared = _prepare_decrypted(value)
+    plaintext = prepared.plaintext.encode("utf-8")
     key = AESGCM.generate_key(bit_length=256)
     iv = os.urandom(12)
     wrapped = decode_public_key(public_key_input).encrypt(
@@ -246,8 +271,8 @@ def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, A
         padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
     )
     envelope = _envelope_metadata(
-        parsed,
-        sha256_hex(plaintext.decode("utf-8")),
+        dict(prepared.metadata),
+        sha256_hex(prepared.plaintext),
         base64.b64encode(wrapped).decode("ascii"),
         base64.b64encode(iv).decode("ascii"),
     )
@@ -255,15 +280,20 @@ def create_envelope(value: dict[str, Any], public_key_input: str) -> dict[str, A
 
 
 async def create_provider_envelope(value: dict[str, Any], provider: WrapProvider) -> dict[str, Any]:
-    parsed = parse_decrypted(value)
-    plaintext = canonical_decrypted(parsed).encode("utf-8")
+    return await _create_prepared_provider_envelope(_prepare_decrypted(value), provider)
+
+
+async def _create_prepared_provider_envelope(
+    prepared: _PreparedDecrypted, provider: WrapProvider
+) -> dict[str, Any]:
+    plaintext = prepared.plaintext.encode("utf-8")
     key = AESGCM.generate_key(bit_length=256)
     iv = os.urandom(12)
     wrapped = await provider.wrap(key)
     info = provider.envelope_provider()
     envelope = _envelope_metadata(
-        parsed,
-        sha256_hex(plaintext.decode("utf-8")),
+        dict(prepared.metadata),
+        sha256_hex(prepared.plaintext),
         base64.b64encode(wrapped).decode("ascii"),
         base64.b64encode(iv).decode("ascii"),
         key_wrap=provider.key_wrap,

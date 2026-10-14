@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 
 import aiosqlite
+from psycopg import AsyncConnection
 from psycopg.rows import dict_row
+from psycopg.sql import SQL, Identifier
 from psycopg_pool import AsyncConnectionPool
 
 from .lifecycle import cleanup_result, finish_before_cancelling
@@ -21,8 +23,20 @@ from .rate_limit import (
 )
 
 CAPACITY_LOCK_ID = 72_499_123
+SCHEMA_LOCK_ID = 72_499_124
 SQLITE_PREFIX = "sqlite:"
 SQLITE_MEMORY_PATH = ":memory:"
+
+CAPACITY_INDEXES = [
+    # Partial covering indexes keep retained review decisions out of admission scans.
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_pending ON quarantine_items(status, expires_at) WHERE status IN ('pending','postponed')",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_writer ON quarantine_items(writer_id, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer'",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_unknown ON quarantine_items(reason, status, expires_at) WHERE status IN ('pending','postponed') AND reason='unknown_writer'",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_family ON quarantine_items(writer_id, kind, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer' AND writer_id IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bank ON quarantine_items(bank_id, status, expires_at) WHERE status IN ('pending','postponed') AND bank_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bytes ON quarantine_items(encrypted_bytes, status, expires_at) WHERE encrypted_bytes<>0",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_security ON quarantine_items(kind) WHERE kind='security_event'",
+]
 
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS quarantine_items (
@@ -43,15 +57,7 @@ SCHEMA = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_bank ON quarantine_items(bank_id, status, created_at) WHERE bank_id IS NOT NULL",
-    # Partial covering indexes keep retained review decisions out of admission scans.
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_pending ON quarantine_items(status, expires_at) WHERE status IN ('pending','postponed')",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_writer ON quarantine_items(writer_id, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer'",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_unknown ON quarantine_items(reason, status, expires_at) WHERE status IN ('pending','postponed') AND reason='unknown_writer'",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_family ON quarantine_items(writer_id, kind, status, expires_at, reason) WHERE status IN ('pending','postponed') AND reason <> 'unknown_writer' AND writer_id IS NULL",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bank ON quarantine_items(bank_id, status, expires_at) WHERE status IN ('pending','postponed') AND bank_id IS NOT NULL",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bytes ON quarantine_items(encrypted_bytes, status, expires_at) WHERE encrypted_bytes<>0",
-    "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_security ON quarantine_items(kind) WHERE kind='security_event'",
-]
+] + CAPACITY_INDEXES
 
 _BANK_ID_BACKFILL = (
     "UPDATE quarantine_items SET bank_id=source_bank "
@@ -257,6 +263,7 @@ class PostgresDatabase(Database):
     dialect = "postgres"
 
     def __init__(self, url: str, *, max_size: int = 5) -> None:
+        self.url = url
         self.pool = AsyncConnectionPool(
             url, min_size=1, max_size=max_size, kwargs={"row_factory": dict_row}, open=False
         )
@@ -330,6 +337,50 @@ async def create_backend(url: str) -> Backend:
 
 
 async def initialize_schema(db: Database) -> None:
+    if isinstance(db, PostgresDatabase):
+        await _initialize_postgres_schema(db)
+    else:
+        await _initialize_schema_transaction(db, SCHEMA)
+
+
+async def _initialize_postgres_schema(db: PostgresDatabase) -> None:
+    # This session owns the migration lock and is never returned to the pool.
+    connection = await AsyncConnection.connect(db.url, autocommit=True, row_factory=dict_row)
+    try:
+        tx = PostgresTx(connection)
+        # Take this before the capacity transaction: waiting replicas must not block admissions.
+        await tx.execute(f"SELECT pg_advisory_lock({SCHEMA_LOCK_ID})")
+        await _initialize_schema_transaction(db, SCHEMA[: -len(CAPACITY_INDEXES)])
+        for statement in CAPACITY_INDEXES:
+            name = statement.split(" ON ", 1)[0].rsplit(" ", 1)[1]
+            index = await tx.fetchone(
+                "SELECT i.indisvalid valid,n.nspname schema_name "
+                "FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE i.indrelid='quarantine_items'::regclass AND c.relname=?",
+                (name,),
+            )
+            if index and index["valid"]:
+                continue
+            if index:
+                # A cancelled/failed concurrent build can leave an invalid index behind.
+                await connection.execute(
+                    SQL("DROP INDEX CONCURRENTLY {}").format(
+                        Identifier(str(index["schema_name"]), name)
+                    )
+                )
+            await tx.execute(
+                statement.replace("CREATE INDEX IF NOT EXISTS", "CREATE INDEX CONCURRENTLY", 1)
+            )
+    except BaseException as error:
+        if (cleanup_error := await cleanup_result(connection.close())) is not None:
+            error.__cause__ = cleanup_error
+        raise
+    else:
+        await finish_before_cancelling(connection.close())
+
+
+async def _initialize_schema_transaction(db: Database, statements: list[str]) -> None:
     async with db.transaction(capacity_lock=True) as tx:
         await tx.execute(SCHEMA[0])
         for name, definition in (
@@ -342,7 +393,17 @@ async def initialize_schema(db: Database) -> None:
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")
                 if name == "bank_id":
                     await tx.execute(_BANK_ID_BACKFILL)
-        for statement in SCHEMA[1:]:
+        for statement in statements[1:]:
+            if tx.dialect == "postgres" and statement.startswith(
+                ("CREATE INDEX", "CREATE UNIQUE INDEX")
+            ):
+                name = statement.split(" ON ", 1)[0].rsplit(" ", 1)[1]
+                # Even IF NOT EXISTS can request a table lock; skip existing legacy indexes.
+                if await tx.fetchone(
+                    "SELECT 1 present FROM pg_indexes WHERE schemaname=current_schema() AND indexname=?",
+                    (name,),
+                ):
+                    continue
             await tx.execute(statement)
 
 

@@ -11,6 +11,9 @@
 - `dependabot/*` is the only automated exception; the native ruleset bypass is limited to Dependabot and the PR check accepts that prefix only for PRs authored by `dependabot[bot]`.
 - External fork branch names are not restricted.
 - Merge through a pull request after required checks; resolve review conversations and use squash merge. GitHub automatically deletes merged same-repository head branches. Required approving reviews are `0` while the repository has a single maintainer.
+- Base pushes automatically refresh eligible same-repository PRs only while auto-merge is enabled. Dependabot uses its scheduled native rebasing.
+- To refresh a manual PR, run the `pr branch updater` workflow on its base branch (`main` or `release/X.Y.Z`) with its `pull_number`. This refreshes only that PR and reports conflicts or update failures. Enabling auto-merge after the last base push also needs an explicit refresh or another base push.
+- Strict required checks still require the current base before merging. After a refresh, verify the new head's checks and review comments; refresh and verify again if the base advances.
 - Releases use plain SemVer tags such as `v0.10.0` on prepared release commits descending from `main`.
 - Native ruleset `Enforce release tag names` targets all tags except `v*` and enables `Restrict creations`, so non-release tag names cannot be created.
 - Native ruleset `Protect release tags` targets `v*` and enables `Restrict updates`, `Restrict deletions`, and `Block force pushes`, so release-looking tags are immutable after creation.
