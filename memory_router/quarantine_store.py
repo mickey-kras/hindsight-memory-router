@@ -17,6 +17,7 @@ from .repository import (
     PENDING,
     REVIEW_IN_PROGRESS,
     REVIEWABLE_STATUSES,
+    AdmissionSnapshot,
     Capacity,
     QuarantineRepository,
 )
@@ -76,8 +77,26 @@ class QuarantineStore:
             input_ = {**input_, "dedupeKey": security_event_identity(input_)}
         quarantine_id = self._resolve_id(input_)
         self._assert_item_size(input_, quarantine_id)
-        existing_for_charge = await self.repository.get(quarantine_id)
-        known = await self._known_identity(input_, existing_for_charge is not None)
+        mode = "id"
+        if input_["kind"] == "recalled_memory":
+            mode = "memory"
+            bank = input_.get("sourceBank")
+            memory = input_.get("sourceMemoryId")
+            existing_for_charge = (
+                await self.repository.find_memory_state(bank, memory)
+                if bank is not None and memory is not None
+                else None
+            )
+        elif input_["kind"] in {"retain_request", "recall_request"} and input_.get("dedupeKey"):
+            mode = "request"
+            existing_for_charge = await self.repository.find_request_state(input_["dedupeKey"])
+        else:
+            existing_for_charge = await self.repository.get(quarantine_id)
+        snapshot = AdmissionSnapshot.capture(existing_for_charge)
+        if existing_for_charge is not None:
+            quarantine_id = str(existing_for_charge["quarantine_id"])
+            self._assert_item_size(input_, quarantine_id)
+        known = self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
         self._assert_writable(input_, existing_for_charge)
 
@@ -88,11 +107,6 @@ class QuarantineStore:
         async def operation(_session: RateLimitConsumer) -> dict[str, str]:
             existing = await self.repository.get(quarantine_id)
             self._assert_writable(input_, existing)
-            mode = "id"
-            if input_["kind"] == "recalled_memory":
-                mode = "memory"
-            elif input_["kind"] in {"retain_request", "recall_request"} and item.get("dedupe_key"):
-                mode = "request"
             capacity = self.capacity
             if _anonymous_auth_failure(input_):
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
@@ -102,7 +116,7 @@ class QuarantineStore:
                 mode=mode,
                 at=input_["timestamp"],
                 require_reviewable_request=True,
-                reject_stale_updates=True,
+                expected_snapshot=snapshot,
             )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
@@ -197,7 +211,7 @@ class QuarantineStore:
             item["expires_at"] = iso_format(created + timedelta(days=self.limits.item_ttl_days))
         return item
 
-    async def _known_identity(self, input_: dict[str, Any], item_exists: bool) -> bool:
+    def _known_identity(self, input_: dict[str, Any], item_exists: bool) -> bool:
         if input_.get("dedupeKey") and input_["kind"] in {
             "security_event",
             "retain_request",
@@ -209,12 +223,7 @@ class QuarantineStore:
             and input_.get("sourceBank") is not None
             and input_.get("sourceMemoryId") is not None
         ):
-            return (
-                await self.repository.find_memory_state(
-                    input_["sourceBank"], input_["sourceMemoryId"]
-                )
-                is not None
-            )
+            return item_exists
         return False
 
     async def _charge(

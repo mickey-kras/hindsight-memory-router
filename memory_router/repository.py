@@ -3,12 +3,11 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
+from .canonical import canonical_json, sha256_hex
 from .db import Database, Tx
 from .errors import HttpError
-from .timestamps import parse_iso
 
 SECURITY_EVENT_IDENTITY_LIMIT = 64
 
@@ -60,6 +59,25 @@ STAT_KEYS = (
 _MEMORY_SELECT = "SELECT * FROM quarantine_items WHERE source_bank=? AND source_memory_id=?"
 _REQUEST_SELECT = "SELECT * FROM quarantine_items WHERE dedupe_key=?"
 _ID_SELECT = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
+_SUMMARY_COLUMNS = (
+    "quarantine_id",
+    "created_at",
+    "updated_at",
+    "kind",
+    "reason",
+    "writer_id",
+    "source",
+    "source_bank",
+    "source_memory_id",
+    "dedupe_key",
+    "sha256",
+    "status",
+    "postpone_count",
+    "requarantine_count",
+    "encrypted_bytes",
+    "expires_at",
+    "bank_id",
+)
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
     "WHERE status IN ('pending','postponed') "
@@ -73,6 +91,15 @@ class Capacity:
     max_pending_items_per_writer: int
     max_encrypted_bytes: int
     max_pending_items_per_bank: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionSnapshot:
+    fingerprint: str | None
+
+    @classmethod
+    def capture(cls, item: dict[str, Any] | None) -> AdmissionSnapshot:
+        return cls(sha256_hex(canonical_json(item)) if item is not None else None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,19 +245,28 @@ class QuarantineRepository:
         async with self.db.transaction() as tx:
             return stored(await tx.fetchone(_MEMORY_SELECT, (bank_id, memory_id)))
 
+    async def find_request_state(self, dedupe_key: str) -> dict[str, Any] | None:
+        async with self.db.transaction() as tx:
+            return stored(await tx.fetchone(_REQUEST_SELECT, (dedupe_key,)))
+
     async def list_reviewable(
         self, limit: int, offset: int, at: str, filter_: QueueFilter | None = None
     ) -> list[dict[str, Any]]:
         clause, params = _filter_clause(filter_) if filter_ is not None else ("", [])
         statement = (
-            "SELECT * FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "  # nosec B608  # noqa: S608
+            "SELECT "  # nosec B608  # noqa: S608
+            + ",".join(_SUMMARY_COLUMNS)
+            + " FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "
             "AND NOT(expires_at IS NOT NULL AND expires_at<=?)"
             + clause
             + " ORDER BY created_at ASC, quarantine_id ASC LIMIT ? OFFSET ?"
         )
         async with self.db.transaction() as tx:
             rows = await tx.fetchall(statement, (at, *params, limit, offset))
-        return [_summary(stored(row) or {}) for row in rows]
+        for row in rows:
+            row["postpone_count"] = int(row.get("postpone_count") or 0)
+            row["requarantine_count"] = int(row.get("requarantine_count") or 0)
+        return [_summary(row) for row in rows]
 
     async def count_reviewable(self, at: str, filter_: QueueFilter) -> int:
         clause, params = _filter_clause(filter_)
@@ -305,7 +341,7 @@ class QuarantineRepository:
         mode: str,
         at: str,
         require_reviewable_request: bool = False,
-        reject_stale_updates: bool = False,
+        expected_snapshot: AdmissionSnapshot | None = None,
     ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
@@ -327,8 +363,17 @@ class QuarantineRepository:
                     "quarantine_item_in_review",
                     "matching quarantine item is already being reviewed",
                 )
-            if reject_stale_updates:
-                _assert_write_freshness(item, existing)
+            if (
+                expected_snapshot is not None
+                and existing is not None
+                and expected_snapshot != AdmissionSnapshot.capture(existing)
+                and not _same_evidence(item, existing)
+            ):
+                raise HttpError(
+                    409,
+                    "quarantine_write_stale",
+                    "matching quarantine item changed during wrapping; retry from a fresh snapshot",
+                )
             await self._assert_capacity(tx, item, existing, capacity, at)
             if existing:
                 if _expired(existing, at):
@@ -571,40 +616,23 @@ class QuarantineRepository:
             )
 
 
-def _write_timestamp(value: Any, *, stored_item: bool = False) -> datetime:
-    try:
-        parsed = parse_iso(str(value))
-        if parsed.tzinfo is None:
-            raise ValueError("timestamp requires a timezone")
-    except ValueError as exc:
-        if stored_item:
-            raise HttpError(
-                409,
-                "quarantine_write_stale",
-                "stored quarantine timestamp cannot be compared safely",
-            ) from exc
-        raise HttpError(
-            400,
-            "invalid_quarantine_timestamp",
-            "quarantine timestamp must be an ISO timestamp with a timezone",
-        ) from exc
-    return parsed
-
-
-def _assert_write_freshness(item: dict[str, Any], existing: dict[str, Any] | None) -> None:
-    incoming = _write_timestamp(item.get("updated_at"))
-    if existing is None:
-        return
-    current = _write_timestamp(existing.get("updated_at"), stored_item=True)
-    same_evidence = item.get("sha256") == existing.get("sha256") and item.get(
-        "source_content_sha256"
-    ) == existing.get("source_content_sha256")
-    if incoming < current or (incoming == current and not same_evidence):
-        raise HttpError(
-            409,
-            "quarantine_write_stale",
-            "matching quarantine item has newer or conflicting evidence; retry with a fresh timestamp",
+def _same_evidence(item: dict[str, Any], existing: dict[str, Any]) -> bool:
+    return all(
+        item.get(key) == existing.get(key)
+        for key in (
+            "quarantine_id",
+            "sha256",
+            "kind",
+            "reason",
+            "writer_id",
+            "source",
+            "source_bank",
+            "source_memory_id",
+            "source_content_sha256",
+            "dedupe_key",
+            "bank_id",
         )
+    )
 
 
 def _is_pending(item: dict[str, Any] | None) -> bool:
@@ -652,26 +680,7 @@ def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
 
 
 def _summary(item: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "quarantine_id",
-        "created_at",
-        "updated_at",
-        "kind",
-        "reason",
-        "writer_id",
-        "source",
-        "source_bank",
-        "source_memory_id",
-        "dedupe_key",
-        "sha256",
-        "status",
-        "postpone_count",
-        "requarantine_count",
-        "encrypted_bytes",
-        "expires_at",
-        "bank_id",
-    )
-    return {key: item[key] for key in keys if item.get(key) is not None}
+    return {key: item[key] for key in _SUMMARY_COLUMNS if item.get(key) is not None}
 
 
 def is_expired(item: dict[str, Any], at: str) -> bool:

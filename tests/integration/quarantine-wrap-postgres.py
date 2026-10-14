@@ -141,6 +141,16 @@ async def verify() -> None:
                     saved = await repo.get(newer["quarantine_id"])
                     assert saved and saved == before and saved["source_content_sha256"] == "newer"
                     assert saved["updated_at"] == newer_input["timestamp"]
+                    lagging_input = {
+                        **newer_input,
+                        "timestamp": "2026-10-13T00:00:00.000Z",
+                        "sourceContentSha256": "lagging-clock-update",
+                        "payload": {"content": "subsequent genuine update"},
+                    }
+                    sequential = await asyncio.wait_for(store.put(lagging_input), 5)
+                    await provider.started.get()
+                    latest = await repo.get(sequential["quarantine_id"])
+                    assert latest and latest["source_content_sha256"] == "lagging-clock-update"
                 finally:
                     older.cancel()
                     await asyncio.gather(older, return_exceptions=True)
