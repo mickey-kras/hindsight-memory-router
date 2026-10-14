@@ -140,7 +140,8 @@ async def verify_rollback(limiter: PostgresRateLimiter) -> None:
     assert limiter.max_window_cache[0] == cache_before
     async with limiter.database.transaction() as tx:
         assert not await tx.fetchall(
-            "SELECT bucket FROM quarantine_rate_limit_events WHERE bucket LIKE 'rollback-%'"
+            "SELECT bucket FROM quarantine_rate_limit_events WHERE bucket LIKE ?",
+            ("rollback-%",),
         )
         assert not await tx.fetchall(
             "SELECT identity FROM quarantine_rate_limit_identities WHERE scope='rollback-scope'"

@@ -140,9 +140,11 @@ def store_fixture(
     repository = SimpleNamespace(
         get=AsyncMock(return_value=None),
         find_memory_state=AsyncMock(return_value=None),
+        find_request_state=AsyncMock(return_value=None),
         store=AsyncMock(),
     )
     limiter = Limiter()
+    repository.find_request_state.side_effect = repository.get
     return (
         QuarantineStore(public_key(), repository, limits or QuarantineLimits(), limiter),
         repository,
@@ -216,7 +218,7 @@ async def test_put_rejects_oversize_and_reviewed_duplicate() -> None:
     assert too_large.value.code == "quarantine_item_too_large"
 
     store, repository, _ = store_fixture()
-    repository.get.return_value = {"status": "reviewed_allowed"}
+    repository.get.return_value = {"status": "reviewed_allowed", "quarantine_id": "q"}
     with pytest.raises(HttpError) as reviewed:
         await store.put(base_input(dedupeKey="d"))
     assert reviewed.value.code == "quarantine_request_in_review"
@@ -241,7 +243,7 @@ async def test_review_in_progress_is_rejected_before_encrypt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     store, repository, _ = store_fixture()
-    repository.get.return_value = {"status": "review_in_progress"}
+    repository.get.return_value = {"status": "review_in_progress", "quarantine_id": "q"}
     encrypt = MagicMock()
     monkeypatch.setattr(store, "_encrypt", encrypt)
     with pytest.raises(HttpError) as review:
@@ -250,15 +252,14 @@ async def test_review_in_progress_is_rejected_before_encrypt(
     encrypt.assert_not_called()
 
 
-@pytest.mark.asyncio
-async def test_known_identity_variants() -> None:
-    store, repository, _ = store_fixture()
-    assert await store._known_identity(base_input("security_event", dedupeKey="x"), True)
-    repository.find_memory_state.return_value = {"status": "pending"}
-    assert await store._known_identity(
-        base_input("recalled_memory", sourceBank="main", sourceMemoryId="m"), False
-    )
-    assert not await store._known_identity(base_input("retain_request"), False)
+def test_known_identity_variants() -> None:
+    store, _, _ = store_fixture()
+    assert store._known_identity(base_input("security_event", dedupeKey="x"), True)
+    memory = base_input("recalled_memory", sourceBank="main", sourceMemoryId="m")
+    assert store._known_identity(memory, True)
+    assert not store._known_identity(memory, False)
+    assert not store._known_identity(base_input("recalled_memory"), True)
+    assert not store._known_identity(base_input("retain_request"), False)
 
 
 @pytest.mark.asyncio
@@ -312,6 +313,7 @@ async def test_oversize_preflight_preserves_rate_budget_for_bounded_placeholder(
     repository = SimpleNamespace(
         get=AsyncMock(return_value=None),
         find_memory_state=AsyncMock(return_value=None),
+        find_request_state=AsyncMock(return_value=None),
         store=AsyncMock(),
     )
     store = QuarantineStore(
@@ -361,6 +363,7 @@ async def test_postgres_rate_charge_survives_failed_quarantine_write() -> None:
     repository = SimpleNamespace(
         get=AsyncMock(return_value=None),
         find_memory_state=AsyncMock(return_value=None),
+        find_request_state=AsyncMock(return_value=None),
         store=AsyncMock(
             side_effect=HttpError(507, "quarantine_capacity_exceeded", "quarantine is full")
         ),

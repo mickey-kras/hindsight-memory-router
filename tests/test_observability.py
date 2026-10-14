@@ -807,6 +807,7 @@ def test_runtime_message_reason_mapping() -> None:
         ("quarantine_item_too_large", "payload-too-large"),
         ("quarantine_request_in_review", "conflict"),
         ("quarantine_item_in_review", "conflict"),
+        ("quarantine_write_stale", "conflict"),
     ],
 )
 def test_log_degradation_maps_code_and_preserves_writer(
