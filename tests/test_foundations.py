@@ -551,7 +551,7 @@ async def test_in_memory_rate_limiter_count_distinct_expiry_and_lock() -> None:
 
 
 class FakeTx:
-    def __init__(self, rows: list[dict[str, int] | None] | None = None) -> None:
+    def __init__(self, rows: list[dict[str, object] | None] | None = None) -> None:
         self.rows = list(rows or [])
         self.executed: list[tuple[str, tuple[object, ...] | None]] = []
 
@@ -560,14 +560,20 @@ class FakeTx:
 
     async def fetchone(
         self, sql: str, params: tuple[object, ...] | None = None
-    ) -> dict[str, int] | None:
+    ) -> dict[str, object] | None:
         self.executed.append((sql, params))
         return self.rows.pop(0) if self.rows else None
+
+    async def fetchall(
+        self, sql: str, params: tuple[object, ...] | None = None
+    ) -> list[dict[str, object]]:
+        row = await self.fetchone(sql, params)
+        return [row] if row else []
 
 
 @pytest.mark.asyncio
 async def test_postgres_rate_limiter_paths() -> None:
-    tx = FakeTx([{"count": 0}, {"count": 0}, None, {"now_ms": 100}])
+    tx = FakeTx([{"bucket": "b", "count": 0}, {"count": 0}, None, {"now_ms": 100}])
     session = _PostgresSession(tx)
     await session.consume_many_distinct(
         [Bucket("b", 2, 10), Bucket("b", 2, 10), Bucket("off", 0, 1)],
@@ -580,7 +586,7 @@ async def test_postgres_rate_limiter_paths() -> None:
     await _PostgresSession(FakeTx()).consume_many_distinct([], [])
 
     with pytest.raises(HttpError):
-        await _PostgresSession(FakeTx([{"count": 1}])).consume_many_distinct(
+        await _PostgresSession(FakeTx([{"bucket": "b", "count": 1}])).consume_many_distinct(
             [Bucket("b", 1, 10)], [], at_ms=20
         )
     with pytest.raises(HttpError):

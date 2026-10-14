@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import secrets
 from dataclasses import dataclass
@@ -10,7 +9,12 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity, security_event_identity
-from .envelope import canonical_decrypted, create_provider_envelope, estimate_envelope_size
+from .envelope import (
+    _create_prepared_provider_envelope,
+    _estimate_prepared_envelope_size,
+    _prepare_decrypted,
+    _PreparedDecrypted,
+)
 from .errors import HttpError
 from .key_wrap import RsaOaepWrapProvider, WrapProvider, provider_envelope_metadata
 from .rate_limit import Bucket, Distinct, RateLimitConsumer, RateLimiter
@@ -75,6 +79,7 @@ class QuarantineStore:
         )
 
     async def put(self, input_: dict[str, Any]) -> dict[str, str]:
+        input_ = dict(input_)
         if input_["kind"] == "security_event":
             input_ = {**input_, "dedupeKey": security_event_identity(input_)}
         quarantine_id = self._resolve_id(input_)
@@ -96,16 +101,14 @@ class QuarantineStore:
         snapshot = AdmissionSnapshot.capture(existing_for_charge)
         if existing_for_charge is not None:
             quarantine_id = str(existing_for_charge["quarantine_id"])
-        self._assert_item_size(input_, quarantine_id)
+        prepared = self._assert_item_size(input_, quarantine_id)
         known = self._known_identity(input_, existing_for_charge is not None)
         await self._charge(input_, known, self.rate_limiter)
         self._assert_writable(input_, existing_for_charge)
 
         async with self._wrap_slots:
-            evidence = AdmissionEvidence(
-                canonical_decrypted(self._decrypted(input_, quarantine_id))
-            )
-            encrypted = await self._encrypt(input_, quarantine_id, evidence=evidence)
+            evidence = AdmissionEvidence(prepared.plaintext)
+            encrypted = await self._encrypt(input_, quarantine_id, prepared=prepared)
         item = self._build_item(input_, quarantine_id, encrypted)
 
         async def operation(_session: RateLimitConsumer) -> dict[str, str]:
@@ -162,10 +165,10 @@ class QuarantineStore:
             decrypted["source"] = input_["source"]
         return decrypted
 
-    def _assert_item_size(self, input_: dict[str, Any], quarantine_id: str) -> None:
-        decrypted = self._decrypted(input_, quarantine_id)
-        encrypted_bytes = estimate_envelope_size(
-            decrypted,
+    def _assert_item_size(self, input_: dict[str, Any], quarantine_id: str) -> _PreparedDecrypted:
+        prepared = _prepare_decrypted(self._decrypted(input_, quarantine_id))
+        encrypted_bytes = _estimate_prepared_envelope_size(
+            prepared,
             self.wrap_provider.wrapped_key_bytes,
             key_wrap=self.wrap_provider.key_wrap,
             provider=provider_envelope_metadata(self.wrap_provider.envelope_provider()),
@@ -176,16 +179,17 @@ class QuarantineStore:
                 "quarantine_item_too_large",
                 "encrypted quarantine item exceeds configured size limit",
             )
+        return prepared
 
     async def _encrypt(
         self,
         input_: dict[str, Any],
         quarantine_id: str,
         *,
-        evidence: AdmissionEvidence | None = None,
+        prepared: _PreparedDecrypted | None = None,
     ) -> dict[str, Any]:
-        return await create_provider_envelope(
-            json.loads(evidence.plaintext) if evidence else self._decrypted(input_, quarantine_id),
+        return await _create_prepared_provider_envelope(
+            prepared or _prepare_decrypted(self._decrypted(input_, quarantine_id)),
             self.wrap_provider,
         )
 
