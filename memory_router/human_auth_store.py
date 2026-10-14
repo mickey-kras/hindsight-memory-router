@@ -18,9 +18,10 @@ _LOGIN_TTL_MS = 300_000
 _SESSION_TTL_MS = 3_600_000
 _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS human_auth_policy "
-    "(id INTEGER PRIMARY KEY, generation TEXT NOT NULL)",
+    "(id INTEGER PRIMARY KEY, generation TEXT NOT NULL, activation_epoch BIGINT NOT NULL DEFAULT 1)",
     "CREATE TABLE IF NOT EXISTS human_auth_logins "
-    "(transaction_id TEXT PRIMARY KEY, generation TEXT NOT NULL, state TEXT NOT NULL, "
+    "(transaction_id TEXT PRIMARY KEY, generation TEXT NOT NULL, activation_epoch BIGINT NOT NULL, "
+    "state TEXT NOT NULL, "
     "challenge TEXT NOT NULL, redirect_uri TEXT NOT NULL, nonce TEXT NOT NULL, "
     "expires_at_ms BIGINT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_human_auth_logins_expiry ON human_auth_logins(expires_at_ms)",
@@ -37,6 +38,7 @@ _SCHEMA = (
 
 @dataclass(frozen=True, slots=True)
 class LoginTransaction:
+    activation_epoch: int
     redirect_uri: str
     nonce: str = field(repr=False)
 
@@ -97,19 +99,23 @@ class HumanAuthStore:
             if check_generation:
                 await self._require_generation(tx)
 
-    async def _require_generation(self, tx: Tx) -> None:
-        row = await tx.fetchone("SELECT generation FROM human_auth_policy WHERE id=1")
+    async def _require_generation(self, tx: Tx) -> int:
+        row = await tx.fetchone(
+            "SELECT generation,activation_epoch FROM human_auth_policy WHERE id=1"
+        )
         if row is None or row["generation"] != self.generation:
             raise _unavailable()
+        return int(row["activation_epoch"])
 
-    async def require_generation(self) -> None:
+    async def require_generation(self) -> int:
         async with self.db.transaction(capacity_lock=True) as tx:
-            await self._require_generation(tx)
+            return await self._require_generation(tx)
 
     async def activate(self) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             await tx.execute(
-                "UPDATE human_auth_policy SET generation=? WHERE id=1", (self.generation,)
+                "UPDATE human_auth_policy SET generation=?,activation_epoch=activation_epoch+1 WHERE id=1",
+                (self.generation,),
             )
             await tx.execute("DELETE FROM human_auth_logins")
             # Keep unexpired rows counted against caps even after revocation.
@@ -121,7 +127,7 @@ class HumanAuthStore:
     ) -> str:
         transaction_id = secrets.token_urlsafe(32)
         async with self.db.transaction(capacity_lock=True) as tx:
-            await self._require_generation(tx)
+            activation_epoch = await self._require_generation(tx)
             now = await _now_ms(tx)
             await self._prune(tx, now)
             await self._require_session_capacity(tx, now)
@@ -130,11 +136,12 @@ class HumanAuthStore:
                 raise _capacity()
             await tx.execute(
                 "INSERT INTO human_auth_logins "
-                "(transaction_id,generation,state,challenge,redirect_uri,nonce,expires_at_ms) "
-                "VALUES(?,?,?,?,?,?,?)",
+                "(transaction_id,generation,activation_epoch,state,challenge,redirect_uri,nonce,expires_at_ms) "
+                "VALUES(?,?,?,?,?,?,?,?)",
                 (
                     transaction_id,
                     self.generation,
+                    activation_epoch,
                     state,
                     challenge,
                     redirect_uri,
@@ -148,13 +155,13 @@ class HumanAuthStore:
         self, transaction_id: str, *, state: str, challenge: str
     ) -> LoginTransaction:
         async with self.db.transaction(capacity_lock=True) as tx:
-            await self._require_generation(tx)
+            activation_epoch = await self._require_generation(tx)
             now = await _now_ms(tx)
             await self._require_session_capacity(tx, now)
             row = await tx.fetchone(
                 "SELECT state,challenge,redirect_uri,nonce FROM human_auth_logins "
-                "WHERE transaction_id=? AND generation=? AND expires_at_ms>?",
-                (transaction_id, self.generation, now),
+                "WHERE transaction_id=? AND generation=? AND activation_epoch=? AND expires_at_ms>?",
+                (transaction_id, self.generation, activation_epoch, now),
             )
             if row is None:
                 raise _invalid_login()
@@ -165,16 +172,24 @@ class HumanAuthStore:
             await tx.execute(
                 "DELETE FROM human_auth_logins WHERE transaction_id=?", (transaction_id,)
             )
-            result = LoginTransaction(str(row["redirect_uri"]), str(row["nonce"]))
+            result = LoginTransaction(activation_epoch, str(row["redirect_uri"]), str(row["nonce"]))
         return result
 
+    async def cancel_login(self, transaction_id: str) -> None:
+        async with self.db.transaction(capacity_lock=True) as tx:
+            await tx.execute(
+                "DELETE FROM human_auth_logins WHERE transaction_id=? AND generation=?",
+                (transaction_id, self.generation),
+            )
+
     async def issue(
-        self, *, principal_id: str, grants: tuple[PrincipalGrant, ...]
+        self, *, activation_epoch: int, principal_id: str, grants: tuple[PrincipalGrant, ...]
     ) -> IssuedSession:
         key_id, secret = secrets.token_hex(16), secrets.token_hex(32)
         digest = hashlib.sha256(secret.encode("ascii")).hexdigest()
         async with self.db.transaction(capacity_lock=True) as tx:
-            await self._require_generation(tx)
+            if await self._require_generation(tx) != activation_epoch:
+                raise _invalid_login()
             now = await _now_ms(tx)
             await self._prune(tx, now)
             row = await tx.fetchone(

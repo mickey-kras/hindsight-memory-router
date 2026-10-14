@@ -33,18 +33,34 @@ async def verify() -> None:
         )
         assert sum(not isinstance(result, BaseException) for result in results) == 1
         grants = (PrincipalGrant(bank="smoke", scopes=["memory.recall"]),)
-        issued = await first.issue(principal_id="human-smoke", grants=grants)
+        issued = await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-smoke",
+            grants=grants,
+        )
         secret = issued.token.split("_")[2]
         assert await second.authenticate(issued.key_id, secret) is not None
         await first.revoke(issued.key_id)
         assert await second.authenticate(issued.key_id, secret) is None
         # Unexpired revoked sessions still count, including across two independent pools.
         for _ in range(18):
-            issued = await first.issue(principal_id="human-smoke", grants=grants)
+            issued = await first.issue(
+                activation_epoch=await first.require_generation(),
+                principal_id="human-smoke",
+                grants=grants,
+            )
             await second.revoke(issued.key_id)
         results = await asyncio.gather(
-            first.issue(principal_id="human-smoke", grants=grants),
-            second.issue(principal_id="human-smoke", grants=grants),
+            first.issue(
+                activation_epoch=await first.require_generation(),
+                principal_id="human-smoke",
+                grants=grants,
+            ),
+            second.issue(
+                activation_epoch=await second.require_generation(),
+                principal_id="human-smoke",
+                grants=grants,
+            ),
             return_exceptions=True,
         )
         assert (
@@ -55,7 +71,7 @@ async def verify() -> None:
         await replacement.activate()
         for operation in (
             first.require_generation(),
-            first.issue(principal_id="human-other", grants=grants),
+            first.issue(activation_epoch=1, principal_id="human-other", grants=grants),
             first.authenticate(issued.key_id, secret),
         ):
             try:

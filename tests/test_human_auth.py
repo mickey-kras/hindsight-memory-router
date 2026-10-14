@@ -319,9 +319,109 @@ async def test_provider_concurrency_is_bounded(
             "start",
         )
         assert response.status_code == 429 and running == 8
+        async with service.store.db.transaction() as tx:
+            assert await tx.fetchone("SELECT COUNT(*) AS n FROM human_auth_logins") == {"n": 8}
     finally:
         release.set()
         await asyncio.gather(*pending)
+
+
+@pytest.mark.parametrize("cycle_policy", [False, True])
+async def test_policy_activation_during_verified_exchange_requires_fresh_login(
+    service: HumanAuth,
+    provider: Provider,
+    cycle_policy: bool,
+) -> None:
+    login = await start(service, provider)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def paused_provider(incoming: httpx.Request) -> httpx.Response:
+        if incoming.url.path == "/token":
+            entered.set()
+            await release.wait()
+        return provider.respond(incoming)
+
+    await service.oidc.client.aclose()
+    service.oidc.client = httpx.AsyncClient(transport=httpx.MockTransport(paused_provider))
+    pending = asyncio.create_task(service.exchange(login))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        if cycle_policy:
+            other = HumanAuthStore(service.store.db, hashlib.sha256(b"other-policy").hexdigest())
+            await other.initialize(check_generation=False)
+            await other.activate()
+        await service.store.activate()
+        release.set()
+        with pytest.raises(HttpError) as failure:
+            await pending
+        assert failure.value.status == 401
+        assert failure.value.code == "human_login_required"
+        async with service.store.db.transaction() as tx:
+            assert await tx.fetchone("SELECT COUNT(*) AS n FROM human_auth_sessions") == {"n": 0}
+        issued = await service.exchange(await start(service, provider))
+        assert (await service.authenticate("Bearer " + str(issued["token"]))).session is not None
+    finally:
+        release.set()
+        if not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize("endpoint", ["/.well-known/openid-configuration", "/token", "/jwks"])
+@pytest.mark.parametrize("status", [429, 500, 503])
+async def test_provider_failures_are_unavailability(
+    service: HumanAuth,
+    provider: Provider,
+    endpoint: str,
+    status: int,
+) -> None:
+    login = await start(service, provider)
+
+    def failed_provider(incoming: httpx.Request) -> httpx.Response:
+        if incoming.url.path == endpoint:
+            return httpx.Response(status, json={"error": "private-provider-detail"})
+        return provider.respond(incoming)
+
+    await service.oidc.client.aclose()
+    service.oidc.client = httpx.AsyncClient(transport=httpx.MockTransport(failed_provider))
+    response = await service.dispatch(
+        request("POST", "/auth/human/exchange", body=login.model_dump()), "exchange"
+    )
+    assert response.status_code == 503
+    assert json.loads(response.body)["error"] == "human_identity_unavailable"
+    assert b"private-provider-detail" not in response.body
+
+
+async def test_failed_start_removes_unreturned_transaction(
+    service: HumanAuth, provider: Provider
+) -> None:
+    provider.metadata_changes = {"issuer": "https://untrusted.example"}
+    response = await service.dispatch(
+        request(
+            "POST",
+            "/auth/human/start",
+            body={
+                "redirect_uri": REDIRECT,
+                "state": STATE,
+                "code_challenge": CHALLENGE,
+            },
+        ),
+        "start",
+    )
+    assert response.status_code == 401
+    async with service.store.db.transaction() as tx:
+        assert await tx.fetchone("SELECT COUNT(*) AS n FROM human_auth_logins") == {"n": 0}
+
+
+async def test_invalid_authorization_code_remains_authentication_failure(
+    service: HumanAuth, provider: Provider
+) -> None:
+    login = await start(service, provider)
+    provider.status = 400
+    response = await service.dispatch(
+        request("POST", "/auth/human/exchange", body=login.model_dump()), "exchange"
+    )
+    assert response.status_code == 401
 
 
 async def test_pair_intersection_and_current_bank_policy(

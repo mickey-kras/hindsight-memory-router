@@ -109,7 +109,9 @@ async def test_sessions_digest_grant_pairs_revocation_and_expiry(
     stores: tuple[HumanAuthStore, HumanAuthStore],
 ) -> None:
     first, second = stores
-    issued = await first.issue(principal_id="human-test", grants=GRANTS)
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
     prefix, key_id, secret = issued.token.split("_")
     assert prefix == "mrh" and len(key_id) == 32 and len(secret) == 64
     assert secret not in repr(issued)
@@ -124,7 +126,9 @@ async def test_sessions_digest_grant_pairs_revocation_and_expiry(
     assert await second.authenticate("unknown", secret) is None
     await first.revoke(key_id)
     assert await second.authenticate(key_id, secret) is None
-    issued = await first.issue(principal_id="human-test", grants=GRANTS)
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
     await set_expired(first.db, "sessions")
     assert await second.authenticate(issued.key_id, issued.token.split("_")[2]) is None
 
@@ -134,7 +138,9 @@ async def test_activation_blocks_stale_replica_and_never_resurrects_sessions(
 ) -> None:
     first, second = stores
     transaction = await login(first)
-    issued = await first.issue(principal_id="human-test", grants=GRANTS)
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
     new = HumanAuthStore(second.db, "generation-b")
     with pytest.raises(HttpError) as rejected:
         await new.initialize()
@@ -146,7 +152,7 @@ async def test_activation_blocks_stale_replica_and_never_resurrects_sessions(
         first.require_generation(),
         login(first),
         first.claim_login(transaction, state="s" * 43, challenge="c" * 43),
-        first.issue(principal_id="human-test", grants=GRANTS),
+        first.issue(activation_epoch=1, principal_id="human-test", grants=GRANTS),
         first.authenticate(issued.key_id, issued.token.split("_")[2]),
     ):
         with pytest.raises(HttpError) as stale:
@@ -163,16 +169,30 @@ async def test_revocation_cannot_bypass_per_principal_cap(
 ) -> None:
     first, second = stores
     for _ in range(19):
-        issued = await first.issue(principal_id="human-test", grants=GRANTS)
+        issued = await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        )
         await second.revoke(issued.key_id)
     results = await asyncio.gather(
-        first.issue(principal_id="human-test", grants=GRANTS),
-        second.issue(principal_id="human-test", grants=GRANTS),
+        first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        ),
+        second.issue(
+            activation_epoch=await second.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        ),
         return_exceptions=True,
     )
     assert sum(isinstance(result, HttpError) and result.status == 429 for result in results) == 1
     await set_expired(first.db, "sessions")
-    await second.issue(principal_id="human-test", grants=GRANTS)
+    await second.issue(
+        activation_epoch=await second.require_generation(), principal_id="human-test", grants=GRANTS
+    )
 
 
 async def test_global_caps_and_prune(stores: tuple[HumanAuthStore, HumanAuthStore]) -> None:
@@ -180,8 +200,8 @@ async def test_global_caps_and_prune(stores: tuple[HumanAuthStore, HumanAuthStor
     async with first.db.transaction() as tx:
         for index in range(1000):
             await tx.execute(
-                "INSERT INTO human_auth_logins VALUES(?,?,?,?,?,?,?)",
-                (str(index), "generation-a", "s", "c", "uri", "nonce", 9_999_999_999_999),
+                "INSERT INTO human_auth_logins VALUES(?,?,?,?,?,?,?,?)",
+                (str(index), "generation-a", 1, "s", "c", "uri", "nonce", 9_999_999_999_999),
             )
     with pytest.raises(HttpError) as full:
         await login(second)
@@ -195,7 +215,9 @@ async def test_global_caps_and_prune(stores: tuple[HumanAuthStore, HumanAuthStor
                 (str(index), "generation-a", str(index), "digest", "[]", 9_999_999_999_999, 1),
             )
     with pytest.raises(HttpError) as full:
-        await second.issue(principal_id="other", grants=GRANTS)
+        await second.issue(
+            activation_epoch=await second.require_generation(), principal_id="other", grants=GRANTS
+        )
     assert full.value.status == 429
     for action in (
         login(second),
@@ -205,4 +227,56 @@ async def test_global_caps_and_prune(stores: tuple[HumanAuthStore, HumanAuthStor
             await action
         assert admission.value.status == 429
     await set_expired(first.db, "sessions")
-    await second.issue(principal_id="other", grants=GRANTS)
+    await second.issue(
+        activation_epoch=await second.require_generation(), principal_id="other", grants=GRANTS
+    )
+
+
+@pytest.mark.parametrize("restore_config", [False, True])
+async def test_activation_invalidates_inflight_exchange(
+    stores: tuple[HumanAuthStore, HumanAuthStore], restore_config: bool
+) -> None:
+    first, second = stores
+    transaction = await login(first)
+    claimed = asyncio.Event()
+    provider_returned = asyncio.Event()
+
+    async def exchange() -> None:
+        binding = await first.claim_login(transaction, state="s" * 43, challenge="c" * 43)
+        claimed.set()
+        await provider_returned.wait()
+        await first.issue(
+            activation_epoch=binding.activation_epoch, principal_id="human-test", grants=GRANTS
+        )
+
+    task = asyncio.create_task(exchange())
+    await claimed.wait()
+    if restore_config:
+        replacement = HumanAuthStore(second.db, "generation-b")
+        await replacement.initialize(check_generation=False)
+        await replacement.activate()
+    await second.activate()
+    provider_returned.set()
+    with pytest.raises(HttpError) as stale:
+        await task
+    assert stale.value.status == 401
+    async with first.db.transaction() as tx:
+        assert await tx.fetchone("SELECT * FROM human_auth_sessions") is None
+    fresh = await login(first)
+    binding = await first.claim_login(fresh, state="s" * 43, challenge="c" * 43)
+    issued = await first.issue(
+        activation_epoch=binding.activation_epoch, principal_id="human-test", grants=GRANTS
+    )
+    assert await second.authenticate(issued.key_id, issued.token.split("_")[2]) is not None
+
+
+async def test_cancel_login_removes_only_selected_transaction(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second = stores
+    cancelled, retained = await login(first), await login(first)
+    await second.cancel_login(cancelled)
+    with pytest.raises(HttpError) as missing:
+        await first.claim_login(cancelled, state="s" * 43, challenge="c" * 43)
+    assert missing.value.status == 401
+    await first.claim_login(retained, state="s" * 43, challenge="c" * 43)

@@ -201,6 +201,9 @@ consuming login transactions, issuing credentials, and authenticating sessions.
 Issuance rechecks the generation after provider I/O. Mismatch fails closed. A replica cannot automatically replace an existing
 generation. Operators explicitly activate configuration changes; activation
 invalidates previous transactions and sessions, including on stale replicas.
+Each explicit activation also increments a shared epoch. An exchange keeps the
+epoch captured when its login transaction was consumed and must match it again
+when issuing the session, even if the configuration digest is unchanged or restored.
 
 The installer stores credentials only in supported OS secure storage. Its regular
 configuration contains a credential reference bound to the HTTPS router origin

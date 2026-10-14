@@ -78,6 +78,10 @@ class HumanOidc:
                 follow_redirects=False,
                 timeout=10,
             ) as response:
+                if response.status_code == 429 or response.status_code >= 500:
+                    raise HttpError(
+                        503, "human_identity_unavailable", "identity provider unavailable"
+                    )
                 if response.status_code != 200:
                     raise invalid_identity()
                 body = bytearray()

@@ -54,10 +54,14 @@ async def test_activation_and_revoke(configured_cli: tuple[str, str, str]) -> No
         registry = load_principal_registry(registry_path)
         config = load_human_config(config_path, registry)
         store = HumanAuthStore(database, generation_for(config, registry))
-        issued = await store.issue(principal_id="human-test", grants=())
+        issued = await store.issue(
+            activation_epoch=await store.require_generation(), principal_id="human-test", grants=()
+        )
         await human_auth._operate("revoke", issued.key_id)
         assert await store.authenticate(issued.key_id, issued.token.split("_")[2]) is None
-        issued = await store.issue(principal_id="human-test", grants=())
+        issued = await store.issue(
+            activation_epoch=await store.require_generation(), principal_id="human-test", grants=()
+        )
         await human_auth._operate("activate", None)
         assert await store.authenticate(issued.key_id, issued.token.split("_")[2]) is None
     finally:

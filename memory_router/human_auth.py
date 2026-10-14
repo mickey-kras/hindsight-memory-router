@@ -17,6 +17,7 @@ from .errors import HttpError
 from .human_auth_config import HumanAuthConfig
 from .human_auth_store import HumanAuthStore
 from .human_oidc import HumanOidc, invalid_identity
+from .lifecycle import cleanup_result
 from .logging import log_event
 from .principals import Authentication, PrincipalGrant, PrincipalResolver, PrincipalSession
 from .rate_limit import Bucket, ConcurrencyLimiter, RateLimiter
@@ -182,22 +183,31 @@ class HumanAuth:
         matched = _REDIRECT.fullmatch(login.redirect_uri)
         if matched is None or int(matched[1]) > 65535:
             raise HttpError(400, "invalid_human_login", "invalid loopback redirect")
-        nonce = secrets.token_urlsafe(32)
-        transaction_id = await self.store.create_login(
-            state=login.state,
-            challenge=login.code_challenge,
-            redirect_uri=login.redirect_uri,
-            nonce=nonce,
-        )
-        url = await self._bounded(
-            lambda: self.oidc.authorization_url(
-                redirect_uri=login.redirect_uri,
+
+        async def begin() -> dict[str, str]:
+            nonce = secrets.token_urlsafe(32)
+            transaction_id = await self.store.create_login(
                 state=login.state,
                 challenge=login.code_challenge,
+                redirect_uri=login.redirect_uri,
                 nonce=nonce,
             )
-        )
-        return {"transaction_id": transaction_id, "authorization_url": url}
+            try:
+                url = await self.oidc.authorization_url(
+                    redirect_uri=login.redirect_uri,
+                    state=login.state,
+                    challenge=login.code_challenge,
+                    nonce=nonce,
+                )
+            except BaseException as error:
+                if (
+                    cleanup_error := await cleanup_result(self.store.cancel_login(transaction_id))
+                ) is not None:
+                    error.__cause__ = cleanup_error
+                raise
+            return {"transaction_id": transaction_id, "authorization_url": url}
+
+        return await self._bounded(begin)
 
     async def exchange(self, login: ExchangeLogin) -> dict[str, object]:
         challenge = (
@@ -220,7 +230,11 @@ class HumanAuth:
         if principal_id is None:
             raise invalid_identity()
         principal = self.resolver.registry.principals[principal_id]
-        issued = await self.store.issue(principal_id=principal_id, grants=tuple(principal.grants))
+        issued = await self.store.issue(
+            principal_id=principal_id,
+            grants=tuple(principal.grants),
+            activation_epoch=transaction.activation_epoch,
+        )
         return {
             "token": issued.token,
             "token_type": "Bearer",  # nosec B105 - OAuth token type, not a credential

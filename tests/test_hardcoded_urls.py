@@ -5,6 +5,8 @@ from pathlib import Path
 
 ALLOWED_URL_LITERALS = {
     ("memory_router/config.py", "http://hindsight:8888"),
+    # Fixed loopback redirect regex; escaped dots end this match.
+    ("memory_router/human_auth.py", "http://127"),
 }
 URL_PATTERN = re.compile(r"https?://[^\"'`\s\\]+")
 
