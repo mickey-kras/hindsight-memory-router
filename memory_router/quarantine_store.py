@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 import secrets
 from dataclasses import dataclass
@@ -9,7 +10,7 @@ from typing import Any, cast
 
 from .canonical import sha256_hex
 from .dedupe import request_family_identity, security_event_identity
-from .envelope import create_provider_envelope, estimate_envelope_size
+from .envelope import canonical_decrypted, create_provider_envelope, estimate_envelope_size
 from .errors import HttpError
 from .key_wrap import RsaOaepWrapProvider, WrapProvider, provider_envelope_metadata
 from .rate_limit import Bucket, Distinct, RateLimitConsumer, RateLimiter
@@ -17,6 +18,7 @@ from .repository import (
     PENDING,
     REVIEW_IN_PROGRESS,
     REVIEWABLE_STATUSES,
+    AdmissionEvidence,
     AdmissionSnapshot,
     Capacity,
     QuarantineRepository,
@@ -101,7 +103,10 @@ class QuarantineStore:
         self._assert_writable(input_, existing_for_charge)
 
         async with self._wrap_slots:
-            encrypted = await self._encrypt(input_, quarantine_id)
+            evidence = AdmissionEvidence(
+                canonical_decrypted(self._decrypted(input_, quarantine_id))
+            )
+            encrypted = await self._encrypt(input_, quarantine_id, evidence=evidence)
         item = self._build_item(input_, quarantine_id, encrypted)
 
         async def operation(_session: RateLimitConsumer) -> dict[str, str]:
@@ -117,6 +122,7 @@ class QuarantineStore:
                 at=input_["timestamp"],
                 require_reviewable_request=True,
                 expected_snapshot=snapshot,
+                incoming_evidence=evidence,
             )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
@@ -172,9 +178,16 @@ class QuarantineStore:
                 "encrypted quarantine item exceeds configured size limit",
             )
 
-    async def _encrypt(self, input_: dict[str, Any], quarantine_id: str) -> dict[str, Any]:
+    async def _encrypt(
+        self,
+        input_: dict[str, Any],
+        quarantine_id: str,
+        *,
+        evidence: AdmissionEvidence | None = None,
+    ) -> dict[str, Any]:
         return await create_provider_envelope(
-            self._decrypted(input_, quarantine_id), self.wrap_provider
+            json.loads(evidence.plaintext) if evidence else self._decrypted(input_, quarantine_id),
+            self.wrap_provider,
         )
 
     def _build_item(

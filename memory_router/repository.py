@@ -8,6 +8,7 @@ from typing import Any
 from .canonical import canonical_json, sha256_hex
 from .db import Database, Tx
 from .errors import HttpError
+from .timestamps import parse_iso
 
 SECURITY_EVENT_IDENTITY_LIMIT = 64
 
@@ -100,6 +101,28 @@ class AdmissionSnapshot:
     @classmethod
     def capture(cls, item: dict[str, Any] | None) -> AdmissionSnapshot:
         return cls(sha256_hex(canonical_json(item)) if item is not None else None)
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionEvidence:
+    plaintext: str
+
+    def matches(self, incoming_sha: str, existing: dict[str, Any]) -> bool:
+        if sha256_hex(self.plaintext) != incoming_sha:
+            return False
+        envelope = existing.get("encrypted")
+        if not isinstance(envelope, dict):
+            return False
+        created_at = envelope.get("created_at")
+        if not isinstance(created_at, str):
+            return False
+        try:
+            parse_iso(created_at)
+            value = json.loads(self.plaintext)
+            value["created_at"] = created_at
+            return sha256_hex(canonical_json(value)) == existing.get("sha256")
+        except (ValueError, TypeError):
+            return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -342,6 +365,7 @@ class QuarantineRepository:
         at: str,
         require_reviewable_request: bool = False,
         expected_snapshot: AdmissionSnapshot | None = None,
+        incoming_evidence: AdmissionEvidence | None = None,
     ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
@@ -367,7 +391,7 @@ class QuarantineRepository:
                 expected_snapshot is not None
                 and existing is not None
                 and expected_snapshot != AdmissionSnapshot.capture(existing)
-                and not _same_evidence(item, existing)
+                and not _same_evidence(item, existing, incoming_evidence)
             ):
                 raise HttpError(
                     409,
@@ -616,12 +640,15 @@ class QuarantineRepository:
             )
 
 
-def _same_evidence(item: dict[str, Any], existing: dict[str, Any]) -> bool:
-    return all(
+def _same_evidence(
+    item: dict[str, Any],
+    existing: dict[str, Any],
+    incoming_evidence: AdmissionEvidence | None,
+) -> bool:
+    same_metadata = all(
         item.get(key) == existing.get(key)
         for key in (
             "quarantine_id",
-            "sha256",
             "kind",
             "reason",
             "writer_id",
@@ -632,6 +659,10 @@ def _same_evidence(item: dict[str, Any], existing: dict[str, Any]) -> bool:
             "dedupe_key",
             "bank_id",
         )
+    )
+    return same_metadata and (
+        item.get("sha256") == existing.get("sha256")
+        or (incoming_evidence is not None and incoming_evidence.matches(item["sha256"], existing))
     )
 
 

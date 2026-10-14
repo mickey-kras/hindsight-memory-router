@@ -74,14 +74,20 @@ async def verify() -> None:
 
         created: set[str] = set()
 
-        async def write(identity: str) -> dict[str, str]:
-            result = await store.put(request(identity))
+        async def write(identity: str, attempt: int) -> dict[str, str]:
+            input_ = request(identity)
+            input_["timestamp"] = f"2026-10-14T00:00:00.{attempt:03d}Z"
+            target = peer_store if identity == "same" and attempt == 1 else store
+            result = await target.put(input_)
             created.add(result["quarantine_id"])
             return result
 
         async def blocked_writes(identities: list[str]) -> list[dict[str, str]]:
             provider.release.clear()
-            tasks = [asyncio.create_task(write(identity)) for identity in identities]
+            tasks = [
+                asyncio.create_task(write(identity, attempt))
+                for attempt, identity in enumerate(identities)
+            ]
             try:
                 for _ in tasks:
                     await asyncio.wait_for(provider.started.get(), 5)
@@ -101,9 +107,11 @@ async def verify() -> None:
             assert len({result["quarantine_id"] for result in distinct}) == 5
             # Both wraps can proceed; their short database critical sections still dedupe.
             repeated = await blocked_writes(["same", "same"])
-            assert repeated[0] == repeated[1]
+            assert repeated[0]["quarantine_id"] == repeated[1]["quarantine_id"]
+            assert repeated[0]["sha256"] != repeated[1]["sha256"]
             saved = await repo.get(repeated[0]["quarantine_id"])
             assert saved and saved["requarantine_count"] == 1
+            assert saved["sha256"] in {result["sha256"] for result in repeated}
             provider.block_all = False
             for equal_timestamps in (False, True):
                 provider.release.clear()
