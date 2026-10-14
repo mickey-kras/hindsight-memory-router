@@ -9,7 +9,7 @@ CACHE_NAMES = {".mypy_cache", ".pytest_cache", ".ruff_cache", "__pycache__"}
 
 def main() -> int:
     try:
-        result = subprocess.run(  # noqa: S603 - fixed Git index query
+        result = subprocess.run(
             ["git", "ls-files", "--full-name", "-z", "--", ":/"],  # noqa: S607
             capture_output=True,
             check=True,
