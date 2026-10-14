@@ -1,4 +1,4 @@
-.PHONY: init install lint format mypy test check architecture architecture-site requirements
+.PHONY: init install lint format mypy test check architecture architecture-site requirements build-requirements
 
 init:
 	git config core.hooksPath .githooks
@@ -11,6 +11,11 @@ install:
 requirements:
 	pip-compile --generate-hashes --strip-extras --no-header --no-annotate \
 		--output-file requirements.txt pyproject.toml
+
+build-requirements:
+	pip-compile --generate-hashes --no-reuse-hashes --strip-extras --no-header --no-annotate \
+		--allow-unsafe --only-build-deps --all-build-deps --build-isolation \
+		--output-file build-requirements.txt pyproject.toml
 
 format:
 	python -m ruff format --check memory_router tests .github/scripts/sync-sonar-findings.py
