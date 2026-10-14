@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 
-from memory_router.db import Database, create_database
+from memory_router.db import Database, Tx, create_database
 from memory_router.errors import HttpError
 from memory_router.human_auth_store import HumanAuthStore
 from memory_router.principals import PrincipalGrant
@@ -280,3 +281,27 @@ async def test_cancel_login_removes_only_selected_transaction(
         await first.claim_login(cancelled, state="s" * 43, challenge="c" * 43)
     assert missing.value.status == 401
     await first.claim_login(retained, state="s" * 43, challenge="c" * 43)
+
+
+async def test_authentication_does_not_take_allocation_lock(
+    stores: tuple[HumanAuthStore, HumanAuthStore], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = stores
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
+    transaction = second.db.transaction
+    capacity_locks: list[bool] = []
+
+    @asynccontextmanager
+    async def observe_transaction(*, capacity_lock: bool = False) -> AsyncIterator[Tx]:
+        capacity_locks.append(capacity_lock)
+        async with transaction(capacity_lock=capacity_lock) as tx:
+            yield tx
+
+    monkeypatch.setattr(second.db, "transaction", observe_transaction)
+    secret = issued.token.split("_")[2]
+    assert await second.authenticate(issued.key_id, secret) is not None
+    assert await second.authenticate(issued.key_id, "0" * 64) is None
+    assert await second.authenticate("0" * 32, "0" * 64) is None
+    assert capacity_locks == [False, False, False]

@@ -39,7 +39,11 @@ async def verify() -> None:
             grants=grants,
         )
         secret = issued.token.split("_")[2]
-        assert await second.authenticate(issued.key_id, secret) is not None
+        async with first_db.transaction(capacity_lock=True):
+            async with asyncio.timeout(5):
+                assert await second.authenticate(issued.key_id, secret) is not None
+                assert await second.authenticate(issued.key_id, "0" * 64) is None
+                assert await second.authenticate("0" * 32, "0" * 64) is None
         await first.revoke(issued.key_id)
         assert await second.authenticate(issued.key_id, secret) is None
         # Unexpired revoked sessions still count, including across two independent pools.

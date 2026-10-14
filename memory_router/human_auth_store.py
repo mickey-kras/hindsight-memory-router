@@ -216,7 +216,7 @@ class HumanAuthStore:
 
     async def authenticate(self, key_id: str, secret: str) -> StoredSession | None:
         digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
-        async with self.db.transaction(capacity_lock=True) as tx:
+        async with self.db.transaction() as tx:
             await self._require_generation(tx)
             now = await _now_ms(tx)
             row = await tx.fetchone(
