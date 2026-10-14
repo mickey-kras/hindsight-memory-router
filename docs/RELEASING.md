@@ -35,9 +35,11 @@ Release tags are lightweight and unsigned. Verify artifacts by recorded digest u
 GitHub release and cosign signatures. The reusable signing workflow remains `publish.yml`; a release
 started on main has its actual main workflow identity. Image SLSA provenance preserves that source
 and adds a `release-candidate` resolved dependency naming the release ref and exact candidate commit.
-Check that dependency against the release tag and `image-digests.txt`. The official `@actions/attest`
-builder constructs the workflow claims; the pinned `@sigstore/core` override fixes its transitive
-DSSE advisory without replacing GitHub's signing actions.
+Check that dependency against the release tag and `image-digests.txt`. The provenance helper verifies
+GitHub OIDC signatures and binds the claims to the executing workflow. Cosign signs provenance and
+CycloneDX predicates for each registry digest. Publication requires local bundle and registry
+verification, GitHub attestation upload, and GitHub CLI verification through repository discovery.
+Verified Sigstore bundles are retained as workflow artifacts.
 
 ## Versions and inputs
 

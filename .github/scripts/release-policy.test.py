@@ -37,6 +37,13 @@ if ROUTER:
     PATHS.append(".github/scripts/publish-image.sh")
     PATHS.append(".github/scripts/release-cleanup.cjs")
     PATHS.append(".github/scripts/release-cleanup.test.cjs")
+    PATHS.extend([
+        ".github/scripts/provenance.cjs",
+        ".github/scripts/provenance.test.cjs",
+        ".github/scripts/attest-image.cjs",
+        ".github/scripts/attest-image.test.cjs",
+        ".github/scripts/attestation-smoke.sh",
+    ])
 
 
 def policy(overrides=None):
@@ -213,13 +220,31 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertIn("@${GHCR_DIGEST}", generate)
         for name, registry in [("Attest GHCR SBOM", "IMAGE_GHCR"), ("Attest Docker Hub SBOM", "IMAGE_DOCKERHUB")]:
             step = steps[name]
-            self.assertRegex(step["uses"], r"^actions/attest@[0-9a-f]{40}$")
-            self.assertEqual(step["with"]["sbom-path"], "sbom.cdx.json")
-            self.assertIs(step["with"]["push-to-registry"], True)
-            self.assertEqual(step["with"]["subject-name"], f"${{{{ env.{registry} }}}}")
+            self.assertRegex(step["uses"], r"^actions/github-script@[0-9a-f]{40}$")
+            self.assertEqual(step["env"]["ATTEST_PREDICATE"], "sbom.cdx.json")
+            self.assertEqual(step["env"]["ATTEST_TYPE"], "https://cyclonedx.org/bom")
+            self.assertEqual(step["env"]["ATTEST_IMAGE"], f"${{{{ env.{registry} }}}}")
+            self.assertIn("attestImage", step["with"]["script"])
         self.assertIn("sbom=sha256:", steps["Record image digests"]["run"])
         script = (ROOT / ".github/scripts/release.cjs").read_text()
         self.assertIn('"sbom.cdx.json"', script)
+
+    def test_attestations_remove_the_affected_dependency_and_retain_verified_bundles(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        manifest = json.loads((ROOT / ".github/scripts/package.json").read_text())
+        lock = json.loads((ROOT / ".github/scripts/package-lock.json").read_text())
+        self.assertIn("jose", manifest["dependencies"])
+        for package in ["@actions/attest", "http-cache-semantics", "make-fetch-happen"]:
+            self.assertFalse(any(path.endswith("node_modules/" + package) for path in lock["packages"]))
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        self.assertFalse(any(step.get("uses", "").startswith("actions/attest") for step in publish["steps"]))
+        self.assertEqual(steps["Install Cosign"]["with"]["cosign-release"], "v3.1.3")
+        upload = steps["Retain verified attestation bundles"]
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIn("github.run_attempt", upload["with"]["name"])
+        self.assertEqual(publish["permissions"]["attestations"], "write")
 
     def test_release_ui_package_contract(self):
         if not ROUTER:
@@ -439,8 +464,8 @@ class ReleasePolicyTests(unittest.TestCase):
         steps = {step.get("name"): step for step in publisher["steps"]}
         self.assertEqual(steps["Upload Trivy SARIF"]["with"]["sha"], "${{ inputs.candidate_sha || github.sha }}")
         for name in ["Attest GHCR image", "Attest Docker Hub image"]:
-            self.assertEqual(steps[name]["with"]["predicate-path"], "${{ steps.provenance.outputs.path }}")
-            self.assertEqual(steps[name]["with"]["predicate-type"], "${{ steps.provenance.outputs.type }}")
+            self.assertEqual(steps[name]["env"]["ATTEST_PREDICATE"], "${{ steps.provenance.outputs.path }}")
+            self.assertEqual(steps[name]["env"]["ATTEST_TYPE"], "${{ steps.provenance.outputs.type }}")
 
     def test_two_validation_stages_keep_artifacts_distinct(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
@@ -520,6 +545,27 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(
             policy({path: (ROOT / path).read_text().replace("if (!condition)", "if (false)")})
         )
+
+    def test_attestation_verification_and_regression_checks_cannot_be_neutralized(self):
+        if not ROUTER:
+            self.skipTest("router attestation helpers required")
+        mutations = [
+            ("provenance.cjs", 'issuer: ISSUER, audience: AUDIENCE, algorithms: ["RS256"],', ''),
+            ("attest-image.cjs", '  run("gh", [...verify, "--bundle", bundlePath]);', ''),
+            ("provenance.test.cjs", 'test("', 'test.skip("'),
+            ("attest-image.test.cjs", 'test("', 'test.skip("'),
+            ("attestation-smoke.sh", "cosign verify-attestation", "true verify-attestation"),
+        ]
+        for filename, before, after in mutations:
+            path = f".github/scripts/{filename}"
+            with self.subTest(path=path):
+                original = (ROOT / path).read_text()
+                changed = original.replace(before, after, 1)
+                self.assertNotEqual(changed, original)
+                self.assertIn(
+                    f"{path}: release automation must match its reviewed policy",
+                    "\n".join(policy({path: changed})),
+                )
 
     def test_scan_neutralization_fails(self):
         path = ".github/workflows/ci.yml"

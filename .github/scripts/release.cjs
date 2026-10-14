@@ -578,8 +578,8 @@ function releaseNotes(manifest, sha) {
   return `| Component | Version |\n| --- | --- |\n${rows.join("\n")}\n\nHindsight: ${manifest.hindsight.version}.\nCommit: ${sha}.\n\nSee release.json for exact upstream commits, package checksums and${manifest.packages.length ? " the tested router image digest" : " image-digests.txt for published images"}.`;
 }
 
-async function candidateProvenance({ github, context, core, target, build = async () =>
-  (await import("@actions/attest")).buildSLSAProvenancePredicate() }) {
+async function candidateProvenance({ github, context, core, target, build = () =>
+  require("./provenance.cjs").buildProvenance({ core, context }) }) {
   const candidate = releaseTarget(context, target);
   await validate({ github, context, core, target });
   const predicate = await build();
