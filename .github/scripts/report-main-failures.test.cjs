@@ -48,6 +48,148 @@ test('independent failed tests produce independent issues', () => {
   assert.equal(reportsForJob(run, job, text).length, 2);
 });
 
+function qualityReportFixture(jobs, logs) {
+  const writes = [];
+  const execute = (command, args) => {
+    if (command === 'bash') {
+      writes.push(readFileSync(args[1], 'utf8'));
+      return '';
+    }
+    const path = args[1];
+    if (path.endsWith('/actions/runs/42')) return JSON.stringify({ ...run, conclusion: 'failure' });
+    if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs }]);
+    if (path.includes('/issues?')) return JSON.stringify([[]]);
+    const id = path.match(/\/actions\/jobs\/(\d+)\/logs$/)?.[1];
+    if (id && id in logs) return logs[id];
+    throw new Error(`Unexpected API: ${path}`);
+  };
+  const reports = main({ GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' }, execute, () => {});
+  assert.equal(writes.length, reports.length);
+  return reports;
+}
+
+const qualityWorker = { ...job, name: 'quality / python', steps: [{ ...step, name: 'Tests and coverage' }] };
+const qualityGate = { ...job, id: 8, name: 'quality / checks', steps: [{ ...step, name: 'Require every quality gate' }] };
+const workerFailure = log('FAILED tests/test_example.py::test_example - AssertionError: regression');
+const aggregateFailure = log('##[error]python: expected success, got failure');
+
+test('quality status failures reuse reported worker causes regardless of API job order', () => {
+  for (const jobs of [[qualityGate, qualityWorker], [qualityWorker, qualityGate]]) {
+    const reports = qualityReportFixture(jobs, { 7: workerFailure, 8: aggregateFailure });
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].key, reportsForJob(run, qualityWorker, workerFailure)[0].key);
+    assert.match(reports[0].body, /AssertionError: regression/);
+  }
+  const unrelated = log('FAILED tests/test_other.py::test_other - ValueError: another cause');
+  const reports = qualityReportFixture([qualityGate, qualityWorker], { 7: unrelated, 8: aggregateFailure });
+  assert.equal(reports.length, 1);
+  assert.notEqual(reports[0].key, reportsForJob(run, qualityWorker, workerFailure)[0].key);
+});
+
+test('quality status suppression preserves independent worker errors and aggregate faults', () => {
+  const ui = { ...qualityWorker, id: 9, name: 'quality / ui' };
+  const reports = qualityReportFixture([qualityGate, ui, qualityWorker], {
+    7: workerFailure, 9: log('TypeError: UI build failed'),
+    8: [aggregateFailure, log('##[error]ui: expected success, got failure'),
+      log('##[error]release: expected success, got missing')].join('\n'),
+  });
+  assert.equal(reports.length, 3);
+  const aggregate = reports.find(report => report.body.includes('- Job / step: quality / checks'));
+  assert.match(aggregate.body, /release: expected success, got missing/);
+  assert.doesNotMatch(aggregate.body, /python: expected|ui: expected/);
+  assert.ok(reports.some(report => report.body.includes('AssertionError: regression')));
+  assert.ok(reports.some(report => report.body.includes('TypeError: UI build failed')));
+});
+
+test('aggregate-only failures, missing results and unexpected gates remain actionable', () => {
+  for (const fault of [aggregateFailure,
+    log('##[error]python: expected success, got missing'),
+    log('##[error]python: expected success, got null'),
+    log('##[error]python: expected success, got skipped'),
+    log('##[error]python: expected success, got cancelled'),
+    log('##[error]container: expected skipped, got failure'),
+    log('##[error]Unexpected quality gate: unreviewed'),
+    log('TypeError: Cannot convert undefined or null to object')]) {
+    const alone = qualityReportFixture([qualityGate], { 8: fault });
+    assert.equal(alone.length, 1);
+    const mixed = qualityReportFixture([qualityWorker, qualityGate], {
+      7: workerFailure, 8: [aggregateFailure, fault].join('\n'),
+    });
+    assert.equal(mixed.length, fault === aggregateFailure ? 1 : 2);
+  }
+});
+
+test('quality correlation does not cross release validation scopes or hide setup failures', () => {
+  const scopedWorker = { ...qualityWorker, name: 'validate main / quality / python' };
+  const scopedGate = { ...qualityGate, name: 'validate main / quality / checks' };
+  assert.equal(qualityReportFixture([scopedGate, scopedWorker], { 7: workerFailure, 8: aggregateFailure }).length, 1);
+  const candidateGate = { ...qualityGate, name: 'validate and publish candidate / quality / checks' };
+  assert.equal(qualityReportFixture([candidateGate, scopedWorker], { 7: workerFailure, 8: aggregateFailure }).length, 2);
+  const setupGate = { ...qualityGate, steps: [{ ...step, name: 'Set up job' }] };
+  assert.equal(qualityReportFixture([setupGate, qualityWorker], { 7: workerFailure, 8: aggregateFailure }).length, 2);
+  for (const conclusion of ['timed_out', 'action_required', 'startup_failure']) {
+    assert.equal(qualityReportFixture([{ ...qualityGate, conclusion }, qualityWorker], { 7: workerFailure, 8: aggregateFailure }).length, 2);
+  }
+  for (const conclusion of ['success', 'skipped', 'cancelled', null]) {
+    assert.equal(qualityReportFixture([{ ...qualityWorker, conclusion }, qualityGate], { 8: aggregateFailure }).length, 1);
+  }
+  assert.equal(qualityReportFixture([qualityWorker, { ...qualityGate, steps: [] }], { 7: workerFailure, 8: '' }).length, 2);
+});
+
+const hindsightWorker = { ...qualityWorker, id: 10, name: 'quality / hindsight', steps: [{ ...step, name: 'Resolve Hindsight once' }] };
+const skippedPython = { ...qualityWorker, conclusion: 'skipped' };
+const skippedContainer = { ...qualityWorker, id: 9, name: 'quality / container', conclusion: 'skipped' };
+const hindsightFailure = log('ValueError: Hindsight resolution failed');
+const dependencySkips = [log('##[error]hindsight: expected success, got failure'),
+  log('##[error]python: expected success, got skipped'),
+  log('##[error]container: expected success, got skipped')].join('\n');
+
+test('reported Hindsight failures cover confirmed dependent skips regardless of job ordering', () => {
+  for (const jobs of [[qualityGate, skippedPython, skippedContainer, hindsightWorker],
+    [hindsightWorker, skippedContainer, skippedPython, qualityGate]]) {
+    const reports = qualityReportFixture(jobs, { 10: hindsightFailure, 8: dependencySkips });
+    assert.equal(reports.length, 1);
+    assert.match(reports[0].body, /ValueError: Hindsight resolution failed/);
+  }
+});
+
+test('dependent skips remain actionable without a reported same-scope Hindsight cause', () => {
+  for (const cause of [[], [{ ...hindsightWorker, conclusion: 'success' }],
+    [{ ...hindsightWorker, conclusion: 'cancelled' }],
+    [{ ...hindsightWorker, name: 'validate main / quality / hindsight' }]]) {
+    const reports = qualityReportFixture([qualityGate, skippedPython, skippedContainer, ...cause],
+      { 10: hindsightFailure, 8: dependencySkips });
+    const aggregate = reports.find(report => report.body.includes('- Job / step: quality / checks'));
+    assert.ok(aggregate);
+    assert.match(aggregate.body, /python: expected success, got skipped/);
+    assert.match(aggregate.body, /container: expected success, got skipped/);
+  }
+  for (const dependent of [null, { ...skippedPython, conclusion: null },
+    { ...skippedPython, conclusion: 'success' }]) {
+    const reports = qualityReportFixture([hindsightWorker, qualityGate, ...(dependent ? [dependent] : [])],
+      { 10: hindsightFailure, 8: log('##[error]python: expected success, got skipped') });
+    assert.equal(reports.length, 2);
+  }
+});
+
+test('Hindsight skip correlation preserves independent, missing and mixed aggregate faults', () => {
+  for (const fault of [log('##[error]ui: expected success, got skipped'),
+    log('##[error]release: expected success, got skipped'),
+    log('##[error]security: expected success, got skipped'),
+    log('##[error]python: expected success, got missing'),
+    log('##[error]python: expected success, got null'),
+    log('##[error]container: expected skipped, got failure'),
+    log('##[error]Unexpected quality gate: unreviewed')]) {
+    const reports = qualityReportFixture([qualityGate, skippedPython, skippedContainer, hindsightWorker],
+      { 10: hindsightFailure, 8: `${dependencySkips}\n${fault}` });
+    assert.equal(reports.length, 2);
+    const aggregate = reports.find(report => report.body.includes('- Job / step: quality / checks'));
+    assert.ok(aggregate.body.includes(fault.split('Z ')[1]));
+    assert.doesNotMatch(aggregate.body, /hindsight: expected success, got failure|python: expected success, got skipped|container: expected success, got skipped/);
+  }
+});
+
 test('passed steps and shell command echoes cannot supply the failure signature', () => {
   const text = '2026-09-04T23:59:59Z ValueError: unrelated\n' + log('echo ValueError: not an error');
   assert.match(reportsForJob(run, job, text)[0].body, /No reliable error signature/);
