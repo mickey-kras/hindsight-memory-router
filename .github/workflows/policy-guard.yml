@@ -43,14 +43,15 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "43abfb796dd38d0fae12eca10ab0676b21c7f12502d59296cdaeeec7979d5ac1",
+              ".github/scripts/release-policy.test.py": "5cc8e4746d6afd0bbb2614d48e52c9988030516bdf67bd90d3f5f860b26f935f",
+              ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "49b192c0d8e5740e8ab5b9e0df41e6fc8029f894682a5005c29f2eadf09ca8e5",
               ".github/workflows/release.yml": "1c0f53465d44deaeeced2158c3dd668ca0e625acf51212357be597ffaed0094c",
-              ".github/workflows/ci.yml": "5a72522fc262556b7f2dd5fad5a4a938310e318ac0c4ca03ad06d021456b46e4",
-              ".github/workflows/aislop.yml": "dbc57921f92d8c45726d9ff3edb16bdc38e67e53733b6c0b7a61670bf6658492",
+              ".github/workflows/ci.yml": "d9ad181f9bcf822ed4ae0a3c0110bab820e8dba9215c2dbef809dd0b0e76f02e",
+              ".github/workflows/aislop.yml": "0ecc80af57e081678cb78f6c088eb9f89f10b497d7c8105b4b74b88a0ce9a724",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
               ".github/scripts/report-main-failures.cjs": "652f29115b78eee5f7b56a8043cddda94e9cf7e74cb8559d1398a5c972697222",
@@ -408,6 +409,9 @@ jobs:
                 if (!ci.includes('node .github/scripts/npm-audit.cjs')) {
                   fail('ci.yml: Node dependency audit must stay present');
                 }
+                if (!hasYamlScalar(ci, 'run', 'node --test .github/scripts/aislop-cli.test.cjs')) {
+                  fail('ci.yml: pinned Aislop CLI regression tests must stay present');
+                }
                 if (!/^  container:\s*$/m.test(ci)) {
                   fail('ci.yml: required container PR job must stay present');
                 }
@@ -465,14 +469,8 @@ jobs:
                 if (!aislop.includes('name: aislop status')) {
                   fail('aislop.yml: required aislop status job must stay present');
                 }
-                if (!aislop.includes('npm run aislop:ci:human')) {
-                  fail('aislop.yml: quality gate must stay present');
-                }
-                if (!aislop.includes('npm run --silent aislop:ci:sarif')) {
-                  fail('aislop.yml: main SARIF generation must stay present');
-                }
-                if (!aislop.includes('npm run --silent aislop:ci -- --sarif')) {
-                  fail('aislop.yml: PR SARIF generation must stay present');
+                if (!hasYamlScalar(aislop, 'run', 'npm run --silent aislop:ci -- --sarif > aislop.sarif')) {
+                  fail('aislop.yml: one full-repository SARIF scan must preserve the CLI quality exit status');
                 }
                 if (!hasYamlScalar(aislop, 'category', '.github/workflows/publish.yml:status')) {
                   fail('aislop.yml: SARIF must preserve the default-branch configuration');
