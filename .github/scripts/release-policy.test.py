@@ -116,7 +116,140 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
         return [] if result.returncode == 0 else [result.stdout + result.stderr]
 
 
+def quality_gate(needs, event="pull_request"):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    script = workflow["jobs"]["checks"]["steps"][0]["with"]["script"]
+    driver = r"""
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const failures = [];
+const core = {setFailed: message => failures.push(message)};
+new Function('core', input.script)(core);
+process.stdout.write(JSON.stringify(failures));
+"""
+    result = subprocess.run(
+        ["node", "-e", driver],
+        input=json.dumps({"script": script}),
+        env={**os.environ, "NEEDS_JSON": json.dumps(needs), "EVENT_NAME": event},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    return json.loads(result.stdout)
+
+
 class ReleasePolicyTests(unittest.TestCase):
+    def test_parallel_quality_jobs_preserve_required_identities_and_hindsight(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        jobs = workflow["jobs"]
+        self.assertEqual(workflow["name"], "ci")
+        self.assertEqual(set(jobs), {"hindsight", "python", "ui", "release", "security", "checks", "container"})
+        self.assertEqual(set(jobs["checks"]["needs"]), set(jobs) - {"checks"})
+        self.assertEqual(jobs["checks"]["if"], "always()")
+        self.assertEqual(jobs["checks"].get("name", "checks"), "checks")
+        self.assertEqual(jobs["container"]["name"], "container")
+        self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request'")
+        for name in ["ui", "release", "security"]:
+            self.assertNotIn("needs", jobs[name])
+        for name in ["python", "container"]:
+            self.assertEqual(jobs[name]["needs"], "hindsight")
+        for name in ["hindsight", "python", "ui", "release", "security"]:
+            self.assertNotIn("if", jobs[name])
+        for job in jobs.values():
+            self.assertNotIn("continue-on-error", job)
+            for step in job["steps"]:
+                self.assertNotIn("continue-on-error", step)
+                if step.get("uses", "").startswith("actions/checkout@"):
+                    self.assertIs(step["with"]["persist-credentials"], False)
+        self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in jobs["checks"]["steps"]))
+        gate = jobs["checks"]["steps"][0]
+        self.assertEqual(gate["env"], {"NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}"})
+        outputs = workflow.get("on", workflow.get(True))["workflow_call"]["outputs"]
+        for name, source in [("version", "version"), ("sha", "sha"), ("image", "image")]:
+            self.assertEqual(outputs[f"hindsight_{name}"]["value"], f"${{{{ jobs.hindsight.outputs.{source} }}}}")
+        resolve = next(step for step in jobs["hindsight"]["steps"] if step.get("id") == "resolve")
+        self.assertEqual(resolve["env"], {"RELEASE_CANDIDATE_SHA": "${{ inputs.candidate_sha }}", "RELEASE_CANDIDATE_REF": "${{ inputs.candidate_ref }}"})
+        upstream = next(step for step in jobs["python"]["steps"] if step.get("name") == "Checkout current Hindsight OpenClaw sources")
+        self.assertEqual(upstream["with"]["ref"], "${{ needs.hindsight.outputs.sha }}")
+        self.assertEqual(jobs["container"]["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.hindsight.outputs.image }}")
+
+    def test_quality_gate_rejects_failed_cancelled_missing_and_skipped_jobs(self):
+        names = ["hindsight", "python", "ui", "release", "security", "container"]
+        passing = {name: {"result": "success", "outputs": {}} for name in names}
+        self.assertEqual(quality_gate(passing), [])
+        for name in names:
+            for state in ["failure", "cancelled", "skipped", "neutral", "", None]:
+                with self.subTest(job=name, state=state):
+                    changed = {**passing, name: {"result": state}}
+                    self.assertTrue(quality_gate(changed))
+            self.assertTrue(quality_gate({key: value for key, value in passing.items() if key != name}))
+            self.assertTrue(quality_gate({**passing, name: {"outputs": {}}}))
+        self.assertTrue(quality_gate({**passing, "unreviewed": {"result": "success"}}))
+        self.assertTrue(quality_gate({}))
+
+    def test_quality_gate_allows_only_the_known_non_pr_container_skip_and_reruns(self):
+        passing = {name: {"result": "success"} for name in ["hindsight", "python", "ui", "release", "security", "container"]}
+        for event in ["push", "workflow_dispatch"]:
+            with self.subTest(event=event):
+                baseline = {**passing, "container": {"result": "skipped"}}
+                self.assertEqual(quality_gate(baseline, event), [])
+                self.assertTrue(quality_gate({**baseline, "security": {"result": "skipped"}}, event))
+                for state in ["success", "failure", "cancelled", None]:
+                    self.assertTrue(quality_gate({**baseline, "container": {"result": state}}, event))
+                self.assertTrue(quality_gate({key: value for key, value in baseline.items() if key != "container"}, event))
+                self.assertTrue(quality_gate({**baseline, "python": {"result": "failure"}}, event))
+                # A failed-job rerun may retain successful results from the first attempt.
+                self.assertEqual(quality_gate(baseline, event), [])
+        self.assertTrue(quality_gate({**passing, "ui": {"result": "cancelled"}}))
+        self.assertEqual(quality_gate(passing), [])
+
+    def test_quality_worker_gates_and_diagnostics_remain_local(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+        required = {
+            "python": ["Python runtime lock is current", "Python dev lock is current", "No legacy TypeScript runtime or tests", "OpenClaw compatibility inventory", "Unicode confusables map is reproducible", "Tests and coverage"],
+            "ui": ["UI unit, crypto, and build checks", "UI package consumer check", "Install Playwright Chromium", "UI browser tests", "OpenAPI contract", "Upload OpenAPI diagnostics"],
+            "release": ["npm audit filter tests", "Release automation tests", "Attestation CLI and registry compatibility", "Release policy tests", "PR branch updater tests", "Failure reporter tests"],
+            "security": ["Audit release tools", "Python dependency audit", "Bandit", "Node tooling audit", "Gitleaks", "Upload redacted secret scan", "Semgrep", "Hadolint"],
+            "container": ["Default Compose smoke", "Fake Hindsight router-storage parity", "Real Hindsight router-storage parity", "Trivy PR gate"],
+        }
+        for name, gates in required.items():
+            steps = {step.get("name"): step for step in jobs[name]["steps"]}
+            for gate in gates:
+                self.assertIn(gate, steps)
+        coverage = next(step for step in jobs["python"]["steps"] if step.get("name") == "Tests and coverage")
+        self.assertEqual(coverage["run"], "coverage run -m pytest && coverage report --fail-under=90")
+        ui_steps = jobs["ui"]["steps"]
+        runtime_install = next(index for index, step in enumerate(ui_steps) if step.get("run") == "python -m pip install --require-hashes -r requirements.txt")
+        ui_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "UI unit, crypto, and build checks")
+        self.assertLess(runtime_install, ui_test)
+        self.assertTrue(any(step.get("uses", "").startswith("actions/setup-python@") for step in ui_steps[:runtime_install]))
+        for job in jobs.values():
+            steps = {step.get("name"): step for step in job["steps"]}
+            step_ids = {step["id"] for step in job["steps"] if "id" in step}
+            for name, step in steps.items():
+                if name and name.startswith("Upload"):
+                    for source in re.findall(r"steps\.([\w-]+)\.outcome", step.get("if", "")):
+                        self.assertIn(source, step_ids)
+                    if step.get("uses", "").startswith("actions/upload-artifact@"):
+                        self.assertEqual(step["with"]["if-no-files-found"], "error")
+
+    def test_parallel_quality_bypasses_fail_reviewed_policy(self):
+        path = ".github/workflows/ci.yml"
+        original = (ROOT / path).read_text()
+        mutations = [
+            original.replace("    if: always()", "    if: success()"),
+            original.replace("needs: [hindsight, python, ui, release, security, container]", "needs: [hindsight, python, ui, release, security]"),
+            original.replace("result !== expected", "false"),
+            original.replace("  security:\n", "  security:\n    continue-on-error: true\n"),
+            original.replace("  ui:\n", "  ui:\n    if: false\n"),
+            original.replace("coverage report --fail-under=90", "coverage report --fail-under=0"),
+            original.replace("ref: ${{ inputs.candidate_sha }}", "ref: main"),
+            original.replace("github.run_attempt", "github.run_id"),
+        ]
+        for changed in mutations:
+            with self.subTest(mutation=changed):
+                self.assertNotEqual(changed, original)
+                self.assertTrue(policy({path: changed}))
+
     def test_workflow_release_contract(self):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         events = main.get("on", main.get(True))
@@ -469,7 +602,7 @@ class ReleasePolicyTests(unittest.TestCase):
 
     def test_two_validation_stages_keep_artifacts_distinct(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        steps = {step.get("name"): step for step in ci["jobs"]["checks"]["steps"]}
+        steps = {step.get("name"): step for job in ci["jobs"].values() for step in job["steps"]}
         self.assertIs(steps["Gitleaks"]["env"]["GITLEAKS_ENABLE_UPLOAD_ARTIFACT"], False)
         upload = steps["Upload redacted secret scan"]
         self.assertIn("inputs.candidate_sha || github.sha", upload["with"]["name"])
