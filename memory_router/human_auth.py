@@ -25,7 +25,7 @@ from .rate_limit import Bucket, ConcurrencyLimiter, RateLimiter
 logger = logging.getLogger(__name__)
 HUMAN_TOKEN = re.compile(r"^Bearer mrh_([0-9a-f]{32})_([0-9a-f]{64})$")
 _RANDOM_VALUE = r"^[A-Za-z0-9_-]{43}$"
-_REDIRECT = re.compile(r"^http://127\.0\.0\.1:([1-9][0-9]{0,4})/callback$")
+_REDIRECT = re.compile(r"^http://127\.0\.0\.1:([1-9]\d{0,4})/callback$", re.ASCII)
 _NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
 

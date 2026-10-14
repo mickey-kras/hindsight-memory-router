@@ -83,6 +83,7 @@ logger = logging.getLogger(__name__)
 configure_logging()
 _MAX_JSON_DEPTH = 64
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
+_PRINCIPAL_RESOLVER_COMPONENT = "principal resolver"
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
     "message": "authentication required",
@@ -213,7 +214,7 @@ class Runtime:
             backend.concurrency_limiter or InMemoryConcurrencyLimiter()
         )
         if settings.memory_router_human_auth:
-            resolver = _require_runtime(self.principal_resolver, "principal resolver")
+            resolver = _require_runtime(self.principal_resolver, _PRINCIPAL_RESOLVER_COMPONENT)
             human_config = load_human_config(settings.memory_router_human_auth, resolver.registry)
             human_store = HumanAuthStore(
                 self.database, generation_for(human_config, resolver.registry)
@@ -844,7 +845,7 @@ async def _authorized_admin_response(
 
 async def _principal_admin_response(request: Request, pathname: str, method: str) -> Response:
     deps = PrincipalAdminDeps(
-        resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+        resolver=_require_runtime(runtime.principal_resolver, _PRINCIPAL_RESOLVER_COMPONENT),
         auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
         admin=_require_runtime(runtime.admin, "admin service"),
         on_auth_failure=lambda: _auth_failure_rate("admin"),
@@ -921,7 +922,7 @@ async def dispatch(path: str, request: Request) -> Response:
     if runtime.principal_resolver is not None:
         principal = await authenticate_principal(
             request,
-            resolver=_require_runtime(runtime.principal_resolver, "principal resolver"),
+            resolver=_require_runtime(runtime.principal_resolver, _PRINCIPAL_RESOLVER_COMPONENT),
             auditor=_require_runtime(runtime.auditor, _AUTH_AUDITOR_COMPONENT),
             route_class=route_class,
             on_failure=lambda: _auth_failure_rate("router"),

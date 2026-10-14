@@ -144,6 +144,41 @@ async def start(service: HumanAuth, provider: Provider) -> ExchangeLogin:
     )
 
 
+@pytest.mark.parametrize("port", ["1", "80", "49152", "65535"])
+async def test_start_accepts_ascii_loopback_ports(service: HumanAuth, port: str) -> None:
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    started = await service.start(
+        StartLogin(redirect_uri=redirect_uri, state=STATE, code_challenge=CHALLENGE)
+    )
+    query = parse_qs(urlsplit(started["authorization_url"]).query)
+    assert query["redirect_uri"] == [redirect_uri]
+    transaction = await service.store.claim_login(
+        started["transaction_id"], state=STATE, challenge=CHALLENGE
+    )
+    assert transaction.redirect_uri == redirect_uri
+
+
+@pytest.mark.parametrize(
+    "port", ["0", "01", "65536", "99999", "100000", "-1", "1\u0662", "1\uff12", "\u0661"]
+)
+async def test_start_rejects_invalid_or_non_ascii_ports(
+    service: HumanAuth, provider: Provider, port: str
+) -> None:
+    with pytest.raises(HttpError) as failure:
+        await service.start(
+            StartLogin(
+                redirect_uri=f"http://127.0.0.1:{port}/callback",
+                state=STATE,
+                code_challenge=CHALLENGE,
+            )
+        )
+    assert failure.value.status == 400
+    assert failure.value.code == "invalid_human_login"
+    assert not provider.calls
+    async with service.store.db.transaction() as tx:
+        assert await tx.fetchone("SELECT COUNT(*) AS n FROM human_auth_logins") == {"n": 0}
+
+
 async def test_exchange_authentication_grants_signout_and_legacy_separation(
     service: HumanAuth, provider: Provider
 ) -> None:
