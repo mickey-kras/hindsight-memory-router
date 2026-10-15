@@ -13,12 +13,39 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import PostgresDatabase, PostgresTx, SqliteTx, create_database, is_postgres
+from memory_router.errors import HttpError
 from memory_router.policy import RouterPolicy, recalled_content_digest
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import InMemoryRateLimiter
 from memory_router.repository import Capacity, QuarantineRepository
+from memory_router.scan_executor import (
+    scan_recalled,
+    shutdown_scan_executor_async,
+    start_scan_executor,
+)
 
 AT = "2026-10-01T00:00:00.000Z"
+SCANNER_STARTUP_SECONDS = 60
+
+
+async def warm_scanner() -> None:
+    # Standalone probes skip the app lifespan; cold spawn is not a visibility check.
+    async with asyncio.timeout(SCANNER_STARTUP_SECONDS):
+        await asyncio.to_thread(start_scan_executor)
+        while True:
+            try:
+                result = await scan_recalled({"id": "warmup", "text": "ordinary"})
+            except HttpError as exc:
+                if (
+                    exc.status != 503
+                    or exc.code != "recall_scan_unavailable"
+                    or exc.message != "recall safety scan timed out"
+                ):
+                    raise
+                await asyncio.sleep(1)
+            else:
+                assert result.safe, result
+                return
 
 
 async def verify_batches(url: str) -> None:
@@ -121,7 +148,7 @@ async def verify_batches(url: str) -> None:
         await db.close()
 
 
-async def main() -> None:
+async def verify_database() -> None:
     configured = os.environ["QUARANTINE_DATABASE_URL"]
     if not is_postgres(configured):
         with TemporaryDirectory() as directory:
@@ -142,6 +169,14 @@ async def main() -> None:
                 await tx.execute(f"DROP SCHEMA {schema} CASCADE")
     finally:
         await db.close()
+
+
+async def main() -> None:
+    try:
+        await warm_scanner()
+        await verify_database()
+    finally:
+        await shutdown_scan_executor_async()
 
 
 if __name__ == "__main__":
