@@ -4,7 +4,7 @@
 
 One bounded JSON object is written to stdout per event. Required fields: `event`, `level`, `logger`, `timestamp`.
 
-Optional fields: `request_id`, `operation`, `request_method`, `upstream_method`, `error_kind`, `error_fingerprint`, `upstream_status`, `http_status`, `outcome`, `request_duration_ms`, `operation_duration_ms`, `route_class`, `writer_id`, `reason`, `timeout_ms`, `suppressed`.
+Optional fields: `request_id`, `operation`, `maintenance_phase`, `request_method`, `upstream_method`, `error_kind`, `error_fingerprint`, `upstream_status`, `http_status`, `outcome`, `request_duration_ms`, `operation_duration_ms`, `route_class`, `writer_id`, `reason`, `timeout_ms`, `suppressed`.
 
 Text caps: request and writer IDs 128, logger 128, operation 64, methods 16. `request_id` accepts client-provided `[A-Za-z0-9._:-]`; clients must not put secrets in it. Invalid request IDs are replaced by generated IDs. Writer registry IDs must match `[A-Za-z0-9._:-]{1,128}` and cannot be `.` or `..`; invalid registries fail startup. Other invalid writer IDs and logger names are fingerprinted. `error_fingerprint` is an allowlisted exception class or opaque raise-site hash.
 
@@ -16,6 +16,7 @@ Unknown fields and invalid numbers are dropped. Invalid enums use their safe fal
 - `outcome`: `failed`, `degraded`, `healthy`, `unhealthy`
 - `route_class`: `readiness`, `liveness`, `version`, `admin`, `memory`, `openclaw`, `unmatched`
 - `operation`: values in `memory_router/logging_contract.py`, plus `facade_scan` and `openclaw_<allowlist operation>`
+- `maintenance_phase`: `session-prune`, `review-recovery`, `expiry`, `event-retention`; other values are dropped
 - `reason`: `admin-cleanup-token-missing`, `admin-read-token-missing`, `admin-review-token-missing`, `anonymous-mode`, `application-shutdown`, `application-startup`, `asgi-application-error`, `direct-stdlib-log`, `http-protocol-error`, `legacy-admin-token`, `legacy-router-token`, `openclaw-suspicious-provider-response`, `openclaw-suspicious-request`, `openclaw-unknown-writer`, `reserved-field`, `router-token-missing`, `runtime-other`, `server-finished`, `server-running`, `server-started`, `server-stopping`, `unregistered-event`
 
 ## Events
@@ -34,6 +35,7 @@ Use `python -m memory_router` or the `memory-router` script. Direct Uvicorn CLI 
 ## Throttling and probe cache
 
 - High-volume events: one per `(event, route_class, error_kind)` per minute. The next record includes `suppressed=N`.
+- `quarantine_sweeper_failed` adds its allowlisted `maintenance_phase` to that throttle key, so each failed phase remains visible with its own suppressed count. Session pruning and event retention continue independently after failures; expiry runs only after successful review recovery. The sweeper failure metric counts failed iterations once, even if several phases fail. Cancellation adds no failure count or event.
 - Uvicorn warning/error noise: one per `reason` per minute. Critical records are never throttled.
 - Dependency readiness log transitions require two matching observations. Unexpected readiness orchestration failures emit `readiness_orchestration_failed` immediately, then use the per-category minute throttle above. HTTP readiness responses use each probe result immediately.
 - Readiness and anonymous `/version`: cache success and failure for one second; serve stale data for at most five seconds during one bounded refresh; cold concurrent callers get 503.

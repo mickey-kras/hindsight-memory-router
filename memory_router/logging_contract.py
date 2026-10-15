@@ -13,6 +13,7 @@ SAFE_FIELDS = frozenset(
     {
         "request_id",
         "operation",
+        "maintenance_phase",
         "upstream_method",
         "request_method",
         "error_kind",
@@ -98,6 +99,7 @@ ERROR_KINDS = frozenset(
     }
 )
 OUTCOMES = frozenset({"failed", "degraded", "healthy", "unhealthy"})
+MAINTENANCE_PHASES = frozenset({"session-prune", "review-recovery", "expiry", "event-retention"})
 ROUTE_CLASSES = frozenset(
     {"readiness", "liveness", "version", "admin", "memory", "openclaw", "unmatched"}
 )
@@ -225,6 +227,8 @@ def safe_text(value: Any, *, fallback: str, limit: int) -> str:
 
 
 def sanitize_output_field(key: str, value: Any) -> Any | None:
+    if key == "maintenance_phase":
+        return value if isinstance(value, str) and value in MAINTENANCE_PHASES else None
     if key == "logger":
         logger_name = safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
         return (
@@ -282,6 +286,9 @@ def sanitize_fields(fields: dict[str, Any]) -> dict[str, Any]:
 
 
 def _sanitize_vocabularies(fields: dict[str, Any]) -> None:
+    phase = fields.get("maintenance_phase")
+    if not isinstance(phase, str) or phase not in MAINTENANCE_PHASES:
+        fields.pop("maintenance_phase", None)
     error_kind = fields.get("error_kind")
     if "error_kind" in fields and (
         not isinstance(error_kind, str) or error_kind not in ERROR_KINDS

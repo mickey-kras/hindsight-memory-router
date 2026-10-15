@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import time
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import ExitStack, asynccontextmanager, contextmanager, suppress
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
@@ -11,6 +12,31 @@ from unittest.mock import patch
 
 from memory_router import scan_executor, security, security_base64, security_rules, unicode_security
 from memory_router.security import SafetyResult
+
+
+@asynccontextmanager
+async def event_loop_heartbeat() -> AsyncIterator[asyncio.Event]:
+    armed, heartbeat = asyncio.Event(), asyncio.Event()
+
+    async def monitor() -> None:
+        previous = time.monotonic()
+        armed.set()
+        while True:
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            elapsed = now - previous
+            assert elapsed < 1.0, f"event loop blocked for {elapsed:.3f}s"
+            heartbeat.set()
+            previous = now
+
+    task = asyncio.create_task(monitor())
+    try:
+        await armed.wait()
+        yield heartbeat
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
 
 @contextmanager

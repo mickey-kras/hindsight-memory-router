@@ -166,6 +166,10 @@ if [[ "$router_db" == "sqlite" ]]; then
   pass_check
 fi
 
+begin_check "independent maintenance phases preserve recovery and event retention"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 15 python - < tests/integration/maintenance-phases.py
+pass_check
+
 begin_check "security audit capacity is scoped and durable across replicas"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/security-event-capacity.py
 pass_check
@@ -427,7 +431,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 59096688cb08b0c51114d7d51c877fafb69fab38f095e0a156dea521fa44d508
+# integration-behavior-sha256: 25fe8da5e54ab78f4758fa2095de8bb38fb45d5f70bd836ebb0be4d4a2dba5f3
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
