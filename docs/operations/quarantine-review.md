@@ -41,6 +41,6 @@ For an ambiguous outcome:
    | `confirmed_applied` | You verified the upstream side effect happened. | Finalize without replaying it. |
    | `confirmed_not_applied` | You verified it did not happen. | Move to `postponed`, allowing a normal retry. |
 
-Do not retry an uncertain write without that verification. If the side effect was already checkpointed as completed, a normal retry of the same review action can finalize it without replay.
+Do not retry an uncertain write without that verification. If the side effect was already checkpointed as completed, the queue and item endpoint keep it available even after the original TTL. Retry the same review action (or use Finalize approval/rejection in the console) to finalize it without replay. Retain approval still requires the exact decrypted object; no new reject, postpone, or reconciliation action is allowed for a completed checkpoint.
 
 Startup moves stale `review_in_progress` items to `postponed` without increasing the postpone count. It leaves side-effect checkpoint states untouched. A crash cannot undo a committed Hindsight action.

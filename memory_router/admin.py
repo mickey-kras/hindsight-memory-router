@@ -117,6 +117,7 @@ class QuarantineAdminService:
                 stats["pending_items"]
                 + stats["postponed_items"]
                 + stats["review_side_effect_started_items"]
+                + stats["review_side_effect_completed_items"]
             )
         return {"items": items, "total": total}
 
@@ -578,7 +579,10 @@ class QuarantineAdminService:
 
     async def _require_reviewable(self, quarantine_id: str) -> dict[str, Any]:
         item = await self._require_item(quarantine_id)
-        if item["status"] not in REVIEWABLE_STATUSES | {REVIEW_SIDE_EFFECT_STARTED}:
+        if item["status"] not in REVIEWABLE_STATUSES | {
+            REVIEW_SIDE_EFFECT_STARTED,
+            REVIEW_SIDE_EFFECT_COMPLETED,
+        }:
             raise HttpError(
                 409, "quarantine_already_finalized", "quarantine item is not pending review"
             )

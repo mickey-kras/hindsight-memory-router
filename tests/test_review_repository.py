@@ -503,3 +503,91 @@ async def test_review_mutators_recheck_expiry_inside_transaction() -> None:
             await action(repository)
         assert exc.value.code == "quarantine_expired"
         assert tx.executed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["retain_request", "recalled_memory"])
+async def test_fresh_admin_resumes_committed_side_effect_without_replay(
+    repo: QuarantineRepository, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    from unittest.mock import AsyncMock, Mock
+
+    from memory_router import admin
+    from memory_router.admin import AdminActor, QuarantineAdminService
+    from memory_router.repository import QueueFilter
+    from tests.fakes import QID, registry
+    from tests.test_admin import exact_item
+
+    payload = (
+        {"action": "retain", "writer_id": "main", "body": {"items": [{"content": "hello"}]}}
+        if kind == "retain_request"
+        else {"action": "recalled_memory", "bank_id": "main", "result": {"id": "m1"}}
+    )
+    item, decrypted = exact_item(
+        kind,
+        payload,
+        source_bank="main",
+        source_memory_id="m1",
+        expires_at="2099-01-01T00:00:00.000Z",
+    )
+    await add(repo, item)
+    upstream = SimpleNamespace(retain=AsyncMock(), invalidate_memory=AsyncMock())
+    limits = SimpleNamespace(assert_retain_bounds=Mock(), consume_retain=AsyncMock())
+    actor = AdminActor(token_scope="review")  # noqa: S106 - scope label, not a secret
+
+    def client() -> QuarantineAdminService:
+        return QuarantineAdminService(repo, upstream, registry(), limits)
+
+    finish_name = "finish_approve_retain" if kind == "retain_request" else "finish_reject_memory"
+    finish = getattr(admin, finish_name)
+    monkeypatch.setattr(
+        admin, finish_name, AsyncMock(side_effect=RuntimeError("crash after commit"))
+    )
+    with pytest.raises(RuntimeError, match="crash after commit"):
+        if kind == "retain_request":
+            await client().approve(QID, {"decrypted": decrypted}, actor)
+        else:
+            await client().reject(QID, actor)
+    monkeypatch.setattr(admin, finish_name, finish)
+    # TTL only expires pending/postponed items, including after a server restart.
+    async with repo.db.transaction() as tx:
+        await tx.execute("UPDATE quarantine_items SET expires_at=?", ("2000-01-01T00:00:00.000Z",))
+    fresh = client()
+    queue = await fresh.list_queue(10, 0)
+    assert queue["total"] == 1
+    assert queue["items"][0]["status"] == "review_side_effect_completed"
+    filtered = await fresh.list_queue(10, 0, QueueFilter(status="review_side_effect_completed"))
+    assert filtered == queue
+    read = await fresh.read_item(QID)
+    assert read["encrypted"] == item["encrypted"]
+    assert (await fresh.stats())["review_side_effect_completed_items"] == 1
+    # Checkpoints cannot be postponed, deleted, or reconciled as uncertain.
+    with pytest.raises(HttpError):
+        await fresh.postpone(QID, actor)
+    with pytest.raises(HttpError):
+        await fresh.reconcile(
+            QID,
+            {
+                "action": "confirmed_not_applied",
+                "expected_sha256": read["record"]["sha256"],
+                "expected_updated_at": read["record"]["updated_at"],
+            },
+            actor,
+        )
+    if kind == "retain_request":
+        with pytest.raises(HttpError):
+            await fresh.reject(QID, actor)
+        with pytest.raises(HttpError):
+            await fresh.approve(QID, {"decrypted": {**decrypted, "payload": {}}}, actor)
+        await fresh.approve(QID, {"decrypted": decrypted}, actor)
+        assert await repo.get(QID) is None
+        upstream.retain.assert_awaited_once()
+        upstream.invalidate_memory.assert_not_awaited()
+        limits.consume_retain.assert_awaited_once()
+    else:
+        with pytest.raises(HttpError):
+            await fresh.approve(QID, {"decrypted": decrypted}, actor)
+        await fresh.reject(QID, actor)
+        assert (await repo.get(QID))["status"] == "reviewed_blocked"
+        upstream.invalidate_memory.assert_awaited_once()
+        upstream.retain.assert_not_awaited()

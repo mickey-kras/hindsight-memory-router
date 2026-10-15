@@ -10,6 +10,7 @@ export type QuarantineStatus =
   | "pending"
   | "postponed"
   | "review_side_effect_started"
+  | "review_side_effect_completed"
   | "reviewed_allowed"
   | "reviewed_blocked";
 
@@ -108,6 +109,7 @@ export interface QuarantineStats {
   pending_items: number;
   postponed_items: number;
   review_side_effect_started_items: number;
+  review_side_effect_completed_items: number;
   reviewed_allowed_items: number;
   reviewed_blocked_items: number;
   encrypted_bytes: number;

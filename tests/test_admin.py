@@ -69,6 +69,7 @@ def service(
                 "pending_items": 1,
                 "postponed_items": 2,
                 "review_side_effect_started_items": 7,
+                "review_side_effect_completed_items": 0,
                 "reviewed_allowed_items": 3,
                 "reviewed_blocked_items": 4,
                 "encrypted_bytes": 5,
