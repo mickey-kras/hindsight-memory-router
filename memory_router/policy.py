@@ -18,6 +18,8 @@ from .repository import (
     REVIEWABLE_STATUSES,
     REVIEWED_ALLOWED,
     REVIEWED_BLOCKED,
+    MemoryIdentity,
+    MemoryReviewState,
 )
 from .scan_executor import scan_recalled, scan_request
 from .security import SafetyResult
@@ -188,9 +190,29 @@ class RouterPolicy:
         responses: list[tuple[str, dict[str, Any]]],
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
+        identities = [
+            (bank_id, str(result["id"]))
+            for bank_id, response in responses
+            for result in response.get("results", [])
+            if isinstance(result, dict) and "id" in result
+        ]
+        # External review decisions follow this request's pre-scan snapshot.
+        states = await self.repository.find_memory_review_states(identities) if identities else {}
+        dirty: set[MemoryIdentity] = set()
         for bank_id, response in responses:
             for result in response.get("results", []):
-                if await self._allow_recalled_or_degrade(writer_id, source, bank_id, result):
+                identity = (bank_id, str(result["id"]))
+                # A previous result may have reopened or quarantined this identity.
+                # Refresh after mutation attempts, including failed or uncertain commits,
+                # rather than allowing them from stale approved/absent metadata.
+                if identity in dirty:
+                    refreshed = await self.repository.find_memory_review_states([identity])
+                    states.pop(identity, None)
+                    states.update(refreshed)
+                    dirty.remove(identity)
+                if await self._allow_recalled_or_degrade(
+                    writer_id, source, bank_id, result, review_states=states, invalidated=dirty
+                ):
                     results.append(result)
         return results
 
@@ -343,10 +365,24 @@ class RouterPolicy:
             )
 
     async def _allow_recalled_or_degrade(
-        self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
+        self,
+        writer_id: str,
+        source: str,
+        bank_id: str,
+        result: dict[str, Any],
+        *,
+        review_states: dict[MemoryIdentity, MemoryReviewState] | None = None,
+        invalidated: set[MemoryIdentity] | None = None,
     ) -> bool:
         try:
-            return await self._allow_recalled(writer_id, source, bank_id, result)
+            return await self._allow_recalled(
+                writer_id,
+                source,
+                bank_id,
+                result,
+                review_states=review_states,
+                invalidated=invalidated,
+            )
         except ValueError:
             await self._quarantine_placeholder_or_degrade(writer_id, source, bank_id, result)
             return False
@@ -369,39 +405,60 @@ class RouterPolicy:
             return False
 
     async def _allow_recalled(
-        self, writer_id: str, source: str, bank_id: str, result: dict[str, Any]
+        self,
+        writer_id: str,
+        source: str,
+        bank_id: str,
+        result: dict[str, Any],
+        *,
+        review_states: dict[MemoryIdentity, MemoryReviewState] | None = None,
+        invalidated: set[MemoryIdentity] | None = None,
     ) -> bool:
-        state = await self.repository.find_memory_state(bank_id, str(result["id"]))
+        if review_states is None:
+            row = await self.repository.find_memory_state(bank_id, str(result["id"]))
+            state = (
+                MemoryReviewState(row["status"], row.get("source_content_sha256")) if row else None
+            )
+        else:
+            state = review_states.get((bank_id, str(result["id"])))
         digest = recalled_content_digest(result)
-        if state and state["status"] in {
+        if state and state.status in {
             REVIEWED_BLOCKED,
             REVIEW_IN_PROGRESS,
             REVIEW_SIDE_EFFECT_STARTED,
             REVIEW_SIDE_EFFECT_COMPLETED,
         }:
             return False
-        if state and state["status"] == REVIEWED_ALLOWED:
-            if state.get("source_content_sha256") == digest:
+        if state and state.status == REVIEWED_ALLOWED:
+            if state.source_content_sha256 == digest:
                 volatile = {
                     key: value for key, value in result.items() if key not in {"id", "text"}
                 }
                 scan = await scan_recalled(volatile, writer_id=writer_id)
                 if scan.safe:
                     return True
-                await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
+                await self._quarantine_recalled(
+                    writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+                )
                 return False
             scan = await scan_recalled(result, writer_id=writer_id)
-            await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
+            await self._quarantine_recalled(
+                writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+            )
             return False
         scan = await scan_recalled(result, writer_id=writer_id)
-        if state and state["status"] in REVIEWABLE_STATUSES:
-            if state.get("source_content_sha256") == digest:
+        if state and state.status in REVIEWABLE_STATUSES:
+            if state.source_content_sha256 == digest:
                 return False
-            await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
+            await self._quarantine_recalled(
+                writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+            )
             return False
         if scan.safe:
             return True
-        await self._quarantine_recalled(writer_id, source, bank_id, result, digest, scan)
+        await self._quarantine_recalled(
+            writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+        )
         return False
 
     async def _quarantine_recalled(
@@ -412,7 +469,11 @@ class RouterPolicy:
         result: dict[str, Any],
         digest: str,
         scan: SafetyResult,
+        *,
+        invalidated: set[MemoryIdentity] | None = None,
     ) -> None:
+        if invalidated is not None:
+            invalidated.add((bank_id, str(result["id"])))
         payload: dict[str, Any] = {
             "action": "recalled_memory",
             "bank_id": bank_id,

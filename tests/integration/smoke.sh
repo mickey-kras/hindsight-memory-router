@@ -178,6 +178,11 @@ begin_check "recreated quarantine identities consume synchronized admission budg
 docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 60 python < tests/integration/quarantine_admission.py
 pass_check
 
+begin_check "recall review metadata batches preserve snapshots and duplicate quarantine visibility"
+docker compose -p "$project" -f "$compose_file" cp tests/integration/recall-review-batches.py memory-router:/tmp/recall-review-batches.py
+docker compose -p "$project" -f "$compose_file" exec -T memory-router python /tmp/recall-review-batches.py
+pass_check
+
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
@@ -435,7 +440,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 9fd72e40f70a0a86cba77da02e7f2f530872be74fef84211db4dc1b66fa04bf6
+# integration-behavior-sha256: e2aeaaa265afbcf036ad009f95baf39c5c2b78db6769227328a4c9acc8219330
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
