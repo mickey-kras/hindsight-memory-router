@@ -626,6 +626,7 @@ def _scan_direct_fields(  # NOSONAR
     keycap_values: set[str] = set()
     direct_encoded_state = _EncodedState()
     scanned_values: set[tuple[str, bool]] = set()
+    reviewed_origins = {key: index + 1 for index, key in enumerate(sorted(options.reviewed_fields))}
     for index, (key, raw, is_key) in enumerate(fields):
         if options.deadline is not None and time.monotonic() >= options.deadline:
             result.add(SafetyFinding(options.time_limit_match or "time_limit", "span_limit"))
@@ -649,14 +650,14 @@ def _scan_direct_fields(  # NOSONAR
             result.transformations.update(transformations)
             if options.reviewed_fields:
                 canonical = security_provenance.ReviewedText(
-                    canonical, key in options.reviewed_fields
+                    canonical, reviewed_origins.get(key, 0) if not is_key else 0
                 )
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
                 options.canonical_output.append((key, canonical, is_key))
             if "keycap" in transformations:
                 keycap_values.add(canonical)
-            if key in options.reviewed_fields:
+            if not is_key and key in options.reviewed_fields:
                 continue
             security_rules._add_unicode_findings(result, transformations)
             signature = canonical, is_key

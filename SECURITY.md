@@ -51,7 +51,7 @@ Scanning uses NFKC, semantic folds, Latin-diacritic removal, and vendored Unicod
 
 Phrase and word boundaries reduce false positives. Related inflections may not match. Split scans exclude `system prompt`, `developer message`, and `new instructions` unless another detector or a complete field matches. Separate bare `api`/`key` and `private`/`key` fields are suppressed when only version tokens sit between them.
 
-Reviewed recall approvals pin stable memory identity/content (`id` + `text`). When that digest still matches, approved `id`/`text` remains reconstruction context during each recall scan. Only findings proven wholly contained in those exact approved field occurrences are exempt; volatile fields and new instructions spanning approved and volatile fields still suppress the result and reopen review, including repeated matches of an approved rule. Scanner limits and unknown provenance fail closed.
+Reviewed recall approvals pin stable memory identity/content (`id` + `text`). When that digest still matches, approved `id`/`text` remains reconstruction context during each recall scan. Only findings proven wholly contained in one exact approved field occurrence are exempt; volatile fields and new instructions spanning approved and volatile fields still suppress the result and reopen review, including repeated matches of an approved rule. The approval digest does not bind object field order, so findings assembled across `id` and `text` also suppress the result, even within one approved memory. Scanner limits and unknown provenance fail closed.
 
 ## Quarantine lifecycle
 

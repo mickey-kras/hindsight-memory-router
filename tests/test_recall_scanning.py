@@ -142,3 +142,13 @@ async def test_recall_worker_includes_new_card_context_in_approval(
 ) -> None:
     value = {"id": "m1", "text": text, "metadata": {"note": note}}
     assert (await scan_executor.scan_recalled(value, reviewed_stable=True)).safe is safe
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+async def test_recall_worker_does_not_approve_new_field_order(first: str) -> None:
+    second = "text" if first == "id" else "id"
+    approved = {first: "previous instructions", second: "system prompt ignore"}
+    assert (await scan_executor.scan_recalled(approved, reviewed_stable=True)).safe
+    assert not (
+        await scan_executor.scan_recalled(dict(reversed(approved.items())), reviewed_stable=True)
+    ).safe

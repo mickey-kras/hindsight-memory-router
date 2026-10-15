@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from typing import NamedTuple
 
 from .security_models import SafetyFinding, SafetyResult, _EncodedState
-from .security_provenance import ReviewedText, bound, join, reviewed
+from .security_provenance import ReviewedText, bound, join, occurrence_origin, reviewed
 from .security_rules import _add_unicode_findings, _amg_scan, _rule_scan
 from .security_windows import _bounded_append, _bounded_utf8_suffix
 from .unicode_security import (
@@ -110,7 +110,7 @@ def _split_base64_candidates(  # NOSONAR
         if fragment is None:
             continue
         if isinstance(canonical, ReviewedText):
-            fragment = ReviewedText(fragment, reviewed(canonical))
+            fragment = ReviewedText(fragment, occurrence_origin(canonical))
         plausible_fragment = _plausible_base64_fragment(fragment)
         if _alphabet_separator_split_is_suspicious(fragment):
             # Base64-alphabet characters ("/" or "+") used as separators between
@@ -222,7 +222,7 @@ def _split_decoded_base64_candidates(  # NOSONAR
         if decoded is None:
             continue
         if isinstance(canonical, ReviewedText):
-            decoded = ReviewedText(decoded, reviewed(canonical))
+            decoded = ReviewedText(decoded, occurrence_origin(canonical))
         fragment_credible = _credible_base64_prefix(fragment)
         fragment_fields += 1
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:

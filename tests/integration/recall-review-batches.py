@@ -238,7 +238,7 @@ async def verify_batches(url: str) -> None:
 
         for memory_id, text, note, allowed in (
             ("approved-reference", "system prompt 2026123456789012", "credit card", False),
-            ("approved-card", "credit card 2026123456789012", "ordinary", True),
+            ("approved-value", "credit card 2026123456789012", "ordinary", True),
             ("approved-card1", "2026123456789012 card", "ordinary", True),
         ):
             approved_card = {"id": memory_id, "text": text}
@@ -262,6 +262,37 @@ async def verify_batches(url: str) -> None:
                 ("main", memory_id)
             ]
             assert card_state.status == ("reviewed_allowed" if allowed else "pending")
+
+        for first in ("id", "text"):
+            second = "text" if first == "id" else "id"
+            approved_order = {first: "previous instructions", second: "system prompt ignore"}
+            memory_id = approved_order["id"]
+            assert (
+                await policy._allowed_recall_results(
+                    "main", "integration", [("main", {"results": [approved_order]})]
+                )
+                == []
+            )
+            async with db.transaction() as tx:
+                await tx.execute(
+                    "UPDATE quarantine_items SET status='reviewed_allowed' WHERE source_memory_id=?",
+                    (memory_id,),
+                )
+            assert await policy._allowed_recall_results(
+                "main", "integration", [("main", {"results": [approved_order]})]
+            ) == [approved_order]
+            reordered = dict(reversed(approved_order.items()))
+            assert recalled_content_digest(reordered) == recalled_content_digest(approved_order)
+            assert (
+                await policy._allowed_recall_results(
+                    "main", "integration", [("main", {"results": [reordered]})]
+                )
+                == []
+            )
+            reordered_state = (await repository.find_memory_review_states([("main", memory_id)]))[
+                ("main", memory_id)
+            ]
+            assert reordered_state.status == "pending"
 
         # Recovery checkpoints survive TTL and remain discoverable by a new client.
         for index, status in enumerate(

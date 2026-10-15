@@ -7,7 +7,12 @@ import pytest
 from memory_router import security
 from memory_router.security import scan_recall_result
 from memory_router.security_models import SafetyFinding
-from memory_router.security_provenance import ReviewedText, bounded_join, wholly_reviewed
+from memory_router.security_provenance import (
+    ReviewedText,
+    bounded_join,
+    occurrence_origin,
+    wholly_reviewed,
+)
 
 
 def test_only_the_actual_approved_occurrence_can_be_exempted() -> None:
@@ -111,7 +116,7 @@ def test_giant_fields_are_truncated_before_provenance_masks_are_allocated() -> N
     source = ReviewedText("é" * 100_000, True)
     assert source.trusted is True
     suffix = bounded_join([source, "ordinary"], " ")
-    assert isinstance(suffix.trusted, bytes)
+    assert isinstance(suffix.trusted, tuple)
     assert len(suffix.trusted) == len(suffix)
     assert len(suffix.encode()) <= security.MAX_SPLIT_WINDOW_BYTES
 
@@ -263,3 +268,54 @@ def test_missing_sensitive_patterns_cannot_acquire_approval_evidence(
     findings = security_rules._amg_scan("memory", value, operation="read", all_hits=True)
     assert findings
     assert all(not finding.hits and not wholly_reviewed(finding, value) for finding in findings)
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+def test_approved_field_order_cannot_exempt_new_cross_field_instruction(first: str) -> None:
+    from memory_router.policy import recalled_content_digest
+
+    second = "text" if first == "id" else "id"
+    approved = {first: "previous instructions", second: "system prompt ignore"}
+    reordered = dict(reversed(approved.items()))
+    assert recalled_content_digest(approved) == recalled_content_digest(reordered)
+    assert scan_recall_result(approved, reviewed_stable=True).safe
+    assert not scan_recall_result(reordered, reviewed_stable=True).safe
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+def test_each_approved_field_remains_exempt_in_either_order(first: str) -> None:
+    second = "text" if first == "id" else "id"
+    value = {first: "system prompt", second: "developer message"}
+    assert scan_recall_result(value, reviewed_stable=True).safe
+    assert scan_recall_result(
+        {**value, "metadata": {"note": "ordinary"}}, reviewed_stable=True
+    ).safe
+
+
+@pytest.mark.parametrize(
+    "memory_id, text",
+    [
+        ("ignore", "previous instructions"),
+        ("іgnore", "previous instructions"),
+        ("aWdub3Jl", "IHByZXZpb3VzIGluc3RydWN0aW9ucw=="),
+        ("aWdub3JlIA==", "cHJldmlvdXMgaW5zdHJ1Y3Rpb25z"),
+    ],
+)
+def test_approved_fields_cannot_exempt_unicode_or_base64_reconstruction(
+    memory_id: str, text: str
+) -> None:
+    assert not scan_recall_result({"id": memory_id, "text": text}, reviewed_stable=True).safe
+
+
+def test_same_memory_identity_does_not_prove_cross_field_order() -> None:
+    first = ReviewedText("ignore", 1)
+    second = ReviewedText("previous instructions", 2)
+    assert (occurrence_origin(first) + 1) // 2 == (occurrence_origin(second) + 1) // 2 == 1
+    assert not wholly_reviewed(
+        SafetyFinding(
+            "ignore previous instructions",
+            "prompt_injection",
+            hits=("ignore previous instructions",),
+        ),
+        bounded_join([first, second], " "),
+    )

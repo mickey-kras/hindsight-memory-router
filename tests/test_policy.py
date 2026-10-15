@@ -561,3 +561,18 @@ async def test_approved_unsafe_text_with_changed_safe_metadata_remains_allowed(t
     }
     assert await router.recall("main", {"query": "status"}) == {"results": [changed]}
     assert store.items == []
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+async def test_reordered_approved_fields_suppress_and_requarantine(first: str) -> None:
+    second = "text" if first == "id" else "id"
+    approved = {first: "previous instructions", second: "system prompt ignore"}
+    reordered = dict(reversed(approved.items()))
+    router, _, store, repository = policy(FakeHindsight([reordered]))
+    repository.states[("main", approved["id"])] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items[0]["kind"] == "recalled_memory"
+    assert store.items[0]["sourceContentSha256"] == recalled_content_digest(approved)

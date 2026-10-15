@@ -18,40 +18,47 @@ from .unicode_security import (
 
 
 class ReviewedText(str):
-    trusted: bool | bytes
+    trusted: int | tuple[int, ...]
 
-    def __new__(cls, value: str, trusted: bool | bytes = False) -> ReviewedText:
+    def __new__(cls, value: str, trusted: int | tuple[int, ...] = False) -> ReviewedText:
         instance = super().__new__(cls, value)
         instance.trusted = trusted
         return instance
 
 
-def reviewed(value: str) -> bool:
+def occurrence_origin(value: str) -> int:
     if not isinstance(value, ReviewedText):
-        return False
-    return value.trusted if isinstance(value.trusted, bool) else all(value.trusted)
+        return 0
+    if isinstance(value.trusted, int):
+        return max(0, value.trusted)
+    units = set(value.trusted) - {-1}  # Synthetic separators are neutral.
+    return units.pop() if len(units) == 1 and 0 not in units else 0
 
 
-def flags_for(value: str) -> bytes:
-    if isinstance(value, ReviewedText) and isinstance(value.trusted, bytes):
+def reviewed(value: str) -> bool:
+    return occurrence_origin(value) > 0
+
+
+def flags_for(value: str) -> tuple[int, ...]:
+    if isinstance(value, ReviewedText) and isinstance(value.trusted, tuple):
         return value.trusted
-    return bytes([reviewed(value)]) * len(value)
+    return (occurrence_origin(value),) * len(value)
 
 
 def join(parts: Iterable[str], separator: str = "") -> ReviewedText:
     entries = list(parts)
     value = separator.join(entries)
-    flags = bytearray()
+    flags: list[int] = []
     for index, entry in enumerate(entries):
         if index:
             # Inserted separators do not introduce unreviewed source content.
-            flags.extend([True] * len(separator))
+            flags.extend([-1] * len(separator))
         flags.extend(flags_for(entry))
-    return ReviewedText(value, bytes(flags))
+    return ReviewedText(value, tuple(flags))
 
 
 def slice_text(value: ReviewedText, start: int, stop: int | None = None) -> ReviewedText:
-    trusted = value.trusted if isinstance(value.trusted, bool) else value.trusted[start:stop]
+    trusted = value.trusted if isinstance(value.trusted, int) else value.trusted[start:stop]
     return ReviewedText(value[start:stop], trusted)
 
 
@@ -109,7 +116,7 @@ def trim(value: str, *, from_start: bool) -> ReviewedText:
 
 
 def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterable[ReviewedText]:
-    # Retain the source bit through bounded joins and slicing.
+    # Retain exact source fields through bounded joins and slicing.
     if len(fragments) < 2 or (deadline is not None and time.monotonic() >= deadline):
         return
     spaced_prefix = bounded_join(fragments[:-1], " ")
@@ -144,7 +151,7 @@ def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterabl
         yield join([left, right], " ")
         yield join([left, right])
         # Synthesized edge matches always depend on both fields.
-        trusted = all(reviewed(part) for part in fragments)
+        trusted = occurrence_origin(join(fragments))
         for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
             yield ReviewedText(edge, trusted)
 
@@ -161,9 +168,7 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
             originals.append(
                 ReviewedText(
                     "".join(pieces),
-                    b"".join(
-                        bytes([flags[index]]) * len(piece) for index, piece in enumerate(pieces)
-                    ),
+                    tuple(flags[index] for index, piece in enumerate(pieces) for _ in piece),
                 )
             )
     if not window.isascii():
@@ -181,7 +186,7 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
         removed = {match.start() for match in security_rules._IN_WORD_DIGIT.finditer(original)}
         keep = [index for index in range(len(original)) if index not in removed]
         without_digits = ReviewedText(
-            "".join(original[index] for index in keep), bytes(flags[index] for index in keep)
+            "".join(original[index] for index in keep), tuple(flags[index] for index in keep)
         )
         for value in (original, without_digits):
             for rendered in (
@@ -194,7 +199,7 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
                 variants.append(
                     ReviewedText(
                         "".join(rendered[index] for index in keep),
-                        bytes(flags[index] for index in keep),
+                        tuple(flags[index] for index in keep),
                     )
                 )
     for hit in finding.hits:
@@ -202,7 +207,7 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
         for variant in variants:
             for match in re.finditer(re.escape(hit), variant, re.I):
                 found = True
-                if not all(flags_for(variant)[match.start() : match.end()]):
+                if not reviewed(slice_text(variant, match.start(), match.end())):
                     return False
         if not found:
             return False
