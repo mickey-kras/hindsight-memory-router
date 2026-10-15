@@ -1,5 +1,3 @@
-"""Test synchronization and clocks scoped to scanner deadline arithmetic."""
-
 from __future__ import annotations
 
 import os
