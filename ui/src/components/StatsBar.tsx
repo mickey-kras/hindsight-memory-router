@@ -11,7 +11,7 @@ export function StatsBar({ stats }: Props) {
     { label: "Postponed", value: String(stats.postponed_items), tone: "text-zinc-300" },
     {
       label: "Stuck",
-      value: String(stats.review_side_effect_started_items),
+      value: String(stats.review_side_effect_started_items + stats.review_side_effect_completed_items),
       tone: "text-amber-300",
     },
     { label: "Total", value: String(stats.total_items) },

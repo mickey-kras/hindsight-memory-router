@@ -54,6 +54,7 @@ STAT_KEYS = (
     "pending_items",
     "postponed_items",
     "review_side_effect_started_items",
+    "review_side_effect_completed_items",
     "expired_items",
     "reviewed_allowed_items",
     "reviewed_blocked_items",
@@ -180,7 +181,14 @@ class QueueFilter:
 QUEUE_FILTER_PARAMS = ("bank_id", "writer_id", "principal_id", "kind", "status")
 QUEUE_KINDS = frozenset({"retain_request", "recall_request", "recalled_memory", "security_event"})
 QUEUE_STATUSES = frozenset(
-    {PENDING, POSTPONED, REVIEW_SIDE_EFFECT_STARTED, REVIEWED_ALLOWED, REVIEWED_BLOCKED}
+    {
+        PENDING,
+        POSTPONED,
+        REVIEW_SIDE_EFFECT_STARTED,
+        REVIEW_SIDE_EFFECT_COMPLETED,
+        REVIEWED_ALLOWED,
+        REVIEWED_BLOCKED,
+    }
 )
 
 
@@ -326,8 +334,8 @@ class QuarantineRepository:
         statement = (
             "SELECT "  # nosec B608  # noqa: S608
             + ",".join(_SUMMARY_COLUMNS)
-            + " FROM quarantine_items WHERE status IN ('pending','postponed','review_side_effect_started') "
-            "AND NOT(expires_at IS NOT NULL AND expires_at<=?)"
+            + " FROM quarantine_items WHERE (status IN ('review_side_effect_started','review_side_effect_completed') OR (status IN ('pending','postponed') "
+            "AND NOT(expires_at IS NOT NULL AND expires_at<=?)))"
             + clause
             + " ORDER BY created_at ASC, quarantine_id ASC LIMIT ? OFFSET ?"
         )
@@ -342,8 +350,8 @@ class QuarantineRepository:
         clause, params = _filter_clause(filter_)
         statement = (
             "SELECT COUNT(*) count FROM quarantine_items "  # nosec B608  # noqa: S608
-            "WHERE status IN ('pending','postponed','review_side_effect_started') "
-            "AND NOT(expires_at IS NOT NULL AND expires_at<=?)" + clause
+            "WHERE (status IN ('review_side_effect_started','review_side_effect_completed') OR (status IN ('pending','postponed') "
+            "AND NOT(expires_at IS NOT NULL AND expires_at<=?)))" + clause
         )
         async with self.db.transaction() as tx:
             row = await tx.fetchone(statement, (at, *params))
@@ -356,12 +364,13 @@ class QuarantineRepository:
                     """SELECT COUNT(*) total_items,
               SUM(CASE WHEN status='pending' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) pending_items,
               SUM(CASE WHEN status='postponed' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) postponed_items,
-              SUM(CASE WHEN status='review_side_effect_started' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) review_side_effect_started_items,
+              SUM(CASE WHEN status='review_side_effect_started' THEN 1 ELSE 0 END) review_side_effect_started_items,
+              SUM(CASE WHEN status='review_side_effect_completed' THEN 1 ELSE 0 END) review_side_effect_completed_items,
               SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 1 ELSE 0 END) expired_items,
               SUM(CASE WHEN status='reviewed_allowed' THEN 1 ELSE 0 END) reviewed_allowed_items,
               SUM(CASE WHEN status='reviewed_blocked' THEN 1 ELSE 0 END) reviewed_blocked_items,
               COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes FROM quarantine_items""",
-                    (at, at, at, at, at),
+                    (at, at, at, at),
                 )
                 or {}
             )

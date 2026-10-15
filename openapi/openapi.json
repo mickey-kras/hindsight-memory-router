@@ -354,7 +354,7 @@
       "get": {
         "operationId": "listQuarantineQueue",
         "summary": "List items awaiting review",
-        "description": "Returns metadata only, including items stuck in review_side_effect_started that await reconciliation. Encrypted payloads are fetched one item at a time. A principal token with a quarantine.review grant may list metadata for the granted banks only; ciphertext fetch and review actions keep admin-token auth.",
+        "description": "Returns metadata only, including review_side_effect_started items awaiting reconciliation and review_side_effect_completed items awaiting finalization. Checkpoints remain visible after their original TTL. Encrypted payloads are fetched one item at a time. A principal token with a quarantine.review grant may list metadata for the granted banks only; ciphertext fetch and review actions keep admin-token auth.",
         "tags": [
           "Quarantine administration"
         ],
@@ -431,7 +431,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Pending and postponed items ordered by creation time.",
+            "description": "Pending, postponed, and recoverable review_side_effect_started and review_side_effect_completed checkpoints ordered by creation time.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1830,6 +1830,7 @@
           "pending",
           "postponed",
           "review_side_effect_started",
+          "review_side_effect_completed",
           "reviewed_allowed",
           "reviewed_blocked"
         ]
@@ -1933,7 +1934,7 @@
           "total": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total number of reviewable items (pending + postponed) across all pages."
+            "description": "Total number of reviewable items (pending, postponed, and recoverable review_side_effect_started and review_side_effect_completed checkpoints) across all pages."
           }
         }
       },
@@ -2283,6 +2284,7 @@
           "pending_items",
           "postponed_items",
           "review_side_effect_started_items",
+          "review_side_effect_completed_items",
           "reviewed_allowed_items",
           "reviewed_blocked_items",
           "encrypted_bytes",
@@ -2299,6 +2301,10 @@
             "minimum": 0
           },
           "postponed_items": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "review_side_effect_completed_items": {
             "type": "integer",
             "minimum": 0
           },

@@ -283,3 +283,28 @@ test("tokens persist across reload within the tab but never hit localStorage", a
   const localStorageSize = await page.evaluate(() => window.localStorage.length);
   expect(localStorageSize).toBe(0);
 });
+
+
+test("completed checkpoints offer only original finalization after a fresh connection", async ({ page }, testInfo) => {
+  await page.request.post(`${MOCK_ORIGIN}/__seed-completed`);
+  await connect(page);
+  const prefix = testInfo.project.name === "phone" ? "card" : "row";
+  await page.getByTestId(`${prefix}-${RETAIN_ID}`).click();
+  await expect(page.getByRole("button", { name: "Finalize approval" })).toBeDisabled();
+  await expect(page.getByTestId("reject-open")).toHaveCount(0);
+  await expect(page.getByTestId("postpone")).toHaveCount(0);
+  await expect(page.getByTestId("reconcile-applied-open")).toHaveCount(0);
+  await page.getByTestId("key-input").fill(PRIVATE_PEM);
+  await page.getByTestId("import-key").click();
+  await page.getByTestId("decrypt").click();
+  await page.getByRole("button", { name: "Finalize approval" }).click();
+  await page.getByTestId("confirm-action").click();
+  await expect(page.getByText(`approved ${RETAIN_ID}`)).toBeVisible();
+  await page.getByTestId(`${prefix}-${RECALL_ID}`).click();
+  await expect(page.getByTestId("approve-open")).toHaveCount(0);
+  await expect(page.getByTestId("postpone")).toHaveCount(0);
+  await page.getByRole("button", { name: "Finalize rejection" }).click();
+  await page.getByTestId("confirm-action").click();
+  await expect(page.getByText(`rejected ${RECALL_ID}`)).toBeVisible();
+  expect((await mockActions(page)).map((a) => a.action)).toEqual(["approve", "reject"]);
+});

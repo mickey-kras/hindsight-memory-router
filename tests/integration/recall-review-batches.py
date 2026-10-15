@@ -12,12 +12,13 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
+from memory_router.admin import QuarantineAdminService
 from memory_router.db import PostgresDatabase, PostgresTx, SqliteTx, create_database, is_postgres
 from memory_router.errors import HttpError
 from memory_router.policy import RouterPolicy, recalled_content_digest
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import InMemoryRateLimiter
-from memory_router.repository import Capacity, QuarantineRepository
+from memory_router.repository import Capacity, QuarantineRepository, QueueFilter
 from memory_router.scan_executor import (
     scan_recalled,
     shutdown_scan_executor_async,
@@ -143,6 +144,29 @@ async def verify_batches(url: str) -> None:
         ]
         assert state.status == "pending"
         assert state.source_content_sha256 == recalled_content_digest(approved)
+
+        # Recovery checkpoints survive TTL and remain discoverable by a new client.
+        for index, status in enumerate(
+            ("review_side_effect_started", "review_side_effect_completed")
+        ):
+            qid = f"q_checkpoint_{index:016x}"
+            checkpoint = {
+                **seed,
+                "quarantine_id": qid,
+                "kind": "retain_request",
+                "source_bank": None,
+                "source_memory_id": None,
+                "status": status,
+                "encrypted": {"v": 1},
+            }
+            await repository.store(checkpoint, Capacity(1000, 1000, 1000000), mode="id", at=AT)
+            fresh = QuarantineAdminService(repository, None, None, None)
+            queue = await fresh.list_queue(10, 0, QueueFilter(status=status))
+            assert queue["total"] == 1, queue
+            assert queue["items"][0]["quarantine_id"] == qid, queue
+            assert (await fresh.read_item(qid))["record"]["status"] == status
+            assert (await fresh.stats())[f"{status}_items"] == 1
+
     finally:
         await replica.close()
         await db.close()
