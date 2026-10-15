@@ -431,7 +431,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Pending and postponed items ordered by creation time.",
+            "description": "Pending, postponed, and recoverable review_side_effect_started and review_side_effect_completed checkpoints ordered by creation time.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1934,7 +1934,7 @@
           "total": {
             "type": "integer",
             "minimum": 0,
-            "description": "Total number of reviewable items (pending + postponed) across all pages."
+            "description": "Total number of reviewable items (pending, postponed, and recoverable review_side_effect_started and review_side_effect_completed checkpoints) across all pages."
           }
         }
       },
