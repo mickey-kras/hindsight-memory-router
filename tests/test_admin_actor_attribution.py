@@ -26,6 +26,12 @@ def test_admin_action_audit_fields_follow_bounded_vocabularies() -> None:
     assert "quarantine_id" not in sanitize_fields({"quarantine_id": "not a quarantine id"})
 
 
+@pytest.mark.parametrize("field", ["decision", "action", "admin_token_scope"])
+@pytest.mark.parametrize("value", [["allow"], {"approve": True}, {"review"}])
+def test_audit_vocabularies_drop_unhashable_values(field: str, value: object) -> None:
+    assert field not in sanitize_fields({field: value})
+
+
 def test_admin_action_events_are_never_throttled(caplog: pytest.LogCaptureFixture) -> None:
     logger = logging.getLogger("memory_router.test")
     caplog.set_level(logging.INFO, logger="memory_router.test")

@@ -302,15 +302,14 @@ def _sanitize_vocabularies(fields: dict[str, Any]) -> None:
     if "reason" in fields:
         reason = safe_text(fields["reason"], fallback="runtime-other", limit=128).replace("_", "-")
         fields["reason"] = reason if reason in REASONS else "runtime-other"
-    decision = fields.get("decision")
-    if not isinstance(decision, str) or decision not in DECISIONS:
-        fields.pop("decision", None)
-    action = fields.get("action")
-    if not isinstance(action, str) or action not in ADMIN_ACTIONS:
-        fields.pop("action", None)
-    token_scope = fields.get("admin_token_scope")
-    if not isinstance(token_scope, str) or token_scope not in ADMIN_TOKEN_SCOPES:
-        fields.pop("admin_token_scope", None)
+    for field, vocabulary in (
+        ("decision", DECISIONS),
+        ("action", ADMIN_ACTIONS),
+        ("admin_token_scope", ADMIN_TOKEN_SCOPES),
+    ):
+        value = fields.get(field)
+        if not isinstance(value, str) or value not in vocabulary:
+            fields.pop(field, None)
 
 
 def _sanitize_scope(fields: dict[str, Any]) -> None:
