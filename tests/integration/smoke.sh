@@ -459,7 +459,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 36246be7309fedad10cdd7adfbf19726737da218b71c462bd89ea669a05ea45d
+# integration-behavior-sha256: 3b0259e6feeea1ab9ae5796e111e796c65eefae1b9b1d035c667f404f64db7da
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

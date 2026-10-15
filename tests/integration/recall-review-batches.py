@@ -236,6 +236,33 @@ async def verify_batches(url: str) -> None:
             == []
         )
 
+        for memory_id, text, note, allowed in (
+            ("approved-reference", "system prompt 2026123456789012", "credit card", False),
+            ("approved-card", "credit card 2026123456789012", "ordinary", True),
+            ("approved-card1", "2026123456789012 card", "ordinary", True),
+        ):
+            approved_card = {"id": memory_id, "text": text}
+            assert (
+                await policy._allowed_recall_results(
+                    "main", "integration", [("main", {"results": [approved_card]})]
+                )
+                == []
+            )
+            async with db.transaction() as tx:
+                await tx.execute(
+                    "UPDATE quarantine_items SET status='reviewed_allowed' WHERE source_memory_id=?",
+                    (memory_id,),
+                )
+            changed_card = {**approved_card, "metadata": {"note": note}}
+            assert recalled_content_digest(changed_card) == recalled_content_digest(approved_card)
+            assert await policy._allowed_recall_results(
+                "main", "integration", [("main", {"results": [changed_card]})]
+            ) == ([changed_card] if allowed else [])
+            card_state = (await repository.find_memory_review_states([("main", memory_id)]))[
+                ("main", memory_id)
+            ]
+            assert card_state.status == ("reviewed_allowed" if allowed else "pending")
+
         # Recovery checkpoints survive TTL and remain discoverable by a new client.
         for index, status in enumerate(
             ("review_side_effect_started", "review_side_effect_completed")

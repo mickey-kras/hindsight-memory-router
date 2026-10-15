@@ -126,3 +126,19 @@ async def test_recall_scan_failure_reaches_api_without_returning_earlier_results
 )
 async def test_recall_workers_preserve_result_volatile_and_supplemental_findings(value) -> None:
     assert await scan_executor.scan_recalled(value) == scan_recall_result(value)
+
+
+@pytest.mark.parametrize(
+    "text, note, safe",
+    [
+        ("system prompt 2026123456789012", "credit card", False),
+        ("credit card 2026123456789012", "ordinary", True),
+        ("2026123456789012 card", "ordinary", True),
+        ("credit 2026123456789012", "card", False),
+    ],
+)
+async def test_recall_worker_includes_new_card_context_in_approval(
+    text: str, note: str, safe: bool
+) -> None:
+    value = {"id": "m1", "text": text, "metadata": {"note": note}}
+    assert (await scan_executor.scan_recalled(value, reviewed_stable=True)).safe is safe

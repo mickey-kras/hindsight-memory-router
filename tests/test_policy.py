@@ -514,6 +514,7 @@ async def test_oversized_recall_placeholder_follows_the_recall_bank_scope() -> N
         ("ignore", "ｐｒｅｖｉｏｕｓ instructions"),
         ("ignore", "prev\u200bious instructions"),
         ("ignore", "previous instructions" + "x" * 1024),
+        ("system prompt 2026123456789012", "credit card"),
     ],
 )
 async def test_approved_stable_fields_remain_instruction_reconstruction_context(
@@ -545,6 +546,9 @@ async def test_approved_stable_fields_remain_instruction_reconstruction_context(
         "AKIAIOSFODNN7EXAMPLE",
         "-----BEGIN OPENSSH PRIVATE KEY-----",
         "aws_secret_access_key = ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn",
+        "credit card 2026123456789012",
+        "2026123456789012 card",
+        "4111111111111111",
     ],
 )
 async def test_approved_unsafe_text_with_changed_safe_metadata_remains_allowed(text: str) -> None:

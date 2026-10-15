@@ -37,6 +37,7 @@ _CARD_NUMBER = re.compile(r"(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)")
 
 
 _CARD_CONTEXT = re.compile(r"\b(?:card|credit|debit|visa|mastercard|amex|discover|pan)\b", re.I)
+_CARD_CONTEXT_RADIUS = 32
 
 
 _DETECTORS = (
@@ -479,16 +480,17 @@ def _amg_scan(  # NOSONAR
                     patterns = [entry[0] for entry in AUTONOMY_PATTERNS]
                 # Approval needs complete, untruncated occurrences. Unknown detectors
                 # have no evidence sufficient to exempt their findings.
-                hits = tuple(
-                    dict.fromkeys(
-                        match.group(0)
-                        for pattern in patterns
-                        if isinstance(pattern, re.Pattern)
-                        for match in pattern.finditer(candidate)
-                    )
+                matches = tuple(
+                    match
+                    for pattern in patterns
+                    if isinstance(pattern, re.Pattern)
+                    for match in pattern.finditer(candidate)
                 )
+                hits = tuple(dict.fromkeys(match.group(0) for match in matches))
             if name == "sensitive_data" and not _keep_sensitive_detection(candidate, hits):
                 continue
+            if all_hits and name == "sensitive_data":
+                hits = _sensitive_context_hits(candidate, matches)
             finding = SafetyFinding(
                 string_hits[0] if string_hits else name,
                 _REASON_MAP.get(name, name),
@@ -511,6 +513,28 @@ def _amg_scan(  # NOSONAR
     return findings
 
 
+def _sensitive_context_hits(value: str, matches: Iterable[re.Match[str]]) -> tuple[str, ...]:
+    # Non-Luhn references become sensitive only with nearby card context. Approval
+    # must cover both the number and every keyword that activates the finding.
+    contextual: list[str] = []
+    for match in matches:
+        hit = match.group(0)
+        if not _CARD_NUMBER.fullmatch(hit.strip()) or _luhn_valid(re.sub(r"\D", "", hit)):
+            contextual.append(hit)
+            continue
+        start = max(0, match.start() - _CARD_CONTEXT_RADIUS)
+        end = min(len(value), match.end() + _CARD_CONTEXT_RADIUS)
+        for keyword in _CARD_CONTEXT.finditer(value[start:end]):
+            contextual.append(
+                value[
+                    min(match.start(), start + keyword.start()) : max(
+                        match.end(), start + keyword.end()
+                    )
+                ]
+            )
+    return tuple(dict.fromkeys(contextual))
+
+
 def _keep_sensitive_detection(value: str, hits: tuple[str, ...]) -> bool:
     card_matches = list(_CARD_NUMBER.finditer(value))
     if not card_matches:
@@ -520,7 +544,11 @@ def _keep_sensitive_detection(value: str, hits: tuple[str, ...]) -> bool:
         return True
     for match in card_matches:
         digits = re.sub(r"\D", "", match.group(0))
-        context = value[max(0, match.start() - 32) : min(len(value), match.end() + 32)]
+        context = value[
+            max(0, match.start() - _CARD_CONTEXT_RADIUS) : min(
+                len(value), match.end() + _CARD_CONTEXT_RADIUS
+            )
+        ]
         if _CARD_CONTEXT.search(context) or _luhn_valid(digits):
             return True
     return False

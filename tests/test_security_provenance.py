@@ -191,3 +191,73 @@ def test_approved_sensitive_patterns_keep_safe_context_and_block_new_occurrences
         {"id": "m1", "text": approved_secret + "; " + new_prefix, "metadata": {"note": new_suffix}},
         reviewed_stable=True,
     ).safe
+
+
+@pytest.mark.parametrize("note", ["credit card", "visa", "debit", "PAN"])
+def test_approved_numeric_reference_does_not_exempt_new_card_context(note: str) -> None:
+    assert not scan_recall_result(
+        {"id": "m1", "text": "system prompt 2026123456789012", "metadata": {"note": note}},
+        reviewed_stable=True,
+    ).safe
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["credit card 2026123456789012", "2026123456789012 card", "4111111111111111"],
+)
+@pytest.mark.parametrize("memory_id", ["m1", "item123"])
+def test_approved_card_finding_keeps_benign_metadata(text: str, memory_id: str) -> None:
+    stable = {"id": memory_id, "text": text}
+    assert scan_recall_result(stable, reviewed_stable=True).safe
+    assert scan_recall_result(
+        {**stable, "metadata": {"note": "ordinary"}}, reviewed_stable=True
+    ).safe
+
+
+def test_card_context_occurrences_include_every_activating_keyword() -> None:
+    from memory_router.security_rules import _amg_scan
+
+    value = "credit 2026123456789012 card"
+    contextual = _amg_scan("memory", value, operation="read", all_hits=True)
+    sensitive = next(finding for finding in contextual if finding.detector == "sensitive_data")
+    assert sensitive.hits == ("credit 2026123456789012", "2026123456789012 card")
+    # The ordinary scan retains its existing output contract.
+    ordinary = _amg_scan("memory", value, operation="read")
+    assert next(finding for finding in ordinary if finding.detector == "sensitive_data").hits == ()
+
+
+@pytest.mark.parametrize("gap, expected", [(26, True), (27, False)])
+def test_card_context_preserves_existing_32_character_radius(gap: int, expected: bool) -> None:
+    from memory_router.security_rules import _amg_scan
+
+    value = "2026123456789012 " + "x" * gap + " card"
+    assert bool(_amg_scan("memory", value, operation="read", all_hits=True)) is expected
+
+
+def test_card_context_uses_exact_detector_occurrence_after_numeric_id() -> None:
+    from memory_router.security_rules import _amg_scan
+
+    findings = _amg_scan("memory", "m1 2026123456789012 card", operation="read", all_hits=True)
+    assert next(finding for finding in findings if finding.detector == "sensitive_data").hits == (
+        "2026123456789012 card",
+    )
+
+
+def test_missing_sensitive_patterns_cannot_acquire_approval_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from memory_router import security_rules
+
+    class UnknownSensitiveDetector:
+        def inspect(self, key: str, value: str, *, operation: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                matched=True, detector="sensitive_data", severity="high", metadata={}
+            )
+
+    monkeypatch.setattr(security_rules, "_DETECTORS", (UnknownSensitiveDetector(),))
+    value = ReviewedText("credit card 2026123456789012", True)
+    findings = security_rules._amg_scan("memory", value, operation="read", all_hits=True)
+    assert findings
+    assert all(not finding.hits and not wholly_reviewed(finding, value) for finding in findings)
