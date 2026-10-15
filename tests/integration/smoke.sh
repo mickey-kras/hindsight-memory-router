@@ -198,6 +198,9 @@ if [[ "$mode" == "fake" && "$router_db" == "postgres" ]]; then
   docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 30 python < tests/integration/quarantine-wrap-postgres.py
   pass_check
 
+  begin_check "PostgreSQL quota admission preserves boundaries, concurrency, rollback and SQLite parity"
+  docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 60 python < tests/integration/rate-limit-postgres.py
+  pass_check
   begin_check "human login consumption and revocation are shared in PostgreSQL"
   docker compose -p "$project" -f "$compose_file" exec -T memory-router python < tests/integration/human-auth-postgres.py
   pass_check
@@ -270,7 +273,21 @@ decrypt_local() {
   printf '%s' "$QUARANTINE_PRIVATE_KEY" | docker run --rm -i \
     -v "${input_file}:/input.json:ro" \
     hindsight-memory-router:ci \
-    python -c 'import base64,json,sys; from pathlib import Path; from memory_router.envelope import decrypt_envelope; private_key=base64.b64decode(sys.stdin.read()).decode(); value=json.loads(Path("/input.json").read_text()); print(json.dumps(decrypt_envelope(value["encrypted"], private_key), separators=(",", ":")))'
+    python -c '
+import base64,json,sys
+from pathlib import Path
+from memory_router.canonical import sha256_hex
+from memory_router.envelope import canonical_decrypted, decrypt_envelope, estimate_envelope_size
+private_key=base64.b64decode(sys.stdin.read()).decode()
+value=json.loads(Path(sys.argv[1]).read_text())
+envelope=value["encrypted"]
+decrypted=decrypt_envelope(envelope, private_key)
+assert sha256_hex(canonical_decrypted(decrypted)) == envelope["sha256"] == value["record"]["sha256"]
+wrapped_bytes=len(base64.b64decode(envelope["encryption"]["wrapped_key_b64"]))
+serialized_bytes=len(json.dumps(envelope, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+assert estimate_envelope_size(decrypted, wrapped_bytes) == serialized_bytes == value["record"]["encrypted_bytes"]
+print(json.dumps(decrypted, separators=(",", ":")))
+' /input.json
 }
 
 begin_check "scoped admin tokens enforce read review and cleanup boundaries"
@@ -414,7 +431,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 3f657221c86d17ad5abeb5827fb3e9763db5863804f5e7fd3588a687e4e048a3
+# integration-behavior-sha256: fcdeab0572517fea58b1cec837b1af5d38ad75c3866cb9fa08eb280eb30d96ef
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -575,7 +592,18 @@ PY
   pass_check
 fi
 
-begin_check "bulk cleanup uses dry-run count confirmation"
+begin_check "bulk cleanup validates reasons and uses dry-run count confirmation"
+for cleanup_dry_run in true false; do
+  invalid_cleanup_status="$(curl --max-time 5 -sS -o "$tmp_dir/invalid-cleanup.json" -w '%{http_code}' \
+    -H "Authorization: Bearer ${admin_cleanup_token}" -H "Content-Type: application/json" \
+    -X POST "${router_url}/admin/quarantine/cleanup" \
+    -d "{\"reasons\":[\"auth_failed\",\"unknown_reason\"],\"dry_run\":${cleanup_dry_run},\"expected_count\":0}")"
+  [[ "$invalid_cleanup_status" == "400" ]] || fail_check "unknown cleanup reason was accepted"
+  python3 - "$tmp_dir/invalid-cleanup.json" <<'PY'
+import json, sys
+assert json.load(open(sys.argv[1]))["error"] == "invalid_cleanup"
+PY
+done
 cleanup_preview="$(admin_cleanup_post "/admin/quarantine/cleanup" '{"scope":"pending","dry_run":true}')"
 cleanup_count="$(printf '%s' "$cleanup_preview" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')"
 cleanup_result="$(admin_cleanup_post "/admin/quarantine/cleanup" "{\"scope\":\"pending\",\"dry_run\":false,\"expected_count\":${cleanup_count}}")"
