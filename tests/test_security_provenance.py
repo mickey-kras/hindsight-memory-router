@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import tracemalloc
 
 import pytest
 
@@ -119,6 +120,23 @@ def test_giant_fields_are_truncated_before_provenance_masks_are_allocated() -> N
     assert isinstance(suffix.trusted, tuple)
     assert len(suffix.trusted) == len(suffix)
     assert len(suffix.encode()) <= security.MAX_SPLIT_WINDOW_BYTES
+
+
+def test_large_source_fields_do_not_allocate_full_origin_masks_for_edge_windows() -> None:
+    from memory_router.security_provenance import sequence_windows
+
+    fragments = [ReviewedText("x" * 900_000, 1), ReviewedText("y" * 900_000, 2)]
+    tracemalloc.start()
+    try:
+        windows = list(sequence_windows(fragments, deadline=None))
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert windows
+    assert (
+        max(len(window.encode()) for window in windows) <= 2 * security.MAX_SPLIT_WINDOW_BYTES + 1
+    )
+    assert peak < 8 * 1024 * 1024
 
 
 @pytest.mark.parametrize("prefix", ["ign1️⃣ore", "ignóre", "іgnore"])

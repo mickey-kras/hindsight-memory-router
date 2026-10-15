@@ -151,7 +151,8 @@ def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterabl
         yield join([left, right], " ")
         yield join([left, right])
         # Synthesized edge matches always depend on both fields.
-        trusted = occurrence_origin(join(fragments))
+        origin = occurrence_origin(fragments[0])
+        trusted = origin if origin == occurrence_origin(fragments[1]) else 0
         for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
             yield ReviewedText(edge, trusted)
 
