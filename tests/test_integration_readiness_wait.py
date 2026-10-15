@@ -11,6 +11,72 @@ import pytest
 
 
 @pytest.mark.parametrize(
+    ("statuses", "delay", "budget", "succeeds"),
+    [
+        ([503, 200], 0, 3, True),
+        ([503], 0, 2, False),
+        ([200], 1.2, 3, True),
+        ([200], 3, 1, False),
+    ],
+)
+def test_startup_readiness_wait_requires_success_before_deadline(
+    statuses: list[int], delay: float, budget: int, succeeds: bool
+) -> None:
+    requests: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            status = statuses[min(len(requests), len(statuses) - 1)]
+            requests.append(self.path)
+            time.sleep(delay)
+            self.send_response(status)
+            self.end_headers()
+            try:
+                self.wfile.write(b'{"status":"healthy"}')
+            except BrokenPipeError:
+                pass  # The deadline test deliberately disconnects a slow response.
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    script = Path("tests/integration/smoke.sh").read_text()
+    function = script.split("wait_for_readiness() {", 1)[1].split("\n}\n", 1)[0]
+    function = (
+        "wait_for_readiness() {" + function.replace("SECONDS + 60", f"SECONDS + {budget}") + "\n}\n"
+    )
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = subprocess.run(  # noqa: S603 - checked-in function, loopback fixture
+                [  # noqa: S607 - standard shell used by smoke.sh
+                    "bash",
+                    "-c",
+                    'set -euo pipefail\nrouter_url="$1"\n'
+                    'fail_check() { printf "%s\\n" "$1" >&2; exit 1; }\n'
+                    + function
+                    + "wait_for_readiness /health/ready",
+                    "readiness-test",
+                    f"http://127.0.0.1:{server.server_port}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=budget + 3,
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+    assert (result.returncode == 0) is succeeds, result.stderr
+    assert requests and set(requests) == {"/health/ready"}
+    if succeeds:
+        assert json.loads(result.stdout) == {"status": "healthy"}
+        assert len(requests) >= len(statuses)
+    else:
+        assert not result.stdout
+        assert "readiness /health/ready did not become reachable" in result.stderr
+
+
+@pytest.mark.parametrize(
     ("delay", "status", "event", "budget", "succeeds"),
     [
         (5.2, 503, "hindsight_readiness_failed", 7, True),
