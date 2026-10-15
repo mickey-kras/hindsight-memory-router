@@ -45,19 +45,19 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "04f8c8c9243d3b33e3bf6084a883cb765f77fedbf54516cef63768e9370eb645",
+              ".github/scripts/release-policy.test.py": "5e7156518a462208f2c57cb39e58e6b5d677b8dbe735a3ce80f358d9940cb969",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
-              ".github/workflows/publish.yml": "49b192c0d8e5740e8ab5b9e0df41e6fc8029f894682a5005c29f2eadf09ca8e5",
-              ".github/workflows/release.yml": "1c0f53465d44deaeeced2158c3dd668ca0e625acf51212357be597ffaed0094c",
+              ".github/workflows/publish.yml": "f659829cf22a2c55b367c19c76060c00ffa60695e2c10763bfdb3d9a7af626bf",
+              ".github/workflows/release.yml": "588a6dfc6f4dd61cc94b78334e324da8d54f3ae12eead536f805786797311634",
               ".github/workflows/ci.yml": "abb295bf236a0665afaff4eb77c775a5495fd4e882e4c99bf954e4cabcb9d33d",
               ".github/workflows/aislop.yml": "0ecc80af57e081678cb78f6c088eb9f89f10b497d7c8105b4b74b88a0ce9a724",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
-              ".github/workflows/architecture.yml": "5204bbf4fbc12302cc4160aea78d4cedb1a812b9c45e775bdd793cd39757698e",
+              ".github/workflows/architecture.yml": "542a6d4f5fea1a60c5562c4439af26443cfcdaddd8303fa55b2aa09e6f3cfe09",
               ".github/scripts/report-main-failures.cjs": "652f29115b78eee5f7b56a8043cddda94e9cf7e74cb8559d1398a5c972697222",
-              ".github/scripts/report-main-failures.test.cjs": "a0aee72db3ad204e59882a7f8732fa896557f344fdd1eb91ae40336de5cb4c7d"
+              ".github/scripts/report-main-failures.test.cjs": "74e7e246fc4a2061069455a8e2cdbe1921206230673ea4f73276be59e9a33e8f"
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
