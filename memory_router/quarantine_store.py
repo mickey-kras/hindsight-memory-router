@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any, cast
 
 from .canonical import sha256_hex
+from .db import Tx
 from .dedupe import request_family_identity, security_event_identity
 from .envelope import (
     _create_prepared_provider_envelope,
@@ -102,8 +103,11 @@ class QuarantineStore:
         if existing_for_charge is not None:
             quarantine_id = str(existing_for_charge["quarantine_id"])
         prepared = self._assert_item_size(input_, quarantine_id)
+        family = request_family_identity(
+            input_["kind"], input_["reason"], input_.get("writerId"), input_["payload"]
+        )
         known = self._known_identity(input_, existing_for_charge is not None)
-        await self._charge(input_, known, self.rate_limiter)
+        await self._charge(input_, known, self.rate_limiter, family=family)
         self._assert_writable(input_, existing_for_charge)
 
         async with self._wrap_slots:
@@ -117,6 +121,19 @@ class QuarantineStore:
             capacity = self.capacity
             if _anonymous_auth_failure(input_):
                 capacity = Capacity(capacity.max_pending_items, 0, capacity.max_encrypted_bytes, 0)
+
+            async def charge_current_identity(tx: Tx, current: dict[str, Any] | None) -> None:
+                # Preserve the committed early attempt. If storage now sees a different
+                # admission class, charge that class in the same transaction as the item.
+                current_known = self._known_identity(input_, current is not None)
+                if current_known != known:
+                    await self._charge(
+                        input_,
+                        current_known,
+                        self.rate_limiter.consumer_for_transaction(tx),
+                        family=family,
+                    )
+
             await self.repository.store(
                 item,
                 capacity,
@@ -125,6 +142,7 @@ class QuarantineStore:
                 require_reviewable_request=True,
                 expected_snapshot=snapshot,
                 incoming_evidence=evidence,
+                before_store=charge_current_identity,
             )
             return {"quarantine_id": quarantine_id, "sha256": str(encrypted["sha256"])}
 
@@ -243,7 +261,12 @@ class QuarantineStore:
         return False
 
     async def _charge(
-        self, input_: dict[str, Any], known: bool, session: RateLimitConsumer
+        self,
+        input_: dict[str, Any],
+        known: bool,
+        session: RateLimitConsumer,
+        *,
+        family: tuple[str, str] | None = None,
     ) -> None:
         window = self.limits.rate_limit_window_ms
         auth_audit = _anonymous_auth_failure(input_)
@@ -267,7 +290,7 @@ class QuarantineStore:
             if input_["reason"] == "unknown_writer"
             else input_.get("writerId") or "unknown-writer"
         )
-        family = request_family_identity(
+        family = family or request_family_identity(
             input_["kind"], input_["reason"], input_.get("writerId"), input_["payload"]
         )
         identities: list[Distinct] = []

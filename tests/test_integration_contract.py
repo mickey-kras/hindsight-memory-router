@@ -88,6 +88,7 @@ REQUIRED_WORKFLOW_CHECKS = {
     "principal quarantine approval preserves original bank",
     "principal facade content requires memory recall",
     "security audit capacity is scoped and durable across replicas",
+    "recreated quarantine identities consume synchronized admission budgets",
     "metadata-heavy request scanning preserves liveness responsiveness",
     "native recall scanning preserves liveness responsiveness",
     "scoped admin tokens enforce read review and cleanup boundaries",

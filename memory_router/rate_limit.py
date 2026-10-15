@@ -43,6 +43,8 @@ class RateLimitConsumer(Protocol):
 
 
 class RateLimiter(RateLimitConsumer, Protocol):
+    def consumer_for_transaction(self, tx: Tx) -> RateLimitConsumer: ...
+
     async def with_identity_lock[T](
         self, identity: str, operation: Callable[[RateLimitConsumer], Awaitable[T]]
     ) -> T: ...
@@ -91,6 +93,9 @@ class InMemoryRateLimiter:
         self.locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self.guard = asyncio.Lock()
         self.consume_count = 0
+
+    def consumer_for_transaction(self, tx: Tx) -> RateLimitConsumer:
+        return self
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
         await self.consume_many_distinct(buckets, [], at_ms)
@@ -383,6 +388,11 @@ class PostgresRateLimiter:
         self.database = database
         self.consume_count = 0
         self.max_window_cache = [0]
+
+    def consumer_for_transaction(self, tx: Tx) -> RateLimitConsumer:
+        # Cache observations belong to this transaction, whose commit is owned by
+        # the caller. Do not update the limiter's cache before that commit.
+        return _PostgresSession(tx, max_window_cache=[0])
 
     async def initialize(self) -> None:
         async with self.database.transaction() as tx:

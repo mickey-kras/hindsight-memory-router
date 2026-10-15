@@ -174,6 +174,10 @@ begin_check "security audit capacity is scoped and durable across replicas"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/security-event-capacity.py
 pass_check
 
+begin_check "recreated quarantine identities consume synchronized admission budgets"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 60 python < tests/integration/quarantine_admission.py
+pass_check
+
 begin_check "router runtime does not receive quarantine private key"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c 'import os,sys; sys.exit(1 if "QUARANTINE_PRIVATE_KEY" in os.environ else 0)' || fail_check "router runtime received QUARANTINE_PRIVATE_KEY"
 pass_check
@@ -431,7 +435,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 25fe8da5e54ab78f4758fa2095de8bb38fb45d5f70bd836ebb0be4d4a2dba5f3
+# integration-behavior-sha256: 9fd72e40f70a0a86cba77da02e7f2f530872be74fef84211db4dc1b66fa04bf6
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

@@ -63,6 +63,17 @@ async def test_postgres_max_window_cache_updates_only_after_commit() -> None:
     assert cache[0] == 120_000
 
 
+@pytest.mark.asyncio
+async def test_transaction_consumer_records_windows_without_uncommitted_shared_cache() -> None:
+    tx = FakeRateLimitTx()
+    limiter = PostgresRateLimiter(SimpleNamespace())
+    consumer = limiter.consumer_for_transaction(tx)
+    await consumer.consume_many([Bucket("recreation", 10, 120_000)], at_ms=100_000)
+    assert limiter.max_window_cache == [0]
+    assert any("INSERT INTO quarantine_rate_limit_state" in sql for sql, _ in tx.executed)
+    assert any("INSERT INTO quarantine_rate_limit_events" in sql for sql, _ in tx.executed)
+
+
 async def _result(value: str) -> str:
     return value
 

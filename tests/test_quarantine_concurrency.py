@@ -266,7 +266,7 @@ async def test_sweep_during_wrapping_preserves_the_original_attempt_charge(
     saved = await repository.get(result["quarantine_id"])
     assert saved and saved["requarantine_count"] == 0
     assert saved["created_at"] == "2026-08-10T00:00:00.000Z"
-    assert len(limiter.events["quarantine-writes"]) == 1
+    assert len(limiter.events["quarantine-writes"]) == 2
     assert len(limiter.events["quarantine-requarantine-ops"]) == 1
 
 
