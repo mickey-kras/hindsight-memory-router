@@ -237,7 +237,8 @@ async def verify_postgres_upgrade(url: str) -> None:
             async with serving.transaction() as tx:
                 indices = await tx.fetchall(
                     "SELECT c.relname,i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
-                    "WHERE i.indrelid='quarantine_items'::regclass AND c.relname LIKE 'idx_quarantine_capacity_%'"
+                    "WHERE i.indrelid='quarantine_items'::regclass AND c.relname LIKE ?",
+                    ("idx_quarantine_capacity_%",),
                 )
                 assert {row["relname"] for row in indices} == set(names), indices
                 assert all(row["indisvalid"] for row in indices), indices

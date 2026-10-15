@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,8 +8,47 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from psycopg._queries import PostgresQuery
+from psycopg.adapt import Transformer
 
 from memory_router import db as db_module
+
+
+def test_postgres_upgrade_helper_queries_bind_with_installed_driver() -> None:
+    source = ast.parse(Path("tests/integration/security-event-capacity.py").read_text())
+    helper = next(
+        node
+        for node in source.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "verify_postgres_upgrade"
+    )
+    converted = []
+    for node in ast.walk(helper):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"execute", "fetchone", "fetchall"}
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            continue
+        statement = node.args[0].value
+        observer = isinstance(node.func.value, ast.Name) and node.func.value.id == "observer"
+        params = None if observer else ()
+        if len(node.args) > 1:
+            assert isinstance(node.args[1], ast.Tuple)
+            # Actual literal parameters (including the LIKE pattern) are used;
+            # dynamic values get representative scalars for driver conversion.
+            params = tuple(
+                value.value if isinstance(value, ast.Constant) else 1 for value in node.args[1].elts
+            )
+        query = PostgresQuery(Transformer())
+        query.convert(statement if observer else db_module.PostgresTx.sql(statement), params)
+        converted.append(query)
+    assert converted
+    catalog = next(query for query in converted if b"c.relname LIKE" in query.query)
+    assert b"c.relname LIKE $1" in catalog.query
+    assert catalog.params == [b"idx_quarantine_capacity_%"]
 
 
 class Cursor:
