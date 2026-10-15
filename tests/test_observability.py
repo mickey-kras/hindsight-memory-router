@@ -25,7 +25,7 @@ from memory_router.logging import (
     log_event,
     reset_log_state,
 )
-from memory_router.logging_contract import sanitize_fields, sanitize_output_field
+from memory_router.logging_contract import INTEGER_FIELDS, sanitize_fields, sanitize_output_field
 from memory_router.observability import RequestIdMiddleware, current_request_id
 from memory_router.openclaw import OpenClawFacade
 from memory_router.policy import RouterPolicy
@@ -742,6 +742,27 @@ async def test_version_failure_does_not_queue_or_amplify_concurrent_requests(
         "message": "Upstream memory service is unavailable",
     }
     version.assert_awaited_once()
+
+
+@pytest.mark.parametrize("field", sorted(INTEGER_FIELDS))
+@pytest.mark.parametrize("value", [True, False, -1, 1.0])
+def test_integer_log_fields_reject_invalid_values(field: str, value: object) -> None:
+    assert sanitize_output_field(field, value) is None
+
+
+@pytest.mark.parametrize("field", sorted(INTEGER_FIELDS))
+@pytest.mark.parametrize("value", [0, 200])
+def test_integer_log_fields_preserve_valid_values(field: str, value: int) -> None:
+    assert sanitize_output_field(field, value) is value
+
+
+@pytest.mark.parametrize("field", sorted(INTEGER_FIELDS))
+def test_integer_log_fields_preserve_integer_subclasses(field: str) -> None:
+    class AuditInteger(int):
+        pass
+
+    value = AuditInteger(200)
+    assert sanitize_output_field(field, value) is value
 
 
 def test_invalid_logger_name_is_fingerprinted() -> None:

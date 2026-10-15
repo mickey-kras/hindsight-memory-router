@@ -237,9 +237,7 @@ def sanitize_output_field(key: str, value: Any) -> Any | None:
     if key in TEXT_LIMITS:
         return safe_text(value, fallback="unavailable", limit=TEXT_LIMITS[key])
     if key in INTEGER_FIELDS:
-        return (
-            value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
-        )
+        return _nonnegative_integer(value)
     if key in DURATION_FIELDS:
         return _nonnegative_number(value)
     if key in BOOLEAN_FIELDS:
@@ -247,6 +245,10 @@ def sanitize_output_field(key: str, value: Any) -> Any | None:
     if key in {"error_kind", "error_fingerprint", "outcome", "route_class", "reason"}:
         return safe_text(value, fallback="unavailable", limit=128)
     return None
+
+
+def _nonnegative_integer(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _nonnegative_number(value: Any) -> float | None:
