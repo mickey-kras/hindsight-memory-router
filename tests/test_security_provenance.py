@@ -243,8 +243,10 @@ def test_card_context_uses_exact_detector_occurrence_after_numeric_id() -> None:
     )
 
 
+@pytest.mark.parametrize("text", ["credit card 2026123456789012", "2026123456789012"])
 def test_missing_sensitive_patterns_cannot_acquire_approval_evidence(
     monkeypatch: pytest.MonkeyPatch,
+    text: str,
 ) -> None:
     from types import SimpleNamespace
 
@@ -257,7 +259,7 @@ def test_missing_sensitive_patterns_cannot_acquire_approval_evidence(
             )
 
     monkeypatch.setattr(security_rules, "_DETECTORS", (UnknownSensitiveDetector(),))
-    value = ReviewedText("credit card 2026123456789012", True)
+    value = ReviewedText(text, True)
     findings = security_rules._amg_scan("memory", value, operation="read", all_hits=True)
     assert findings
     assert all(not finding.hits and not wholly_reviewed(finding, value) for finding in findings)

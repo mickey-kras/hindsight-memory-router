@@ -487,7 +487,11 @@ def _amg_scan(  # NOSONAR
                     for match in pattern.finditer(candidate)
                 )
                 hits = tuple(dict.fromkeys(match.group(0) for match in matches))
-            if name == "sensitive_data" and not _keep_sensitive_detection(candidate, hits):
+            if (
+                name == "sensitive_data"
+                and (not all_hits or hits)
+                and not _keep_sensitive_detection(candidate, hits)
+            ):
                 continue
             if all_hits and name == "sensitive_data":
                 hits = _sensitive_context_hits(candidate, matches)
