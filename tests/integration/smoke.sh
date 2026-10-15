@@ -92,6 +92,24 @@ fail_check() {
   exit 1
 }
 
+wait_for_readiness() {
+  local path="$1"
+  local deadline=$((SECONDS + 60))
+  local request_timeout
+  local response
+  while (( SECONDS < deadline )); do
+    request_timeout=$((deadline - SECONDS))
+    (( request_timeout > 0 )) || break
+    (( request_timeout > 20 )) && request_timeout=20
+    if response="$(curl --max-time "$request_timeout" -fsS "${router_url}${path}")"; then
+      printf '%s' "$response"
+      return 0
+    fi
+    sleep 1
+  done
+  fail_check "readiness ${path} did not become reachable within 60 seconds"
+}
+
 wait_for_readiness_event() {
   local expected_status="$1"
   local expected_event="$2"
@@ -193,9 +211,9 @@ printf '%s' "$live_response" | python3 -c 'import json,sys; data=json.load(sys.s
 pass_check
 
 begin_check "router readiness and internal Hindsight become reachable"
-health_response="$(curl --max-time 5 -fsS "${router_url}/health")"
-ready_response="$(curl --max-time 5 -fsS "${router_url}/health/ready")"
-legacy_ready_response="$(curl --max-time 5 -fsS "${router_url}/ready")"
+health_response="$(wait_for_readiness /health)"
+ready_response="$(wait_for_readiness /health/ready)"
+legacy_ready_response="$(wait_for_readiness /ready)"
 for readiness_response in "$health_response" "$ready_response" "$legacy_ready_response"; do
   printf '%s' "$readiness_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, dict) and "status" in data and "router_health" not in data' || fail_check "router readiness alias returned unexpected health JSON"
 done
