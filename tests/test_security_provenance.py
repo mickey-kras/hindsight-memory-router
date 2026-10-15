@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import tracemalloc
+from itertools import islice
 
 import pytest
 
@@ -137,6 +138,34 @@ def test_large_source_fields_do_not_allocate_full_origin_masks_for_edge_windows(
         max(len(window.encode()) for window in windows) <= 2 * security.MAX_SPLIT_WINDOW_BYTES + 1
     )
     assert peak < 8 * 1024 * 1024
+
+
+@pytest.mark.parametrize("second_origin, expected_origin", [(1, 1), (2, 0), (0, 0)])
+def test_pair_edge_windows_are_lazy_and_require_same_origin(
+    monkeypatch: pytest.MonkeyPatch, second_origin: int, expected_origin: int
+) -> None:
+    from memory_router import security_provenance, security_rules
+
+    calls: list[tuple[str, str, float | None]] = []
+
+    def edge_matches(first: str, second: str, *, deadline: float | None) -> list[str]:
+        calls.append((first, second, deadline))
+        return ["synthetic edge"]
+
+    monkeypatch.setattr(security_provenance.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(security_rules, "_rule_edge_matches", edge_matches)
+    fragments = [ReviewedText("alpha", 1), ReviewedText("beta", second_origin)]
+    windows = iter(security_provenance.sequence_windows(fragments, deadline=1.0))
+    assert not calls
+    preceding = list(islice(windows, 9))
+    assert len(preceding) == 9
+    assert preceding[-2:] == ["alpha beta", "alphabeta"]
+    assert not calls
+    edge = next(windows)
+    assert calls == [(fragments[0], fragments[1], 1.0)]
+    assert edge == "synthetic edge"
+    assert edge.trusted == expected_origin
+    assert not list(windows)
 
 
 @pytest.mark.parametrize("prefix", ["ign1️⃣ore", "ignóre", "іgnore"])

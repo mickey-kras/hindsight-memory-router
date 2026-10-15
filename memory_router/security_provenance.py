@@ -115,6 +115,18 @@ def trim(value: str, *, from_start: bool) -> ReviewedText:
     )
 
 
+def _pair_edge_windows(fragments: list[str], *, deadline: float | None) -> Iterable[ReviewedText]:
+    left = bound(trim(fragments[0], from_start=False))
+    right = bound(trim(fragments[1], from_start=True), prefix=True)
+    yield join([left, right], " ")
+    yield join([left, right])
+    # Synthesized edge matches always depend on both fields.
+    origin = occurrence_origin(fragments[0])
+    trusted = origin if origin == occurrence_origin(fragments[1]) else 0
+    for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
+        yield ReviewedText(edge, trusted)
+
+
 def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterable[ReviewedText]:
     # Retain exact source fields through bounded joins and slicing.
     if len(fragments) < 2 or (deadline is not None and time.monotonic() >= deadline):
@@ -146,15 +158,7 @@ def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterabl
     yield bounded_join(trimmed)
     yield mixed_suffix(list(trimmed))
     if len(fragments) == 2:
-        left = bound(trim(fragments[0], from_start=False))
-        right = bound(trim(fragments[1], from_start=True), prefix=True)
-        yield join([left, right], " ")
-        yield join([left, right])
-        # Synthesized edge matches always depend on both fields.
-        origin = occurrence_origin(fragments[0])
-        trusted = origin if origin == occurrence_origin(fragments[1]) else 0
-        for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
-            yield ReviewedText(edge, trusted)
+        yield from _pair_edge_windows(fragments, deadline=deadline)
 
 
 def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
