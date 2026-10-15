@@ -17,9 +17,10 @@ from memory_router.security import SafetyResult
 @asynccontextmanager
 async def event_loop_heartbeat() -> AsyncIterator[asyncio.Event]:
     armed, heartbeat = asyncio.Event(), asyncio.Event()
+    previous = time.monotonic()
 
     async def monitor() -> None:
-        previous = time.monotonic()
+        nonlocal previous
         armed.set()
         while True:
             await asyncio.sleep(0.01)
@@ -34,9 +35,11 @@ async def event_loop_heartbeat() -> AsyncIterator[asyncio.Event]:
         await armed.wait()
         yield heartbeat
     finally:
+        elapsed = time.monotonic() - previous
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+        assert elapsed < 1.0, f"event loop blocked for {elapsed:.3f}s"
 
 
 @contextmanager
