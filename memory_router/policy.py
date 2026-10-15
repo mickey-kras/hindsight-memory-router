@@ -430,22 +430,9 @@ class RouterPolicy:
         }:
             return False
         if state and state.status == REVIEWED_ALLOWED:
-            if state.source_content_sha256 == digest:
-                volatile = {
-                    key: value for key, value in result.items() if key not in {"id", "text"}
-                }
-                scan = await scan_recalled(volatile, writer_id=writer_id)
-                if scan.safe:
-                    return True
-                await self._quarantine_recalled(
-                    writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
-                )
-                return False
-            scan = await scan_recalled(result, writer_id=writer_id)
-            await self._quarantine_recalled(
-                writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+            return await self._allow_reviewed_recalled(
+                writer_id, source, bank_id, result, digest, state, invalidated=invalidated
             )
-            return False
         scan = await scan_recalled(result, writer_id=writer_id)
         if state and state.status in REVIEWABLE_STATUSES:
             if state.source_content_sha256 == digest:
@@ -456,6 +443,32 @@ class RouterPolicy:
             return False
         if scan.safe:
             return True
+        await self._quarantine_recalled(
+            writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+        )
+        return False
+
+    async def _allow_reviewed_recalled(
+        self,
+        writer_id: str,
+        source: str,
+        bank_id: str,
+        result: dict[str, Any],
+        digest: str,
+        state: MemoryReviewState,
+        *,
+        invalidated: set[MemoryIdentity] | None = None,
+    ) -> bool:
+        if state.source_content_sha256 == digest:
+            volatile = {key: value for key, value in result.items() if key not in {"id", "text"}}
+            scan = await scan_recalled(volatile, writer_id=writer_id)
+            if scan.safe:
+                return True
+            await self._quarantine_recalled(
+                writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
+            )
+            return False
+        scan = await scan_recalled(result, writer_id=writer_id)
         await self._quarantine_recalled(
             writer_id, source, bank_id, result, digest, scan, invalidated=invalidated
         )
