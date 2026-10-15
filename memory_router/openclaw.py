@@ -71,7 +71,9 @@ class OpenClawFacade:
             allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
-            await self._validate_safe_response(route, writer_id, source, value, bank_override)
+            await self.validate_safe_response(
+                route.resource, writer_id, source, value, bank_override
+            )
         try:
             if route.strict_contract:
                 validate_openclaw_response(
@@ -138,9 +140,9 @@ class OpenClawFacade:
             raise HttpError(400, "invalid_request", "items must be an array")
         self.policy.limits.assert_retain_bounds(body)
 
-    async def _validate_safe_response(
+    async def validate_safe_response(
         self,
-        route: FacadeRoute,
+        resource: str,
         writer_id: str,
         source: str,
         value: Any,
@@ -163,7 +165,7 @@ class OpenClawFacade:
         await self._audit(
             writer_id,
             "openclaw_suspicious_provider_response",
-            {"resource": route.resource, "response": value},
+            {"resource": resource, "response": value},
             response_scan,
             source,
             bank_id,

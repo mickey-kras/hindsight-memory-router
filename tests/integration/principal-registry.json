@@ -11,6 +11,29 @@
     "alpha-only": {"accessPolicy": {"allowedPrincipals": ["agent-alpha"]}}
   },
   "principals": {
+    "agent-bank-safety": {
+      "keys": [
+        {
+          "id": "bank-safety-1",
+          "sha256": "d91323a5298f3b9f814db29efaa271f24fbdccedfdd062491b8abc8e07b7fb69",
+          "created_at": "2026-09-01T00:00:00Z"
+        }
+      ],
+      "grants": [
+        {
+          "bank": "shared",
+          "scopes": [
+            "bank.list"
+          ]
+        }
+      ],
+      "limits": {
+        "config": {
+          "rate_limit_max": 20,
+          "concurrency_max": 1
+        }
+      }
+    },
     "agent-config": {
       "keys": [{
         "id": "config-1",
