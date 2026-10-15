@@ -117,6 +117,11 @@ jobs:
     needs: [quality, aislop, codeql, architecture]
     if: inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    env:
+      SOURCE_SHA: ${{ github.sha }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      COVERAGE_ARTIFACT_ID: ${{ needs.quality.outputs.coverage_artifact_id }}
+      PRODUCER_RUN_ATTEMPT: ${{ needs.quality.outputs.coverage_run_attempt }}
     permissions:
       contents: read
       id-token: write
@@ -132,6 +137,28 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Require authoritative coverage producer
+        run: |
+          if [[ ! "$COVERAGE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]] || [[ ! "$PRODUCER_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+            echo 'CoverageEvidenceError: missing authoritative coverage producer output; rerun authoritative main CI.' >&2
+            exit 1
+          fi
+
+      - name: Download authoritative coverage
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.quality.outputs.coverage_artifact_id }}
+          path: ${{ runner.temp }}/coverage-evidence
+          digest-mismatch: error
+
+      - name: Verify authoritative coverage
+        run: python .github/scripts/coverage-artifact.py restore "$RUNNER_TEMP/coverage-evidence"
+
       - name: Mask configured SonarQube endpoint
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -143,23 +170,6 @@ jobs:
           audience: ${{ secrets.TAILSCALE_AUDIENCE }}
           tags: tag:github-sonar
           use-cache: 'true'
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            dev-requirements.txt
-
-      - name: Generate coverage for SonarQube
-        run: |
-          python -m pip install 'pip==26.1.2'
-          python -m pip install --require-hashes -r requirements.txt
-          python -m pip install --require-hashes -r dev-requirements.txt
-          python -m pip install --no-deps -e .
-          python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=xml --cov-fail-under=90 --durations=30
 
       - name: Mask advertised SonarQube endpoint
         env:

@@ -16,6 +16,10 @@ on:
         value: ${{ jobs.hindsight.outputs.sha }}
       hindsight_image:
         value: ${{ jobs.hindsight.outputs.image }}
+      coverage_artifact_id:
+        value: ${{ jobs.python.outputs.coverage_artifact_id }}
+      coverage_run_attempt:
+        value: ${{ jobs.python.outputs.coverage_run_attempt }}
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ inputs.candidate_ref || github.event.pull_request.number || github.ref }}
@@ -103,6 +107,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       validation: ${{ steps.completed.outputs.validation }}
+      coverage_artifact_id: ${{ steps.coverage-upload.outputs.artifact-id }}
+      coverage_run_attempt: ${{ steps.coverage-evidence.outputs.run_attempt }}
     steps:
       - name: Explicit successful no-op
         if: needs.changes.outputs.python == 'false'
@@ -214,9 +220,9 @@ jobs:
           python scripts/generate_confusables_ascii.py
           diff -u /tmp/confusables_ascii.expected.json memory_router/confusables_ascii.json
 
-      - run: ruff format --diff memory_router tests .github/scripts/sync-sonar-findings.py .github/scripts/mask-sonar-context.py
+      - run: ruff format --diff memory_router tests .github/scripts/sync-sonar-findings.py .github/scripts/mask-sonar-context.py .github/scripts/coverage-artifact.py .github/scripts/coverage-artifact.test.py
         if: ${{ needs.changes.outputs.python != 'false' }}
-      - run: ruff check memory_router tests .github/scripts/sync-sonar-findings.py .github/scripts/mask-sonar-context.py
+      - run: ruff check memory_router tests .github/scripts/sync-sonar-findings.py .github/scripts/mask-sonar-context.py .github/scripts/coverage-artifact.py .github/scripts/coverage-artifact.test.py
         if: ${{ needs.changes.outputs.python != 'false' }}
       - run: mypy memory_router
         if: ${{ needs.changes.outputs.python != 'false' }}
@@ -225,6 +231,28 @@ jobs:
         if: ${{ needs.changes.outputs.python != 'false' }}
         # Each pytest worker can start four scanner processes; keep the worker count bounded.
         run: python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=90 --durations=30
+      - name: Prepare authoritative coverage evidence
+        id: coverage-evidence
+        if: ${{ success() && needs.changes.outputs.python != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python -m coverage xml
+          python .github/scripts/coverage-artifact.py prepare "$RUNNER_TEMP/coverage-evidence"
+
+      - name: Upload authoritative coverage evidence
+        id: coverage-upload
+        if: ${{ success() && needs.changes.outputs.python != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-coverage-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}-${{ steps.coverage-evidence.outputs.config_sha256 }}
+          path: |
+            ${{ runner.temp }}/coverage-evidence/coverage.xml
+            ${{ runner.temp }}/coverage-evidence/manifest.json
+          if-no-files-found: error
+
       - name: Record successful validation
         id: completed
         env:
@@ -398,6 +426,10 @@ jobs:
       - name: CI dependency classification tests
         if: ${{ needs.changes.outputs.release != 'false' }}
         run: node --test .github/scripts/ci-impact.test.cjs
+
+      - name: Coverage evidence tests
+        if: ${{ needs.changes.outputs.release != 'false' }}
+        run: python .github/scripts/coverage-artifact.test.py
 
       - name: Release policy tests
         if: ${{ needs.changes.outputs.release != 'false' }}
