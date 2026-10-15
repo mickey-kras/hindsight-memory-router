@@ -4,6 +4,7 @@ from collections.abc import Sequence
 
 from memory_router.db import PostgresTx
 from memory_router.models import WriterRegistry
+from memory_router.repository import MemoryIdentity, MemoryReviewState
 
 QID = "q_item_0123456789abcdef"
 
@@ -116,6 +117,21 @@ class FakeRepository:
 
     async def find_memory_state(self, bank: str, memory_id: str) -> dict[str, object] | None:
         return self.states.get((bank, memory_id), self.state)
+
+    async def find_memory_review_states(
+        self, identities: Sequence[MemoryIdentity]
+    ) -> dict[MemoryIdentity, MemoryReviewState]:
+        states = {}
+        for key in identities:
+            row = self.states.get(key, self.state)
+            if row:
+                states[key] = MemoryReviewState(
+                    str(row["status"]),
+                    str(row["source_content_sha256"])
+                    if row.get("source_content_sha256") is not None
+                    else None,
+                )
+        return states
 
 
 class FakeStore:

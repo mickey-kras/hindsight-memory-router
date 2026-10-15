@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +12,9 @@ from .errors import HttpError
 from .timestamps import parse_iso
 
 SECURITY_EVENT_IDENTITY_LIMIT = 64
+# Bound both bind count (400) and OR depth below SQLite's conservative limits.
+MEMORY_REVIEW_BATCH_SIZE = 200
+type MemoryIdentity = tuple[str, str]
 
 PENDING = "pending"
 POSTPONED = "postponed"
@@ -103,6 +106,12 @@ class Capacity:
     max_pending_items_per_writer: int
     max_encrypted_bytes: int
     max_pending_items_per_bank: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryReviewState:
+    status: str
+    source_content_sha256: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -278,6 +287,33 @@ class QuarantineRepository:
     async def find_memory_state(self, bank_id: str, memory_id: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:
             return stored(await tx.fetchone(_MEMORY_SELECT, (bank_id, memory_id)))
+
+    async def find_memory_review_states(
+        self, identities: Sequence[MemoryIdentity]
+    ) -> dict[MemoryIdentity, MemoryReviewState]:
+        keys = list(dict.fromkeys(identities))
+        if not keys:
+            return {}
+        states: dict[MemoryIdentity, MemoryReviewState] = {}
+        # Keep batches in one snapshot and release locks before scans/writes.
+        # SQLite already reserves writes; PostgreSQL needs repeatable read.
+        async with self.db.transaction() as tx:
+            if tx.dialect == "postgres":
+                await tx.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+            for start in range(0, len(keys), MEMORY_REVIEW_BATCH_SIZE):
+                batch = keys[start : start + MEMORY_REVIEW_BATCH_SIZE]
+                # Expiry must not bypass a stored review decision.
+                statement = (
+                    "SELECT source_bank,source_memory_id,status,source_content_sha256 "
+                    "FROM quarantine_items WHERE "  # nosec B608  # noqa: S608
+                    + " OR ".join("(source_bank=? AND source_memory_id=?)" for _ in batch)
+                )
+                rows = await tx.fetchall(statement, [part for key in batch for part in key])
+                for row in rows:
+                    states[(row["source_bank"], row["source_memory_id"])] = MemoryReviewState(
+                        row["status"], row["source_content_sha256"]
+                    )
+        return states
 
     async def find_request_state(self, dedupe_key: str) -> dict[str, Any] | None:
         async with self.db.transaction() as tx:

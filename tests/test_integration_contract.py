@@ -82,6 +82,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "recall review metadata batches preserve snapshots and duplicate quarantine visibility",
     "independent maintenance phases preserve recovery and event retention",
     "blocked quarantine wrapping preserves shared PostgreSQL admission and dedupe",
     "PostgreSQL quota admission preserves boundaries, concurrency, rollback and SQLite parity",
