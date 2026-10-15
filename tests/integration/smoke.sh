@@ -665,4 +665,3 @@ done
 pass_check
 
 echo "${mode}/${router_db} integration smoke passed ${checks_passed}/${checks_total} checks"
-
