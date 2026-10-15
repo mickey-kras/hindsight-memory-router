@@ -450,7 +450,7 @@ test('unified release failures are trusted only on main', () => {
   ]) assert.equal(trustedRun({ ...dispatch, ...changed }, 'owner/repo', 'main'), false);
 });
 
-function sourceReportFixture(workflow = {}) {
+function sourceReportFixture(workflow = {}, sourceJob = job) {
   const workflowRun = { ...run, event: 'workflow_dispatch', path: '.github/workflows/release.yml',
     head_sha: 'a'.repeat(40), conclusion: 'failure', ...workflow };
   const env = { GITHUB_REPOSITORY: 'owner/repo', GITHUB_RUN_ID: '42' };
@@ -463,7 +463,7 @@ function sourceReportFixture(workflow = {}) {
     const path = args[1];
     if (path.endsWith('/actions/runs/42')) return JSON.stringify(workflowRun);
     if (path === '/repos/owner/repo') return JSON.stringify({ default_branch: 'main' });
-    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [job] }]);
+    if (path.includes('/jobs?')) return JSON.stringify([{ jobs: [sourceJob] }]);
     if (path.includes('/issues?')) return JSON.stringify([[]]);
     if (path.endsWith('/logs')) return log('ValueError: invalid bank');
     throw new Error(`Unexpected API: ${path}`);
@@ -472,6 +472,22 @@ function sourceReportFixture(workflow = {}) {
 }
 
 const candidateReportEnv = { REPORT_CANDIDATE_REF: 'refs/heads/release/0.1.0', REPORT_CANDIDATE_SHA: 'b'.repeat(40) };
+
+test('nested baseline Sonar and candidate smoke failures preserve their own source and job', () => {
+  for (const [name, fields, sourceRef, sourceSha] of [
+    ['validate main / sonar', {}, 'refs/heads/main', 'a'.repeat(40)],
+    ['validate and publish candidate / validate image and release', candidateReportEnv,
+      candidateReportEnv.REPORT_CANDIDATE_REF, candidateReportEnv.REPORT_CANDIDATE_SHA],
+  ]) {
+    const { env, execute, writes } = sourceReportFixture({}, { ...job, name });
+    const reports = main({ ...env, ...fields }, execute);
+    assert.equal(reports.length, 1);
+    assert.ok(reports[0].body.includes(`- Job / step: ${name} / `));
+    assert.ok(reports[0].body.includes(`- Failed source ref: ${sourceRef}\n- Failed source commit: ${sourceSha}\n`));
+    assert.ok(reports[0].body.includes(`- Workflow source: main\n- Workflow commit: ${'a'.repeat(40)}\n`));
+    assert.deepEqual(writes, [reports[0].body]);
+  }
+});
 
 test('main and candidate failures identify the failed source separately from the workflow snapshot', () => {
   const { workflowRun, env, execute, writes } = sourceReportFixture();
