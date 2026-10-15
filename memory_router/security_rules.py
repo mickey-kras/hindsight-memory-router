@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import NamedTuple
 
 from agent_memory_guard.detectors import (
@@ -12,6 +12,9 @@ from agent_memory_guard.detectors import (
     SensitiveDataDetector,
     ToolAbuseDetector,
 )
+from agent_memory_guard.detectors.excessive_autonomy import AUTONOMY_PATTERNS
+from agent_memory_guard.detectors.privilege_escalation import ESCALATION_PATTERNS
+from agent_memory_guard.detectors.tool_abuse import TOOL_ABUSE_PATTERNS, UNSAFE_TOOL_OUTPUT_PATTERNS
 
 from .security_models import SafetyFinding, SafetyResult
 from .unicode_security import (
@@ -264,34 +267,57 @@ def _append_rule_matches(
     seen: set[tuple[str, str]],
     rules: Iterable[tuple[re.Pattern[str], str, str]],
     candidate: str,
+    *,
+    all_hits: bool = False,
 ) -> None:
     for pattern, matched, reason in rules:
-        match = pattern.search(candidate)
+        matches = pattern.finditer(candidate)
+        first = next(matches, None)
+        hits = () if first is None else (first.group(0),)
+        if all_hits and first is not None:
+            hits = tuple(dict.fromkeys((*hits, *(match.group(0) for match in matches))))
         signature = matched, reason
-        if match is not None and signature not in seen:
+        if hits and signature not in seen:
             seen.add(signature)
-            findings.append(SafetyFinding(matched, reason, hits=(match.group(0),)))
+            findings.append(SafetyFinding(matched, reason, hits=hits))
+        elif hits and all_hits:
+            for index, finding in enumerate(findings):
+                if (finding.matched, finding.reason) == signature:
+                    findings[index] = SafetyFinding(
+                        matched, reason, hits=tuple(dict.fromkeys((*finding.hits, *hits)))
+                    )
+                    break
 
 
 def _rule_scan(
-    value: str, *, deadline: float | None = None, strip_inword_digits: bool = False
+    value: str,
+    *,
+    deadline: float | None = None,
+    strip_inword_digits: bool = False,
+    all_hits: bool = False,
 ) -> list[SafetyFinding]:
     return _scan_rule_variants(
         value,
         deadline=deadline,
         strip_inword_digits=strip_inword_digits,
         include_compact_split=False,
+        all_hits=all_hits,
     )
 
 
 def _split_instruction_rule_scan(
-    value: str, *, deadline: float | None = None, strip_inword_digits: bool = False
+    value: str,
+    *,
+    deadline: float | None = None,
+    strip_inword_digits: bool = False,
+    all_hits: bool = False,
 ) -> list[SafetyFinding]:
     return _scan_rule_variants(
         value,
         deadline=deadline,
         strip_inword_digits=strip_inword_digits,
         include_compact_split=True,
+        all_hits=all_hits,
     )
 
 
@@ -301,6 +327,7 @@ def _scan_rule_variants(
     deadline: float | None,
     strip_inword_digits: bool,
     include_compact_split: bool,
+    all_hits: bool = False,
 ) -> list[SafetyFinding]:
     findings: list[SafetyFinding] = []
     seen: set[tuple[str, str]] = set()
@@ -323,7 +350,7 @@ def _scan_rule_variants(
         if include_compact_split:
             scans.append((_COMPACT_SPLIT_RULES, re.sub(r"\s+", "", variant)))
         for rules, candidate in scans:
-            _append_rule_matches(findings, seen, rules, candidate)
+            _append_rule_matches(findings, seen, rules, candidate, all_hits=all_hits)
     if variants.exhausted:
         findings.append(SafetyFinding("confusable_variant_limit", "span_limit"))
     return findings
@@ -408,7 +435,12 @@ def _add_unicode_findings(  # NOSONAR
 
 
 def _amg_scan(  # NOSONAR
-    key: str, value: str, *, operation: str, deadline: float | None = None
+    key: str,
+    value: str,
+    *,
+    operation: str,
+    deadline: float | None = None,
+    all_hits: bool = False,
 ) -> list[SafetyFinding]:
     if not value:
         return []
@@ -433,6 +465,28 @@ def _amg_scan(  # NOSONAR
                 if isinstance(hit, dict) and isinstance(hit.get("matched_text"), str)
             )
             hits = (*string_hits, *structured_hits)
+            if all_hits:
+                patterns = getattr(detector, "_patterns", ())
+                if isinstance(patterns, Mapping):
+                    patterns = patterns.values()
+                if isinstance(detector, ToolAbuseDetector):
+                    patterns = [
+                        entry[0] for entry in (*TOOL_ABUSE_PATTERNS, *UNSAFE_TOOL_OUTPUT_PATTERNS)
+                    ]
+                elif isinstance(detector, PrivilegeEscalationDetector):
+                    patterns = [entry[0] for entry in ESCALATION_PATTERNS]
+                elif isinstance(detector, ExcessiveAutonomyDetector):
+                    patterns = [entry[0] for entry in AUTONOMY_PATTERNS]
+                # Approval needs complete, untruncated occurrences. Unknown detectors
+                # have no evidence sufficient to exempt their findings.
+                hits = tuple(
+                    dict.fromkeys(
+                        match.group(0)
+                        for pattern in patterns
+                        if isinstance(pattern, re.Pattern)
+                        for match in pattern.finditer(candidate)
+                    )
+                )
             if name == "sensitive_data" and not _keep_sensitive_detection(candidate, hits):
                 continue
             finding = SafetyFinding(
@@ -444,6 +498,16 @@ def _amg_scan(  # NOSONAR
             )
             if finding not in findings:
                 findings.append(finding)
+            elif all_hits:
+                index = findings.index(finding)
+                previous = findings[index]
+                findings[index] = SafetyFinding(
+                    finding.matched,
+                    finding.reason,
+                    finding.detector,
+                    finding.severity,
+                    tuple(dict.fromkeys((*previous.hits, *finding.hits))),
+                )
     return findings
 
 

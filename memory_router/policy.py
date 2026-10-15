@@ -460,8 +460,7 @@ class RouterPolicy:
         invalidated: set[MemoryIdentity] | None = None,
     ) -> bool:
         if state.source_content_sha256 == digest:
-            volatile = {key: value for key, value in result.items() if key not in {"id", "text"}}
-            scan = await scan_recalled(volatile, writer_id=writer_id)
+            scan = await scan_recalled(result, writer_id=writer_id, reviewed_stable=True)
             if scan.safe:
                 return True
             await self._quarantine_recalled(

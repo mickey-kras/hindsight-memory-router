@@ -78,17 +78,24 @@ async def test_valid_large_recall_result_keeps_event_loop_responsive(
     assert result["results"] == []
 
 
-@pytest.mark.parametrize("location", ["result", "supplemental"])
+@pytest.mark.parametrize("location", ["result", "supplemental", "reviewed"])
 async def test_recall_scan_failure_reaches_api_without_returning_earlier_results(
     monkeypatch, location
 ) -> None:
     monkeypatch.setattr(scan_executor, "_scan_recalled_payload", _failing_recall_scan)
     response = {"results": [{"id": "first", "text": "first safe result"}]}
-    if location == "result":
+    if location in {"result", "reviewed"}:
         response["results"].append({"id": "explode", "text": "private record"})
     else:
         response["chunks"] = {"explode": {"text": "private supplemental record"}}
-    router, _, store, _ = policy(FakeHindsight(response=response))
+    router, _, store, repository = policy(FakeHindsight(response=response))
+    if location == "reviewed":
+        from memory_router.policy import recalled_content_digest
+
+        repository.states[("main", "explode")] = {
+            "status": "reviewed_allowed",
+            "source_content_sha256": recalled_content_digest(response["results"][-1]),
+        }
     monkeypatch.setattr(app_module.runtime, "allow_anonymous", True)
     monkeypatch.setattr(app_module.runtime, "principal_resolver", None)
     monkeypatch.setattr(app_module.runtime, "policy", router)

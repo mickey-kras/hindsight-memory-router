@@ -10,6 +10,7 @@ from collections.abc import Iterable
 from typing import NamedTuple
 
 from .security_models import SafetyFinding, SafetyResult, _EncodedState
+from .security_provenance import ReviewedText, bound, join, reviewed
 from .security_rules import _add_unicode_findings, _amg_scan, _rule_scan
 from .security_windows import _bounded_append, _bounded_utf8_suffix
 from .unicode_security import (
@@ -70,7 +71,11 @@ def _split_base64_candidates(  # NOSONAR
             and _padded_base64(value) is not None
             and _looks_like_base64(value)
             and (_decode_base64_fragment(value) is not None or _lossy_decodable_base64(value))
+            and (
+                value not in completed or not (isinstance(value, ReviewedText) and reviewed(value))
+            )
         ):
+            completed.pop(value, None)
             completed[value] = None
 
     def add(next_candidates: list[tuple[str, int]], value: str, skipped: int) -> bool:
@@ -83,7 +88,10 @@ def _split_base64_candidates(  # NOSONAR
             exhausted = True
             return False
         work_bytes += size
-        next_candidates.append((value, skipped))
+        # A completed approved padded field cannot accept any later encoded part.
+        # Preserve it without carrying an irrelevant skip-budget candidate.
+        if not (isinstance(value, ReviewedText) and reviewed(value) and "=" in value):
+            next_candidates.append((value, skipped))
         preserve_completed(value)
         return True
 
@@ -101,6 +109,8 @@ def _split_base64_candidates(  # NOSONAR
         unconditional_exhausted |= fragment_exhausted
         if fragment is None:
             continue
+        if isinstance(canonical, ReviewedText):
+            fragment = ReviewedText(fragment, reviewed(canonical))
         plausible_fragment = _plausible_base64_fragment(fragment)
         if _alphabet_separator_split_is_suspicious(fragment):
             # Base64-alphabet characters ("/" or "+") used as separators between
@@ -122,7 +132,11 @@ def _split_base64_candidates(  # NOSONAR
             if skipped >= MAX_SPLIT_BASE64_SKIPS and _credible_base64_prefix(candidate):
                 soft_exhausted = True
             if "=" not in candidate:
-                combined = candidate + fragment
+                combined = (
+                    join([candidate, fragment])
+                    if isinstance(fragment, ReviewedText)
+                    else candidate + fragment
+                )
                 if _alphabet_separator_split_is_suspicious(combined):
                     unconditional_exhausted = True
                 if len(combined) <= MAX_SPLIT_BASE64_CANDIDATE_BYTES and not add(
@@ -207,6 +221,8 @@ def _split_decoded_base64_candidates(  # NOSONAR
         decoded = _decode_base64_fragment(fragment)
         if decoded is None:
             continue
+        if isinstance(canonical, ReviewedText):
+            decoded = ReviewedText(decoded, reviewed(canonical))
         fragment_credible = _credible_base64_prefix(fragment)
         fragment_fields += 1
         if fragment_fields > MAX_SPLIT_BASE64_FIELDS:
@@ -225,8 +241,12 @@ def _split_decoded_base64_candidates(  # NOSONAR
             if not add(
                 next_candidates,
                 _DecodedBase64Candidate(
-                    _bounded_utf8_suffix(f"{candidate.compact}{decoded}".encode()),
-                    _bounded_append(candidate.spaced, decoded),
+                    bound(join([candidate.compact, decoded]))
+                    if isinstance(decoded, ReviewedText)
+                    else _bounded_utf8_suffix(f"{candidate.compact}{decoded}".encode()),
+                    bound(join([candidate.spaced, decoded], " "))
+                    if isinstance(decoded, ReviewedText)
+                    else _bounded_append(candidate.spaced, decoded),
                     candidate.parts + 1,
                     candidate.skipped,
                     candidate.terminated,
@@ -252,6 +272,7 @@ def _split_decoded_base64_candidates(  # NOSONAR
                 candidate.credible or fragment_credible
             ):
                 soft_exhausted = True
+        next_candidates.sort(key=lambda value: reviewed(value.compact))
         unique = dict.fromkeys(next_candidates)
         if len(unique) > MAX_SPLIT_BASE64_CANDIDATES and any(
             candidate.credible for candidate in unique
@@ -753,6 +774,8 @@ def _alphabet_separator_split_is_suspicious(fragment: str) -> bool:
 def _dedupe_split_candidates(values: list[tuple[str, int]]) -> list[tuple[str, int]]:
     unique: dict[tuple[str, int], None] = {}
     for value in values:
+        if isinstance(value[0], ReviewedText) and not reviewed(value[0]):
+            unique.pop(value, None)
         unique[value] = None
     candidates = list(unique)
     candidates.sort(key=lambda value: (-len(value[0]), value[1]))
@@ -770,6 +793,8 @@ def _scan_encoded(  # NOSONAR
     fail_closed_invalid: bool = True,
     deadline: float | None = None,
 ) -> None:
+    if isinstance(canonical, ReviewedText) and reviewed(canonical):
+        return
     recovered, recovery_fail_closed = _recover_base64_edge_fragments(canonical, deadline=deadline)
     if recovery_fail_closed:
         result.add(SafetyFinding("split_base64_limit", "span_limit"))
