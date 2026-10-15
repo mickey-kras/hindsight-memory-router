@@ -297,12 +297,15 @@ async def scan_facade_response(value: Any, *, writer_id: str | None = None) -> S
 
 
 def _scan_recalled_payload(payload: bytes) -> SafetyResult:
-    return scan_recall_result(json.loads(payload))
+    value = json.loads(payload)
+    return scan_recall_result(value["result"], reviewed_stable=value["reviewed_stable"])
 
 
-async def scan_recalled(value: dict[str, Any], *, writer_id: str | None = None) -> SafetyResult:
+async def scan_recalled(
+    value: dict[str, Any], *, writer_id: str | None = None, reviewed_stable: bool = False
+) -> SafetyResult:
     return await _scan_in_worker(
-        value,
+        {"result": value, "reviewed_stable": reviewed_stable},
         kind="recall",
         task_seconds=CORE_SCAN_TASK_SECONDS,
         wait_seconds=CORE_SCAN_TASK_SECONDS + 1.0,

@@ -78,17 +78,24 @@ async def test_valid_large_recall_result_keeps_event_loop_responsive(
     assert result["results"] == []
 
 
-@pytest.mark.parametrize("location", ["result", "supplemental"])
+@pytest.mark.parametrize("location", ["result", "supplemental", "reviewed"])
 async def test_recall_scan_failure_reaches_api_without_returning_earlier_results(
     monkeypatch, location
 ) -> None:
     monkeypatch.setattr(scan_executor, "_scan_recalled_payload", _failing_recall_scan)
     response = {"results": [{"id": "first", "text": "first safe result"}]}
-    if location == "result":
+    if location in {"result", "reviewed"}:
         response["results"].append({"id": "explode", "text": "private record"})
     else:
         response["chunks"] = {"explode": {"text": "private supplemental record"}}
-    router, _, store, _ = policy(FakeHindsight(response=response))
+    router, _, store, repository = policy(FakeHindsight(response=response))
+    if location == "reviewed":
+        from memory_router.policy import recalled_content_digest
+
+        repository.states[("main", "explode")] = {
+            "status": "reviewed_allowed",
+            "source_content_sha256": recalled_content_digest(response["results"][-1]),
+        }
     monkeypatch.setattr(app_module.runtime, "allow_anonymous", True)
     monkeypatch.setattr(app_module.runtime, "principal_resolver", None)
     monkeypatch.setattr(app_module.runtime, "policy", router)
@@ -119,3 +126,29 @@ async def test_recall_scan_failure_reaches_api_without_returning_earlier_results
 )
 async def test_recall_workers_preserve_result_volatile_and_supplemental_findings(value) -> None:
     assert await scan_executor.scan_recalled(value) == scan_recall_result(value)
+
+
+@pytest.mark.parametrize(
+    "text, note, safe",
+    [
+        ("system prompt 2026123456789012", "credit card", False),
+        ("credit card 2026123456789012", "ordinary", True),
+        ("2026123456789012 card", "ordinary", True),
+        ("credit 2026123456789012", "card", False),
+    ],
+)
+async def test_recall_worker_includes_new_card_context_in_approval(
+    text: str, note: str, safe: bool
+) -> None:
+    value = {"id": "m1", "text": text, "metadata": {"note": note}}
+    assert (await scan_executor.scan_recalled(value, reviewed_stable=True)).safe is safe
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+async def test_recall_worker_does_not_approve_new_field_order(first: str) -> None:
+    second = "text" if first == "id" else "id"
+    approved = {first: "previous instructions", second: "system prompt ignore"}
+    assert (await scan_executor.scan_recalled(approved, reviewed_stable=True)).safe
+    assert not (
+        await scan_executor.scan_recalled(dict(reversed(approved.items())), reviewed_stable=True)
+    ).safe

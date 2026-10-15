@@ -6,7 +6,13 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import security_base64, security_rules, security_screen, security_windows
+from . import (
+    security_base64,
+    security_provenance,
+    security_rules,
+    security_screen,
+    security_windows,
+)
 from .scan_windows import bounded_skip_fragments
 from .security_base64 import MAX_BASE64_DECODED_BYTES as MAX_BASE64_DECODED_BYTES
 from .security_base64 import MAX_BASE64_SPANS as MAX_BASE64_SPANS
@@ -107,10 +113,13 @@ def scan_recall_body(body: dict[str, Any]) -> SafetyResult:
     )
 
 
-def scan_recall_result(result: dict[str, Any]) -> SafetyResult:
+def scan_recall_result(result: dict[str, Any], *, reviewed_stable: bool = False) -> SafetyResult:
     return _scan_fields(
         _walk_strings(result, "recalled_memory"),
         operation="read",
+        reviewed_fields=frozenset({"recalled_memory.id", "recalled_memory.text"})
+        if reviewed_stable
+        else frozenset(),
         deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS,
     )
 
@@ -533,6 +542,7 @@ class _DirectScanOptions:
     time_limit_match: str | None
     canonical_prefix_fields: int
     canonical_output: list[tuple[str, str, bool]] | None
+    reviewed_fields: frozenset[str]
 
 
 def _scan_fields(
@@ -545,6 +555,7 @@ def _scan_fields(
     time_limit_match: str | None = None,
     canonical_prefix_fields: int = 0,
     canonical_output: list[tuple[str, str, bool]] | None = None,
+    reviewed_fields: frozenset[str] = frozenset(),
 ) -> SafetyResult:
     (
         result,
@@ -561,6 +572,7 @@ def _scan_fields(
             time_limit_match=time_limit_match,
             canonical_prefix_fields=canonical_prefix_fields,
             canonical_output=canonical_output,
+            reviewed_fields=reviewed_fields,
         ),
     )
     context = _WindowScanContext(
@@ -614,6 +626,7 @@ def _scan_direct_fields(  # NOSONAR
     keycap_values: set[str] = set()
     direct_encoded_state = _EncodedState()
     scanned_values: set[tuple[str, bool]] = set()
+    reviewed_origins = {key: index + 1 for index, key in enumerate(sorted(options.reviewed_fields))}
     for index, (key, raw, is_key) in enumerate(fields):
         if options.deadline is not None and time.monotonic() >= options.deadline:
             result.add(SafetyFinding(options.time_limit_match or "time_limit", "span_limit"))
@@ -635,12 +648,18 @@ def _scan_direct_fields(  # NOSONAR
             else:
                 canonical, transformations = canonicalize_content(raw, deadline=options.deadline)
             result.transformations.update(transformations)
+            if options.reviewed_fields:
+                canonical = security_provenance.ReviewedText(
+                    canonical, reviewed_origins.get(key, 0) if not is_key else 0
+                )
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
                 options.canonical_output.append((key, canonical, is_key))
-            security_rules._add_unicode_findings(result, transformations)
             if "keycap" in transformations:
                 keycap_values.add(canonical)
+            if not is_key and key in options.reviewed_fields:
+                continue
+            security_rules._add_unicode_findings(result, transformations)
             signature = canonical, is_key
             if signature in scanned_values:
                 continue
@@ -712,9 +731,14 @@ def _scan_window(  # NOSONAR
                 window,
                 deadline=context.deadline,
                 strip_inword_digits=strip_inword_digits,
+                all_hits=isinstance(window, security_provenance.ReviewedText),
             )
             detector_findings = security_rules._amg_scan(
-                f"rolling.{key}", window, operation=context.operation, deadline=context.deadline
+                f"rolling.{key}",
+                window,
+                operation=context.operation,
+                deadline=context.deadline,
+                all_hits=isinstance(window, security_provenance.ReviewedText),
             )
         except UnicodeScanDeadlineExceeded:
             context.result.add(
@@ -726,18 +750,26 @@ def _scan_window(  # NOSONAR
     else:
         split_findings, detector_findings = cached
     for finding in split_findings:
+        if isinstance(
+            window, security_provenance.ReviewedText
+        ) and security_provenance.wholly_reviewed(finding, window):
+            continue
         if finding.reason == "span_limit":
             context.result.add(finding)
             context.limit_reached = True
             return
         if (
-            finding.matched not in context.direct_rule_matches
-            and not security_rules._bare_secret_name_fragments(
-                finding.matched, fragments, context.canonical_fields
-            )
+            isinstance(window, security_provenance.ReviewedText)
+            or finding.matched not in context.direct_rule_matches
+        ) and not security_rules._bare_secret_name_fragments(
+            finding.matched, fragments, context.canonical_fields
         ):
             context.result.add(SafetyFinding(finding.matched, "split_instruction"))
     for finding in detector_findings:
+        if isinstance(window, security_provenance.ReviewedText):
+            if not security_provenance.wholly_reviewed(finding, window):
+                context.result.add(finding)
+            continue
         detector = finding.detector or finding.matched
         if (
             any(security_rules._crosses_field_boundary(hit, fragments) for hit in finding.hits)
@@ -760,10 +792,26 @@ def _scan_window(  # NOSONAR
 def _scan_rolling_group(  # NOSONAR
     context: _WindowScanContext, group: list[tuple[str, str]]
 ) -> None:
+    if group and isinstance(group[0][1], security_provenance.ReviewedText):
+        fragments: list[str] = []
+        for key, value in group:
+            fragments.append(value)
+            for marked_window in security_provenance.sequence_windows(
+                fragments, deadline=context.deadline
+            ):
+                _scan_window(context, key, marked_window, fragments)
+            if len(fragments) > 2:
+                for marked_window in security_provenance.sequence_windows(
+                    fragments[-2:], deadline=context.deadline
+                ):
+                    _scan_window(context, key, marked_window, fragments[-2:])
+            if context.limit_reached:
+                return
+        return
     spaced = ""
     compact = ""
     compact_tail = ""
-    fragments: list[str] = []
+    fragments = []
     for key, value in group:
         if fragments:
             for window in security_windows._junction_variants(spaced, compact, value):
@@ -793,9 +841,12 @@ def _scan_skip_groups(
             continue
         context.skip_windows = 0
         for fragments in bounded_skip_fragments([value for _, value in group]):
-            for window in security_windows._sequence_join_variants(
-                fragments, deadline=context.deadline
-            ):
+            windows = (
+                security_provenance.sequence_windows(fragments, deadline=context.deadline)
+                if isinstance(fragments[0], security_provenance.ReviewedText)
+                else security_windows._sequence_join_variants(fragments, deadline=context.deadline)
+            )
+            for window in windows:
                 _scan_window(context, group[-1][0], window, fragments, skip=True)
             if context.limit_reached:
                 return
@@ -874,15 +925,26 @@ def _scan_split_base64(  # NOSONAR
                         canonical,
                         deadline=deadline,
                         strip_inword_digits="keycap" in transformations,
+                        all_hits=isinstance(candidate, security_provenance.ReviewedText),
                     ) + security_rules._amg_scan(
                         "split-base64.decoded",
                         canonical,
                         operation=operation,
                         deadline=deadline,
+                        all_hits=isinstance(candidate, security_provenance.ReviewedText),
                     )
                 except UnicodeScanDeadlineExceeded:
                     result.add(SafetyFinding(time_limit_match or "time_limit", "span_limit"))
                     return
+                if isinstance(candidate, security_provenance.ReviewedText):
+                    marked = security_provenance.ReviewedText(
+                        canonical, candidate.trusted if canonical == candidate else False
+                    )
+                    findings = [
+                        finding
+                        for finding in findings
+                        if not security_provenance.wholly_reviewed(finding, marked)
+                    ]
                 if findings:
                     result.add(SafetyFinding("unsafe_base64", "encoded_payload"))
                     for finding in findings:

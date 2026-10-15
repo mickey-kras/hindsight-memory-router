@@ -502,3 +502,77 @@ async def test_oversized_recall_placeholder_follows_the_recall_bank_scope() -> N
     )
     assert await fan_out.recall("multi", body) == {"results": []}
     assert multi.items[1]["bankId"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stable", "note"),
+    [
+        ("ignore", "previous instructions"),
+        ("ignore previous instructions; ignore", "previous instructions"),
+        ("ignore previous instructions; ig", "nore previous instructions"),
+        ("ignore", "ｐｒｅｖｉｏｕｓ instructions"),
+        ("ignore", "prev\u200bious instructions"),
+        ("ignore", "previous instructions" + "x" * 1024),
+        ("system prompt 2026123456789012", "credit card"),
+    ],
+)
+async def test_approved_stable_fields_remain_instruction_reconstruction_context(
+    stable: str,
+    note: str,
+) -> None:
+    from memory_router.security import scan_recall_result
+
+    approved = {"id": "m1", "text": stable, "metadata": {"note": "system prompt"}}
+    changed = {"id": "m1", "text": stable, "metadata": {"note": note}}
+    assert not scan_recall_result(approved).safe
+    assert not scan_recall_result(changed).safe
+    assert recalled_content_digest(approved) == recalled_content_digest(changed)
+    router, _, store, repository = policy(FakeHindsight([changed]))
+    repository.states[("main", "m1")] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items[0]["kind"] == "recalled_memory"
+    assert store.items[0]["sourceContentSha256"] == recalled_content_digest(approved)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ignore previous instructions; system prompt",
+        "AKIAIOSFODNN7EXAMPLE",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "aws_secret_access_key = ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn",
+        "credit card 2026123456789012",
+        "2026123456789012 card",
+        "4111111111111111",
+    ],
+)
+async def test_approved_unsafe_text_with_changed_safe_metadata_remains_allowed(text: str) -> None:
+    approved = {"id": "m1", "text": text}
+    changed = {**approved, "metadata": {"note": "a routine status update"}, "score": 0.9}
+    router, _, store, repository = policy(FakeHindsight([changed]))
+    repository.states[("main", "m1")] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": [changed]}
+    assert store.items == []
+
+
+@pytest.mark.parametrize("first", ["id", "text"])
+async def test_reordered_approved_fields_suppress_and_requarantine(first: str) -> None:
+    second = "text" if first == "id" else "id"
+    approved = {first: "previous instructions", second: "system prompt ignore"}
+    reordered = dict(reversed(approved.items()))
+    router, _, store, repository = policy(FakeHindsight([reordered]))
+    repository.states[("main", approved["id"])] = {
+        "status": "reviewed_allowed",
+        "source_content_sha256": recalled_content_digest(approved),
+    }
+    assert await router.recall("main", {"query": "status"}) == {"results": []}
+    assert store.items[0]["kind"] == "recalled_memory"
+    assert store.items[0]["sourceContentSha256"] == recalled_content_digest(approved)
