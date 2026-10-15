@@ -27,6 +27,31 @@ def test_only_the_actual_approved_occurrence_can_be_exempted() -> None:
 
 
 @pytest.mark.parametrize(
+    ("source", "hit"),
+    [
+        ("sys1tem-pr2ompt", "system prompt"),
+        ("sys1tem-pr2ompt", "systemprompt"),
+        ("sys1tem \tpr2ompt", "systemprompt"),
+    ],
+)
+def test_normalized_hits_retain_each_source_occurrence(source: str, hit: str) -> None:
+    finding = SafetyFinding(hit, "prompt_injection", hits=(hit,))
+    approved = ReviewedText(source, 1)
+    assert wholly_reviewed(finding, bounded_join([approved, "ordinary"], " "))
+    assert not wholly_reviewed(finding, bounded_join([approved, source], " "))
+
+
+@pytest.mark.parametrize("ambiguous_count", [2, 40])
+def test_ambiguous_variants_require_the_whole_window_to_be_reviewed(
+    ambiguous_count: int,
+) -> None:
+    finding = SafetyFinding("system prompt", "prompt_injection", hits=("system prompt",))
+    approved = ReviewedText("system prompt " + "\U0001ccde" * ambiguous_count, 1)
+    assert wholly_reviewed(finding, approved)
+    assert not wholly_reviewed(finding, bounded_join([approved, "ordinary"], " "))
+
+
+@pytest.mark.parametrize(
     "note", ["previous instructions", "previous-instructions", "previousinstructions"]
 )
 def test_rule_variant_reconstruction_retains_approved_prefix(note: str) -> None:

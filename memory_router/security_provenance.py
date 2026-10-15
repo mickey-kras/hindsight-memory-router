@@ -181,6 +181,11 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
             # A hit string alone cannot establish which ambiguous source variant
             # produced it. Mixed-origin windows therefore cannot be exempted.
             return reviewed(window)
+    variants = _rule_variants(originals)
+    return all(_hit_wholly_reviewed(hit, variants) for hit in finding.hits)
+
+
+def _rule_variants(originals: Iterable[ReviewedText]) -> list[ReviewedText]:
     variants: list[ReviewedText] = []
     for original in originals:
         flags = flags_for(original)
@@ -203,13 +208,14 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
                         tuple(flags[index] for index in keep),
                     )
                 )
-    for hit in finding.hits:
-        found = False
-        for variant in variants:
-            for match in re.finditer(re.escape(hit), variant, re.I):
-                found = True
-                if not reviewed(slice_text(variant, match.start(), match.end())):
-                    return False
-        if not found:
-            return False
-    return True
+    return variants
+
+
+def _hit_wholly_reviewed(hit: str, variants: Iterable[ReviewedText]) -> bool:
+    found = False
+    for variant in variants:
+        for match in re.finditer(re.escape(hit), variant, re.I):
+            found = True
+            if not reviewed(slice_text(variant, match.start(), match.end())):
+                return False
+    return found
