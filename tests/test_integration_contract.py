@@ -82,6 +82,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "independent maintenance phases preserve recovery and event retention",
     "blocked quarantine wrapping preserves shared PostgreSQL admission and dedupe",
     "principal quarantine approval preserves original bank",
     "principal facade content requires memory recall",

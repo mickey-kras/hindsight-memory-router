@@ -25,8 +25,9 @@ from .logging_contract import (
 _JSON_RENDERER = structlog.processors.JSONRenderer(sort_keys=True)
 _MEMORY_ROUTER_EVENT = object()
 LOG_THROTTLE_INTERVAL_SECONDS = 60.0
-_last_emitted: dict[tuple[str, str, str], float] = {}
-_suppressed: dict[tuple[str, str, str], int] = {}
+type _ThrottleKey = tuple[str, str, str] | tuple[str, str, str, str]
+_last_emitted: dict[_ThrottleKey, float] = {}
+_suppressed: dict[_ThrottleKey, int] = {}
 _write_failures = 0
 
 
@@ -368,11 +369,13 @@ def _prepare_event(
 def _admit_event(event: str, fields: dict[str, Any]) -> bool:
     if event not in THROTTLED_EVENTS:
         return True
-    key = (
+    key: _ThrottleKey = (
         event,
         fields["route_class"],
         safe_text(fields.get("error_kind", "unexpected"), fallback="unexpected", limit=32),
     )
+    if event == "quarantine_sweeper_failed" and "maintenance_phase" in fields:
+        key = (*key, fields["maintenance_phase"])
     now = time.monotonic()
     last_emitted = _last_emitted.get(key)
     if last_emitted is not None and now - last_emitted < LOG_THROTTLE_INTERVAL_SECONDS:

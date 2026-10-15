@@ -166,6 +166,10 @@ if [[ "$router_db" == "sqlite" ]]; then
   pass_check
 fi
 
+begin_check "independent maintenance phases preserve recovery and event retention"
+docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 15 python - < tests/integration/maintenance-phases.py
+pass_check
+
 begin_check "security audit capacity is scoped and durable across replicas"
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python - < tests/integration/security-event-capacity.py
 pass_check
