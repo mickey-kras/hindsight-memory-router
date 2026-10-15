@@ -29,6 +29,8 @@ class MigrationServer:
         self.release_build = asyncio.Event()
         self.release_build.set()
         self.failure: BaseException | None = None
+        self.failed_lock_attempt = asyncio.Event()
+        self.snapshot_wait_started = asyncio.Event()
 
     def database(self) -> db_module.PostgresDatabase:
         db = db_module.PostgresDatabase("postgresql://migration-test")
@@ -74,15 +76,32 @@ class MigrationConnection:
         self.close_started = asyncio.Event()
         self.release_close = asyncio.Event()
         self.release_close.set()
+        self.statement_active = False
+        self.statement_finished = asyncio.Event()
+        self.statement_finished.set()
 
     async def execute(self, query: Any, params: Any = ()) -> Cursor:
+        self.statement_active = True
+        self.statement_finished.clear()
+        try:
+            return await self._execute(query, params)
+        finally:
+            # An autocommit statement releases its snapshot when it finishes.
+            self.statement_active = False
+            self.statement_finished.set()
+
+    async def _execute(self, query: Any, params: Any = ()) -> Cursor:
         statement = query if isinstance(query, str) else query.as_string()
         self.calls.append(statement)
-        if "pg_advisory_lock" in statement:
+        if "pg_try_advisory_lock" in statement or "pg_advisory_lock" in statement:
             assert str(db_module.SCHEMA_LOCK_ID) in statement
             assert db_module.SCHEMA_LOCK_ID != db_module.CAPACITY_LOCK_ID
+            if "pg_try_advisory_lock" in statement and self.server.schema_lock.locked():
+                self.server.failed_lock_attempt.set()
+                return Cursor({"acquired": False})
             await self.server.schema_lock.acquire()
             self.owns_lock = True
+            return Cursor({"acquired": True})
         elif "FROM pg_index" in statement:
             name = params[0]
             if name in self.server.indices:
@@ -98,6 +117,12 @@ class MigrationConnection:
             self.server.indices[name] = False
             self.server.build_started.set()
             await self.server.release_build.wait()
+            # Partial concurrent builds wait for transactions with old snapshots,
+            # including another session's still-running advisory lock statement.
+            for peer in self.server.connections:
+                if peer is not self and peer.statement_active:
+                    self.server.snapshot_wait_started.set()
+                    await peer.statement_finished.wait()
             if self.server.failure:
                 raise self.server.failure
             self.server.indices[name] = True
@@ -136,6 +161,66 @@ async def test_replica_migrations_do_not_hold_admission_lock(
         assert len(server.indices) == 7 and all(server.indices.values())
         assert all(connection.closed for connection in server.connections)
         assert not any("CREATE INDEX" in sql for sql in server.connections[1].calls)
+    finally:
+        server.release_build.set()
+        first.cancel()
+        second.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_blocking_lock_statement_prevents_partial_index_snapshot_validation() -> None:
+    server = MigrationServer()
+    owner = await server.connect("postgresql://migration-test", autocommit=True)
+    waiter = await server.connect("postgresql://migration-test", autocommit=True)
+    await owner.execute(f"SELECT pg_advisory_lock({db_module.SCHEMA_LOCK_ID})")
+    server.release_build.clear()
+    build = asyncio.create_task(
+        owner.execute("CREATE INDEX CONCURRENTLY test ON quarantine_items(status)")
+    )
+    await server.build_started.wait()
+    waiting = asyncio.create_task(
+        waiter.execute(f"SELECT pg_advisory_lock({db_module.SCHEMA_LOCK_ID})")
+    )
+    try:
+        while not waiter.statement_active:
+            await asyncio.sleep(0)
+        server.release_build.set()
+        await asyncio.wait_for(server.snapshot_wait_started.wait(), 1)
+        assert not build.done() and not waiting.done()
+        assert owner.owns_lock and waiter.statement_active
+        # Aborting the waiting statement releases the snapshot, as in the hosted
+        # deadlock detector's victim selection, and permits the index to finish.
+        waiting.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiting
+        await asyncio.wait_for(build, 1)
+    finally:
+        build.cancel()
+        waiting.cancel()
+        await asyncio.gather(build, waiting, return_exceptions=True)
+        await owner.close()
+        await waiter.close()
+
+
+@pytest.mark.asyncio
+async def test_waiting_replica_releases_snapshot_before_partial_index_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    server = MigrationServer()
+    server.release_build.clear()
+    monkeypatch.setattr(db_module.AsyncConnection, "connect", server.connect)
+    first = asyncio.create_task(db_module.initialize_schema(server.database()))
+    await asyncio.wait_for(server.build_started.wait(), 1)
+    second = asyncio.create_task(db_module.initialize_schema(server.database()))
+    try:
+        await asyncio.wait_for(server.failed_lock_attempt.wait(), 1)
+        assert not server.connections[1].statement_active
+        assert not second.done()
+        server.release_build.set()
+        await asyncio.wait_for(asyncio.gather(first, second), 1)
+        assert all(server.indices.values()) and len(server.indices) == 7
+        assert all(connection.closed for connection in server.connections)
     finally:
         server.release_build.set()
         first.cancel()

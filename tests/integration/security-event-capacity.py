@@ -18,6 +18,7 @@ from psycopg.sql import SQL, Identifier
 
 from memory_router.db import (
     CAPACITY_INDEXES,
+    SCHEMA_LOCK_ID,
     PostgresDatabase,
     create_database,
     initialize_schema,
@@ -196,6 +197,26 @@ async def verify_postgres_upgrade(url: str) -> None:
                             break
                         await asyncio.sleep(0.01)
                 tasks.append(asyncio.create_task(initialize_schema(replicas[1])))
+                async with asyncio.timeout(5):
+                    while True:
+                        cursor = await observer.execute(
+                            "SELECT pid,backend_xmin FROM pg_stat_activity "
+                            "WHERE query=%s AND state='idle'",
+                            (f"SELECT pg_try_advisory_lock({SCHEMA_LOCK_ID}) acquired",),
+                        )
+                        waiting_replica = await cursor.fetchone()
+                        if waiting_replica:
+                            # Waiting between completed autocommit attempts must
+                            # retain neither an old snapshot nor a queued lock.
+                            assert waiting_replica["backend_xmin"] is None, waiting_replica
+                            cursor = await observer.execute(
+                                "SELECT 1 FROM pg_locks WHERE pid=%s "
+                                "AND locktype='advisory' AND NOT granted",
+                                (waiting_replica["pid"],),
+                            )
+                            assert await cursor.fetchone() is None
+                            break
+                        await asyncio.sleep(0.01)
                 capacity = Capacity(3, 3, 1000, 3)
                 await asyncio.wait_for(
                     repository.store(memory("upgrade-live"), capacity, mode="memory", at=AT), 2

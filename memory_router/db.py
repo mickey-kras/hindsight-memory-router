@@ -348,8 +348,15 @@ async def _initialize_postgres_schema(db: PostgresDatabase) -> None:
     connection = await AsyncConnection.connect(db.url, autocommit=True, row_factory=dict_row)
     try:
         tx = PostgresTx(connection)
-        # Take this before the capacity transaction: waiting replicas must not block admissions.
-        await tx.execute(f"SELECT pg_advisory_lock({SCHEMA_LOCK_ID})")
+        # Finish every lock attempt: a blocking SELECT retains an old snapshot that
+        # a partial concurrent index build must wait for, deadlocking both replicas.
+        delay = 0.05
+        while True:
+            lock = await tx.fetchone(f"SELECT pg_try_advisory_lock({SCHEMA_LOCK_ID}) acquired")
+            if lock and lock["acquired"]:
+                break
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 0.5)
         await _initialize_schema_transaction(db, SCHEMA[: -len(CAPACITY_INDEXES)])
         for statement in CAPACITY_INDEXES:
             name = statement.split(" ON ", 1)[0].rsplit(" ", 1)[1]
