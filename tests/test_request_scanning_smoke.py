@@ -5,7 +5,7 @@ import runpy
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 from urllib.error import HTTPError
 
 import pytest
@@ -19,6 +19,7 @@ TIMEOUT = {
 
 @pytest.fixture
 def smoke_server():
+    health_probes: Event = Event()
     state = {
         "posts": [],
         "status": 503,
@@ -26,19 +27,21 @@ def smoke_server():
         "retry_after": "1",
         "recover": True,
         "health_delay": 0,
-        "heavy_delay": 0.2,
+        "wait_for_health": True,
         "health_calls": 0,
     }
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            state["health_calls"] += 1
             delay = state["health_delay"]
             state["health_delay"] = 0
             time.sleep(delay)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b'{"status":"alive"}')
+            state["health_calls"] += 1
+            if state["health_calls"] >= 3:
+                health_probes.set()
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -46,8 +49,9 @@ def smoke_server():
             heavy = (
                 "metadata" in body.get("items", [{}])[0] or body.get("query") == "CI metadata scan"
             )
-            if heavy:
-                time.sleep(state["heavy_delay"])
+            if heavy and state["wait_for_health"] and not health_probes.wait(timeout=5):
+                self.send_error(500, "Timed out waiting for three health probes")
+                return
             failed = heavy or not state["recover"]
             self.send_response(state["status"] if failed else 200)
             self.send_header("Retry-After", state["retry_after"])
@@ -68,16 +72,19 @@ def smoke_server():
     try:
         yield f"http://127.0.0.1:{server.server_port}", state
     finally:
+        health_probes.set()
         server.shutdown()
         server.server_close()
         thread.join()
 
 
 @pytest.mark.parametrize("operation", ["retain", "recall"])
+@pytest.mark.parametrize("health_delay", [0, 0.25])
 def test_smoke_accepts_exact_timeout_only_after_clean_scan_recovers(
-    smoke_server, monkeypatch, operation
+    smoke_server, monkeypatch, operation, health_delay: float
 ):
     url, state = smoke_server
+    state["health_delay"] = health_delay
     if operation == "recall":
         state["body"] = {
             "error": "recall_scan_unavailable",
@@ -107,6 +114,7 @@ def test_smoke_accepts_exact_timeout_only_after_clean_scan_recovers(
 def test_smoke_rejects_unexpected_error_or_partial_content(smoke_server, changes):
     url, state = smoke_server
     state.update(changes)
+    state["wait_for_health"] = False
     with pytest.raises(AssertionError):
         HELPER["memory_request"](url, "test-token", "retain")
 
@@ -134,7 +142,6 @@ def test_smoke_rejects_timeout_when_clean_scan_cannot_recover(smoke_server, monk
 def test_smoke_rejects_timeout_when_liveness_was_blocked(smoke_server, monkeypatch):
     url, state = smoke_server
     state["health_delay"] = 1.05
-    state["heavy_delay"] = 1.3
     monkeypatch.setattr(sys, "argv", ["request-scanning.py", url, "test-token", "retain"])
     with pytest.raises(AssertionError):
         HELPER["main"]()

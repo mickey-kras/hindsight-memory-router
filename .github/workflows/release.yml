@@ -37,6 +37,8 @@ jobs:
       issues: write
       pages: write
     uses: ./.github/workflows/publish.yml
+    with:
+      validation_only: true
     secrets:
       TAILSCALE_OAUTH_CLIENT_ID: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
       TAILSCALE_AUDIENCE: ${{ secrets.TAILSCALE_AUDIENCE }}

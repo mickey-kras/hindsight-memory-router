@@ -150,6 +150,29 @@ def successful_quality_needs():
     return needs
 
 
+def workflow_condition(condition, inputs, event="workflow_dispatch", ref="refs/heads/main", needs=None):
+    driver = r"""
+const { condition, inputs, event, ref, needs } = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const expression = condition.replace(/^\s*\$\{\{/, '').replace(/\}\}\s*$/, '')
+  .replace(/needs\.([\w-]+)/g, (_, name) => `needs[${JSON.stringify(name)}]`);
+const success = () => Object.values(needs).every(job => job.result === 'success');
+const cancelled = () => Object.values(needs).some(job => job.result === 'cancelled');
+const failure = () => Object.values(needs).some(job => job.result === 'failure');
+const implicitSuccess = /\b(always|success|failure|cancelled)\(/.test(expression) || success();
+const result = implicitSuccess && new Function('inputs', 'github', 'needs', 'success', 'failure',
+  'cancelled', 'always', `return (${expression});`)(inputs, { event_name: event, ref }, needs,
+  success, failure, cancelled, () => true);
+process.stdout.write(JSON.stringify(Boolean(result)));
+"""
+    result = subprocess.run(
+        ["node", "-e", driver],
+        input=json.dumps({"condition": condition, "inputs": inputs, "event": event, "ref": ref,
+                          "needs": needs or {}}),
+        text=True, capture_output=True, check=True,
+    )
+    return json.loads(result.stdout)
+
+
 class ReleasePolicyTests(unittest.TestCase):
     def test_parallel_quality_jobs_preserve_required_identities_and_hindsight(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
@@ -546,6 +569,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         baseline = release["jobs"]["baseline"]
         self.assertEqual(baseline["uses"], "./.github/workflows/publish.yml")
         self.assertEqual(baseline["needs"], "entry")
+        self.assertEqual(baseline["with"], {"validation_only": True})
         entry = release["jobs"]["entry"]
         self.assertEqual(entry["permissions"], {})
         self.assertNotIn("environment", entry)
@@ -583,6 +607,93 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             self.assertIn(name, steps)
         self.assertIn("--exit-code 1", steps["Trivy critical gate"]["run"])
         self.assertEqual(publish["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.quality.outputs.hindsight_image }}")
+
+    def test_validation_only_baseline_preserves_validation_and_limits_side_effects(self):
+        main = yaml.safe_load((ROOT / MAIN).read_text())
+        architecture = yaml.safe_load((ROOT / ".github/workflows/architecture.yml").read_text())
+        for workflow in [main, architecture]:
+            inputs = workflow.get("on", workflow.get(True))["workflow_call"]["inputs"]
+            self.assertEqual(inputs["validation_only"]["type"], "boolean")
+            self.assertIs(inputs["validation_only"]["default"], False)
+        jobs = main["jobs"]
+        self.assertEqual(jobs["architecture"]["with"]["validation_only"], "${{ inputs.validation_only == true }}")
+        architecture_steps = architecture["jobs"]["validate"]["steps"]
+        pages_steps = [step for step in architecture_steps if step.get("name") in
+                       ["Name architecture Pages artifact", "Upload architecture Pages artifact"]]
+        self.assertEqual(len(pages_steps), 2)
+        for step in architecture_steps:
+            if step not in pages_steps:
+                self.assertNotIn("validation_only", json.dumps(step))
+        for name, job in jobs.items():
+            if name not in ["pages", "update-pr-branches", "architecture"]:
+                self.assertNotIn("validation_only", json.dumps(job))
+        for event, ref, candidate, mode, validation, publication in [
+            ("push", "refs/heads/main", "", False, True, True),
+            ("push", "refs/heads/main", "", None, True, True),
+            ("workflow_dispatch", "refs/heads/main", "", False, True, True),
+            ("workflow_dispatch", "refs/heads/main", "", True, True, False),
+            ("workflow_dispatch", "refs/heads/main", "b" * 40, False, True, False),
+            ("workflow_dispatch", "refs/heads/main", "b" * 40, True, True, False),
+            ("pull_request", "refs/pull/1/merge", "", False, False, False),
+            ("workflow_dispatch", "refs/heads/topic", "", True, False, False),
+        ]:
+            inputs = {"candidate_sha": candidate, "candidate_ref": "refs/heads/release/0.1.0" if candidate else "",
+                      "validation_only": mode}
+            if mode is None:
+                del inputs["validation_only"]
+            with self.subTest(event=event, ref=ref, candidate=bool(candidate), mode=mode):
+                self.assertEqual(workflow_condition(jobs["architecture"]["with"]["validation_only"], inputs),
+                                 mode is True)
+                for name in ["quality", "aislop", "codeql", "architecture", "publish"]:
+                    needs = {key: {"result": "success"} for key in jobs[name].get("needs", [])}
+                    self.assertEqual(workflow_condition(jobs[name]["if"], inputs, event, ref, needs), validation)
+                self.assertEqual(workflow_condition(jobs["sonar"]["if"], inputs, event, ref),
+                                 validation and not candidate)
+                for condition in [jobs["pages"]["if"], jobs["update-pr-branches"]["if"],
+                                  *(step["if"] for step in pages_steps)]:
+                    self.assertEqual(workflow_condition(condition, inputs, event, ref), publication)
+
+    def test_baseline_failures_block_preparation_and_remain_reportable(self):
+        release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())["jobs"]
+        prepare = release["prepare-release"]
+        self.assertEqual(prepare["needs"], "baseline")
+        self.assertNotIn("continue-on-error", release["baseline"])
+        self.assertNotIn("if", prepare)
+        main = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]
+        reporter = main["report-validation-failure"]
+        inputs = {"candidate_sha": "", "candidate_ref": "", "validation_only": True}
+        passing = {name: {"result": "success"} for name in reporter["needs"]}
+        for side_effect in ["pages", "update-pr-branches"]:
+            passing[side_effect] = {"result": "skipped"}
+        self.assertFalse(workflow_condition(reporter["if"], inputs, needs=passing))
+        for name in ["quality", "aislop", "codeql", "architecture", "publish", "sonar"]:
+            with self.subTest(failed=name):
+                failed = {**passing, name: {"result": "failure"}}
+                self.assertTrue(workflow_condition(reporter["if"], inputs, needs=failed))
+        for state in ["failure", "cancelled", "skipped"]:
+            self.assertFalse(workflow_condition(prepare.get("if", "success()"), inputs,
+                                               needs={"baseline": {"result": state}}))
+
+    def test_validation_only_gate_and_side_effect_regressions_fail_policy(self):
+        release_path = ".github/workflows/release.yml"
+        release = (ROOT / release_path).read_text()
+        main = (ROOT / MAIN).read_text()
+        sonar_condition = yaml.safe_load(main)["jobs"]["sonar"]["if"]
+        architecture_path = ".github/workflows/architecture.yml"
+        architecture = (ROOT / architecture_path).read_text()
+        mutations = [
+            (release_path, release.replace("validation_only: true", "validation_only: false")),
+            (release_path, release.replace("needs: baseline", "needs: entry")),
+            (MAIN, main.replace(" && !inputs.validation_only", "")),
+            (MAIN, main.replace(f"    if: {sonar_condition}\n",
+                                f"    if: {sonar_condition} && !inputs.validation_only\n")),
+            (MAIN, main.replace("      - name: Trivy critical gate", "      - if: false\n        name: Trivy critical gate")),
+            (architecture_path, architecture.replace(" && !inputs.validation_only", "")),
+        ]
+        for path, changed in mutations:
+            with self.subTest(path=path, changed=changed[:30]):
+                self.assertNotEqual(changed, (ROOT / path).read_text())
+                self.assertTrue(policy({path: changed}))
 
     def test_dependency_review_contract(self):
         validation = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
@@ -887,10 +998,13 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         main = yaml.safe_load((ROOT / MAIN).read_text())
         for job in ["quality", "aislop", "codeql", "architecture"]:
             caller = main["jobs"][job]
-            self.assertEqual(caller["with"], {
+            expected = {
                 "candidate_sha": "${{ inputs.candidate_sha }}",
                 "candidate_ref": "${{ inputs.candidate_ref }}",
-            })
+            }
+            if job == "architecture":
+                expected["validation_only"] = "${{ inputs.validation_only == true }}"
+            self.assertEqual(caller["with"], expected)
             workflow = yaml.safe_load((ROOT / caller["uses"]).read_text())
             for reusable in workflow["jobs"].values():
                 for step in reusable.get("steps", []):
