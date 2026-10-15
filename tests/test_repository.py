@@ -261,7 +261,7 @@ async def test_queue_filter_scope_status_expiry_and_pagination_parity(
         ("expired", "bank-a", "main", "retain_request", "pending", at),
         ("expired-stuck", "bank-a", "main", "retain_request", "review_side_effect_started", at),
         ("reviewing", "bank-a", "main", "retain_request", "review_in_progress", None),
-        ("completed", "bank-a", "main", "retain_request", "review_side_effect_completed", None),
+        ("completed", "bank-a", "main", "retain_request", "review_side_effect_completed", at),
         ("allowed", "bank-a", "main", "retain_request", "reviewed_allowed", None),
         ("blocked", "bank-a", "main", "retain_request", "reviewed_blocked", None),
     ):
@@ -272,17 +272,27 @@ async def test_queue_filter_scope_status_expiry_and_pagination_parity(
         }
         await repository.store(value, capacity, mode="id", at=at)
 
+    stats = await repository.stats(at)
+    assert stats["review_side_effect_started_items"] == 2
+    assert stats["review_side_effect_completed_items"] == 1
+    assert stats["expired_items"] == 1
+    from memory_router.metrics_http import _metrics_response
+
+    response = await _metrics_response(repository)
+    assert "memory_router_review_side_effect_started_items 2" in response.body.decode()
+
     for filter_, expected in (
-        (QueueFilter(), ["a", "b", "c", "d"]),
-        (QueueFilter(bank_id="bank-a"), ["a", "c"]),
-        (QueueFilter(bank_ids=("bank-a", "bank-b")), ["a", "b", "c"]),
+        (QueueFilter(), ["a", "b", "c", "completed", "d", "expired-stuck"]),
+        (QueueFilter(bank_id="bank-a"), ["a", "c", "completed", "expired-stuck"]),
+        (QueueFilter(bank_ids=("bank-a", "bank-b")), ["a", "b", "c", "completed", "expired-stuck"]),
         (QueueFilter(bank_ids=()), []),
-        (QueueFilter(writer_id="main"), ["a", "b"]),
-        (QueueFilter(principal_id="main"), ["a", "b"]),
+        (QueueFilter(writer_id="main"), ["a", "b", "completed", "expired-stuck"]),
+        (QueueFilter(principal_id="main"), ["a", "b", "completed", "expired-stuck"]),
         (QueueFilter(kind="recall_request"), ["b"]),
         (QueueFilter(status="pending"), ["a", "d"]),
         (QueueFilter(status="postponed"), ["b"]),
-        (QueueFilter(status="review_side_effect_started"), ["c"]),
+        (QueueFilter(status="review_side_effect_started"), ["c", "expired-stuck"]),
+        (QueueFilter(status="review_side_effect_completed"), ["completed"]),
         (QueueFilter(status="reviewed_allowed"), []),
         (QueueFilter(bank_ids=("bank-a",), principal_id="main", status="pending"), ["a"]),
         (QueueFilter(bank_id="bank-b", bank_ids=("bank-a",)), []),

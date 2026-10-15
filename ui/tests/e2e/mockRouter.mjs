@@ -69,7 +69,7 @@ export function startMockRouter(port = 8899) {
   const reviewable = () =>
     [...items.values()].filter(
       (i) =>
-        ["pending", "postponed", "review_side_effect_started"].includes(i.record.status) &&
+        ["pending", "postponed", "review_side_effect_started", "review_side_effect_completed"].includes(i.record.status) &&
         !expired(i),
     );
 
@@ -81,6 +81,9 @@ export function startMockRouter(port = 8899) {
       postponed_items: all.filter((i) => i.record.status === "postponed").length,
       review_side_effect_started_items: all.filter(
         (i) => i.record.status === "review_side_effect_started",
+      ).length,
+      review_side_effect_completed_items: all.filter(
+        (i) => i.record.status === "review_side_effect_completed",
       ).length,
       reviewed_allowed_items: all.filter((i) => i.record.status === "reviewed_allowed").length,
       reviewed_blocked_items: all.filter((i) => i.record.status === "reviewed_blocked").length,
@@ -119,6 +122,15 @@ export function startMockRouter(port = 8899) {
     if (url.pathname === "/__reset" && req.method === "POST") {
       reset();
       return finish(200, { reset: true });
+    }
+    if (url.pathname === "/__seed-completed" && req.method === "POST") {
+      for (const item of items.values()) {
+        if (["retain_request", "recalled_memory"].includes(item.record.kind)) {
+          item.record.status = "review_side_effect_completed";
+          item.record.expires_at = "2000-01-01T00:00:00.000Z";
+        }
+      }
+      return finish(200, { seeded: "review_side_effect_completed" });
     }
     if (url.pathname === "/__seed-stuck" && req.method === "POST") {
       const target = items.get("q_retain_0123456789abcdef");
@@ -254,7 +266,7 @@ export function startMockRouter(port = 8899) {
     const action = match[3];
 
     if (req.method === "GET" && !action) {
-      if (item.record.status !== "review_side_effect_started") {
+      if (!["review_side_effect_started", "review_side_effect_completed"].includes(item.record.status)) {
         if (FINAL_STATUSES.has(item.record.status)) {
           return finish(409, {
             error: "quarantine_already_finalized",
@@ -388,7 +400,7 @@ export function startMockRouter(port = 8899) {
       return;
     }
 
-    if (FINAL_STATUSES.has(item.record.status)) {
+    if (FINAL_STATUSES.has(item.record.status) && !(item.record.status === "review_side_effect_completed" && ((item.record.kind === "retain_request" && action === "approve") || (item.record.kind === "recalled_memory" && action === "reject")))) {
       return finish(409, {
         error: "quarantine_already_finalized",
         message: "quarantine item is not pending review",

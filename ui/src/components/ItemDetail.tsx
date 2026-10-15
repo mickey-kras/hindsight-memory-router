@@ -145,8 +145,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
     meta.push(["Encrypted size", formatBytes(record.encrypted_bytes)]);
   if (record.expires_at) meta.push(["Expires", formatTime(record.expires_at)]);
 
-  const canReview = item.status === "pending" || item.status === "postponed";
-  const canReconcile = item.status === "review_side_effect_started";
+  const canFinalize = record.status === "review_side_effect_completed";
+  const canApprove = canFinalize && record.kind === "retain_request";
+  const canReject = canFinalize && record.kind === "recalled_memory";
+  const canReview = record.status === "pending" || record.status === "postponed";
+  const canReconcile = record.status === "review_side_effect_started";
 
   return (
     <section
@@ -248,39 +251,52 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         />
       )}
 
-      {(canReview || canReconcile) && (
+      {canFinalize && (
+        <Banner
+          kind="info"
+          text="Hindsight completed the original action. Finalize the same decision without calling Hindsight again. Retain approval still requires the exact decrypted object."
+        />
+      )}
+
+      {(canReview || canReconcile || canFinalize) && (
         <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-zinc-800 bg-zinc-900/95 px-4 py-3 backdrop-blur">
           {pendingAction === null && (
             <div className="flex flex-wrap gap-2">
-              {canReview && (
+              {(canReview || canApprove || canReject) && (
                 <>
-                  <button
-                    onClick={() => setPendingAction("approve")}
-                    disabled={!decrypted || busy || (tokens !== "host" && !tokens.review)}
-                    data-testid="approve-open"
-                    title={
-                      !decrypted ? "decrypt first" : (tokens !== "host" && !tokens.review) ? "review token required" : ""
-                    }
-                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
-                  >
-                    Approve
-                  </button>
-                  <button
-                    onClick={() => setPendingAction("reject")}
-                    disabled={busy || (tokens !== "host" && !tokens.review)}
-                    data-testid="reject-open"
-                    className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
-                  >
-                    Reject
-                  </button>
-                  <button
-                    onClick={() => void runAction("postpone")}
-                    disabled={busy || (tokens !== "host" && !tokens.review)}
-                    data-testid="postpone"
-                    className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    Postpone
-                  </button>
+                  {(canReview || canApprove) && (
+                    <button
+                      onClick={() => setPendingAction("approve")}
+                      disabled={!decrypted || busy || (tokens !== "host" && !tokens.review)}
+                      data-testid="approve-open"
+                      title={
+                        !decrypted ? "decrypt first" : (tokens !== "host" && !tokens.review) ? "review token required" : ""
+                      }
+                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+                    >
+                      {canFinalize ? "Finalize approval" : "Approve"}
+                    </button>
+                  )}
+                  {(canReview || canReject) && (
+                    <button
+                      onClick={() => setPendingAction("reject")}
+                      disabled={busy || (tokens !== "host" && !tokens.review)}
+                      data-testid="reject-open"
+                      className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
+                    >
+                      {canFinalize ? "Finalize rejection" : "Reject"}
+                    </button>
+                  )}
+                  {canReview && (
+                    <button
+                      onClick={() => void runAction("postpone")}
+                      disabled={busy || (tokens !== "host" && !tokens.review)}
+                      data-testid="postpone"
+                      className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+                    >
+                      Postpone
+                    </button>
+                  )}
                 </>
               )}
               {canReconcile && (
