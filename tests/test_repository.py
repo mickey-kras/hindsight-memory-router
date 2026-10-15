@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from memory_router.admin import QuarantineAdminService
+from memory_router.admin import AdminActor, QuarantineAdminService
 from memory_router.db import SqliteDatabase, SqliteTx, create_database, initialize_schema
 from memory_router.errors import HttpError
 from memory_router.repository import (
@@ -667,3 +667,47 @@ async def test_admin_detail_omits_absent_metadata_from_real_storage(
     )
     assert result["record"]["postpone_count"] == 0
     assert result["encrypted"] == stored_item["encrypted"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cutoff", "selected"),
+    [
+        ("2026-07-01T01:00:00+02:00", ["before"]),
+        ("2026-06-30T23:00:00Z", ["before"]),
+        ("2026-06-30T18:00:00-05:00", ["before"]),
+        ("2026-06-30T23:00:00.000000000Z", ["before"]),
+        ("2026-06-30T23:00:00.000000001Z", ["before", "boundary"]),
+        ("2026-07-01T01:00:00.000001+02:00", ["before", "boundary"]),
+        ("2026-07-01T00:30:00.1Z", ["before", "boundary", "later", "millisecond"]),
+        ("2026-07-01T00:30:00.100000Z", ["before", "boundary", "later", "millisecond"]),
+        ("2026-07-01T00:30:00.100000001Z", ["before", "boundary", "later", "millisecond", "tenth"]),
+    ],
+)
+async def test_cleanup_cutoff_instant_ordering(
+    repository: QuarantineRepository, cutoff: str, selected: list[str]
+) -> None:
+    times = {
+        "before": "2026-06-30T22:59:59.999Z",
+        "boundary": "2026-06-30T23:00:00.000Z",
+        "later": "2026-07-01T00:30:00.000Z",
+        "millisecond": "2026-07-01T00:30:00.001Z",
+        "tenth": "2026-07-01T00:30:00.100Z",
+    }
+    for qid, created_at in times.items():
+        await repository.store(
+            {**item(qid), "created_at": created_at},
+            Capacity(20, 20, 100_000),
+            mode="id",
+            at=created_at,
+        )
+    service = QuarantineAdminService(repository, None, None, None)
+    actor = AdminActor(token_scope="cleanup")  # noqa: S106 - scope, not a secret
+    preview = await service.cleanup({"older_than": cutoff}, actor)
+    assert preview["count"] == len(selected)
+    result = await service.cleanup(
+        {"older_than": cutoff, "dry_run": False, "expected_count": preview["count"]}, actor
+    )
+    assert result == {**preview, "dry_run": False}
+    for qid in times:
+        assert (await repository.get(qid) is None) == (qid in selected)

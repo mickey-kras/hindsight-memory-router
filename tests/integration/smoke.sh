@@ -458,7 +458,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 5eed9e5ab47401c6d7c4862d8377a4396de6a40827d7099ee678cbff86c4e30b
+# integration-behavior-sha256: bc82bec9aa7a32c2f1378060dc166bf374f1f21cc632e61a049fac35e1735dfc
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -630,6 +630,15 @@ for cleanup_dry_run in true false; do
 import json, sys
 assert json.load(open(sys.argv[1]))["error"] == "invalid_cleanup"
 PY
+  invalid_cleanup_time_status="$(curl --max-time 5 -sS -o "$tmp_dir/invalid-cleanup-time.json" -w '%{http_code}' \
+    -H "Authorization: Bearer ${admin_cleanup_token}" -H "Content-Type: application/json" \
+    -X POST "${router_url}/admin/quarantine/cleanup" \
+    -d "{\"older_than\":\"2026-07-01T00:00:00\",\"dry_run\":${cleanup_dry_run},\"expected_count\":0}")"
+  [[ "$invalid_cleanup_time_status" == "400" ]] || fail_check "timezone-less cleanup cutoff was accepted"
+  python3 - "$tmp_dir/invalid-cleanup-time.json" <<'PYTIME'
+import json, sys
+assert json.load(open(sys.argv[1]))["error"] == "invalid_cleanup_time"
+PYTIME
 done
 cleanup_preview="$(admin_cleanup_post "/admin/quarantine/cleanup" '{"scope":"pending","dry_run":true}')"
 cleanup_count="$(printf '%s' "$cleanup_preview" | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])')"

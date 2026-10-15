@@ -2400,7 +2400,8 @@
           },
           "older_than": {
             "type": "string",
-            "format": "date-time"
+            "format": "date-time",
+            "description": "Select items created strictly before this instant. Requires seconds and an explicit timezone (Z or +/-HH:MM). Fractional seconds are supported, including sub-millisecond precision. Equivalent offsets select the same items; invalid or out-of-range timestamps return 400."
           },
           "dry_run": {
             "type": "boolean",

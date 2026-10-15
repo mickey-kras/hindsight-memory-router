@@ -350,9 +350,6 @@ async def test_cleanup_dry_run_commit_and_validation(monkeypatch: pytest.MonkeyP
     assert perform.await_args.kwargs == {"actor": "review"}
     with pytest.raises(HttpError, match="scope"):
         await svc.cleanup({"scope": "bad"}, ACTOR)
-    with pytest.raises(HttpError) as time:
-        await svc.cleanup({"older_than": "bad"}, ACTOR)
-    assert time.value.code == "invalid_cleanup_time"
     for expected in (None, True, -1, "2"):
         with pytest.raises(HttpError) as required:
             await svc.cleanup({"dry_run": False, "expected_count": expected}, ACTOR)
@@ -1050,3 +1047,40 @@ async def test_stats_adds_per_bank_breakdown() -> None:
     scoped = await svc.bank_stats(("bank-a",))
     assert scoped == {"banks": [entry]}
     assert repo.bank_stats.await_args.args[1] == ("bank-a",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cutoff",
+    [
+        "bad",
+        "2026-07-01",
+        "2026-07-01T00:00:00",
+        "2026-07-01T00:00:00.123",
+        "2026-07-01T00:00:00+02:99",
+        "2026-02-30T00:00:00Z",
+        "0001-01-01T00:00:00+01:00",
+        "9999-12-31T23:59:59-01:00",
+        2026,
+        True,
+        [],
+        {},
+        1.5,
+    ],
+)
+@pytest.mark.parametrize("dry_run", [True, False])
+async def test_cleanup_rejects_invalid_cutoffs(cutoff: object, dry_run: bool) -> None:
+    svc, _, _, _ = service(None)
+    with pytest.raises(HttpError) as invalid:
+        await svc.cleanup({"older_than": cutoff, "dry_run": dry_run, "expected_count": 0}, ACTOR)
+    assert invalid.value.status == 400
+    assert invalid.value.code == "invalid_cleanup_time"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", [[], {}, True, 1])
+async def test_cleanup_rejects_invalid_scope_types(scope: object) -> None:
+    svc, _, _, _ = service(None)
+    with pytest.raises(HttpError) as invalid:
+        await svc.cleanup({"scope": scope}, ACTOR)
+    assert invalid.value.status == 400
