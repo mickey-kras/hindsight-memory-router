@@ -7,7 +7,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
@@ -84,6 +84,7 @@ configure_logging()
 _MAX_JSON_DEPTH = 64
 _AUTH_AUDITOR_COMPONENT = "auth auditor"
 _PRINCIPAL_RESOLVER_COMPONENT = "principal resolver"
+type _MaintenancePhase = Literal["session-prune", "review-recovery", "expiry", "event-retention"]
 _AUTHENTICATION_REQUIRED = {
     "error": "unauthorized",
     "message": "authentication required",
@@ -335,25 +336,45 @@ class Runtime:
         while True:
             await asyncio.sleep(interval)
             at = iso_now()
-            try:
-                if self.human_auth is not None:
-                    await self.human_auth.store.prune()
-                await recover_interrupted(repository, at, self.review_stale_seconds)
-                await sweep_expired(repository, at)
-                if retention_days > 0:
-                    cutoff = iso_format(datetime.now(UTC) - timedelta(days=retention_days))
-                    await prune_events_before(repository, cutoff, at, export_path)
-            except Exception as exc:
-                metrics.record_sweeper_failure()
+            iteration_failed = False
+
+            def report_failure(phase: _MaintenancePhase, exc: Exception) -> None:
+                nonlocal iteration_failed
+                if not iteration_failed:
+                    metrics.record_sweeper_failure()
+                    iteration_failed = True
                 log_event(
                     logger,
                     "error",
                     "quarantine_sweeper_failed",
                     operation="quarantine_maintenance",
+                    maintenance_phase=phase,
                     error_kind="unexpected",
                     error=exc,
                     outcome="failed",
                 )
+
+            try:
+                if self.human_auth is not None:
+                    await self.human_auth.store.prune()
+            except Exception as exc:
+                report_failure("session-prune", exc)
+
+            phase: _MaintenancePhase = "review-recovery"
+            try:
+                await recover_interrupted(repository, at, self.review_stale_seconds)
+                # Expiry depends on recovery completing successfully in this iteration.
+                phase = "expiry"
+                await sweep_expired(repository, at)
+            except Exception as exc:
+                report_failure(phase, exc)
+
+            try:
+                if retention_days > 0:
+                    cutoff = iso_format(datetime.now(UTC) - timedelta(days=retention_days))
+                    await prune_events_before(repository, cutoff, at, export_path)
+            except Exception as exc:
+                report_failure("event-retention", exc)
 
 
 runtime = Runtime()
