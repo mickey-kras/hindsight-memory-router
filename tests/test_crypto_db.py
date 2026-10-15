@@ -93,6 +93,7 @@ def test_envelope_key_decoders_reject_rsa_keys_smaller_than_2048_bits() -> None:
     "reason",
     [
         "recalled_suspicious_supplemental",
+        "recalled_suspicious_aggregate",
         "openclaw_suspicious_request",
         "openclaw_unknown_writer",
         "openclaw_suspicious_provider_response",
@@ -268,6 +269,7 @@ def test_quarantine_reason_vocabulary_covers_producers() -> None:
             )
     assert {
         "recalled_suspicious_supplemental",
+        "recalled_suspicious_aggregate",
         "openclaw_suspicious_request",
         "openclaw_unknown_writer",
         "openclaw_suspicious_provider_response",

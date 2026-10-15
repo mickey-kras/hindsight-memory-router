@@ -22,6 +22,7 @@ from .security import (
     scan_facade_payload,
     scan_query_values,
     scan_recall_body,
+    scan_recall_response,
     scan_recall_result,
     scan_retain_body,
 )
@@ -298,14 +299,28 @@ async def scan_facade_response(value: Any, *, writer_id: str | None = None) -> S
 
 def _scan_recalled_payload(payload: bytes) -> SafetyResult:
     value = json.loads(payload)
+    if value.get("reviewed_result_positions") is not None:
+        return scan_recall_response(
+            value["result"], reviewed_result_positions=frozenset(value["reviewed_result_positions"])
+        )
     return scan_recall_result(value["result"], reviewed_stable=value["reviewed_stable"])
 
 
 async def scan_recalled(
-    value: dict[str, Any], *, writer_id: str | None = None, reviewed_stable: bool = False
+    value: dict[str, Any],
+    *,
+    writer_id: str | None = None,
+    reviewed_stable: bool = False,
+    reviewed_result_positions: frozenset[int] | None = None,
 ) -> SafetyResult:
     return await _scan_in_worker(
-        {"result": value, "reviewed_stable": reviewed_stable},
+        {
+            "result": value,
+            "reviewed_stable": reviewed_stable,
+            "reviewed_result_positions": sorted(reviewed_result_positions)
+            if reviewed_result_positions is not None
+            else None,
+        },
         kind="recall",
         task_seconds=CORE_SCAN_TASK_SECONDS,
         wait_seconds=CORE_SCAN_TASK_SECONDS + 1.0,

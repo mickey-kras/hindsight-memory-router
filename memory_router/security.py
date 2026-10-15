@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
@@ -122,6 +123,37 @@ def scan_recall_result(result: dict[str, Any], *, reviewed_stable: bool = False)
         else frozenset(),
         deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS,
     )
+
+
+def scan_recall_response(
+    response: dict[str, Any], *, reviewed_result_positions: frozenset[int] = frozenset()
+) -> SafetyResult:
+    # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
+    # metadata and supplemental fields cannot acquire approval through a path label.
+    marked = dict(response)
+    marked_results: list[dict[str, object]] = []
+    for position, result in enumerate(response.get("results", [])):
+        copied = dict(result)
+        if position in reviewed_result_positions:
+            for field_index, field_name in enumerate(("id", "text")):
+                value = copied.get(field_name)
+                if isinstance(value, str):
+                    copied[field_name] = security_provenance.ReviewedText(
+                        value, 2 * position + field_index + 1
+                    )
+        marked_results.append(copied)
+    marked["results"] = marked_results
+    fields = (
+        (
+            key,
+            value
+            if isinstance(value, security_provenance.ReviewedText)
+            else security_provenance.ReviewedText(value),
+            is_key,
+        )
+        for key, value, is_key in _walk_strings(marked, "recalled_response", include_numbers=True)
+    )
+    return _scan_fields(fields, operation="read", deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS)
 
 
 def scan_facade_result(result: Any) -> SafetyResult:
@@ -489,7 +521,7 @@ def _decoded_query_values(decoded: object) -> Iterator[tuple[str, str]]:
 
 
 def _walk_strings(
-    value: Any, path: str, *, is_key: bool = False
+    value: Any, path: str, *, is_key: bool = False, include_numbers: bool = False
 ) -> Iterator[tuple[str, str, bool]]:
     stack: list[Iterator[tuple[Any, str, bool]]] = [iter(((value, path, is_key),))]
     while stack:
@@ -500,6 +532,17 @@ def _walk_strings(
             continue
         if isinstance(current, str):
             yield current_path, current, current_is_key
+        elif (
+            include_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
+        ):
+            original = str(current)
+            yield current_path, original, current_is_key
+            if isinstance(current, float) and math.isfinite(current) and current.is_integer():
+                # A finite Python float has at most 309 decimal integer digits.
+                # Keep the original spelling; each alternate consumes the same budgets.
+                decimal = str(int(current))
+                if decimal != original:
+                    yield current_path, decimal, current_is_key
         else:
             stack.append(_walk_children(current, current_path))
 
@@ -648,16 +691,23 @@ def _scan_direct_fields(  # NOSONAR
             else:
                 canonical, transformations = canonicalize_content(raw, deadline=options.deadline)
             result.transformations.update(transformations)
-            if options.reviewed_fields:
+            if options.reviewed_fields or isinstance(raw, security_provenance.ReviewedText):
                 canonical = security_provenance.ReviewedText(
-                    canonical, reviewed_origins.get(key, 0) if not is_key else 0
+                    canonical,
+                    (
+                        raw.trusted
+                        if isinstance(raw, security_provenance.ReviewedText)
+                        else reviewed_origins.get(key, 0)
+                    )
+                    if not is_key
+                    else 0,
                 )
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
                 options.canonical_output.append((key, canonical, is_key))
             if "keycap" in transformations:
                 keycap_values.add(canonical)
-            if not is_key and key in options.reviewed_fields:
+            if not is_key and security_provenance.reviewed(canonical):
                 continue
             security_rules._add_unicode_findings(result, transformations)
             signature = canonical, is_key

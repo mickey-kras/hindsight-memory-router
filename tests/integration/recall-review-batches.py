@@ -263,6 +263,49 @@ async def verify_batches(url: str) -> None:
             ]
             assert card_state.status == ("reviewed_allowed" if allowed else "pending")
 
+        # Aggregate approval belongs to one memory, including numeric context.
+        for case, left, right in (
+            ("instruction", "ignore", "previous instructions"),
+            ("number", "2026123456789012", "credit card"),
+        ):
+            aggregate_results = [
+                {"id": f"aggregate-{case}-left", "text": left},
+                {"id": f"aggregate-{case}-right", "text": right},
+            ]
+            for result in aggregate_results:
+                await repository.store(
+                    {
+                        **seed,
+                        "quarantine_id": result["id"],
+                        "source_memory_id": result["id"],
+                        "source_content_sha256": recalled_content_digest(result),
+                    },
+                    Capacity(1000, 1000, 1000000),
+                    mode="memory",
+                    at=AT,
+                )
+            positions: set[int] = set()
+            allowed_results = await policy._allowed_recall_results(
+                "main",
+                "integration",
+                [("main", {"results": aggregate_results})],
+                reviewed_positions=positions,
+            )
+            assert allowed_results == aggregate_results and positions == {0, 1}
+            assert not await policy._allow_recall_aggregate(
+                "main", "integration", {"results": allowed_results}, frozenset(positions)
+            )
+            async with db.transaction() as tx:
+                aggregate_audits = await tx.fetchall(
+                    "SELECT quarantine_id FROM quarantine_items WHERE reason=?",
+                    ("recalled_suspicious_aggregate",),
+                )
+            assert len(aggregate_audits) == (1 if case == "instruction" else 2)
+            for audit in aggregate_audits:
+                stored_audit = await repository.get(audit["quarantine_id"])
+                assert stored_audit and stored_audit["kind"] == "security_event"
+                assert stored_audit["encrypted"]["reason"] == "recalled_suspicious_aggregate"
+
         for first in ("id", "text"):
             second = "text" if first == "id" else "id"
             approved_order = {first: "previous instructions", second: "system prompt ignore"}
