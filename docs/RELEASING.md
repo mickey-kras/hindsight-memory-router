@@ -16,8 +16,9 @@ fail at the entry guard, before validation, candidate checkout or release creden
 
 The workflow graph contains separate main and candidate validation stages. Candidate jobs explicitly
 check out and scan the frozen candidate SHA; the GitHub workflow source remains the selected dispatch
-SHA. Sonar and Pages run only in the main stage. The run summary records candidate
-and baseline commits. If main advances before creating a new candidate, dispatch from current main.
+SHA. The release baseline retains Sonar and architecture validation. Pages publication and PR branch
+updates run in ordinary main workflows and are omitted from the release baseline. The run summary
+records candidate and baseline commits. If main advances before creating a new candidate, dispatch from current main.
 Native retries keep the original selected snapshot even if main later advances. If main has advanced,
 use the original run’s retry button; a new dispatch does not select an older main snapshot.
 
