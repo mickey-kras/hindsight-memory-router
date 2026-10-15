@@ -4,6 +4,8 @@
 
 Use the scoped cleanup token for preview and execution.
 
+`older_than` selects items created strictly before that instant. Supply an ISO date-time with seconds and an explicit timezone (`Z` or `+/-HH:MM`), such as the examples below. Equivalent timezone offsets select the same items. Fractional seconds are accepted, including precision finer than the stored UTC milliseconds; an item exactly at the cutoff is excluded. Invalid, timezone-less, or out-of-range timestamps return `400`.
+
 Preview example:
 
 ```json

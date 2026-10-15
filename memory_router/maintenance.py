@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import datetime
 from typing import Any, get_args
 
 from .envelope import QuarantineReason
@@ -14,8 +16,15 @@ from .repository import (
     QuarantineRepository,
     insert_event,
 )
+from .timestamps import iso_format
 
 BATCH_LIMIT = 1000
+
+_CLEANUP_TIME = re.compile(
+    r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}"
+    r"(?:\.(?P<fraction>\d+))?(?:[Zz]|[+-](?:[01]\d|2[0-3]):[0-5]\d)",
+    re.ASCII,
+)
 
 _SWEEP_SQL = """
 SELECT quarantine_id, expires_at
@@ -163,7 +172,7 @@ async def prune_events_before(
 def cleanup_params(
     scope: str, reasons: list[str] | None, older_than: str | None
 ) -> tuple[str, list[Any]]:
-    if scope not in {PENDING, "all"}:
+    if not isinstance(scope, str) or scope not in {PENDING, "all"}:
         raise HttpError(400, "invalid_cleanup", "cleanup scope must be pending or all")
     if reasons is not None and not isinstance(reasons, list):
         raise HttpError(400, "invalid_cleanup", "cleanup reasons must be an array")
@@ -180,11 +189,29 @@ def cleanup_params(
         clauses.append("reason IN (" + ",".join("?" for _ in selected) + ")")
         params.extend(selected)
     if older_than is not None:
-        if not isinstance(older_than, str):
-            raise HttpError(400, "invalid_cleanup", "older_than must be a string")
-        clauses.append("created_at < ?")
-        params.append(older_than)
+        cutoff, has_submillisecond = _cleanup_cutoff(older_than)
+        # Stored creation times are UTC milliseconds. A fractional cutoff after
+        # that millisecond includes the stored instant at its truncated boundary.
+        clauses.append("created_at <= ?" if has_submillisecond else "created_at < ?")
+        params.append(cutoff)
     return " AND ".join(clauses), params
+
+
+def _cleanup_cutoff(value: str) -> tuple[str, bool]:
+    try:
+        match = _CLEANUP_TIME.fullmatch(value) if isinstance(value, str) else None
+        if match is None:
+            raise ValueError("expected a timestamp with a timezone")
+        cutoff = iso_format(datetime.fromisoformat(value.upper()))
+    except (ValueError, OverflowError) as exc:
+        raise HttpError(
+            400,
+            "invalid_cleanup_time",
+            "older_than must be an ISO timestamp with a timezone (Z or +/-HH:MM)",
+        ) from exc
+    # Inspect all digits: datetime only retains six fractional digits.
+    fraction = match.group("fraction") or ""
+    return cutoff, any(digit != "0" for digit in fraction[3:])
 
 
 def _cleanup_query(select: str, where: str) -> str:

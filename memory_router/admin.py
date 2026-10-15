@@ -40,7 +40,7 @@ from .review_repository import (
 )
 from .review_repository import postpone as postpone_item
 from .scan_executor import scan_request
-from .timestamps import iso_now, parse_iso
+from .timestamps import iso_now
 from .validation import parse_retain_body
 
 logger = logging.getLogger(__name__)
@@ -552,17 +552,10 @@ class QuarantineAdminService:
 
     async def cleanup(self, body: dict[str, Any], actor: AdminActor) -> dict[str, Any]:
         scope = body.get("scope", PENDING)
-        if scope not in {PENDING, "all"}:
+        if not isinstance(scope, str) or scope not in {PENDING, "all"}:
             raise HttpError(400, "invalid_request", "scope must be pending or all")
         reasons = body.get("reasons")
         older_than = body.get("older_than")
-        if older_than is not None:
-            try:
-                parse_iso(str(older_than))
-            except ValueError as exc:
-                raise HttpError(
-                    400, "invalid_cleanup_time", "older_than must be an ISO timestamp"
-                ) from exc
         preview = await preview_cleanup(self.repository, scope, reasons, older_than)
         if body.get("dry_run") is not False:
             return {"dry_run": True, **preview}

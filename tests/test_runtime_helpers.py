@@ -181,9 +181,9 @@ class Repo:
 
 
 def test_cleanup_params_validation() -> None:
-    where, params = cleanup_params("pending", ["auth_failed"], "2020")
+    where, params = cleanup_params("pending", ["auth_failed"], "2020-01-01T00:00:00Z")
     assert where == "status IN ('pending','postponed') AND reason IN (?) AND created_at < ?"
-    assert params == ["auth_failed", "2020"]
+    assert params == ["auth_failed", "2020-01-01T00:00:00.000Z"]
 
     where, params = cleanup_params("all", None, None)
     assert where == (
