@@ -372,13 +372,12 @@ def test_query_window_budget_accepts_the_full_field_limit() -> None:
 
 
 def test_query_deadline_accepts_full_length_values_at_the_field_limit() -> None:
-    with scanner_clock():
-        result = scan_query_values(
-            [(f"q{index}", f"safe-value-{index:03d}-abcdefgh") for index in range(256)]
-        )
+    result = scan_query_values(
+        [(f"q{index}", f"safe-value-{index:03d}-abcdefgh") for index in range(256)]
+    )
 
-        assert "time_limit" not in matches(result)
-        assert result.safe
+    assert "time_limit" not in matches(result)
+    assert result.safe
 
 
 def test_safe_content_is_allowed() -> None:

@@ -27,6 +27,8 @@ PATHS = [
     ".github/scripts/report-main-failures.cjs",
     ".github/scripts/report-main-failures.test.cjs",
     ".github/scripts/aislop-cli.test.cjs",
+    ".github/scripts/ci-impact.cjs",
+    ".github/scripts/ci-impact.test.cjs",
     ".github/workflows/dependency-review.yml",
     ".github/workflows/pr-branch-updater.yml",
     ".github/scripts/pr-branch-updater.cjs",
@@ -117,7 +119,7 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
         return [] if result.returncode == 0 else [result.stdout + result.stderr]
 
 
-def quality_gate(needs, event="pull_request"):
+def quality_gate(needs, event="pull_request", candidate_sha="", candidate_ref=""):
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     script = workflow["jobs"]["checks"]["steps"][0]["with"]["script"]
     driver = r"""
@@ -130,7 +132,8 @@ process.stdout.write(JSON.stringify(failures));
     result = subprocess.run(
         ["node", "-e", driver],
         input=json.dumps({"script": script}),
-        env={**os.environ, "NEEDS_JSON": json.dumps(needs), "EVENT_NAME": event},
+        env={**os.environ, "NEEDS_JSON": json.dumps(needs), "EVENT_NAME": event,
+             "CANDIDATE_SHA": candidate_sha, "CANDIDATE_REF": candidate_ref},
         text=True,
         capture_output=True,
         check=True,
@@ -138,21 +141,32 @@ process.stdout.write(JSON.stringify(failures));
     return json.loads(result.stdout)
 
 
+def successful_quality_needs():
+    needs = {name: {"result": "success", "outputs": {}} for name in
+             ["changes", "hindsight", "python", "ui", "release", "security", "container"]}
+    needs["changes"]["outputs"] = {name: "true" for name in ["python", "ui", "release"]}
+    for name in ["python", "ui", "release"]:
+        needs[name]["outputs"] = {"validation": "full"}
+    return needs
+
+
 class ReleasePolicyTests(unittest.TestCase):
     def test_parallel_quality_jobs_preserve_required_identities_and_hindsight(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = workflow["jobs"]
         self.assertEqual(workflow["name"], "ci")
-        self.assertEqual(set(jobs), {"hindsight", "python", "ui", "release", "security", "checks", "container"})
+        self.assertEqual(set(jobs), {"changes", "hindsight", "python", "ui", "release", "security", "checks", "container"})
         self.assertEqual(set(jobs["checks"]["needs"]), set(jobs) - {"checks"})
         self.assertEqual(jobs["checks"]["if"], "always()")
         self.assertEqual(jobs["checks"].get("name", "checks"), "checks")
         self.assertEqual(jobs["container"]["name"], "container")
         self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request'")
-        for name in ["ui", "release", "security"]:
-            self.assertNotIn("needs", jobs[name])
-        for name in ["python", "container"]:
-            self.assertEqual(jobs[name]["needs"], "hindsight")
+        self.assertNotIn("needs", jobs["security"])
+        self.assertNotIn("needs", jobs["hindsight"])
+        for name in ["ui", "release"]:
+            self.assertEqual(jobs[name]["needs"], "changes")
+        self.assertEqual(jobs["python"]["needs"], ["changes", "hindsight"])
+        self.assertEqual(jobs["container"]["needs"], "hindsight")
         for name in ["hindsight", "python", "ui", "release", "security"]:
             self.assertNotIn("if", jobs[name])
         for job in jobs.values():
@@ -163,7 +177,8 @@ class ReleasePolicyTests(unittest.TestCase):
                     self.assertIs(step["with"]["persist-credentials"], False)
         self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in jobs["checks"]["steps"]))
         gate = jobs["checks"]["steps"][0]
-        self.assertEqual(gate["env"], {"NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}"})
+        self.assertEqual(gate["env"], {"NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}",
+                                       "CANDIDATE_SHA": "${{ inputs.candidate_sha }}", "CANDIDATE_REF": "${{ inputs.candidate_ref }}"})
         outputs = workflow.get("on", workflow.get(True))["workflow_call"]["outputs"]
         for name, source in [("version", "version"), ("sha", "sha"), ("image", "image")]:
             self.assertEqual(outputs[f"hindsight_{name}"]["value"], f"${{{{ jobs.hindsight.outputs.{source} }}}}")
@@ -174,8 +189,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(jobs["container"]["env"]["HINDSIGHT_TEST_IMAGE"], "${{ needs.hindsight.outputs.image }}")
 
     def test_quality_gate_rejects_failed_cancelled_missing_and_skipped_jobs(self):
-        names = ["hindsight", "python", "ui", "release", "security", "container"]
-        passing = {name: {"result": "success", "outputs": {}} for name in names}
+        passing = successful_quality_needs()
+        names = list(passing)
         self.assertEqual(quality_gate(passing), [])
         for name in names:
             for state in ["failure", "cancelled", "skipped", "neutral", "", None]:
@@ -188,7 +203,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(quality_gate({}))
 
     def test_quality_gate_allows_only_the_known_non_pr_container_skip_and_reruns(self):
-        passing = {name: {"result": "success"} for name in ["hindsight", "python", "ui", "release", "security", "container"]}
+        passing = successful_quality_needs()
         for event in ["push", "workflow_dispatch"]:
             with self.subTest(event=event):
                 baseline = {**passing, "container": {"result": "skipped"}}
@@ -202,6 +217,76 @@ class ReleasePolicyTests(unittest.TestCase):
                 self.assertEqual(quality_gate(baseline, event), [])
         self.assertTrue(quality_gate({**passing, "ui": {"result": "cancelled"}}))
         self.assertEqual(quality_gate(passing), [])
+
+    def test_noops_require_successful_jobs_and_matching_explicit_completion(self):
+        passing = successful_quality_needs()
+        for name in ["python", "ui", "release"]:
+            passing["changes"]["outputs"][name] = "false"
+            passing[name]["outputs"]["validation"] = "noop"
+        self.assertEqual(quality_gate(passing), [])
+        for name in ["python", "ui", "release"]:
+            for state in ["failure", "cancelled", "skipped"]:
+                self.assertTrue(quality_gate({**passing, name: {"result": state, "outputs": {"validation": "noop"}}}))
+            for output in [{}, {"validation": "full"}, {"validation": "skipped"}]:
+                self.assertTrue(quality_gate({**passing, name: {"result": "success", "outputs": output}}))
+            affected = successful_quality_needs()
+            affected[name]["outputs"]["validation"] = "noop"
+            self.assertTrue(quality_gate(affected), "Affected work cannot report a successful no-op")
+            for value in ["", "False", None]:
+                affected["changes"]["outputs"][name] = value
+                self.assertTrue(quality_gate(affected))
+        for event in ["push", "workflow_dispatch"]:
+            self.assertTrue(quality_gate({**passing, "container": {"result": "skipped"}}, event))
+        self.assertTrue(quality_gate(passing, candidate_sha="a" * 40))
+        self.assertTrue(quality_gate(passing, candidate_ref="refs/heads/release/1"))
+
+    def test_noop_steps_and_full_worker_steps_are_complementary(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+        for name in ["python", "ui", "release"]:
+            job = jobs[name]
+            self.assertNotIn("if", job)
+            self.assertEqual(job["outputs"], {"validation": "${{ steps.completed.outputs.validation }}"})
+            noop, *work, complete = job["steps"]
+            self.assertEqual(noop["name"], "Explicit successful no-op")
+            self.assertEqual(noop["if"], f"needs.changes.outputs.{name} == 'false'")
+            self.assertEqual(complete["id"], "completed")
+            self.assertNotIn("if", complete, "Completion must retain default success(), never always()")
+            for step in work:
+                self.assertIn(f"needs.changes.outputs.{name} != 'false'", step["if"])
+            # Run the actual no-op and completion shell, including missing-output
+            # fallback. GitHub's normal success() prevents completion after any
+            # failed work step; the aggregator separately rejects failed jobs.
+            for affected, expected in [("false", "noop"), ("true", "full"), ("", "full")]:
+                with tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory) / "output"
+                    env = {**os.environ, "AFFECTED": affected, "GITHUB_OUTPUT": str(output)}
+                    if affected == "false":
+                        result = subprocess.run(["bash", "-eo", "pipefail", "-c", noop["run"]], env=env, capture_output=True, check=True)
+                        self.assertIn(b"unaffected", result.stdout)
+                    subprocess.run(["bash", "-eo", "pipefail", "-c", complete["run"]], env=env, check=True)
+                    self.assertEqual(output.read_text(), f"validation={expected}\n")
+        for name in ["security", "container", "hindsight"]:
+            for step in jobs[name]["steps"]:
+                self.assertNotIn("needs.changes", step.get("if", ""))
+        checkout = jobs["changes"]["steps"][0]
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+
+    def test_classifier_and_noop_bypasses_fail_reviewed_policy(self):
+        path = ".github/workflows/ci.yml"
+        original = (ROOT / path).read_text()
+        for before, after in [
+            ("`${baseSha}:.github/scripts/ci-impact.cjs`", "`${headSha}:.github/scripts/ci-impact.cjs`"),
+            ("&& !process.env.CANDIDATE_REF", ""),
+            ("typeof result[name] !== 'boolean'", "false"),
+            ("if: needs.changes.outputs.python == 'false'", "if: false"),
+            ("id: completed\n", "id: completed\n        if: always()\n"),
+            ("needs[name]?.outputs?.validation !== expected", "false"),
+        ]:
+            changed = original.replace(before, after)
+            self.assertNotEqual(changed, original)
+            self.assertTrue(policy({path: changed}))
+        for path in [".github/scripts/ci-impact.cjs", ".github/scripts/ci-impact.test.cjs"]:
+            self.assertTrue(policy({path: (ROOT / path).read_text() + "\n// unreviewed change\n"}))
 
     def test_quality_worker_gates_and_diagnostics_remain_local(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
@@ -223,7 +308,7 @@ class ReleasePolicyTests(unittest.TestCase):
         aislop_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "Aislop CLI regression tests")
         self.assertLess(npm_install, aislop_test)
         self.assertEqual(ui_steps[aislop_test]["run"], "node --test .github/scripts/aislop-cli.test.cjs")
-        self.assertNotIn("if", ui_steps[aislop_test])
+        self.assertEqual(ui_steps[aislop_test]["if"], "${{ needs.changes.outputs.ui != 'false' }}")
         runtime_install = next(index for index, step in enumerate(ui_steps) if step.get("run") == "python -m pip install --require-hashes -r requirements.txt")
         ui_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "UI unit, crypto, and build checks")
         self.assertLess(runtime_install, ui_test)
@@ -243,7 +328,7 @@ class ReleasePolicyTests(unittest.TestCase):
         original = (ROOT / path).read_text()
         mutations = [
             original.replace("    if: always()", "    if: success()"),
-            original.replace("needs: [hindsight, python, ui, release, security, container]", "needs: [hindsight, python, ui, release, security]"),
+            original.replace("needs: [changes, hindsight, python, ui, release, security, container]", "needs: [changes, hindsight, python, ui, release, security]"),
             original.replace("result !== expected", "false"),
             original.replace("  security:\n", "  security:\n    continue-on-error: true\n"),
             original.replace("  ui:\n", "  ui:\n    if: false\n"),
