@@ -7,8 +7,6 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from pytest_httpx import HTTPXMock
 
 from memory_router import config
@@ -29,21 +27,7 @@ from memory_router.key_wrap import (
     provider_envelope_metadata,
 )
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
-
-
-def _keypair() -> tuple[str, str]:
-    private = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = (
-        private.public_key()
-        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        .decode()
-    )
-    private_pem = private.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
-    return public_pem, private_pem
+from tests.key_material import rsa_keypair as _keypair
 
 
 def _decrypted(**extra: object) -> dict[str, object]:

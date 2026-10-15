@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
 
 import pytest
 
@@ -8,6 +9,14 @@ import memory_router.app as app_module
 import memory_router.logging as logging_module
 import memory_router.scan_executor as scan_executor_module
 from memory_router import probes
+
+
+@pytest.fixture(scope="session", autouse=True)
+def stop_scanner_workers_before_coverage_report() -> Iterator[None]:
+    yield
+    # pytest-cov combines at session finish. Join workers before that point so
+    # spawned scanner measurements are included in the aggregate branch gate.
+    scan_executor_module.shutdown_scan_executor()
 
 
 @pytest.fixture(autouse=True)

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+import os
+from functools import partial
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -14,6 +16,7 @@ from memory_router import scan_executor
 from memory_router.hindsight import HindsightGateway
 from memory_router.security import SafetyResult, scan_recall_result
 from tests.fakes import FakeHindsight
+from tests.scan_sync import event_loop_heartbeat, synchronized_scan
 from tests.test_policy import policy
 
 
@@ -23,7 +26,9 @@ def _failing_recall_scan(payload: bytes) -> SafetyResult:
     return scan_recall_result(json.loads(payload))
 
 
-async def test_valid_large_recall_result_keeps_event_loop_responsive() -> None:
+async def test_valid_large_recall_result_keeps_event_loop_responsive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     response = {
         "results": [
             {
@@ -44,24 +49,33 @@ async def test_valid_large_recall_result_keeps_event_loop_responsive() -> None:
         transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)), trust_env=False
     )
     router, _, _, _ = policy(gateway)
-    tick_times = [time.monotonic()]
-
-    async def pulse() -> None:
-        while True:
-            await asyncio.sleep(0.02)
-            tick_times.append(time.monotonic())
-
-    heartbeat = asyncio.create_task(pulse())
-    try:
-        result = await router.recall("main", {"query": "project status"})
-    finally:
-        tick_times.append(time.monotonic())
-        heartbeat.cancel()
-        await asyncio.gather(heartbeat, return_exceptions=True)
-        await gateway.close()
+    entered, release = tmp_path / "entered", tmp_path / "release"
+    monkeypatch.setattr(
+        scan_executor,
+        "_scan_recalled_payload",
+        partial(synchronized_scan, kind="recall", entered=entered, release=release),
+    )
+    monkeypatch.setattr(scan_executor, "CORE_SCAN_TASK_SECONDS", 30.0)
+    async with event_loop_heartbeat() as heartbeat:
+        request = asyncio.create_task(router.recall("main", {"query": "project status"}))
+        try:
+            async with asyncio.timeout(10):
+                while not entered.exists():
+                    await asyncio.sleep(0.01)
+                assert int(entered.read_text()) != os.getpid()
+                heartbeat.clear()
+                async with asyncio.timeout(1):
+                    await heartbeat.wait()
+                assert not request.done()
+            release.touch()
+            result = await request
+        finally:
+            release.touch()
+            if not request.done():
+                request.cancel()
+            await asyncio.gather(request, return_exceptions=True)
+            await gateway.close()
     assert result["results"] == []
-    assert len(tick_times) > 10
-    assert max(end - start for start, end in zip(tick_times, tick_times[1:], strict=False)) < 1.0
 
 
 @pytest.mark.parametrize("location", ["result", "supplemental"])

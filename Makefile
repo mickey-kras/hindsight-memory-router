@@ -27,8 +27,7 @@ mypy:
 	python -m mypy memory_router
 
 test:
-	python -m coverage run -m pytest
-	python -m coverage report
+	python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=90 --durations=30
 
 check: format lint mypy test
 	npm run check

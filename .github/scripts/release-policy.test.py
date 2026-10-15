@@ -325,7 +325,7 @@ class ReleasePolicyTests(unittest.TestCase):
             for gate in gates:
                 self.assertIn(gate, steps)
         coverage = next(step for step in jobs["python"]["steps"] if step.get("name") == "Tests and coverage")
-        self.assertEqual(coverage["run"], "coverage run -m pytest && coverage report --fail-under=90")
+        self.assertEqual(coverage["run"], "python -m pytest -n 2 --cov --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=90 --durations=30")
         ui_steps = jobs["ui"]["steps"]
         npm_install = next(index for index, step in enumerate(ui_steps) if step.get("run") == "npm ci")
         aislop_test = next(index for index, step in enumerate(ui_steps) if step.get("name") == "Aislop CLI regression tests")
@@ -355,7 +355,7 @@ class ReleasePolicyTests(unittest.TestCase):
             original.replace("result !== expected", "false"),
             original.replace("  security:\n", "  security:\n    continue-on-error: true\n"),
             original.replace("  ui:\n", "  ui:\n    if: false\n"),
-            original.replace("coverage report --fail-under=90", "coverage report --fail-under=0"),
+            original.replace("--cov-fail-under=90", "--cov-fail-under=0"),
             original.replace("ref: ${{ inputs.candidate_sha }}", "ref: main"),
             original.replace("github.run_attempt", "github.run_id"),
         ]

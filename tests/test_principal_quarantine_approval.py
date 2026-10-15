@@ -9,8 +9,6 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import SecretStr
 from pytest_httpx import HTTPXMock
 
@@ -20,6 +18,7 @@ from memory_router.config import RouterSettings
 from memory_router.envelope import decrypt_envelope
 from memory_router.models import WriterRule
 from memory_router.principals import PrincipalGrant
+from tests.key_material import rsa_keypair
 
 PRINCIPAL_ID = "agent-alpha"
 PRIVATE_BANK = "private-bank"
@@ -61,17 +60,7 @@ class ReviewScenario:
 async def scenario(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[ReviewScenario]:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = (
-        key.public_key()
-        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
-        .decode()
-    )
-    private_key = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    public_key, private_key = rsa_keypair()
     registry_path = tmp_path / "principals.json"
     registry_path.write_text(
         json.dumps(

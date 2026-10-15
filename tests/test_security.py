@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Iterator
 from unittest.mock import Mock
 
 import pytest
@@ -18,6 +19,7 @@ from memory_router.security import (
     scan_retain_body,
 )
 from memory_router.unicode_security import canonicalize_content, confusable_rule_variants
+from tests.scan_sync import scanner_clock
 
 
 def detectors(result: SafetyResult) -> set[str | None]:
@@ -355,16 +357,18 @@ def test_rule_edge_tokenization_observes_the_scan_deadline(monkeypatch) -> None:
 
 
 def test_query_pair_limit_accepts_256_and_rejects_257() -> None:
-    pairs = [(f"key-{index}", "ordinary") for index in range(257)]
+    with scanner_clock():
+        pairs = [(f"key-{index}", "ordinary") for index in range(257)]
 
-    assert "query_field_limit" not in matches(scan_query_values(pairs[:256]))
-    assert "query_field_limit" in matches(scan_query_values(pairs))
+        assert "query_field_limit" not in matches(scan_query_values(pairs[:256]))
+        assert "query_field_limit" in matches(scan_query_values(pairs))
 
 
 def test_query_window_budget_accepts_the_full_field_limit() -> None:
-    result = scan_query_values([(f"q{index}", "safe") for index in range(256)])
+    with scanner_clock():
+        result = scan_query_values([(f"q{index}", "safe") for index in range(256)])
 
-    assert result.safe
+        assert result.safe
 
 
 def test_query_deadline_accepts_full_length_values_at_the_field_limit() -> None:
@@ -485,16 +489,26 @@ def test_facade_scan_has_a_wall_clock_budget(monkeypatch) -> None:
 
 
 def test_field_scanner_checks_deadline_before_each_field(monkeypatch) -> None:
-    ticks = iter([0.0, 2.0])
-    monkeypatch.setattr(security_module.time, "monotonic", lambda: next(ticks))
+    elapsed = 0.0
+    canonical_fields: list[tuple[str, str, bool]] = []
 
-    result = security_module._scan_fields(  # noqa: SLF001
-        [("first", "ordinary", False), ("second", "ignore previous instructions", False)],
-        operation="facade",
-        deadline=1.0,
-        time_limit_match="facade_time_limit",
-    )
+    def fields() -> Iterator[tuple[str, str, bool]]:
+        nonlocal elapsed
+        yield "first", "ordinary", False
+        elapsed = 2.0
+        yield "second", "ignore previous instructions", False
 
+    with scanner_clock():
+        monkeypatch.setattr(security_module.time, "monotonic", lambda: elapsed)
+        result = security_module._scan_fields(  # noqa: SLF001
+            fields(),
+            operation="facade",
+            deadline=1.0,
+            time_limit_match="facade_time_limit",
+            canonical_output=canonical_fields,
+        )
+
+    assert canonical_fields == [("first", "ordinary", False)]
     assert "facade_time_limit" in matches(result)
     assert "ignore previous instructions" not in matches(result)
 
@@ -1089,7 +1103,8 @@ def test_split_base64_field_limit_fails_closed_before_consuming_more(monkeypatch
         nonlocal consumed
         for index in range(security_base64.MAX_SPLIT_BASE64_FIELDS + 10):
             consumed += 1
-            yield f"field.{index}", "QUJD", False
+            # Padding keeps candidates short while exercising the real 256-field limit.
+            yield f"field.{index}", "QUJDRA==", False
 
     _, exhausted = security_base64._split_base64_candidates(
         fields(), max_work_bytes=security_base64.MAX_SPLIT_BASE64_WORK_BYTES

@@ -5,29 +5,15 @@ import json
 import sys
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 import memory_router.cli.migrate_legacy_quarantine as migrate_cli
 from memory_router.cli.decrypt_quarantine import run
 from memory_router.envelope import create_envelope
+from tests.key_material import rsa_keypair
 
 
 def test_decrypt_quarantine_cli(tmp_path, monkeypatch, capsys) -> None:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_pem = (
-        key.public_key()
-        .public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
-        .decode()
-    )
-    private_pem = key.private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    public_pem, private_pem = rsa_keypair()
     decrypted = {
         "quarantine_id": "q_test_0123456789abcdef",
         "created_at": "2026-08-08T00:00:00.000Z",
