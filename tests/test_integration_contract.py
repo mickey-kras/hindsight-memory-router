@@ -87,6 +87,7 @@ REQUIRED_WORKFLOW_CHECKS = {
     "blocked quarantine wrapping preserves shared PostgreSQL admission and dedupe",
     "PostgreSQL quota admission preserves boundaries, concurrency, rollback and SQLite parity",
     "principal quarantine approval preserves original bank",
+    "principal bank listings scan only authorized metadata",
     "principal facade content requires memory recall",
     "security audit capacity is scoped and durable across replicas",
     "recreated quarantine identities consume synchronized admission budgets",

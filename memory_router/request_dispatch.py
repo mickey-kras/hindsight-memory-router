@@ -121,11 +121,19 @@ class AuthenticatedRequestDispatcher:
                 )
             q, limit, offset = _bank_list_query(request)
             hindsight = _require(self.deps.hindsight, "hindsight gateway")
+
+            async def list_safe_banks() -> dict[str, Any]:
+                payload = await hindsight.list_banks(banks, q=q, limit=limit, offset=offset)
+                await OpenClawFacade(self.deps.policy).validate_safe_response(
+                    "banks", principal.principal_id, principal.source, payload
+                )
+                return payload
+
             payload = await self.deps.concurrency(
                 request,
                 principal,
                 SCOPE_BANK_LIST,
-                lambda: hindsight.list_banks(banks, q=q, limit=limit, offset=offset),
+                list_safe_banks,
             )
             return JSONResponse(payload)
         return None
