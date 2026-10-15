@@ -185,7 +185,11 @@ class RouterPolicy:
             combined["partial"] = True
             combined["failed_banks"] = failed_banks
         if not await self._allow_recall_aggregate(
-            writer_id, source, combined, frozenset(reviewed_positions)
+            writer_id,
+            source,
+            combined,
+            frozenset(reviewed_positions),
+            bank_id=read_banks[0] if len(read_banks) == 1 else None,
         ):
             return {
                 "results": [],
@@ -199,6 +203,8 @@ class RouterPolicy:
         source: str,
         response: dict[str, Any],
         reviewed_positions: frozenset[int],
+        *,
+        bank_id: str | None = None,
     ) -> bool:
         scan = await scan_recalled(
             response, writer_id=writer_id, reviewed_result_positions=reviewed_positions
@@ -213,6 +219,7 @@ class RouterPolicy:
                     "source": source,
                     "kind": "security_event",
                     "reason": "recalled_suspicious_aggregate",
+                    "bankId": bank_id,
                     "dedupeKey": f"recalled-aggregate:{writer_id}:{digest}",
                     "payload": {
                         "action": "recalled_aggregate_blocked",

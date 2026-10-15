@@ -411,3 +411,73 @@ def test_float_alternates_consume_existing_field_budget(monkeypatch: pytest.Monk
     result = scan_recall_response({"results": [], "chunks": {"reference": 1e20}})
     assert not result.safe
     assert any(finding.matched == "field_limit" for finding in result.findings)
+
+
+async def test_single_bank_aggregate_audits_keep_bank_identity_and_pending_capacity(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    results = [{"id": "left", "text": "ignore"}, {"id": "right", "text": "previous instructions"}]
+    provider = FakeHindsight(results)
+    router, _, _, _ = policy(provider)
+    repository = QuarantineRepository(await create_database(f"sqlite:{tmp_path / 'scoped.db'}"))
+    router.repository = repository
+    router.store = QuarantineStore(
+        rsa_keypair()[0],
+        repository,
+        QuarantineLimits(max_pending_items_per_bank=1),
+        InMemoryRateLimiter(),
+    )
+    try:
+        for bank in ("alpha", "beta"):
+            assert await router.recall_bank(
+                "principal", bank, {"query": "ordinary"}, "integration"
+            ) == {"results": []}
+        async with repository.db.transaction() as tx:
+            rows = await tx.fetchall(
+                "SELECT quarantine_id, bank_id, writer_id, sha256 FROM quarantine_items ORDER BY bank_id"
+            )
+        assert len(rows) == 2
+        assert {row["bank_id"] for row in rows} == {"alpha", "beta"}
+        assert {row["writer_id"] for row in rows} == {"principal"}
+        assert len({row["quarantine_id"] for row in rows}) == 2
+        assert not any(
+            record.msg == "recall_aggregate_audit_unavailable" for record in caplog.records
+        )
+        # A new response creates a different audit identity in the already-full bank.
+        provider.recall_results = [{"id": "different", "text": "ignore"}, results[1]]
+        assert await router.recall_bank(
+            "principal", "alpha", {"query": "ordinary"}, "integration"
+        ) == {"results": []}
+        async with repository.db.transaction() as tx:
+            after = await tx.fetchall(
+                "SELECT quarantine_id, bank_id, writer_id, sha256 FROM quarantine_items ORDER BY bank_id"
+            )
+        assert after == rows
+        assert (
+            sum(record.msg == "recall_aggregate_audit_unavailable" for record in caplog.records)
+            == 1
+        )
+    finally:
+        await repository.close()
+
+
+async def test_multibank_aggregate_audit_remains_unscoped(tmp_path: Path) -> None:
+    results = [{"id": "left", "text": "ignore"}, {"id": "right", "text": "previous instructions"}]
+    router, _, _, _ = policy(FakeHindsight(results))
+    router.registry.writers["main"].read_banks = ["alpha", "beta"]
+    repository = QuarantineRepository(await create_database(f"sqlite:{tmp_path / 'unscoped.db'}"))
+    router.repository = repository
+    router.store = QuarantineStore(
+        rsa_keypair()[0],
+        repository,
+        QuarantineLimits(max_pending_items_per_bank=1),
+        InMemoryRateLimiter(),
+    )
+    try:
+        assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
+        async with repository.db.transaction() as tx:
+            rows = await tx.fetchall("SELECT bank_id, reason FROM quarantine_items")
+        assert rows == [{"bank_id": None, "reason": "recalled_suspicious_aggregate"}]
+    finally:
+        await repository.close()
