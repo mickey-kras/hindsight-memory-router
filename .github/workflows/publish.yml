@@ -4,6 +4,10 @@ on:
   workflow_dispatch:
   workflow_call:
     inputs:
+      validation_only:
+        description: Skip PR branch updates and Pages publication; retain all source validation.
+        type: boolean
+        default: false
       candidate_sha:
         type: string
         default: ''
@@ -50,7 +54,7 @@ jobs:
 
   update-pr-branches:
     name: update PR branches
-    if: inputs.candidate_sha == '' && github.ref == 'refs/heads/main'
+    if: inputs.candidate_sha == '' && github.ref == 'refs/heads/main' && !inputs.validation_only
     permissions:
       contents: read
     uses: ./.github/workflows/pr-branch-updater.yml
@@ -86,13 +90,14 @@ jobs:
       contents: read
     uses: ./.github/workflows/architecture.yml
     with:
+      validation_only: ${{ inputs.validation_only == true }}
       candidate_sha: ${{ inputs.candidate_sha }}
       candidate_ref: ${{ inputs.candidate_ref }}
 
   pages:
     name: pages
     needs: architecture
-    if: inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
+    if: inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' && !inputs.validation_only
     runs-on: ubuntu-latest
     permissions:
       pages: write
