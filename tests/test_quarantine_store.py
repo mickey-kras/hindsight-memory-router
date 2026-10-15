@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -41,6 +42,9 @@ class Session:
 class Limiter:
     def __init__(self) -> None:
         self.session = Session()
+
+    def consumer_for_transaction(self, tx: object) -> Session:
+        return self.session
 
     async def consume_many(self, buckets: object) -> None:
         await self.session.consume_many(buckets)
@@ -402,3 +406,10 @@ async def test_attributed_security_events_preserve_bank_capacity() -> None:
         base_input("security_event", reason="denied_endpoint", bankId="main", dedupeKey="s")
     )
     assert repository.store.await_args.args[1].max_pending_items_per_bank == 7
+
+
+@pytest.mark.asyncio
+async def test_synchronized_admission_survives_concurrent_sqlite_deletion(tmp_path: Path) -> None:
+    from tests.integration.quarantine_admission import verify_admission
+
+    await verify_admission(f"sqlite:{tmp_path / 'admission.db'}")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -376,6 +377,7 @@ class QuarantineRepository:
         require_reviewable_request: bool = False,
         expected_snapshot: AdmissionSnapshot | None = None,
         incoming_evidence: AdmissionEvidence | None = None,
+        before_store: Callable[[Tx, dict[str, Any] | None], Awaitable[None]] | None = None,
     ) -> None:
         async with self.db.transaction(capacity_lock=True) as tx:
             existing = await self._find_existing(tx, item, mode)
@@ -409,6 +411,8 @@ class QuarantineRepository:
                     "matching quarantine item changed during wrapping; retry from a fresh snapshot",
                 )
             await self._assert_capacity(tx, item, existing, capacity, at)
+            if before_store is not None:
+                await before_store(tx, existing)
             if not existing:
                 await self.insert_item(tx, item)
                 return
