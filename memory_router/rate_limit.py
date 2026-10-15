@@ -95,6 +95,7 @@ class InMemoryRateLimiter:
         self.consume_count = 0
 
     def consumer_for_transaction(self, tx: Tx) -> RateLimitConsumer:
+        # tx is accepted for the shared interface; in-memory counters need no DB session.
         return self
 
     async def consume_many(self, buckets: list[Bucket], at_ms: int | None = None) -> None:
