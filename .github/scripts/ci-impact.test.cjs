@@ -8,8 +8,31 @@ const { classify, full, impact, parseDiff } = require('./ci-impact.cjs');
 
 const source = readFileSync(join(__dirname, 'ci-impact.cjs'), 'utf8');
 const workflow = readFileSync(join(__dirname, '../workflows/ci.yml'), 'utf8');
-const wrapper = workflow.split('          script: |\n')[1].split('\n  hindsight:')[0]
-  .split('\n').map(line => line.slice(12)).join('\n');
+
+function workflowWrapper(content) {
+  // The release test job already installs PyYAML for release-policy.test.py.
+  return execFileSync('python3', ['-c', `import sys, yaml
+steps = yaml.safe_load(sys.stdin)["jobs"]["changes"]["steps"]
+matches = [step for step in steps if step.get("id") == "classify"]
+assert len(matches) == 1, "Expected exactly one changes/classify step"
+sys.stdout.write(matches[0]["with"]["script"])
+`], { input: content, encoding: 'utf8' });
+}
+
+const wrapper = workflowWrapper(workflow);
+
+test('wrapper selection survives job reordering and earlier scripts', () => {
+  const reordered = execFileSync('python3', ['-c', `import sys, yaml
+workflow = yaml.safe_load(sys.stdin)
+workflow["jobs"] = dict(reversed(list(workflow["jobs"].items())))
+decoy = {"id": "earlier", "with": {"script": "throw new Error('wrong wrapper');"}}
+workflow["jobs"]["earlier"] = {"steps": [decoy]}
+workflow["jobs"] = {"earlier": workflow["jobs"].pop("earlier"), **workflow["jobs"]}
+workflow["jobs"]["changes"]["steps"].insert(0, decoy)
+sys.stdout.write(yaml.safe_dump(workflow, sort_keys=False))
+`], { input: workflow, encoding: 'utf8' });
+  assert.equal(workflowWrapper(reordered), wrapper);
+});
 
 function repository(fn) {
   const directory = mkdtempSync(join(tmpdir(), 'ci-impact-test-'));

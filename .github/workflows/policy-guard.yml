@@ -28,7 +28,7 @@ jobs:
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
               ".github/scripts/ci-impact.cjs": "5eb80b1d7919f7aba77d8a5b23ce18b6f742c1de19e28e39e1e11f6b6b8ac1ff",
-              ".github/scripts/ci-impact.test.cjs": "a21ffa77343aec7db37ea66b89070a7e802dd470d7325581b64efc50cf888a8f",
+              ".github/scripts/ci-impact.test.cjs": "500a3e9f812d1da5d8e001caa30eead3ac0fc5fe582f4101ad801b93310479c8",
               ".github/workflows/dependency-review.yml": "0b87abc672ea46903ff062c35a11fc0ac35005678e8d3757b829392d063fb314",
               ".github/dependency-review-config.yml": "f92f128addcb10acd3d874579771b0d44675a3db4809d5c274211c4f0bb9374f",
               ".github/scripts/pr-branch-updater.cjs": "fadcbf9a09c8fb44a64c3b5a876dfb00aa1e9ab3e13e326a99c2ef1bb8274e59",
