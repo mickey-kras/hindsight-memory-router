@@ -26,6 +26,8 @@ PATHS = [
     ".github/workflows/architecture.yml",
     ".github/scripts/report-main-failures.cjs",
     ".github/scripts/report-main-failures.test.cjs",
+    ".github/scripts/coverage-artifact.py",
+    ".github/scripts/coverage-artifact.test.py",
     ".github/scripts/aislop-cli.test.cjs",
     ".github/scripts/ci-impact.cjs",
     ".github/scripts/ci-impact.test.cjs",
@@ -268,7 +270,13 @@ class ReleasePolicyTests(unittest.TestCase):
         for name in ["python", "ui", "release"]:
             job = jobs[name]
             self.assertNotIn("if", job)
-            self.assertEqual(job["outputs"], {"validation": "${{ steps.completed.outputs.validation }}"})
+            expected_outputs = {"validation": "${{ steps.completed.outputs.validation }}"}
+            if name == "python":
+                expected_outputs.update({
+                    "coverage_artifact_id": "${{ steps.coverage-upload.outputs.artifact-id }}",
+                    "coverage_run_attempt": "${{ steps.coverage-evidence.outputs.run_attempt }}",
+                })
+            self.assertEqual(job["outputs"], expected_outputs)
             noop, *work, complete = job["steps"]
             self.assertEqual(noop["name"], "Explicit successful no-op")
             self.assertEqual(noop["if"], f"needs.changes.outputs.{name} == 'false'")
@@ -1047,6 +1055,109 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
                         self.assertIn("candidate_sha", name)
                         if not name.startswith("image-${{"):
                             self.assertIn("github.run_attempt", name)
+
+    def test_authoritative_coverage_handoff_is_same_run_and_before_sonar_secrets(self):
+        ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        python = ci["jobs"]["python"]
+        steps = python["steps"]
+        indexed = {step.get("name"): index for index, step in enumerate(steps)}
+        self.assertLess(indexed["Tests and coverage"], indexed["Prepare authoritative coverage evidence"])
+        self.assertLess(indexed["Prepare authoritative coverage evidence"], indexed["Upload authoritative coverage evidence"])
+        self.assertLess(indexed["Upload authoritative coverage evidence"], indexed["Record successful validation"])
+        prepare = steps[indexed["Prepare authoritative coverage evidence"]]
+        upload = steps[indexed["Upload authoritative coverage evidence"]]
+        self.assertEqual(prepare["run"].splitlines(), [
+            "python -m coverage xml",
+            'python .github/scripts/coverage-artifact.py prepare "$RUNNER_TEMP/coverage-evidence"',
+        ])
+        self.assertEqual(prepare["env"], {
+            "SOURCE_SHA": "${{ github.sha }}", "CANDIDATE_SHA": "${{ inputs.candidate_sha }}",
+            "PRODUCER_RUN_ATTEMPT": "${{ github.run_attempt }}",
+        })
+        for step in [prepare, upload]:
+            self.assertIn("success()", step["if"])
+            self.assertNotIn("continue-on-error", step)
+        self.assertEqual(prepare["if"], upload["if"])
+        self.assertTrue(upload["uses"].startswith("actions/upload-artifact@"))
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertNotIn("overwrite", upload["with"])
+        for identity in ["inputs.candidate_sha || github.sha", "github.run_attempt", "steps.coverage-evidence.outputs.config_sha256"]:
+            self.assertIn(identity, upload["with"]["name"])
+        self.assertEqual(upload["with"]["path"].splitlines(), [
+            "${{ runner.temp }}/coverage-evidence/coverage.xml",
+            "${{ runner.temp }}/coverage-evidence/manifest.json",
+        ])
+        outputs = ci.get("on", ci.get(True))["workflow_call"]["outputs"]
+        for name in ["coverage_artifact_id", "coverage_run_attempt"]:
+            self.assertEqual(outputs[name]["value"], "${{ jobs.python.outputs." + name + " }}")
+        for event, ref, candidate, affected, state, allowed in [
+            ("push", "refs/heads/main", "", "true", "success", True),
+            ("workflow_dispatch", "refs/heads/main", "", "true", "success", True),
+            ("workflow_dispatch", "refs/heads/main", "a" * 40, "true", "success", False),
+            ("pull_request", "refs/pull/1/merge", "", "true", "success", False),
+            ("push", "refs/heads/topic", "", "true", "success", False),
+            ("push", "refs/heads/main", "", "false", "success", False),
+            ("push", "refs/heads/main", "", "true", "failure", False),
+            ("push", "refs/heads/main", "", "true", "cancelled", False),
+        ]:
+            with self.subTest(event=event, ref=ref, candidate=candidate, state=state):
+                needs = {"changes": {"result": state, "outputs": {"python": affected}}}
+                self.assertEqual(workflow_condition(prepare["if"], {"candidate_sha": candidate}, event, ref, needs), allowed)
+        sonar = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["sonar"]
+        self.assertEqual(sonar["needs"], ["quality", "aislop", "codeql", "architecture"])
+        self.assertEqual(sonar["permissions"], {"contents": "read", "id-token": "write", "issues": "write"})
+        self.assertEqual(sonar["env"], {
+            "SOURCE_SHA": "${{ github.sha }}", "CANDIDATE_SHA": "${{ inputs.candidate_sha }}",
+            "COVERAGE_ARTIFACT_ID": "${{ needs.quality.outputs.coverage_artifact_id }}",
+            "PRODUCER_RUN_ATTEMPT": "${{ needs.quality.outputs.coverage_run_attempt }}",
+        })
+        steps = sonar["steps"]
+        indexed = {step.get("name"): index for index, step in enumerate(steps)}
+        self.assertLess(indexed["Set up Python"], indexed["Require authoritative coverage producer"])
+        self.assertLess(indexed["Require authoritative coverage producer"], indexed["Download authoritative coverage"])
+        self.assertLess(indexed["Download authoritative coverage"], indexed["Verify authoritative coverage"])
+        verify = steps[indexed["Verify authoritative coverage"]]
+        self.assertEqual(verify["run"], 'python .github/scripts/coverage-artifact.py restore "$RUNNER_TEMP/coverage-evidence"')
+        download = steps[indexed["Download authoritative coverage"]]
+        self.assertTrue(download["uses"].startswith("actions/download-artifact@"))
+        self.assertEqual(download["with"], {
+            "artifact-ids": "${{ needs.quality.outputs.coverage_artifact_id }}",
+            "path": "${{ runner.temp }}/coverage-evidence", "digest-mismatch": "error",
+        })
+        for index, step in enumerate(steps):
+            if "secrets." in json.dumps(step) or step.get("name") == "Connect to the tailnet":
+                self.assertGreater(index, indexed["Verify authoritative coverage"])
+            self.assertNotIn("continue-on-error", step)
+            self.assertNotIn("pip install", step.get("run", ""))
+            self.assertNotIn("pytest", step.get("run", ""))
+        setup = steps[indexed["Set up Python"]]
+        self.assertEqual(setup["with"], {"python-version": "3.12"})
+        self.assertNotIn("Generate coverage for SonarQube", indexed)
+        self.assertEqual(steps[indexed["SonarQube quality gate"]]["with"], {"pollingTimeoutSec": 270})
+        self.assertEqual(steps[indexed["SonarQube quality gate"]]["timeout-minutes"], 6)
+        findings = steps[indexed["Synchronize SonarQube findings"]]
+        self.assertEqual(findings["if"], "${{ !cancelled() && failure() && steps.sonar-quality-gate.outcome == 'failure' }}")
+
+    def test_sonar_missing_producer_outputs_fail_before_artifact_download(self):
+        sonar = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["sonar"]
+        guard = next(step for step in sonar["steps"] if step.get("name") == "Require authoritative coverage producer")
+        for artifact_id, attempt, success in [("123", "1", True), ("", "1", False),
+                                              ("123", "", False), ("0", "1", False),
+                                              ("123,456", "1", False), ("123", "bad", False)]:
+            with self.subTest(artifact_id=artifact_id, attempt=attempt):
+                result = subprocess.run(["bash", "-eo", "pipefail", "-c", guard["run"]],
+                                        env={**os.environ, "COVERAGE_ARTIFACT_ID": artifact_id,
+                                             "PRODUCER_RUN_ATTEMPT": attempt},
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode == 0, success)
+                if not success:
+                    self.assertIn("CoverageEvidenceError:", result.stderr)
+                    self.assertIn("rerun authoritative main CI", result.stderr)
+
+    def test_coverage_verifier_and_tests_are_protected(self):
+        for path in [".github/scripts/coverage-artifact.py", ".github/scripts/coverage-artifact.test.py"]:
+            with self.subTest(path=path):
+                self.assertTrue(policy({path: (ROOT / path).read_text() + "\n# unreviewed change\n"}))
 
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])

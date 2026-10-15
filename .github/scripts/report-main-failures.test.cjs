@@ -25,6 +25,17 @@ test('compatibility diagnostics survive same-second post-job cleanup', () => {
   assert.equal(report.key, reportsForJob({ ...run, id: 99 }, job, text)[0].key);
 });
 
+test('coverage handoff failures retain actionable diagnostics before Sonar analysis', () => {
+  const sonar = { ...job, name: 'sonar', steps: [{ ...step, name: 'Verify authoritative coverage' }] };
+  const diagnostic = 'CoverageEvidenceError: coverage producer context mismatch; rerun authoritative main CI.';
+  const report = reportsForJob(run, sonar, log(diagnostic))[0];
+  assert.ok(report.body.includes(diagnostic));
+  assert.doesNotMatch(report.body, /No reliable error signature/);
+  assert.equal(report.key, reportsForJob({ ...run, id: 99 }, sonar, log(diagnostic))[0].key);
+  assert.notEqual(report.key, reportsForJob(run, sonar,
+    log('CoverageEvidenceError: coverage XML checksum mismatch; rerun authoritative main CI.'))[0].key);
+});
+
 test('same exact error reuses signature across runs, different error does not', () => {
   const first = reportsForJob(run, job, log('ValueError: invalid bank'))[0];
   const repeated = reportsForJob({ ...run, id: 50 }, job, log('ValueError: invalid bank'))[0];
