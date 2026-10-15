@@ -82,8 +82,18 @@ _SUMMARY_COLUMNS = (
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
     "WHERE status IN ('pending','postponed') "
-    "AND NOT(expires_at IS NOT NULL AND expires_at<=?) AND "
+    "AND (expires_at IS NULL OR expires_at>?) AND "
 )
+_CAPACITY_TOTALS_SQL = """SELECT
+    (SELECT COUNT(*) FROM quarantine_items
+     WHERE status IN ('pending','postponed')
+     AND (expires_at IS NULL OR expires_at>?)) pending_count,
+    (SELECT COALESCE(SUM(encrypted_bytes),0) FROM quarantine_items
+     WHERE encrypted_bytes<>0
+     AND NOT(status IN ('pending','postponed')
+             AND expires_at IS NOT NULL AND expires_at<=?)) encrypted_bytes,
+    (SELECT COUNT(*) FROM quarantine_items
+     WHERE kind='security_event') security_event_count"""
 
 
 @dataclass(slots=True)
@@ -565,11 +575,7 @@ class QuarantineRepository:
     ) -> None:
         totals = (
             await tx.fetchone(
-                """SELECT
-            COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END),0) pending_count,
-            COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes,
-            COALESCE(SUM(CASE WHEN kind='security_event' THEN 1 ELSE 0 END),0) security_event_count
-            FROM quarantine_items""",
+                _CAPACITY_TOTALS_SQL,
                 (at, at),
             )
             or {}

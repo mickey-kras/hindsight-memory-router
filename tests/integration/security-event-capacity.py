@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from contextlib import AsyncExitStack
@@ -11,14 +12,124 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg.sql import SQL, Identifier
 
-from memory_router.db import PostgresDatabase, create_database, is_postgres
+from memory_router.db import (
+    CAPACITY_INDEXES,
+    SCHEMA_LOCK_ID,
+    PostgresDatabase,
+    create_database,
+    initialize_schema,
+    is_postgres,
+)
 from memory_router.errors import HttpError
+from memory_router.maintenance import cleanup, sweep_expired
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import InMemoryRateLimiter
-from memory_router.repository import QuarantineRepository
+from memory_router.repository import Capacity, QuarantineRepository
+from memory_router.review_repository import claim_review, finish_approve_memory, postpone
 
 AT = "2026-09-22T00:00:00.000Z"
+EXPIRES = "2026-09-23T00:00:00.000Z"
+
+
+def memory(index: str, expires: str = EXPIRES) -> dict[str, Any]:
+    return {
+        "quarantine_id": index,
+        "created_at": AT,
+        "updated_at": AT,
+        "kind": "recalled_memory",
+        "reason": "suspicious_content",
+        "writer_id": "alice",
+        "bank_id": "alpha",
+        "source_bank": "alpha",
+        "source_memory_id": index,
+        "sha256": "abc",
+        "encrypted": {"data": "x"},
+        "status": "pending",
+        "postpone_count": 0,
+        "expires_at": expires,
+    }
+
+
+async def verify_lifecycle(repositories: list[QuarantineRepository]) -> None:
+    async with repositories[0].db.transaction() as tx:
+        await tx.execute(
+            """WITH RECURSIVE history(n) AS (
+                SELECT 1 UNION ALL SELECT n+1 FROM history WHERE n<2000
+            ) INSERT INTO quarantine_items (
+                quarantine_id,created_at,updated_at,kind,reason,sha256,status,encrypted_bytes
+            ) SELECT 'history-' || CAST(n AS TEXT),?,?,
+                'recalled_memory','suspicious_content','abc','reviewed_blocked',0 FROM history""",
+            (AT, AT),
+        )
+    size = len(json.dumps(memory("a")["encrypted"], separators=(",", ":")).encode())
+    capacity = Capacity(1, 1, size, 1)
+    admitted = await asyncio.gather(
+        *(
+            repositories[n % 2].store(memory(str(n)), capacity, mode="memory", at=AT)
+            for n in range(8)
+        ),
+        return_exceptions=True,
+    )
+    errors = [result for result in admitted if isinstance(result, BaseException)]
+    assert len(errors) == 7 and all(
+        isinstance(error, HttpError) and error.code == "quarantine_capacity_exceeded"
+        for error in errors
+    ), errors
+    winner = str(next(n for n, result in enumerate(admitted) if result is None))
+    await asyncio.gather(
+        *(
+            repositories[n % 2].store(memory(winner), capacity, mode="memory", at=AT)
+            for n in range(8)
+        )
+    )
+    current = await repositories[0].get(winner)
+    assert current and current["requarantine_count"] == 8
+    await postpone(repositories[1], winner, AT)
+    await claim_review(repositories[0], winner, "recalled_memory", AT)
+    # In-review ciphertext remains charged even after its expiry boundary.
+    try:
+        await repositories[1].store(memory("next"), capacity, mode="memory", at=EXPIRES)
+    except HttpError as error:
+        assert error.code == "quarantine_capacity_exceeded"
+    else:
+        raise AssertionError("expired in-review ciphertext stopped consuming bytes")
+    results = await asyncio.gather(
+        finish_approve_memory(repositories[0], winner, AT),
+        repositories[1].store(
+            memory("next", "2027-01-01T00:00:00.000Z"), capacity, mode="memory", at=EXPIRES
+        ),
+        return_exceptions=True,
+    )
+    assert results[0] is None, results
+    if isinstance(results[1], BaseException):
+        assert (
+            isinstance(results[1], HttpError) and results[1].code == "quarantine_capacity_exceeded"
+        )
+        await repositories[1].store(
+            memory("next", "2027-01-01T00:00:00.000Z"), capacity, mode="memory", at=EXPIRES
+        )
+    assert (await cleanup(repositories[1], "all", None, None, 1, EXPIRES))["count"] == 1
+    await repositories[0].store(memory("expired"), capacity, mode="memory", at=AT)
+    # Replacement and expiry cleanup may win either order; both preserve one live item.
+    await asyncio.gather(
+        sweep_expired(repositories[0], EXPIRES),
+        repositories[1].store(
+            memory("expired", "2027-01-01T00:00:00.000Z"), capacity, mode="memory", at=EXPIRES
+        ),
+    )
+    stats = await repositories[0].stats(EXPIRES)
+    assert stats["pending_items"] == 1 and stats["encrypted_bytes"] == size, stats
+    assert (await repositories[0].get(winner))["status"] == "reviewed_allowed"
+    assert (await repositories[0].get("history-1"))["status"] == "reviewed_blocked"
+    assert (await cleanup(repositories[1], "all", None, None, 1, EXPIRES))["count"] == 1
+    assert (await repositories[0].stats(EXPIRES))["total_items"] == 2001
+    async with repositories[0].db.transaction(capacity_lock=True) as tx:
+        await tx.execute("DELETE FROM quarantine_items")
+        await tx.execute("DELETE FROM quarantine_events")
 
 
 def event(index: int, writer: str = "alice", bank: str = "alpha") -> dict[str, Any]:
@@ -42,6 +153,111 @@ async def expect_capacity(store: QuarantineStore, value: dict[str, Any], code: s
         raise AssertionError("over-capacity audit identity was admitted")
 
 
+async def verify_postgres_upgrade(url: str) -> None:
+    async with AsyncExitStack() as resources:
+        serving = await create_database(url)
+        resources.push_async_callback(serving.close)
+        replicas = [PostgresDatabase(url), PostgresDatabase(url)]
+        for replica in replicas:
+            await replica.initialize()
+            resources.push_async_callback(replica.close)
+        observer = await AsyncConnection.connect(url, autocommit=True, row_factory=dict_row)
+        resources.push_async_callback(observer.close)
+        names = [statement.split(" ON ", 1)[0].rsplit(" ", 1)[1] for statement in CAPACITY_INDEXES]
+        for name in names:
+            await observer.execute(SQL("DROP INDEX CONCURRENTLY {}").format(Identifier(name)))
+        async with serving.transaction() as tx:
+            await tx.execute(
+                """WITH RECURSIVE history(n) AS (
+                    SELECT 1 UNION ALL SELECT n+1 FROM history WHERE n<20000
+                ) INSERT INTO quarantine_items (
+                    quarantine_id,created_at,updated_at,kind,reason,sha256,status,encrypted_bytes
+                ) SELECT 'upgrade-' || CAST(n AS TEXT),?,?,
+                    'recalled_memory','suspicious_content','abc','reviewed_blocked',0 FROM history""",
+                (AT, AT),
+            )
+        repository = QuarantineRepository(serving)
+        tasks: list[asyncio.Task[None]] = []
+        try:
+            async with serving.transaction() as writer:
+                # A pre-existing writer makes the first concurrent index build wait.
+                await writer.execute(
+                    "UPDATE quarantine_items SET updated_at=? WHERE quarantine_id='upgrade-1'",
+                    (AT,),
+                )
+                tasks = [asyncio.create_task(initialize_schema(replicas[0]))]
+                async with asyncio.timeout(10):
+                    while True:
+                        cursor = await observer.execute(
+                            "SELECT phase FROM pg_stat_progress_create_index "
+                            "WHERE relid='quarantine_items'::regclass "
+                            "AND phase='waiting for writers before build'"
+                        )
+                        if await cursor.fetchone():
+                            break
+                        await asyncio.sleep(0.01)
+                tasks.append(asyncio.create_task(initialize_schema(replicas[1])))
+                async with asyncio.timeout(5):
+                    while True:
+                        cursor = await observer.execute(
+                            "SELECT pid,backend_xmin FROM pg_stat_activity "
+                            "WHERE query=%s AND state='idle'",
+                            (f"SELECT pg_try_advisory_lock({SCHEMA_LOCK_ID}) acquired",),
+                        )
+                        waiting_replica = await cursor.fetchone()
+                        if waiting_replica:
+                            # Waiting between completed autocommit attempts must
+                            # retain neither an old snapshot nor a queued lock.
+                            assert waiting_replica["backend_xmin"] is None, waiting_replica
+                            cursor = await observer.execute(
+                                "SELECT 1 FROM pg_locks WHERE pid=%s "
+                                "AND locktype='advisory' AND NOT granted",
+                                (waiting_replica["pid"],),
+                            )
+                            assert await cursor.fetchone() is None
+                            break
+                        await asyncio.sleep(0.01)
+                capacity = Capacity(3, 3, 1000, 3)
+                await asyncio.wait_for(
+                    repository.store(memory("upgrade-live"), capacity, mode="memory", at=AT), 2
+                )
+                assert all(not task.done() for task in tasks)
+                # Cancellation leaves a real invalid index; the waiting replica repairs it.
+                tasks[0].cancel()
+                try:
+                    await asyncio.wait_for(tasks[0], 5)
+                except asyncio.CancelledError:
+                    pass
+                else:
+                    raise AssertionError("index migration did not cancel")
+                await asyncio.wait_for(
+                    repository.store(memory("upgrade-peer"), capacity, mode="memory", at=AT), 2
+                )
+            await asyncio.wait_for(tasks[1], 20)
+            async with serving.transaction() as tx:
+                indices = await tx.fetchall(
+                    "SELECT c.relname,i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid "
+                    "WHERE i.indrelid='quarantine_items'::regclass AND c.relname LIKE ?",
+                    ("idx_quarantine_capacity_%",),
+                )
+                assert {row["relname"] for row in indices} == set(names), indices
+                assert all(row["indisvalid"] for row in indices), indices
+                assert (
+                    await tx.fetchone(
+                        "SELECT status FROM quarantine_items WHERE quarantine_id='upgrade-1'"
+                    )
+                )["status"] == "reviewed_blocked"
+            # A retry sees valid indexes and does not recreate them.
+            await asyncio.wait_for(initialize_schema(replicas[0]), 5)
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+        async with serving.transaction(capacity_lock=True) as tx:
+            await tx.execute("DELETE FROM quarantine_items")
+            await tx.execute("DELETE FROM quarantine_events")
+
+
 async def verify_capacity(url: str) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
     pem = key.public_bytes(
@@ -54,6 +270,7 @@ async def verify_capacity(url: str) -> None:
             resources.push_async_callback(database.close)
             databases.append(database)
         repositories = [QuarantineRepository(database) for database in databases]
+        await verify_lifecycle(repositories)
         scoped = [
             QuarantineStore(
                 pem,
@@ -97,6 +314,15 @@ async def verify_capacity(url: str) -> None:
             for error in rejected
         ), rejected
         assert (await repositories[1].stats(AT))["total_items"] == 64
+        # Identity admission includes expired and zero-byte retained audit identities.
+        async with databases[0].transaction() as tx:
+            await tx.execute("UPDATE quarantine_items SET expires_at=?", (AT,))
+            await tx.execute(
+                "UPDATE quarantine_items SET encrypted_bytes=0,"
+                "encrypted_envelope=NULL,status='reviewed_blocked' WHERE quarantine_id IN "
+                "(SELECT quarantine_id FROM quarantine_items ORDER BY quarantine_id LIMIT 32)"
+            )
+        await expect_capacity(stores[1], event(100), "quarantine_security_event_capacity_exceeded")
 
     database = await create_database(url)
     try:
@@ -126,7 +352,9 @@ async def main() -> None:
         parts = urlsplit(configured)
         query = urlencode([*parse_qsl(parts.query), ("options", f"-csearch_path={schema}")])
         try:
-            await verify_capacity(urlunsplit(parts._replace(query=query)))
+            scoped_url = urlunsplit(parts._replace(query=query))
+            await verify_postgres_upgrade(scoped_url)
+            await verify_capacity(scoped_url)
         finally:
             async with database.transaction() as tx:
                 await tx.execute(f"DROP SCHEMA {schema} CASCADE")
@@ -134,4 +362,5 @@ async def main() -> None:
         await database.close()
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
