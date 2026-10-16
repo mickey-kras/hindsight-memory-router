@@ -72,7 +72,7 @@ class OpenClawFacade:
         )
         if value is not None:
             await self.validate_safe_response(
-                route.resource, writer_id, source, value, bank_override
+                route.resource, writer_id, source, value, bank_override, route=route
             )
         try:
             if route.strict_contract:
@@ -147,8 +147,18 @@ class OpenClawFacade:
         source: str,
         value: Any,
         bank_id: str | None = None,
+        *,
+        route: FacadeRoute | None = None,
     ) -> None:
-        response_scan = await scan_facade_response(value, writer_id=writer_id)
+        response_scan = await scan_facade_response(
+            value,
+            writer_id=writer_id,
+            separate_page_ids=bool(
+                route is not None
+                and route.method == "POST"
+                and route.template == "knowledge-base/pages"
+            ),
+        )
         if _only_scan_limit_findings(response_scan):
             error_kind = (
                 "timeout"

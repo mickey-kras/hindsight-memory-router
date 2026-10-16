@@ -14,6 +14,8 @@ from . import (
     security_screen,
     security_windows,
 )
+from .facade_routes import facade_route
+from .openclaw_contracts import facade_response_scan_input
 from .scan_windows import bounded_skip_fragments
 from .security_base64 import MAX_BASE64_DECODED_BYTES as MAX_BASE64_DECODED_BYTES
 from .security_base64 import MAX_BASE64_SPANS as MAX_BASE64_SPANS
@@ -156,25 +158,50 @@ def scan_recall_response(
     return _scan_fields(fields, operation="read", deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS)
 
 
-def scan_facade_result(result: Any) -> SafetyResult:
+def scan_facade_result(result: Any, *, separate_page_ids: bool = False) -> SafetyResult:
     """Scan facade responses in bounded batches.
 
     Field and time budgets fail closed. Base64 state spans batches. General
     instruction reassembly is bounded and does not skip arbitrary fields.
     """
 
-    return _scan_batched_fields(
-        _walk_strings(result, "facade_response"),
-        operation="read",
-        max_fields=MAX_FACADE_SCAN_FIELDS,
-        field_limit_match="facade_field_limit",
-        deadline_seconds=MAX_FACADE_SCAN_SECONDS,
-        time_limit_match="facade_time_limit",
+    deadline = time.monotonic() + MAX_FACADE_SCAN_SECONDS
+    combined = SafetyResult()
+    scanned = (
+        facade_response_scan_input(facade_route("POST", "knowledge-base/pages"), result)
+        if separate_page_ids
+        else result
     )
+    if scanned is not result:
+        for key in ("page_id", "mental_model_id", "operation_id"):
+            identifier = result[key]
+            if isinstance(identifier, str):
+                combined.extend(
+                    _scan_fields(
+                        [(f"facade_response.{key}", identifier, False)],
+                        operation="read",
+                        deadline=deadline,
+                        time_limit_match="facade_time_limit",
+                    )
+                )
+            if security_rules._deadline_reached(combined, deadline, "facade_time_limit"):
+                return combined
+    combined.extend(
+        _scan_batched_fields(
+            _walk_strings(scanned, "facade_response"),
+            operation="read",
+            max_fields=MAX_FACADE_SCAN_FIELDS,
+            field_limit_match="facade_field_limit",
+            deadline_seconds=max(0.0, deadline - time.monotonic()),
+            time_limit_match="facade_time_limit",
+        )
+    )
+    security_rules._deadline_reached(combined, deadline, "facade_time_limit")
+    return combined
 
 
-def scan_facade_payload(payload: bytes) -> SafetyResult:
-    return scan_facade_result(json.loads(payload))
+def scan_facade_payload(payload: bytes, *, separate_page_ids: bool = False) -> SafetyResult:
+    return scan_facade_result(json.loads(payload), separate_page_ids=separate_page_ids)
 
 
 def _scan_batched_fields(  # NOSONAR

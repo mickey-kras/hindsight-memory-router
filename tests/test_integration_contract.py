@@ -82,6 +82,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "Generated knowledge page identifiers preserve direct response scanning",
     "recall review metadata batches preserve snapshots and duplicate quarantine visibility",
     "independent maintenance phases preserve recovery and event retention",
     "blocked quarantine wrapping preserves shared PostgreSQL admission and dedupe",
