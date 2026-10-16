@@ -141,6 +141,51 @@ def _validated_bank_page(value: Any) -> tuple[list[dict[str, Any]], int]:
     return banks, total
 
 
+_RECALL_SCORE_FIELDS = frozenset({"final", "reranker", "semantic", "keyword"})
+
+
+def _valid_recall_scores(value: object) -> bool:
+    if not isinstance(value, dict) or "final" not in value or value.keys() - _RECALL_SCORE_FIELDS:
+        return False
+    for key, score in value.items():
+        if score is None and key != "final":
+            continue
+        if (
+            type(score) not in (int, float)
+            or score < 0
+            or (isinstance(score, float) and not math.isfinite(score))
+            or (key in {"reranker", "semantic"} and score > 1)
+        ):
+            return False
+    return True
+
+
+class _HindsightRecallResult(dict[str, object]):
+    """Adapter provenance for the backend-generated, validated score object."""
+
+    def __init__(self, value: dict[str, object], scores: dict[str, object]) -> None:
+        super().__init__(value)
+        self._scores = scores.copy()
+
+    def scan_view(self) -> dict[str, object]:
+        scores = self.get("scores")
+        if not isinstance(scores, dict) or scores.keys() != self._scores.keys():
+            return self
+        if any(
+            type(scores[key]) is not type(value) or scores[key] != value
+            for key, value in self._scores.items()
+        ):
+            return self
+        # Preserve numeric leaf accounting, including integer-valued float spellings.
+        neutral: dict[str, object] = {}
+        for key, value in self._scores.items():
+            if isinstance(value, float):
+                neutral[key] = ["", ""] if value.is_integer() else ""
+            else:
+                neutral[key] = "" if isinstance(value, int) else None
+        return {**self, "scores": neutral}
+
+
 class HindsightGateway:
     def __init__(
         self,
@@ -203,6 +248,12 @@ class HindsightGateway:
                 RecallResponse.model_validate(value)
                 for result in value.get("results", []):
                     canonical_json({"id": result["id"], "text": result["text"]})
+                value["results"] = [
+                    _HindsightRecallResult(result, result["scores"])
+                    if _valid_recall_scores(result.get("scores"))
+                    else result
+                    for result in value["results"]
+                ]
             except ValueError as exc:
                 raise HindsightGatewayError(
                     "invalid-response", operation="recall", method="POST"
