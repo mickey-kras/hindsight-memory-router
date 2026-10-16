@@ -91,6 +91,9 @@ async def test_metrics_endpoint_serves_prometheus_text_to_admin_read_scope() -> 
         )
         assert response.status_code == 200, token
         assert response.headers["content-type"] == metrics.CONTENT_TYPE
+        assert response.headers.get("deprecation") == (
+            "true" if token == _ADMIN_TOKENS["legacy"] else None
+        )
     assert "# TYPE memory_router_auth_failures_total counter" in body
     assert "# TYPE memory_router_review_side_effect_started_items gauge" in body
     assert "memory_router_review_side_effect_started_items 3" in body
@@ -105,6 +108,7 @@ async def test_metrics_endpoint_rejects_anonymous_and_wrong_scope_tokens() -> No
     ):
         response = await app_module.dispatch("metrics", request("GET", "/metrics", headers=headers))
         assert response.status_code == 401, headers
+        assert "deprecation" not in response.headers
     rendered = metrics.render()
     assert 'memory_router_auth_failures_total{route_class="metrics"} 3' in rendered
 
@@ -126,6 +130,7 @@ async def test_metrics_endpoint_allows_principals_with_review_grants() -> None:
     )
     assert response.status_code == 200
     assert response.headers["content-type"] == metrics.CONTENT_TYPE
+    assert "deprecation" not in response.headers
 
     with pytest.raises(HttpError) as excinfo:
         await app_module.dispatch(

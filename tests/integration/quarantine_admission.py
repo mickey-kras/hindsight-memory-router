@@ -13,10 +13,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.db import PostgresDatabase, create_backend, is_postgres
-from memory_router.envelope import _PreparedDecrypted
+from memory_router.envelope import _PreparedDecrypted, decrypt_envelope
 from memory_router.errors import HttpError
 from memory_router.maintenance import cleanup, sweep_expired
-from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
+from memory_router.quarantine_store import QuarantineLimits, QuarantineStore, _deduped_id
 from memory_router.rate_limit import InMemoryRateLimiter, PostgresRateLimiter, RateLimiter
 from memory_router.repository import QuarantineRepository
 from memory_router.review_repository import claim_review
@@ -56,6 +56,70 @@ class PausedStore(QuarantineStore):
         return await super()._encrypt(input_, quarantine_id, prepared=prepared)
 
 
+class LegacyMemoryStore(PausedStore):
+    def _resolve_id(self, input_: dict[str, Any]) -> str:
+        # Before memoryv2, put/store used the same snapshot guard with this ID.
+        assert input_["kind"] == "recalled_memory"
+        return _deduped_id("memory", f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
+
+
+async def verify_memory_generation_race(
+    repository: QuarantineRepository,
+    other: QuarantineRepository,
+    limiter: RateLimiter,
+    peer_limiter: RateLimiter,
+    public_pem: str,
+    private_pem: str,
+    *,
+    legacy_first: bool,
+) -> None:
+    stores = [
+        LegacyMemoryStore(public_pem, repository, QuarantineLimits(), limiter),
+        PausedStore(public_pem, other, QuarantineLimits(), peer_limiter),
+    ]
+    value = {**admission("recalled_memory"), "sourceMemoryId": f"generation-{legacy_first}"}
+    assert stores[0]._resolve_id(value) != stores[1]._resolve_id(value)
+    writes = [asyncio.create_task(store.put(value)) for store in stores]
+    try:
+        # Both replicas prepare envelopes from the same absent-row snapshot.
+        await asyncio.wait_for(asyncio.gather(*(store.wrapping.wait() for store in stores)), 5)
+        first = 0 if legacy_first else 1
+        stores[first].resume.set()
+        winner = await asyncio.wait_for(writes[first], 5)
+        before = await repository.find_memory_state("main", value["sourceMemoryId"])
+        assert before and before["quarantine_id"] == winner["quarantine_id"]
+        assert (
+            decrypt_envelope(before["encrypted"], private_pem)["quarantine_id"]
+            == before["quarantine_id"]
+        )
+        stores[1 - first].resume.set()
+        try:
+            await asyncio.wait_for(writes[1 - first], 5)
+        except HttpError as error:
+            assert error.status == 409 and error.code == "quarantine_write_stale"
+        else:
+            raise AssertionError("mixed-generation stale envelope was admitted")
+        assert await repository.get(winner["quarantine_id"]) == before
+        assert before["requarantine_count"] == 0
+        assert await repository.get(stores[1 - first]._resolve_id(value)) is None
+
+        # A fresh preflight reuses the persisted ID before preparing its envelope.
+        retry = await asyncio.wait_for(stores[1 - first].put(value), 5)
+        assert retry == winner
+        saved = await repository.get(winner["quarantine_id"])
+        assert saved and saved["requarantine_count"] == 1
+        assert (
+            decrypt_envelope(saved["encrypted"], private_pem)["quarantine_id"]
+            == saved["quarantine_id"]
+        )
+    finally:
+        for store in stores:
+            store.resume.set()
+        for write in writes:
+            write.cancel()
+        await asyncio.gather(*writes, return_exceptions=True)
+
+
 async def budget(limiter: RateLimiter) -> tuple[dict[str, int], dict[str, int]]:
     if isinstance(limiter, InMemoryRateLimiter):
         return (
@@ -89,10 +153,17 @@ async def reset(repository: QuarantineRepository, limiter: RateLimiter) -> None:
 
 
 async def verify_admission(url: str) -> None:
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048).public_key()
-    pem = key.public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    private_pem = key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
     ).decode()
+    pem = (
+        key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+        .decode()
+    )
     async with AsyncExitStack() as resources:
         backend = await create_backend(url)
         resources.push_async_callback(backend.database.close)
@@ -105,6 +176,17 @@ async def verify_admission(url: str) -> None:
         repository = QuarantineRepository(backend.database)
         other = QuarantineRepository(second.database)
         limiter = backend.rate_limiter
+        for legacy_first in (True, False):
+            await reset(repository, limiter)
+            await verify_memory_generation_race(
+                repository,
+                other,
+                limiter,
+                second.rate_limiter,
+                pem,
+                private_pem,
+                legacy_first=legacy_first,
+            )
         for kind in ("retain_request", "recall_request", "recalled_memory", "security_event"):
             for expire in (False, True):
                 await reset(repository, limiter)

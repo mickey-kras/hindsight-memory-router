@@ -155,6 +155,58 @@ async def test_principal_mode_readiness_payload_requires_valid_principal() -> No
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("healthy", [True, False])
+async def test_readiness_legacy_header_is_request_local(healthy: bool) -> None:
+    app_module.runtime.router_token = "legacy-router"  # noqa: S105 - test credential.
+    app_module.runtime.allow_anonymous = False
+    app_module.runtime.principal_resolver = _review_resolver()
+    repository = SimpleNamespace(ping=AsyncMock(side_effect=None if healthy else RuntimeError()))
+    upstream = {"status": "healthy", "database": "connected"}
+    app_module.runtime.repository = repository
+    app_module.runtime.hindsight = SimpleNamespace(health=AsyncMock(return_value=upstream))
+    expected_status = 200 if healthy else 503
+    expected_full = upstream if healthy else {"status": "unhealthy"}
+
+    legacy = await app_module.health_ready(
+        request("GET", "/health/ready", headers={"authorization": "Bearer legacy-router"})
+    )
+    assert legacy.status_code == expected_status
+    assert payload(legacy) == expected_full
+    assert legacy.headers["deprecation"] == "true"
+    cached = probes.readiness.cache
+    assert cached is not None
+    assert "deprecation" not in probes.cached_probe_response(cached).headers
+    assert legacy.body == cached.body
+    assert legacy.headers["content-type"] == "application/json"
+
+    for authorization in (None, "Bearer wrong", "Bearer mr_review-1_" + "ab" * 32):
+        response = await app_module.health_ready(
+            request(
+                "GET",
+                "/health/ready",
+                headers={"authorization": authorization} if authorization else {},
+            )
+        )
+        assert response.status_code == expected_status
+        assert "deprecation" not in response.headers
+        assert payload(response) == (
+            expected_full
+            if authorization and authorization.startswith("Bearer mr_")
+            else {"status": "healthy" if healthy else "unhealthy"}
+        )
+    assert probes.readiness.cache is cached
+    assert "deprecation" not in probes.cached_probe_response(cached).headers
+    repository.ping.assert_awaited_once()
+    app_module.runtime.hindsight.health.assert_awaited_once()
+
+    app_module.runtime.router_token = None
+    app_module.runtime.allow_anonymous = True
+    anonymous = await app_module.health_ready(request("GET", "/health/ready"))
+    assert payload(anonymous) == expected_full
+    assert "deprecation" not in anonymous.headers
+
+
+@pytest.mark.asyncio
 async def test_json_body_bounds_empty_body_and_invalid_json() -> None:
     app_module.runtime.max_body_bytes = 3
     with pytest.raises(HttpError) as declared:

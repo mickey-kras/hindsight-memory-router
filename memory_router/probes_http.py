@@ -10,7 +10,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 from . import probes
-from .auth import AuthFailureAuditor, router_authorized
+from .auth import AuthFailureAuditor, bearer_matches, router_authorized
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .logging import log_event
 from .principal_gate import authenticate_principal
@@ -106,6 +106,12 @@ async def _full_readiness_authorized(request: Request, deps: ProbesDeps) -> bool
 async def readiness_probe_response(request: Request, deps: ProbesDeps) -> Response:
     response = await readiness_response(deps)
     if await _full_readiness_authorized(request, deps):
+        if bearer_matches(request.headers.get("authorization"), deps.router_token):
+            # The probe cache is shared by legacy, principal, and anonymous requests.
+            response = Response(
+                response.body, status_code=response.status_code, headers=dict(response.headers)
+            )
+            response.headers["Deprecation"] = "true"
         return response
     status = "healthy" if response.status_code == 200 else "unhealthy"
     return JSONResponse({"status": status}, status_code=response.status_code)

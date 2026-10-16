@@ -7,7 +7,7 @@ from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
 from . import metrics
-from .auth import AuthFailureAuditor, admin_authorized
+from .auth import AuthFailureAuditor, admin_authorized, admin_token_scope
 from .principal_gate import authenticate_principal, principal_token_present, require_grant
 from .principals import SCOPE_QUARANTINE_REVIEW, PrincipalResolver, PrincipalSession
 from .repository import QuarantineRepository
@@ -43,7 +43,10 @@ async def metrics_endpoint_response(request: Request, deps: MetricsDeps) -> Resp
         if not await deps.admin_auth(request, "read"):
             return JSONResponse(_AUTHENTICATION_REQUIRED, status_code=401)
     await deps.admin_rate("GET")
-    return await _metrics_response(deps.repository)
+    response = await _metrics_response(deps.repository)
+    if admin_token_scope(authorization, "read", deps.admin_tokens) == "legacy":
+        response.headers["Deprecation"] = "true"
+    return response
 
 
 async def _principal_metrics_response(request: Request, deps: MetricsDeps) -> Response:
