@@ -5,6 +5,12 @@
       "source": "integration",
       "write_bank": "physical-main",
       "read_banks": ["physical-main"]
+    },
+    "numeric-scan": {
+      "role": "numeric-safety-regression",
+      "source": "integration",
+      "write_bank": "physical-main",
+      "read_banks": ["physical-main"]
     }
   },
   "defaults": {

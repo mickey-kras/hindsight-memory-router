@@ -4,7 +4,6 @@ import json
 import math
 import time
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
 from typing import Any
 
 from . import (
@@ -41,7 +40,12 @@ from .security_base64 import MAX_SPLIT_BASE64_SKIPS as MAX_SPLIT_BASE64_SKIPS
 from .security_base64 import MAX_SPLIT_BASE64_WORK_BYTES as MAX_SPLIT_BASE64_WORK_BYTES
 from .security_models import SafetyFinding as SafetyFinding
 from .security_models import SafetyResult as SafetyResult
-from .security_models import _EncodedState
+from .security_models import (
+    _DirectScanOptions,
+    _EncodedState,
+    _QueryWindowContext,
+    _WindowScanContext,
+)
 from .security_rules import MAX_NON_ASCII_CODEPOINTS as MAX_NON_ASCII_CODEPOINTS
 from .security_rules import MAX_SCAN_FIELD_BYTES as MAX_SCAN_FIELD_BYTES
 from .security_windows import MAX_SPLIT_WINDOW_BYTES as MAX_SPLIT_WINDOW_BYTES
@@ -99,7 +103,7 @@ def scan_content(content: str, *, operation: str = "read", key: str = "content")
 
 def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
     return _scan_batched_fields(
-        _walk_strings(body, "retain"),
+        _walk_strings(body, "retain", isolated_numbers=True),
         operation="write",
         max_fields=MAX_RETAIN_SCAN_FIELDS,
         field_limit_match="field_limit",
@@ -110,7 +114,7 @@ def scan_retain_body(body: dict[str, Any]) -> SafetyResult:
 
 def scan_recall_body(body: dict[str, Any]) -> SafetyResult:
     return _scan_fields(
-        _walk_strings(body, "recall"),
+        _walk_strings(body, "recall", isolated_numbers=True),
         operation="read",
         deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS,
     )
@@ -190,7 +194,12 @@ def scan_facade_result(
                 return combined
     combined.extend(
         _scan_batched_fields(
-            _walk_strings(scanned, "facade_response", include_numbers=include_numbers),
+            _walk_strings(
+                scanned,
+                "facade_response",
+                include_numbers=include_numbers,
+                isolated_numbers=not include_numbers,
+            ),
             operation="read",
             max_fields=MAX_FACADE_SCAN_FIELDS,
             field_limit_match="facade_field_limit",
@@ -288,18 +297,6 @@ def _reassembly_carry(
         matches = [index for index, entry in enumerate(fields) if entry[2] is is_key]
         selected.update(matches[-group_count:])
     return [entry for index, entry in enumerate(fields) if index in selected]
-
-
-@dataclass(slots=True)
-class _QueryWindowContext:
-    result: SafetyResult
-    canonical_fields: list[tuple[str, str, bool]]
-    direct_detector_matches: set[str]
-    keycap_values: set[str]
-    deadline: float
-    scan_cache: dict[tuple[str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = field(
-        default_factory=dict
-    )
 
 
 def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSONAR
@@ -553,8 +550,17 @@ def _decoded_query_values(decoded: object) -> Iterator[tuple[str, str]]:
         yield (value, "") if is_key else ("", value)
 
 
+class _IsolatedNumber(str):
+    """A JSON numeric scalar scanned directly, without text reassembly."""
+
+
 def _walk_strings(
-    value: Any, path: str, *, is_key: bool = False, include_numbers: bool = False
+    value: Any,
+    path: str,
+    *,
+    is_key: bool = False,
+    include_numbers: bool = False,
+    isolated_numbers: bool = False,
 ) -> Iterator[tuple[str, str, bool]]:
     stack: list[Iterator[tuple[Any, str, bool]]] = [iter(((value, path, is_key),))]
     while stack:
@@ -570,6 +576,17 @@ def _walk_strings(
         ):
             for spelling in _numeric_spellings(current):
                 yield current_path, spelling, current_is_key
+        elif (
+            isolated_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
+        ):
+            # Fractional scores must not become apparent card numbers by stripping
+            # decimal punctuation. Empty fields still consume the shared budget.
+            integral = isinstance(current, int) or (math.isfinite(current) and current.is_integer())
+            yield (
+                current_path,
+                _IsolatedNumber(str(int(current)) if integral else ""),
+                current_is_key,
+            )
         else:
             stack.append(_walk_children(current, current_path))
 
@@ -595,35 +612,6 @@ def _walk_children(value: Any, path: str) -> Iterator[tuple[Any, str, bool]]:
             if isinstance(key, str):
                 yield key, child, True
             yield entry, child, False
-
-
-@dataclass(slots=True)
-class _WindowScanContext:
-    result: SafetyResult
-    canonical_fields: list[tuple[str, str, bool]]
-    direct_rule_matches: set[str]
-    direct_detector_matches: set[str]
-    keycap_values: set[str]
-    operation: str
-    deadline: float | None
-    time_limit_match: str | None
-    rolling_windows: int = 0
-    skip_windows: int = 0
-    limit_reached: bool = False
-    scan_cache: dict[tuple[str, str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = (
-        field(default_factory=dict)
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _DirectScanOptions:
-    operation: str
-    isolated_encoded_fields: bool
-    deadline: float | None
-    time_limit_match: str | None
-    canonical_prefix_fields: int
-    canonical_output: list[tuple[str, str, bool]] | None
-    reviewed_fields: frozenset[str]
 
 
 def _scan_fields(
@@ -738,9 +726,12 @@ def _scan_direct_fields(  # NOSONAR
                         else reviewed_origins.get(key, 0)
                     )
                 canonical = security_provenance.ReviewedText(canonical, trusted)
-            canonical_fields.append((key, canonical, is_key))
-            if options.canonical_output is not None:
-                options.canonical_output.append((key, canonical, is_key))
+            # Numeric fields consume the source/batch field budgets and receive
+            # direct scans, but must not evict text from reassembly carry.
+            if not isinstance(raw, _IsolatedNumber):
+                canonical_fields.append((key, canonical, is_key))
+                if options.canonical_output is not None:
+                    options.canonical_output.append((key, canonical, is_key))
             if "keycap" in transformations:
                 keycap_values.add(canonical)
             if not is_key and security_provenance.reviewed(canonical):
@@ -765,7 +756,11 @@ def _scan_direct_fields(  # NOSONAR
             ):
                 result.add(finding)
                 direct_detector_matches.add(finding.detector or finding.matched)
-            state = _EncodedState() if options.isolated_encoded_fields else direct_encoded_state
+            state = (
+                _EncodedState()
+                if options.isolated_encoded_fields or isinstance(raw, _IsolatedNumber)
+                else direct_encoded_state
+            )
             security_base64._scan_encoded(
                 result,
                 key,
