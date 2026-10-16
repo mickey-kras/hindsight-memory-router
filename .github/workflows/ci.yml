@@ -80,6 +80,7 @@ jobs:
             }
 
   hindsight:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.resolve.outputs.version }}
@@ -103,6 +104,7 @@ jobs:
 
   # The required `aislop status` gate runs in aislop.yml on PRs and through publish.yml on main.
   python:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     needs: [changes, hindsight]
     runs-on: ubuntu-latest
     outputs:
@@ -265,6 +267,7 @@ jobs:
           fi
 
   ui:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     needs: changes
     runs-on: ubuntu-latest
     outputs:
@@ -358,6 +361,7 @@ jobs:
           fi
 
   release:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     needs: changes
     runs-on: ubuntu-latest
     outputs:
@@ -423,6 +427,10 @@ jobs:
         if: ${{ needs.changes.outputs.release != 'false' }}
         run: bash .github/scripts/attestation-smoke.sh
 
+      - name: Draft readiness contract tests
+        if: ${{ needs.changes.outputs.release != 'false' }}
+        run: python .github/scripts/pr-readiness.test.py
+
       - name: CI dependency classification tests
         if: ${{ needs.changes.outputs.release != 'false' }}
         run: node --test .github/scripts/ci-impact.test.cjs
@@ -454,6 +462,7 @@ jobs:
           fi
 
   security:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -571,11 +580,16 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
           EVENT_NAME: ${{ github.event_name }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
         with:
           script: |
+            if (process.env.EVENT_NAME === 'pull_request' && process.env.PR_DRAFT === 'true') {
+              core.setFailed('Draft feedback is not merge validation. Mark ready for review to run all gates.');
+              return;
+            }
             const needs = JSON.parse(process.env.NEEDS_JSON);
             const required = ['changes', 'hindsight', 'python', 'ui', 'release', 'security', 'container'];
             for (const name of required) {
@@ -598,10 +612,24 @@ jobs:
               if (!required.includes(name)) core.setFailed(`Unexpected quality gate: ${name}`);
             }
 
+      - name: Require current ready PR revision
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        with:
+          script: |
+            const expected = context.payload.pull_request;
+            const { data: current } = await github.rest.pulls.get({
+              ...context.repo, pull_number: expected.number,
+            });
+            if (current.state !== 'open' || current.draft !== false ||
+                current.head.sha !== expected.head.sha || current.base.sha !== expected.base.sha) {
+              core.setFailed('PR state or revision changed. Fresh ready-for-review validation is required.');
+            }
+
   container:
     needs: hindsight
     name: container
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && (github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != '')
     runs-on: ubuntu-latest
     permissions:
       contents: read
