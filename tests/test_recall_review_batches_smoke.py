@@ -37,9 +37,16 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
     )
     monkeypatch.setenv("QUARANTINE_DATABASE_URL", "sqlite:unused.db")
     attempts: list[str] = []
+    numeric_outcomes: list[bool] = []
     scan = probe["scan_recalled"]
 
-    async def observe(value: dict[str, Any]) -> SafetyResult:
+    async def observe(
+        value: dict[str, Any], *, reviewed_result_positions: frozenset[int] | None = None
+    ) -> SafetyResult:
+        if reviewed_result_positions is not None:
+            result = await scan(value, reviewed_result_positions=reviewed_result_positions)
+            numeric_outcomes.append(result.safe)
+            return result
         try:
             result = await scan(value)
         except HttpError as exc:
@@ -53,19 +60,26 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
     assert len(attempts) >= 2
     assert attempts[-1] == "ready"
     assert set(attempts[:-1]) == {"recall safety scan timed out"}
+    assert numeric_outcomes == [True, True, False, False, False, False, False, False]
     assert scan_executor._SCAN_EXECUTOR is None
 
 
-@pytest.mark.parametrize("stage", ["startup", "verification", "success"])
+@pytest.mark.parametrize("stage", ["startup", "numeric_verification", "verification", "success"])
 async def test_probe_always_closes_scanner(
     probe: dict[str, Any], monkeypatch: pytest.MonkeyPatch, stage: str
 ) -> None:
     warm = AsyncMock(side_effect=RuntimeError("startup") if stage == "startup" else None)
+    numeric = AsyncMock(
+        side_effect=RuntimeError("numeric_verification")
+        if stage == "numeric_verification"
+        else None
+    )
     verify = AsyncMock(
         side_effect=RuntimeError("verification") if stage == "verification" else None
     )
     close = AsyncMock()
     monkeypatch.setitem(probe, "warm_scanner", warm)
+    monkeypatch.setitem(probe, "verify_numeric_scanning", numeric)
     monkeypatch.setitem(probe, "verify_database", verify)
     monkeypatch.setitem(probe, "shutdown_scan_executor_async", close)
     if stage == "success":
@@ -74,7 +88,8 @@ async def test_probe_always_closes_scanner(
         with pytest.raises(RuntimeError, match=stage):
             await probe["main"]()
     close.assert_awaited_once()
-    assert verify.await_count == (0 if stage == "startup" else 1)
+    assert numeric.await_count == (0 if stage == "startup" else 1)
+    assert verify.await_count == (0 if stage in {"startup", "numeric_verification"} else 1)
 
 
 @pytest.mark.parametrize(
