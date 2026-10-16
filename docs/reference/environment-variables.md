@@ -30,7 +30,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `HINDSIGHT_API_KEY`                        |                          none | Optional Hindsight API key                                      |
 | `HINDSIGHT_REQUIRE_SECURE_TRANSPORT`       |                       `false` | Require HTTPS for every Hindsight upstream, including private hosts |
 | `HINDSIGHT_TIMEOUT_MS`                     |                       `10000` | Hindsight request timeout                                       |
-| `HINDSIGHT_MAX_RESPONSE_BYTES`             |                     `4194304` | Maximum upstream response bytes; facade responses also have a 256 KiB ceiling |
+| `HINDSIGHT_MAX_RESPONSE_BYTES`             |                     `4194304` | Maximum upstream response bytes; facade responses and native retain acknowledgments also have a 256 KiB scan ceiling |
 | `HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX`   |                          `30` | Retain requests per writer/window                               |
 | `HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX`   |                         `300` | Global retain requests/window                                   |
 | `HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX`   |                         `120` | Recall requests per writer/window                               |
