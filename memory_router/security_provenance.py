@@ -19,10 +19,18 @@ from .unicode_security import (
 
 class ReviewedText(str):
     trusted: int | tuple[int, ...]
+    numeric_spans: tuple[tuple[int, int], ...]
 
-    def __new__(cls, value: str, trusted: int | tuple[int, ...] = False) -> ReviewedText:
+    def __new__(
+        cls,
+        value: str,
+        trusted: int | tuple[int, ...] = False,
+        *,
+        numeric_spans: tuple[tuple[int, int], ...] = (),
+    ) -> ReviewedText:
         instance = super().__new__(cls, value)
         instance.trusted = trusted
+        instance.numeric_spans = numeric_spans
         return instance
 
 
@@ -49,17 +57,29 @@ def join(parts: Iterable[str], separator: str = "") -> ReviewedText:
     entries = list(parts)
     value = separator.join(entries)
     flags: list[int] = []
+    numeric_spans: list[tuple[int, int]] = []
     for index, entry in enumerate(entries):
         if index:
             # Inserted separators do not introduce unreviewed source content.
             flags.extend([-1] * len(separator))
+        if isinstance(entry, ReviewedText):
+            numeric_spans.extend(
+                (start + len(flags), end + len(flags)) for start, end in entry.numeric_spans
+            )
         flags.extend(flags_for(entry))
-    return ReviewedText(value, tuple(flags))
+    return ReviewedText(value, tuple(flags), numeric_spans=tuple(numeric_spans))
 
 
 def slice_text(value: ReviewedText, start: int, stop: int | None = None) -> ReviewedText:
     trusted = value.trusted if isinstance(value.trusted, int) else value.trusted[start:stop]
-    return ReviewedText(value[start:stop], trusted)
+    start, end, _ = slice(start, stop).indices(len(value))
+    # Keep original endpoints outside the clipped view: a suffix is not a whole number.
+    numeric_spans = tuple(
+        (left - start, right - start)
+        for left, right in value.numeric_spans
+        if left < end and right > start
+    )
+    return ReviewedText(value[start:end], trusted, numeric_spans=numeric_spans)
 
 
 def bound(value: ReviewedText, *, prefix: bool = False) -> ReviewedText:

@@ -536,13 +536,23 @@ def _walk_strings(
             include_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
         ):
             original = str(current)
-            yield current_path, original, current_is_key
+            yield (
+                current_path,
+                security_provenance.ReviewedText(original, numeric_spans=((0, len(original)),)),
+                current_is_key,
+            )
             if isinstance(current, float) and math.isfinite(current) and current.is_integer():
                 # A finite Python float has at most 309 decimal integer digits.
                 # Keep the original spelling; each alternate consumes the same budgets.
                 decimal = str(int(current))
                 if decimal != original:
-                    yield current_path, decimal, current_is_key
+                    yield (
+                        current_path,
+                        security_provenance.ReviewedText(
+                            decimal, numeric_spans=((0, len(decimal)),)
+                        ),
+                        current_is_key,
+                    )
         else:
             stack.append(_walk_children(current, current_path))
 
@@ -572,9 +582,10 @@ class _WindowScanContext:
     rolling_windows: int = 0
     skip_windows: int = 0
     limit_reached: bool = False
-    scan_cache: dict[tuple[str, str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = (
-        field(default_factory=dict)
-    )
+    scan_cache: dict[
+        tuple[str, str, bool, tuple[tuple[int, int], ...]],
+        tuple[list[SafetyFinding], list[SafetyFinding]],
+    ] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -701,6 +712,9 @@ def _scan_direct_fields(  # NOSONAR
                     )
                     if not is_key
                     else 0,
+                    numeric_spans=raw.numeric_spans
+                    if isinstance(raw, security_provenance.ReviewedText) and canonical == raw
+                    else (),
                 )
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
@@ -773,7 +787,10 @@ def _scan_window(  # NOSONAR
         context.limit_reached = True
         return
     strip_inword_digits = any(fragment in context.keycap_values for fragment in fragments)
-    cache_key = key, window, strip_inword_digits
+    numeric_spans = (
+        window.numeric_spans if isinstance(window, security_provenance.ReviewedText) else ()
+    )
+    cache_key = key, window, strip_inword_digits, numeric_spans
     cached = context.scan_cache.get(cache_key)
     if cached is None:
         try:
@@ -789,6 +806,7 @@ def _scan_window(  # NOSONAR
                 operation=context.operation,
                 deadline=context.deadline,
                 all_hits=isinstance(window, security_provenance.ReviewedText),
+                numeric_spans=numeric_spans,
             )
         except UnicodeScanDeadlineExceeded:
             context.result.add(

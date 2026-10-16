@@ -449,6 +449,7 @@ def _amg_scan(  # NOSONAR
     operation: str,
     deadline: float | None = None,
     all_hits: bool = False,
+    numeric_spans: tuple[tuple[int, int], ...] = (),
 ) -> list[SafetyFinding]:
     if not value:
         return []
@@ -493,11 +494,21 @@ def _amg_scan(  # NOSONAR
                     if isinstance(pattern, re.Pattern)
                     for match in pattern.finditer(candidate)
                 )
+                if name == "sensitive_data" and numeric_spans and candidate == value and matches:
+                    matches = tuple(
+                        match
+                        for match in matches
+                        if not _synthetic_numeric_card(candidate, match, numeric_spans)
+                    )
+                    if not matches:
+                        continue
                 hits = tuple(dict.fromkeys(match.group(0) for match in matches))
             if (
                 name == "sensitive_data"
                 and (not all_hits or hits)
-                and not _keep_sensitive_detection(candidate, hits)
+                and not _keep_sensitive_detection(
+                    candidate, hits, numeric_spans=numeric_spans if candidate == value else ()
+                )
             ):
                 continue
             if all_hits and name == "sensitive_data":
@@ -524,6 +535,37 @@ def _amg_scan(  # NOSONAR
     return findings
 
 
+def _synthetic_numeric_card(
+    value: str, match: re.Match[str], numeric_spans: tuple[tuple[int, int], ...]
+) -> bool:
+    """Reject only context-free card assembly sliced across typed numeric tokens.
+
+    Whole numeric fragments, textual digits, direct scans and contextual detections
+    retain their existing behavior. Numeric provenance grants no review approval.
+    """
+    if not numeric_spans or not _CARD_NUMBER.fullmatch(match.group(0)):
+        return False
+    context = value[
+        max(0, match.start() - _CARD_CONTEXT_RADIUS) : min(
+            len(value), match.end() + _CARD_CONTEXT_RADIUS
+        )
+    ]
+    if _CARD_CONTEXT.search(context):
+        return False
+    spans = [
+        (start, end) for start, end in numeric_spans if start < match.end() and end > match.start()
+    ]
+    return (
+        len(spans) >= 2
+        and any(start < match.start() or end > match.end() for start, end in spans)
+        and all(
+            any(start <= index < end for start, end in spans)
+            for index in range(match.start(), match.end())
+            if value[index].isdigit()
+        )
+    )
+
+
 def _sensitive_context_hits(value: str, matches: Iterable[re.Match[str]]) -> tuple[str, ...]:
     # Non-Luhn references become sensitive only with nearby card context. Approval
     # must cover both the number and every keyword that activates the finding.
@@ -546,9 +588,16 @@ def _sensitive_context_hits(value: str, matches: Iterable[re.Match[str]]) -> tup
     return tuple(dict.fromkeys(contextual))
 
 
-def _keep_sensitive_detection(value: str, hits: tuple[str, ...]) -> bool:
-    card_matches = list(_CARD_NUMBER.finditer(value))
-    if not card_matches:
+def _keep_sensitive_detection(
+    value: str, hits: tuple[str, ...], *, numeric_spans: tuple[tuple[int, int], ...] = ()
+) -> bool:
+    all_card_matches = list(_CARD_NUMBER.finditer(value))
+    card_matches = [
+        match
+        for match in all_card_matches
+        if not _synthetic_numeric_card(value, match, numeric_spans)
+    ]
+    if not all_card_matches:
         return True
     non_card_hits = [hit for hit in hits if not _CARD_NUMBER.fullmatch(hit.strip())]
     if non_card_hits:
