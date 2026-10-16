@@ -160,7 +160,7 @@ class RouterSettings(BaseSettings):
         repr=False,
     )
     quarantine_public_key: str = Field("", validation_alias="QUARANTINE_PUBLIC_KEY")
-    quarantine_max_item_bytes: NonNegativeInt = Field(
+    quarantine_max_item_bytes: PositiveInt = Field(
         1_048_576, validation_alias="QUARANTINE_MAX_ITEM_BYTES"
     )
     quarantine_max_pending_items: NonNegativeInt = Field(

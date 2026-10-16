@@ -43,7 +43,7 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `QUARANTINE_PUBLIC_KEY`                    |                          none | Required for `rsa-oaep` only; private key must stay off the router host |
 | `QUARANTINE_DATABASE_URL`                  | `sqlite:./data/quarantine.db` | SQLite or PostgreSQL quarantine database                        |
 | `QUARANTINE_MAX_POSTPONES`                 |                           `3` | Maximum review postpones                                        |
-| `QUARANTINE_MAX_ITEM_BYTES`                |                     `1048576` | Maximum encrypted item size                                     |
+| `QUARANTINE_MAX_ITEM_BYTES`                |                     `1048576` | Maximum encrypted item size; must be positive                   |
 | `QUARANTINE_MAX_PENDING_ITEMS`             |                        `1000` | Global pending-item capacity                                    |
 | `QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER`  |                          `50` | Per-writer pending capacity                                     |
 | `QUARANTINE_MAX_PENDING_ITEMS_PER_BANK`    |                           `0` | Per-bank pending/postponed capacity for bank-scoped items; `0` disables |

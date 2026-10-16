@@ -279,19 +279,29 @@ async def test_bank_list_rejects_invalid_upstream_shape() -> None:
 
 
 @pytest.mark.asyncio
-async def test_bank_list_uses_one_deadline_across_pages() -> None:
-    gateway = HindsightGateway("http://hindsight", None, timeout_ms=1)
+async def test_bank_list_uses_one_deadline_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
+    gateway = HindsightGateway("http://hindsight", None, timeout_ms=10_000)
+    deadline = asyncio.timeout(10)
+    monkeypatch.setattr(asyncio, "timeout", lambda seconds: deadline)
+    pages = 0
 
-    async def slow_page(*args: object, **kwargs: object) -> dict[str, object]:
-        await asyncio.sleep(0.01)
-        return {"banks": [], "total": 0}
+    async def page(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal pages
+        pages += 1
+        if pages == 1:
+            # Expire the shared deadline after this page, without wall-clock sleeps.
+            deadline.reschedule(asyncio.get_running_loop().time() - 1)
+            return {"banks": [{"bank_id": "hidden"}], "total": 2}
+        await asyncio.sleep(0)
+        pytest.fail("the cumulative deadline should cancel the second page")
 
-    gateway._request = slow_page  # type: ignore[method-assign]
+    gateway._request = page  # type: ignore[method-assign]
     try:
         with pytest.raises(HindsightGatewayError) as timed_out:
             await gateway.list_banks(["shared"])
     finally:
         await gateway.close()
+    assert pages == 2
     assert timed_out.value.kind == "timeout"
 
 

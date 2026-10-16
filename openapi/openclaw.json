@@ -6166,7 +6166,7 @@
         }
       },
       "ScanUnavailable": {
-        "description": "Request scanner failure or saturation returns request_scan_unavailable. Response scanner failure, saturation, or field/time limit returns facade_scan_unavailable. Operational scanner failures do not quarantine content.",
+        "description": "Request scanner failure or saturation returns request_scan_unavailable. Read-response scanner failure, saturation, or field/time limit returns facade_scan_unavailable. Post-write response-scan failures use 502 hindsight_response_scan_unavailable instead, without Retry-After. Operational scanner failures do not quarantine content.",
         "headers": {
           "Retry-After": {
             "description": "Seconds before retrying",
@@ -6185,7 +6185,7 @@
         }
       },
       "UpstreamFailure": {
-        "description": "Hindsight unavailable, redirected, unauthorized, invalid, oversized, unsafe, or failed",
+        "description": "Hindsight unavailable, redirected, unauthorized, invalid, oversized, unsafe, or failed. A response-scan failure after a successful upstream write returns hindsight_response_scan_unavailable without Retry-After; the write may already have completed, so verify its status before retrying. No replay is queued",
         "content": {
           "application/json": {
             "schema": {

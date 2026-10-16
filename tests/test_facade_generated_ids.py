@@ -156,8 +156,15 @@ async def test_create_page_keeps_fail_closed_scan_limit(monkeypatch: pytest.Monk
             return_value=SafetyResult(findings=[SafetyFinding("facade_field_limit", "span_limit")])
         ),
     )
+    policy = _policy(ACK)
     with pytest.raises(HttpError) as blocked:
-        await OpenClawFacade(_policy(ACK)).forward(
+        await OpenClawFacade(policy).forward(
             route=ROUTE, writer_id="openclaw", params={}, body={"name": "Notes"}
         )
-    assert blocked.value.code == "facade_scan_unavailable"
+    assert blocked.value.status == 502
+    assert blocked.value.code == "hindsight_response_scan_unavailable"
+    assert "write may already have completed" in blocked.value.message
+    assert "verify its status before retrying" in blocked.value.message
+    assert not blocked.value.headers
+    policy.hindsight.openclaw_request.assert_awaited_once()
+    policy.quarantine_security_event.assert_not_awaited()

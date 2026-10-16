@@ -71,9 +71,19 @@ class OpenClawFacade:
             allow_empty_response=route.allow_empty_response,
         )
         if value is not None:
-            await self.validate_safe_response(
-                route.resource, writer_id, source, value, bank_override, route=route
-            )
+            try:
+                await self.validate_safe_response(
+                    route.resource, writer_id, source, value, bank_override, route=route
+                )
+            except HttpError as exc:
+                if route.read or exc.code != "facade_scan_unavailable":
+                    raise
+                raise HindsightGatewayError(
+                    "response-scan-unavailable",
+                    operation=f"openclaw_{route.operation}",
+                    method=route.method,
+                    write_uncertain=True,
+                ) from exc
         try:
             if route.strict_contract:
                 validate_openclaw_response(

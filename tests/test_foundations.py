@@ -766,3 +766,24 @@ def test_secure_upstream_keeps_the_exact_configured_path() -> None:
     )
     config.assert_auth_environment(settings)
     assert settings.hindsight_base_url == url
+
+
+@pytest.mark.parametrize("value", [0, -1])
+def test_quarantine_item_size_must_be_positive(value: int) -> None:
+    with pytest.raises(ValueError, match="QUARANTINE_MAX_ITEM_BYTES"):
+        config.RouterSettings(QUARANTINE_MAX_ITEM_BYTES=value)
+
+
+def test_other_quarantine_zero_limits_remain_supported() -> None:
+    settings = config.RouterSettings(
+        QUARANTINE_MAX_ITEM_BYTES=1,
+        QUARANTINE_MAX_PENDING_ITEMS=0,
+        QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER=0,
+        QUARANTINE_MAX_PENDING_ITEMS_PER_BANK=0,
+        QUARANTINE_MAX_ENCRYPTED_BYTES=0,
+    )
+    assert settings.quarantine_max_item_bytes == 1
+    assert settings.quarantine_max_pending_items == 0
+    assert settings.quarantine_max_pending_items_per_writer == 0
+    assert settings.quarantine_max_pending_items_per_bank == 0
+    assert settings.quarantine_max_encrypted_bytes == 0

@@ -74,7 +74,7 @@ class HumanOidc:
                 "GET" if data is None else "POST",
                 url,
                 data=data,
-                headers={"accept": "application/json"},
+                headers={"accept": "application/json", "accept-encoding": "identity"},
                 follow_redirects=False,
                 timeout=10,
             ) as response:
@@ -83,6 +83,11 @@ class HumanOidc:
                         503, "human_identity_unavailable", "identity provider unavailable"
                     )
                 if response.status_code != 200:
+                    raise invalid_identity()
+                if (
+                    response.headers.get("content-encoding", "identity").strip().lower()
+                    != "identity"
+                ):
                     raise invalid_identity()
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
