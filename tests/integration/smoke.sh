@@ -468,7 +468,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 53bb7b58bc3a5e1e43a9b0361bcd92f17708119023acd2a4db87bc4ded9e420e
+# integration-behavior-sha256: 5d4a1cd105c421e51e570005f0ec156b50739acdcd08a992b0d53f3198116353
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -613,6 +613,26 @@ if [[ "$mode" == "fake" ]]; then
   second_reject_recall="$(post_router "/v1/default/banks/main/memories/recall" '{"query":"unsafe rejected result"}')"
   printf '%s' "$second_reject_recall" | python3 -c 'import json,sys; assert json.load(sys.stdin)["results"] == []'
   grep -q '"kind":"invalidate"' "$state_file" || fail_check "fake Hindsight did not receive invalidation"
+  pass_check
+
+  begin_check "Generated knowledge page identifiers preserve direct response scanning"
+  page_response_file="${root}/${tmp_dir}/generated-page-response.json"
+  page_status="$(curl --max-time 10 -sS -o "$page_response_file" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/pages" -d '{"name":"Generated identifiers","source_query":"Project notes"}')"
+  [[ "$page_status" == "201" ]] || fail_check "generated page identifiers were blocked: ${page_status}"
+  python3 - "$page_response_file" <<'PY' || fail_check "generated page acknowledgement changed"
+import json
+import sys
+
+with open(sys.argv[1]) as response:
+    assert json.load(response) == {
+        "page_id": "kp-ce44e615a5f84888a27339d1b4349929",
+        "mental_model_id": "mm-b25d3db07c8e4505a86235b94b2dfc33",
+        "operation_id": "87533620-4755-4092-b203-b7e5d41112cc",
+    }
+PY
+  page_status="$(curl --max-time 10 -sS -o "$page_response_file" -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/pages" -d '{"name":"Sensitive identifier","source_query":"Project notes"}')"
+  [[ "$page_status" == "502" ]] || fail_check "sensitive generated identifier escaped scanning: ${page_status}"
+  python3 -c 'import json,sys; data=json.load(open(sys.argv[1])); assert data["error"] == "hindsight_unsafe_response"' "$page_response_file" || fail_check "sensitive identifier returned wrong error"
   pass_check
 
   begin_check "native recall scanning preserves liveness responsiveness"
