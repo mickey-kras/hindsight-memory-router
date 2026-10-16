@@ -579,16 +579,16 @@ def _walk_strings(
         elif (
             isolated_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
         ):
-            # Fractional scores must not become apparent card numbers by stripping
-            # decimal punctuation. Empty fields still consume the shared budget.
-            integral = isinstance(current, int) or (math.isfinite(current) and current.is_integer())
-            yield (
-                current_path,
-                _IsolatedNumber(str(int(current)) if integral else ""),
-                current_is_key,
-            )
+            yield current_path, _isolated_numeric_spelling(current), current_is_key
         else:
             stack.append(_walk_children(current, current_path))
+
+
+def _isolated_numeric_spelling(value: int | float) -> _IsolatedNumber:
+    # Fractional scores must not become apparent card numbers by stripping
+    # decimal punctuation. Empty fields still consume the shared budget.
+    integral = isinstance(value, int) or (math.isfinite(value) and value.is_integer())
+    return _IsolatedNumber(str(int(value)) if integral else "")
 
 
 def _numeric_spellings(value: int | float) -> Iterator[str]:
