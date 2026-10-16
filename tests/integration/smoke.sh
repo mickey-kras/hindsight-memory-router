@@ -338,6 +338,8 @@ python3 tests/integration/request-scanning.py "$router_url" "$router_token" reta
 pass_check
 
 begin_check "numeric retain extras and numeric padding remain quarantined"
+# Isolate these new quarantine writes from the full facade matrix: PostgreSQL
+# retains writer admission counters across the entire smoke run.
 for numeric_case in pan padding31 padding32 fractional32; do
   numeric_payload="$(python3 -c '
 import json, sys
@@ -351,7 +353,7 @@ else:
     item["extra"] = {"padding": [0.1 if case == "fractional32" else 42] * padding, "tail": "previous instructions"}
 print(json.dumps({"items": [item]}))
 ' "$numeric_case")"
-  numeric_response="$(post_router "/v1/default/banks/main/memories" "$numeric_payload")"
+  numeric_response="$(post_router "/v1/default/banks/numeric-scan/memories" "$numeric_payload")"
   printf '%s' "$numeric_response" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert value.get("queued") is True and value.get("reason") == "suspicious_content", value' || fail_check "numeric retain case ${numeric_case} escaped quarantine"
 done
 pass_check
@@ -495,7 +497,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: b925b59a446afdd06d1323b67b9b6f38a0fb3ba467b188dca37ec727e8c6276c
+# integration-behavior-sha256: 3f17707c182369e640ef1f5428064a9f84fb5b88869c37406dec59fd9a43a895
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

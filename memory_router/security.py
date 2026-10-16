@@ -4,7 +4,6 @@ import json
 import math
 import time
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
 from typing import Any
 
 from . import (
@@ -41,7 +40,12 @@ from .security_base64 import MAX_SPLIT_BASE64_SKIPS as MAX_SPLIT_BASE64_SKIPS
 from .security_base64 import MAX_SPLIT_BASE64_WORK_BYTES as MAX_SPLIT_BASE64_WORK_BYTES
 from .security_models import SafetyFinding as SafetyFinding
 from .security_models import SafetyResult as SafetyResult
-from .security_models import _EncodedState
+from .security_models import (
+    _DirectScanOptions,
+    _EncodedState,
+    _QueryWindowContext,
+    _WindowScanContext,
+)
 from .security_rules import MAX_NON_ASCII_CODEPOINTS as MAX_NON_ASCII_CODEPOINTS
 from .security_rules import MAX_SCAN_FIELD_BYTES as MAX_SCAN_FIELD_BYTES
 from .security_windows import MAX_SPLIT_WINDOW_BYTES as MAX_SPLIT_WINDOW_BYTES
@@ -293,18 +297,6 @@ def _reassembly_carry(
         matches = [index for index, entry in enumerate(fields) if entry[2] is is_key]
         selected.update(matches[-group_count:])
     return [entry for index, entry in enumerate(fields) if index in selected]
-
-
-@dataclass(slots=True)
-class _QueryWindowContext:
-    result: SafetyResult
-    canonical_fields: list[tuple[str, str, bool]]
-    direct_detector_matches: set[str]
-    keycap_values: set[str]
-    deadline: float
-    scan_cache: dict[tuple[str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = field(
-        default_factory=dict
-    )
 
 
 def scan_query_values(query: Iterable[tuple[str, str]]) -> SafetyResult:  # NOSONAR
@@ -620,35 +612,6 @@ def _walk_children(value: Any, path: str) -> Iterator[tuple[Any, str, bool]]:
             if isinstance(key, str):
                 yield key, child, True
             yield entry, child, False
-
-
-@dataclass(slots=True)
-class _WindowScanContext:
-    result: SafetyResult
-    canonical_fields: list[tuple[str, str, bool]]
-    direct_rule_matches: set[str]
-    direct_detector_matches: set[str]
-    keycap_values: set[str]
-    operation: str
-    deadline: float | None
-    time_limit_match: str | None
-    rolling_windows: int = 0
-    skip_windows: int = 0
-    limit_reached: bool = False
-    scan_cache: dict[tuple[str, str, bool], tuple[list[SafetyFinding], list[SafetyFinding]]] = (
-        field(default_factory=dict)
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class _DirectScanOptions:
-    operation: str
-    isolated_encoded_fields: bool
-    deadline: float | None
-    time_limit_match: str | None
-    canonical_prefix_fields: int
-    canonical_output: list[tuple[str, str, bool]] | None
-    reviewed_fields: frozenset[str]
 
 
 def _scan_fields(
