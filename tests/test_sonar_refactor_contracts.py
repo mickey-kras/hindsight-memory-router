@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
 from memory_router import security
@@ -23,7 +21,7 @@ from memory_router.security_provenance import ReviewedText
         (None, []),
     ],
 )
-def test_numeric_walk_preserves_spellings_and_paths(value: Any, expected: list[str]) -> None:
+def test_numeric_walk_preserves_spellings_and_paths(value: object, expected: list[str]) -> None:
     fields = list(security._walk_strings({"nested": [value]}, "root", include_numbers=True))
     assert fields == [("root.nested", "nested", True)] + [
         ("root.nested.0", spelling, False) for spelling in expected

@@ -161,8 +161,6 @@ def _valid_recall_scores(value: object) -> bool:
 
 
 class _HindsightRecallResult(dict[str, object]):
-    """Adapter provenance for the backend-generated, validated score object."""
-
     def __init__(self, value: dict[str, object], scores: dict[str, object]) -> None:
         super().__init__(value)
         self._scores = scores.copy()
