@@ -282,12 +282,19 @@ def _append_rule_matches(
             seen.add(signature)
             findings.append(SafetyFinding(matched, reason, hits=hits))
         elif hits and all_hits:
-            for index, finding in enumerate(findings):
-                if (finding.matched, finding.reason) == signature:
-                    findings[index] = SafetyFinding(
-                        matched, reason, hits=tuple(dict.fromkeys((*finding.hits, *hits)))
-                    )
-                    break
+            _merge_rule_hits(findings, signature, hits)
+
+
+def _merge_rule_hits(
+    findings: list[SafetyFinding], signature: tuple[str, str], hits: tuple[str, ...]
+) -> None:
+    for index, finding in enumerate(findings):
+        if (finding.matched, finding.reason) == signature:
+            matched, reason = signature
+            findings[index] = SafetyFinding(
+                matched, reason, hits=tuple(dict.fromkeys((*finding.hits, *hits)))
+            )
+            break
 
 
 def _rule_scan(
