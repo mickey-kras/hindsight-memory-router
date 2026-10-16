@@ -21,7 +21,7 @@ from .repository import (
     MemoryIdentity,
     MemoryReviewState,
 )
-from .scan_executor import scan_recalled, scan_request
+from .scan_executor import scan_facade_response, scan_recalled, scan_request
 from .security import SafetyResult
 from .timestamps import iso_now
 
@@ -139,7 +139,27 @@ class RouterPolicy:
                 identity, source, "suspicious_content", body, target_bank, scan, identity_mode
             )
         rewritten = prepare_retain_body(body, identity, source, target_bank)
-        return await self.hindsight.retain(target_bank, rewritten)
+        value = await self.hindsight.retain(target_bank, rewritten)
+        # This check runs after the write. Never queue a replay or advise a retry
+        # when its acknowledgment cannot safely be returned.
+        try:
+            response_scan = await scan_facade_response(
+                value, writer_id=identity, include_numbers=True, native_retain=True
+            )
+        except HttpError as exc:
+            raise HindsightGatewayError(
+                "response-scan-unavailable", operation="retain", method="POST"
+            ) from exc
+        if not response_scan.safe:
+            limits = {"facade_field_limit", "facade_time_limit"}
+            kind: Literal["response-scan-unavailable", "unsafe-response"] = (
+                "response-scan-unavailable"
+                if response_scan.findings
+                and all(finding.matched in limits for finding in response_scan.findings)
+                else "unsafe-response"
+            )
+            raise HindsightGatewayError(kind, operation="retain", method="POST")
+        return value
 
     async def recall(
         self, writer_id: str, body: dict[str, Any], source: str | None = None
@@ -262,14 +282,7 @@ class RouterPolicy:
         for bank_id, response in responses:
             for result in response.get("results", []):
                 identity = (bank_id, str(result["id"]))
-                # A previous result may have reopened or quarantined this identity.
-                # Refresh after mutation attempts, including failed or uncertain commits,
-                # rather than allowing them from stale approved/absent metadata.
-                if identity in dirty:
-                    refreshed = await self.repository.find_memory_review_states([identity])
-                    states.pop(identity, None)
-                    states.update(refreshed)
-                    dirty.remove(identity)
+                await self._refresh_dirty_review_state(identity, states, dirty)
                 if await self._allow_recalled_or_degrade(
                     writer_id, source, bank_id, result, review_states=states, invalidated=dirty
                 ):
@@ -283,6 +296,22 @@ class RouterPolicy:
                         reviewed_positions.add(len(results))
                     results.append(result)
         return results
+
+    async def _refresh_dirty_review_state(
+        self,
+        identity: MemoryIdentity,
+        states: dict[MemoryIdentity, MemoryReviewState],
+        dirty: set[MemoryIdentity],
+    ) -> None:
+        # A previous result may have reopened or quarantined this identity.
+        # Refresh after mutation attempts, including failed or uncertain commits,
+        # rather than allowing them from stale approved/absent metadata.
+        if identity not in dirty:
+            return
+        refreshed = await self.repository.find_memory_review_states([identity])
+        states.pop(identity, None)
+        states.update(refreshed)
+        dirty.remove(identity)
 
     async def _merged_recall_field(
         self,

@@ -65,13 +65,22 @@ class _HindsightVersionResponse(BaseModel):
 class HindsightGatewayError(HttpError):
     def __init__(
         self,
-        kind: Literal["timeout", "http", "invalid-response", "network", "response-too-large"],
+        kind: Literal[
+            "timeout",
+            "http",
+            "invalid-response",
+            "network",
+            "response-too-large",
+            "unsafe-response",
+            "response-scan-unavailable",
+        ],
         *,
         upstream_status: int | None = None,
         operation: str | None = None,
         method: str | None = None,
         timeout_ms: int | None = None,
         client_status: int | None = None,
+        write_uncertain: bool = False,
     ) -> None:
         code = {
             "timeout": "hindsight_timeout",
@@ -79,6 +88,8 @@ class HindsightGatewayError(HttpError):
             "invalid-response": "hindsight_invalid_response",
             "network": "hindsight_unavailable",
             "response-too-large": "hindsight_response_too_large",
+            "unsafe-response": "hindsight_unsafe_response",
+            "response-scan-unavailable": "hindsight_response_scan_unavailable",
         }[kind]
         message = {
             "timeout": "Upstream memory service timed out",
@@ -86,7 +97,13 @@ class HindsightGatewayError(HttpError):
             "invalid-response": "Upstream memory service returned an invalid response",
             "network": "Upstream memory service is unavailable",
             "response-too-large": "Upstream memory service response exceeded the size limit",
+            "unsafe-response": "Upstream memory service returned unsafe content",
+            "response-scan-unavailable": "Upstream memory service response could not be safety checked",
         }[kind]
+        if (operation == "retain" or write_uncertain) and not (
+            kind == "http" and upstream_status is not None and 400 <= upstream_status < 500
+        ):
+            message += "; the write may already have completed; verify its status before retrying"
         default_status = 504 if kind == "timeout" else 502
         status = client_status if client_status is not None else default_status
         super().__init__(status, code, message)
@@ -141,6 +158,49 @@ def _validated_bank_page(value: Any) -> tuple[list[dict[str, Any]], int]:
     return banks, total
 
 
+_RECALL_SCORE_FIELDS = frozenset({"final", "reranker", "semantic", "keyword"})
+
+
+def _valid_recall_scores(value: object) -> bool:
+    if not isinstance(value, dict) or "final" not in value or value.keys() - _RECALL_SCORE_FIELDS:
+        return False
+    for key, score in value.items():
+        if score is None and key != "final":
+            continue
+        if (
+            type(score) not in (int, float)
+            or score < 0
+            or (isinstance(score, float) and not math.isfinite(score))
+            or (key in {"reranker", "semantic"} and score > 1)
+        ):
+            return False
+    return True
+
+
+class _HindsightRecallResult(dict[str, object]):
+    def __init__(self, value: dict[str, object], scores: dict[str, object]) -> None:
+        super().__init__(value)
+        self._scores = scores.copy()
+
+    def scan_view(self) -> dict[str, object]:
+        scores = self.get("scores")
+        if not isinstance(scores, dict) or scores.keys() != self._scores.keys():
+            return self
+        if any(
+            type(scores[key]) is not type(value) or scores[key] != value
+            for key, value in self._scores.items()
+        ):
+            return self
+        # Preserve numeric leaf accounting, including integer-valued float spellings.
+        neutral: dict[str, object] = {}
+        for key, value in self._scores.items():
+            if isinstance(value, float):
+                neutral[key] = ["", ""] if value.is_integer() else ""
+            else:
+                neutral[key] = "" if isinstance(value, int) else None
+        return {**self, "scores": neutral}
+
+
 class HindsightGateway:
     def __init__(
         self,
@@ -185,10 +245,13 @@ class HindsightGateway:
             facade["features"][feature] = False
         return facade
 
-    async def retain(self, bank_id: str, body: dict[str, Any]) -> Any:
-        return await self._request(
+    async def retain(self, bank_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        value = await self._request(
             "retain", "POST", f"/v1/default/banks/{quote(bank_id, safe='')}/memories", body
         )
+        if not isinstance(value, dict):
+            raise HindsightGatewayError("invalid-response", operation="retain", method="POST")
+        return value
 
     async def recall(self, bank_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -203,6 +266,12 @@ class HindsightGateway:
                 RecallResponse.model_validate(value)
                 for result in value.get("results", []):
                     canonical_json({"id": result["id"], "text": result["text"]})
+                value["results"] = [
+                    _HindsightRecallResult(result, result["scores"])
+                    if _valid_recall_scores(result.get("scores"))
+                    else result
+                    for result in value["results"]
+                ]
             except ValueError as exc:
                 raise HindsightGatewayError(
                     "invalid-response", operation="recall", method="POST"
@@ -305,7 +374,9 @@ class HindsightGateway:
         allow_empty_response: bool = False,
     ) -> Any:
         max_response_bytes = self.max_response_bytes if response_limit is None else response_limit
-        headers = {"content-type": "application/json"} if body is not None else {}
+        headers = {"accept-encoding": "identity"}
+        if body is not None:
+            headers["content-type"] = "application/json"
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         request_id = current_request_id()
@@ -360,6 +431,13 @@ async def _read_response(
     method: str,
     allow_empty: bool,
 ) -> Any:
+    if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+        raise HindsightGatewayError(
+            "invalid-response",
+            upstream_status=response.status_code,
+            operation=operation,
+            method=method,
+        )
     chunks: list[bytes] = []
     size = 0
     async for chunk in response.aiter_bytes():

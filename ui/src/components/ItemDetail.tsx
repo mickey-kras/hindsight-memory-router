@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import {
   ApiError,
   approveItem,
@@ -42,8 +42,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [busy, setBusy] = useState(false);
+  const selectionGeneration = useRef(0);
 
-  useEffect(() => {
+  // Invalidate old crypto completions and clear plaintext before selection can paint.
+  useLayoutEffect(() => {
+    selectionGeneration.current += 1;
     setDetail(null);
     setDecrypted(null);
     setDecryptError(null);
@@ -62,6 +65,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
       });
     return () => {
       active = false;
+      selectionGeneration.current += 1;
     };
   }, [item.quarantine_id, tokens, onUnauthorized]);
 
@@ -78,10 +82,13 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
 
   const decrypt = useCallback(async () => {
     if (!detail || !keyRef.current) return;
+    const generation = selectionGeneration.current;
     setDecryptError(null);
     try {
-      setDecrypted(await decryptEnvelope(detail.encrypted, keyRef.current));
+      const plaintext = await decryptEnvelope(detail.encrypted, keyRef.current);
+      if (generation === selectionGeneration.current) setDecrypted(plaintext);
     } catch (error) {
+      if (generation !== selectionGeneration.current) return;
       setDecrypted(null);
       setDecryptError(error instanceof DecryptError ? error.message : "decryption failed");
     }
@@ -129,22 +136,6 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   );
 
   const record = detail?.record ?? item;
-  const meta: Array<[string, string]> = [
-    ["Kind", KIND_LABEL[item.kind]],
-    ["Created", formatTime(item.created_at)],
-    ["Updated", formatTime(item.updated_at)],
-    ["SHA-256", item.sha256],
-    ["Postponed", String(item.postpone_count)],
-    ["Requarantined", String(item.requarantine_count)],
-  ];
-  if (item.writer_id) meta.push(["Writer", item.writer_id]);
-  if (item.source) meta.push(["Source", item.source]);
-  if (item.source_bank) meta.push(["Source bank", item.source_bank]);
-  if (item.source_memory_id) meta.push(["Source memory", item.source_memory_id]);
-  if (record.encrypted_bytes !== undefined)
-    meta.push(["Encrypted size", formatBytes(record.encrypted_bytes)]);
-  if (record.expires_at) meta.push(["Expires", formatTime(record.expires_at)]);
-
   const canFinalize = record.status === "review_side_effect_completed";
   const canApprove = canFinalize && record.kind === "retain_request";
   const canReject = canFinalize && record.kind === "recalled_memory";
@@ -156,35 +147,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
       data-testid="item-detail"
       className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <div className="mono text-sm text-zinc-200">{item.quarantine_id}</div>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">
-            <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${REASON_STYLE[item.reason]}`}>
-              {item.reason}
-            </span>
-            <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${STATUS_STYLE[item.status]}`}>
-              {item.status}
-            </span>
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          aria-label="close detail"
-          className="rounded-lg border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
-        >
-          close
-        </button>
-      </div>
-
-      <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
-        {meta.map(([label, value]) => (
-          <div key={label} className="flex gap-2">
-            <dt className="w-28 shrink-0 text-zinc-500">{label}</dt>
-            <dd className="mono break-all text-zinc-300">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <ItemMetadata item={item} record={record} onClose={onClose} />
 
       {loadError && <Banner kind="error" text={loadError} />}
       {detail && !decrypted && (
@@ -364,5 +327,61 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         </div>
       )}
     </section>
+  );
+}
+
+function ItemMetadata({ item, record, onClose }: {
+  item: QuarantineItemSummary;
+  record: QuarantineItemSummary;
+  onClose: () => void;
+}) {
+  const meta: Array<[string, string]> = [
+    ["Kind", KIND_LABEL[item.kind]],
+    ["Created", formatTime(item.created_at)],
+    ["Updated", formatTime(item.updated_at)],
+    ["SHA-256", item.sha256],
+    ["Postponed", String(item.postpone_count)],
+    ["Requarantined", String(item.requarantine_count)],
+  ];
+  if (item.writer_id) meta.push(["Writer", item.writer_id]);
+  if (item.source) meta.push(["Source", item.source]);
+  if (item.source_bank) meta.push(["Source bank", item.source_bank]);
+  if (item.source_memory_id) meta.push(["Source memory", item.source_memory_id]);
+  if (record.encrypted_bytes !== undefined)
+    meta.push(["Encrypted size", formatBytes(record.encrypted_bytes)]);
+  if (record.expires_at) meta.push(["Expires", formatTime(record.expires_at)]);
+
+  return (
+    <>
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <div className="mono text-sm text-zinc-200">{item.quarantine_id}</div>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${REASON_STYLE[item.reason]}`}>
+              {item.reason}
+            </span>
+            <span className={`rounded-md border px-1.5 py-0.5 text-[11px] ${STATUS_STYLE[item.status]}`}>
+              {item.status}
+            </span>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          aria-label="close detail"
+          className="rounded-lg border border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800"
+        >
+          close
+        </button>
+      </div>
+
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 text-xs sm:grid-cols-2">
+        {meta.map(([label, value]) => (
+          <div key={label} className="flex gap-2">
+            <dt className="w-28 shrink-0 text-zinc-500">{label}</dt>
+            <dd className="mono break-all text-zinc-300">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </>
   );
 }

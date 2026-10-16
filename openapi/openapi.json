@@ -892,6 +892,16 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "502": {
+            "description": "Invalid, unsafe, or unscannable Hindsight acknowledgment. The write may already have completed; verify its status before retrying. No Retry-After is supplied.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -1793,7 +1803,7 @@
       },
       "UpstreamResponse": {
         "type": "object",
-        "description": "Response returned by the configured Hindsight version.",
+        "description": "Safety-scanned acknowledgment object returned by the configured Hindsight version, preserving synchronous/asynchronous semantics and safe additive fields.",
         "additionalProperties": true
       },
       "QuarantineId": {

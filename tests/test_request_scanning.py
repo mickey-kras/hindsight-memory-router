@@ -18,7 +18,9 @@ from memory_router import app as app_module
 from memory_router import scan_executor
 from memory_router.errors import HttpError
 from memory_router.facade_routes import facade_route
+from memory_router.limits import HindsightLimitConfig, HindsightLimits
 from memory_router.openclaw import OpenClawFacade
+from memory_router.rate_limit import InMemoryRateLimiter
 from memory_router.security import (
     SafetyResult,
     scan_query_values,
@@ -255,3 +257,26 @@ async def test_admin_approval_scanner_failure_does_not_claim_or_write(monkeypatc
         await admin.approve(QID, {"decrypted": decrypted}, ACTOR)
     assert busy.value.code == "request_scan_unavailable"
     hindsight.retain.assert_not_awaited()
+
+
+@pytest.mark.parametrize("number", [4111111111111111, 4111111111111111.0])
+async def test_native_retain_numeric_pan_is_quarantined_before_upstream(
+    monkeypatch: pytest.MonkeyPatch, number: int | float
+) -> None:
+    from tests.request_helpers import request
+
+    hindsight = FakeHindsight()
+    router, _, store, _ = policy(hindsight)
+    router.limits = HindsightLimits(HindsightLimitConfig(), InMemoryRateLimiter())
+    monkeypatch.setattr(app_module.runtime, "policy", router)
+    monkeypatch.setattr(app_module.runtime, "principal_resolver", None)
+    monkeypatch.setattr(app_module.runtime, "allow_anonymous", True)
+    monkeypatch.setattr(app_module.runtime, "router_token", None)
+    path = "/v1/default/banks/main/memories"
+    body = {"items": [{"content": "project note", "extra": {"values": [number]}}]}
+
+    response = await app_module.dispatch(path.lstrip("/"), request("POST", path, body=body))
+
+    assert json.loads(response.body)["queued"] is True
+    assert hindsight.retain_calls == []
+    assert store.items[0]["reason"] == "suspicious_content"

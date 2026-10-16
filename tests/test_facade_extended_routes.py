@@ -1323,3 +1323,30 @@ async def test_time_window_queries_are_scanned(endpoint: str, parameter: str) ->
 
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("number", [4111111111111111, 4111111111111111.0])
+async def test_facade_response_blocks_numeric_pan_in_nested_extra(number: int | float) -> None:
+    policy = _policy({"items": [{"extra": {"values": [number]}}]})
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/memories/list"
+
+    with pytest.raises(HttpError) as blocked:
+        await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert blocked.value.code == "hindsight_unsafe_response"
+    policy.quarantine_security_event.assert_awaited_once()
+
+
+@pytest.mark.parametrize("number", [0.4111111111111111, 42, True, False])
+async def test_facade_response_preserves_fractional_scores_and_counters(number: object) -> None:
+    upstream = {"items": [{"text": "ordinary memory", "score": number}]}
+    policy = _policy(upstream)
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/memories/list"
+
+    response = await app_module.dispatch(path.lstrip("/"), request("GET", path))
+
+    assert response.status_code == 200
+    assert _payload(response) == upstream
+    policy.quarantine_security_event.assert_not_awaited()

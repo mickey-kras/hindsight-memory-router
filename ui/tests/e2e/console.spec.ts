@@ -308,3 +308,63 @@ test("completed checkpoints offer only original finalization after a fresh conne
   await expect(page.getByText(`rejected ${RECALL_ID}`)).toBeVisible();
   expect((await mockActions(page)).map((a) => a.action)).toEqual(["approve", "reject"]);
 });
+
+for (const outcome of ["success", "error"] as const) {
+  test(`late decrypt ${outcome} cannot overwrite the newly selected item`, async ({ page }, testInfo) => {
+    await connect(page);
+    const prefix = testInfo.project.name === "phone" ? "card" : "row";
+    await page.getByTestId(`${prefix}-${RETAIN_ID}`).click();
+    await page.getByTestId("key-input").fill(PRIVATE_PEM);
+    await page.getByTestId("import-key").click();
+    await expect(page.getByTestId("decrypt")).toBeVisible();
+
+    await page.evaluate(() => {
+      const state = window as typeof window & {
+        finishOldDecrypt?: (success: boolean) => Promise<void>;
+      };
+      const original = crypto.subtle.decrypt.bind(crypto.subtle);
+      crypto.subtle.decrypt = (algorithm, key, data) => {
+        if (typeof algorithm !== "string" && algorithm.name === "AES-GCM") {
+          crypto.subtle.decrypt = original;
+          return new Promise<ArrayBuffer>((resolve, reject) => {
+            state.finishOldDecrypt = async (success) => {
+              if (success) resolve(await original(algorithm, key, data));
+              else reject(new Error("deferred decrypt failure"));
+            };
+          });
+        }
+        return original(algorithm, key, data);
+      };
+    });
+    await page.getByTestId("decrypt").click();
+    await page.waitForFunction(() => "finishOldDecrypt" in window);
+    await page.getByTestId(`${prefix}-${RECALL_ID}`).click();
+    // Switching items retains the imported key, but requires a fresh decryption.
+    await expect(page.getByTestId("key-input")).toHaveCount(0);
+    await page.getByTestId("decrypt").click();
+    await expect(page.getByTestId("payload")).toContainText(RECALL_ID);
+
+    await page.evaluate(async (success) => {
+      const state = window as typeof window & {
+        finishOldDecrypt: (success: boolean) => Promise<void>;
+      };
+      // Observe the old decrypt's digest finishing, then let React commit its updates.
+      const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
+      const digested = new Promise<void>((resolve) => {
+        crypto.subtle.digest = async (algorithm, data) => {
+          const result = await originalDigest(algorithm, data);
+          crypto.subtle.digest = originalDigest;
+          resolve();
+          return result;
+        };
+      });
+      await state.finishOldDecrypt(success);
+      if (success) await digested;
+      else crypto.subtle.digest = originalDigest;
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }, outcome === "success");
+    await expect(page.getByTestId("payload")).toContainText(RECALL_ID);
+    await expect(page.getByTestId("payload")).not.toContainText(RETAIN_ID);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}

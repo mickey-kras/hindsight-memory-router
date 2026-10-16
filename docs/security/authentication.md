@@ -118,6 +118,9 @@ browser ([OIDC Core](https://openid.net/specs/openid-connect-core-1_0.html),
 HTTPS router origin, HTTPS issuer, and public native client ID. Discovery must return that exact issuer
 and advertise S256. Issuer endpoints and signing keys come only from this trusted
 configuration; callers cannot supply an issuer, client ID, or upstream URL.
+OIDC discovery, token, and signing-key requests send `Accept-Encoding: identity`;
+responses must omit `Content-Encoding` or use `identity`. Other encodings are
+rejected before body decoding to preserve response-size limits.
 
 1. The installer binds `127.0.0.1` on an ephemeral port and generates a state and
    PKCE verifier from 32 cryptographically random bytes each, encoded as 43-character

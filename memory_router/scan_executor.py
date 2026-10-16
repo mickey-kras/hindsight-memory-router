@@ -5,13 +5,14 @@ import json
 import logging
 import multiprocessing
 from contextlib import suppress
+from functools import partial
 from threading import BoundedSemaphore, Lock
 from typing import Any, Literal, cast
 
 from pebble import ProcessExpired, ProcessPool
 
 from .errors import HttpError
-from .hindsight import MAX_FACADE_RESPONSE_BYTES
+from .hindsight import MAX_FACADE_RESPONSE_BYTES, _HindsightRecallResult
 from .logging import log_event
 from .observability import current_request_id
 from .security import (
@@ -41,7 +42,7 @@ class _ScannerShutdown(RuntimeError):
 _SCANNER_SHUT_DOWN = "safety scanner shut down"
 CORE_SCAN_TASK_SECONDS = MAX_CORE_SCAN_SECONDS + 1.0
 QUERY_SCAN_TASK_SECONDS = MAX_CORE_SCAN_SECONDS + MAX_QUERY_SCAN_SECONDS + 1.0
-ScanKind = Literal["request", "response", "recall"]
+ScanKind = Literal["request", "response", "recall", "retain_response"]
 
 
 def _new_scan_executor() -> ProcessPool:
@@ -71,7 +72,7 @@ def scan_unavailable(
         operation=operation,
         error_kind=error_kind,
         outcome="failed",
-        route_class="openclaw" if kind == "response" else None,
+        route_class={"response": "openclaw", "retain_response": "memory"}.get(kind),
         writer_id=writer_id,
     )
     return HttpError(
@@ -168,7 +169,14 @@ def _scanner_shutdown(writer_id: str | None, kind: ScanKind) -> HttpError:
 
 
 async def _scan_in_worker(  # NOSONAR
-    value: Any, *, kind: ScanKind, task_seconds: float, wait_seconds: float, writer_id: str | None
+    value: Any,
+    *,
+    kind: ScanKind,
+    task_seconds: float,
+    wait_seconds: float,
+    writer_id: str | None,
+    separate_page_ids: bool = False,
+    include_numbers: bool = False,
 ) -> SafetyResult:
     try:
         admission = _acquire_scan_capacity()
@@ -183,7 +191,7 @@ async def _scan_in_worker(  # NOSONAR
         payload = json.dumps(
             value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         ).encode("utf-8")
-        if kind == "response" and len(payload) > MAX_FACADE_RESPONSE_BYTES:
+        if kind in {"response", "retain_response"} and len(payload) > MAX_FACADE_RESPONSE_BYTES:
             raise scan_unavailable(
                 "response exceeded safety scan limits",
                 error_kind="response-too-large",
@@ -193,9 +201,16 @@ async def _scan_in_worker(  # NOSONAR
         executor = await _get_scan_executor_async(generation)
         scanner = {
             "response": scan_facade_payload,
+            "retain_response": scan_facade_payload,
             "request": _scan_request_payload,
             "recall": _scan_recalled_payload,
         }[kind]
+        if kind in {"response", "retain_response"} and (separate_page_ids or include_numbers):
+            scanner = partial(
+                scan_facade_payload,
+                separate_page_ids=separate_page_ids,
+                include_numbers=include_numbers,
+            )
         future = executor.schedule(
             scanner,
             args=[payload],
@@ -287,13 +302,22 @@ async def scan_request(
     )
 
 
-async def scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
+async def scan_facade_response(
+    value: Any,
+    *,
+    writer_id: str | None = None,
+    separate_page_ids: bool = False,
+    include_numbers: bool = False,
+    native_retain: bool = False,
+) -> SafetyResult:
     return await _scan_in_worker(
         value,
-        kind="response",
+        kind="retain_response" if native_retain else "response",
         task_seconds=FACADE_SCAN_TASK_SECONDS,
         wait_seconds=FACADE_SCAN_WAIT_SECONDS,
         writer_id=writer_id,
+        separate_page_ids=separate_page_ids,
+        include_numbers=include_numbers,
     )
 
 
@@ -313,9 +337,18 @@ async def scan_recalled(
     reviewed_stable: bool = False,
     reviewed_result_positions: frozenset[int] | None = None,
 ) -> SafetyResult:
+    scan_value: dict[str, object] = value
+    if reviewed_result_positions is not None:
+        scan_value = {
+            **value,
+            "results": [
+                result.scan_view() if isinstance(result, _HindsightRecallResult) else result
+                for result in value.get("results", [])
+            ],
+        }
     return await _scan_in_worker(
         {
-            "result": value,
+            "result": scan_value,
             "reviewed_stable": reviewed_stable,
             "reviewed_result_positions": sorted(reviewed_result_positions)
             if reviewed_result_positions is not None

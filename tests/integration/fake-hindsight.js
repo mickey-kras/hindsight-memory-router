@@ -368,6 +368,15 @@ createServer(async (req, res) => {
         query: url.search,
         body,
       });
+      if (method === "POST" && facade[2] === "knowledge-base/pages") {
+        return send(res, 201, {
+          page_id: "kp-ce44e615a5f84888a27339d1b4349929",
+          mental_model_id: "mm-b25d3db07c8e4505a86235b94b2dfc33",
+          operation_id: body.name === "Sensitive identifier"
+            ? "40000000-0001-4789-8aaa-aaaaaaaaaaaa"
+            : "87533620-4755-4092-b203-b7e5d41112cc",
+        });
+      }
       if (method === "GET") {
         const content = "facade content scope smoke";
         if (facade[2] === "graph") {
@@ -398,3 +407,4 @@ createServer(async (req, res) => {
 }).listen(PORT, () => {
   process.stdout.write(`fake-hindsight listening on ${PORT}\n`);
 });
+

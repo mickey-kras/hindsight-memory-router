@@ -54,7 +54,7 @@ Facade contract: `openapi/openclaw.json`.
 - Legacy shared-token mode (`MEMORY_ROUTER_TOKEN`): `{bank_id}` is a writer ID resolved to its configured write bank.
 - Every route uses router authentication, safety scanning, and a retain or recall quota. Development-only anonymous mode also applies.
 - Writes use the global JSON limit; retain has stricter limits.
-- Response scanner worker, capacity, field, or time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`.
+- Read-response scanner worker, capacity, field, or time failure returns `503 facade_scan_unavailable` with `Retry-After: 1`. After a successful upstream facade write, the same failure returns `502 hindsight_response_scan_unavailable` without `Retry-After`; verify the write status before retrying. No replay is queued.
 - An empty upstream success body returns JSON `null` only when the route permits it. Otherwise validation returns a typed 502.
 - Failure mapping: [Hindsight upstream](../providers/hindsight.md#failure-mapping).
 
@@ -62,4 +62,6 @@ Denied: webhooks, file upload/transfer, import/export, upstream `/metrics`, prov
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 
-Stable router errors are returned for policy rejection, request bounds, rate limiting, storage/capacity failures, and mapped Hindsight failures. Upstream Hindsight response bodies are not exposed.
+Stable router errors are returned for policy rejection, request bounds, rate limiting, storage/capacity failures, and mapped Hindsight failures. Upstream Hindsight error response bodies are not exposed.
+
+Native retain returns the configured Hindsight acknowledgment object only after bounded safety scanning. Sync/async flags, operation IDs, usage, and safe additive fields are preserved. Invalid shape, unsafe content, or unavailable response scanning returns a sanitized `502`; the write may already have completed, so verify status before retrying. These post-write failures have no `Retry-After` and do not queue a replay.
