@@ -99,7 +99,9 @@ class HindsightGatewayError(HttpError):
             "unsafe-response": "Upstream memory service returned unsafe content",
             "response-scan-unavailable": "Upstream memory service response could not be safety checked",
         }[kind]
-        if operation == "retain":
+        if operation == "retain" and not (
+            kind == "http" and upstream_status is not None and 400 <= upstream_status < 500
+        ):
             message += "; the write may already have completed; verify its status before retrying"
         default_status = 504 if kind == "timeout" else 502
         status = client_status if client_status is not None else default_status

@@ -28,7 +28,7 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 - Bodies use `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB). Retain, recall, and dry-run extract have stricter limits.
 - Request bodies, queries, native recall results/supplemental fields, and facade responses share four process worker slots with no unbounded queue. Request body and native recall-result scan budgets remain five seconds; queries allow 256 pairs and ten seconds. Workers terminate after the applicable budgets plus one second; callers wait at most one additional second. Responses allow 256 KiB, 8,192 fields, and 30 seconds.
 - Request worker, capacity, hard timeout, or shutdown failure returns `503 request_scan_unavailable`; facade response worker, capacity, or scan-limit failure returns `503 facade_scan_unavailable`. Both include `Retry-After: 1` and do not quarantine the operational failure. Request scanner findings retain their existing block/quarantine behavior.
-- Native retain acknowledgments must be JSON objects and pass the same bounded full-response scan. Safe synchronous and asynchronous acknowledgments, operation IDs, usage, and additive fields are preserved.
+- Native retain acknowledgments must be JSON objects and pass the same bounded full-response scan, including numeric leaf spellings. Safe synchronous and asynchronous acknowledgments, operation IDs, usage, and additive fields are preserved.
 - Unknown query parameters are dropped before scanning.
 
 Webhooks, file transfer, import/export, metrics, provider-credential LLM health probes, cross-writer listings, and deprecated upstream routes are denied and quarantined.
@@ -53,7 +53,7 @@ Webhooks, file transfer, import/export, metrics, provider-credential LLM health 
 
 Upstream error response bodies are never returned.
 
-A failed native retain acknowledgment check does not establish whether the write completed. These errors explicitly tell callers to verify status before retrying, omit `Retry-After`, and never retry or queue the retain for replay. Scanner findings are not a new retain request. Request-scan failures still happen before the upstream write and keep their existing `503` behavior.
+A failed native retain acknowledgment check does not establish whether the write completed. Definite upstream HTTP 4xx rejection does not carry this warning. These errors explicitly tell callers to verify status before retrying, omit `Retry-After`, and never retry or queue the retain for replay. Scanner findings are not a new retain request. Request-scan failures still happen before the upstream write and keep their existing `503` behavior.
 
 Optional bodies treat no body and JSON `null` the same. Required bodies must be JSON objects. Bodyless upstream requests omit `Content-Type`.
 

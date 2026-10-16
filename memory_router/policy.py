@@ -143,7 +143,9 @@ class RouterPolicy:
         # This check runs after the write. Never queue a replay or advise a retry
         # when its acknowledgment cannot safely be returned.
         try:
-            response_scan = await scan_facade_response(value, writer_id=identity)
+            response_scan = await scan_facade_response(
+                value, writer_id=identity, include_numbers=True, native_retain=True
+            )
         except HttpError as exc:
             raise HindsightGatewayError(
                 "response-scan-unavailable", operation="retain", method="POST"
