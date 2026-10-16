@@ -72,6 +72,7 @@ EVENTS = frozenset(
         "quarantine_placeholder_unavailable",
         "quarantine_sweeper_failed",
         "quarantine_write_unavailable",
+        "recall_aggregate_audit_unavailable",
         "recall_supplemental_audit_unavailable",
         "readiness_orchestration_failed",
         "request_failed",

@@ -102,6 +102,27 @@ def fake_llm_url() -> Iterator[str]:
         process.wait(timeout=5)
 
 
+def test_fake_embeddings_keep_query_and_passage_vectors_identical(fake_llm_url: str) -> None:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    vectors = []
+    for inputs in ("a recall query", ["a retained passage", "a different passage"]):
+        request = urllib.request.Request(  # noqa: S310 - loopback fixture
+            fake_llm_url + "/v1/embeddings",
+            data=json.dumps({"model": "ci-fake", "input": inputs, "dimensions": 384}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with opener.open(request, timeout=2) as response:  # noqa: S310 - loopback fixture
+            items = json.load(response)["data"]
+        assert [item["index"] for item in items] == list(
+            range(len(inputs) if isinstance(inputs, list) else 1)
+        )
+        vectors.extend(item["embedding"] for item in items)
+    assert len(vectors) == 3
+    assert all(len(vector) == 384 for vector in vectors)
+    assert vectors[0] == vectors[1] == vectors[2]
+    assert sum(value * value for value in vectors[0]) == 1
+
+
 @pytest.mark.parametrize("endpoint", ["/api/chat", "/v1/chat/completions"])
 def test_fake_llm_extracts_only_a_marker_actually_supplied_for_retain(
     fake_llm_url: str, endpoint: str

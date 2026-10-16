@@ -74,7 +74,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         facade -> quarantine "Audits blocked requests/responses"
 
         policy -> registry "Resolves writer and read/write banks"
-        policy -> scanning "Scans retain/recall requests and recalled results"
+        policy -> scanning "Scans retain/recall requests, recalled entries, and assembled responses"
         policy -> limits "Applies request bounds/quotas"
         policy -> gateway "Retains/recalls allowed content"
         policy -> quarantine "Queues unknown/suspicious evidence and reads review state"
@@ -199,8 +199,10 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             policy -> gateway "Principal mode: requested bank; legacy mode: read-bank fan-out"
             gateway -> hindsight "POST recall per allowed bank"
             policy -> quarantine "Check review state for recalled memories"
-            policy -> scanning "Scan recalled results and supplemental fields before release"
+            policy -> scanning "Scan individual recalled results and supplemental fields"
             policy -> quarantine "Unsafe provider content is quarantined/audited and suppressed"
+            policy -> scanning "Scan assembled recall with exact-digest approval units"
+            policy -> quarantine "Unsafe aggregate: audit digest/findings and suppress entire response"
             autoLayout lr
         }
 
