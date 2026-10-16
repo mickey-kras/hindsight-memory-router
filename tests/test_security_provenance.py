@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import tracemalloc
+from itertools import islice
 
 import pytest
 
@@ -24,6 +25,31 @@ def test_only_the_actual_approved_occurrence_can_be_exempted() -> None:
     assert not wholly_reviewed(hit, bounded_join([approved, "system", "prompt"], " "))
     assert not wholly_reviewed(SafetyFinding("unknown", "prompt_injection"), approved)
     assert not wholly_reviewed(SafetyFinding("field_limit", "span_limit"), approved)
+
+
+@pytest.mark.parametrize(
+    ("source", "hit"),
+    [
+        ("sys1tem-pr2ompt", "system prompt"),
+        ("sys1tem-pr2ompt", "systemprompt"),
+        ("sys1tem \tpr2ompt", "systemprompt"),
+    ],
+)
+def test_normalized_hits_retain_each_source_occurrence(source: str, hit: str) -> None:
+    finding = SafetyFinding(hit, "prompt_injection", hits=(hit,))
+    approved = ReviewedText(source, 1)
+    assert wholly_reviewed(finding, bounded_join([approved, "ordinary"], " "))
+    assert not wholly_reviewed(finding, bounded_join([approved, source], " "))
+
+
+@pytest.mark.parametrize("ambiguous_count", [2, 40])
+def test_ambiguous_variants_require_the_whole_window_to_be_reviewed(
+    ambiguous_count: int,
+) -> None:
+    finding = SafetyFinding("system prompt", "prompt_injection", hits=("system prompt",))
+    approved = ReviewedText("system prompt " + "\U0001ccde" * ambiguous_count, 1)
+    assert wholly_reviewed(finding, approved)
+    assert not wholly_reviewed(finding, bounded_join([approved, "ordinary"], " "))
 
 
 @pytest.mark.parametrize(
@@ -137,6 +163,34 @@ def test_large_source_fields_do_not_allocate_full_origin_masks_for_edge_windows(
         max(len(window.encode()) for window in windows) <= 2 * security.MAX_SPLIT_WINDOW_BYTES + 1
     )
     assert peak < 8 * 1024 * 1024
+
+
+@pytest.mark.parametrize("second_origin, expected_origin", [(1, 1), (2, 0), (0, 0)])
+def test_pair_edge_windows_are_lazy_and_require_same_origin(
+    monkeypatch: pytest.MonkeyPatch, second_origin: int, expected_origin: int
+) -> None:
+    from memory_router import security_provenance, security_rules
+
+    calls: list[tuple[str, str, float | None]] = []
+
+    def edge_matches(first: str, second: str, *, deadline: float | None) -> list[str]:
+        calls.append((first, second, deadline))
+        return ["synthetic edge"]
+
+    monkeypatch.setattr(security_provenance.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(security_rules, "_rule_edge_matches", edge_matches)
+    fragments = [ReviewedText("alpha", 1), ReviewedText("beta", second_origin)]
+    windows = iter(security_provenance.sequence_windows(fragments, deadline=1.0))
+    assert not calls
+    preceding = list(islice(windows, 9))
+    assert len(preceding) == 9
+    assert preceding[-2:] == ["alpha beta", "alphabeta"]
+    assert not calls
+    edge = next(windows)
+    assert calls == [(fragments[0], fragments[1], 1.0)]
+    assert edge == "synthetic edge"
+    assert edge.trusted == expected_origin
+    assert not list(windows)
 
 
 @pytest.mark.parametrize("prefix", ["ign1️⃣ore", "ignóre", "іgnore"])

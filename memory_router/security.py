@@ -535,16 +535,21 @@ def _walk_strings(
         elif (
             include_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
         ):
-            original = str(current)
-            yield current_path, original, current_is_key
-            if isinstance(current, float) and math.isfinite(current) and current.is_integer():
-                # A finite Python float has at most 309 decimal integer digits.
-                # Keep the original spelling; each alternate consumes the same budgets.
-                decimal = str(int(current))
-                if decimal != original:
-                    yield current_path, decimal, current_is_key
+            for spelling in _numeric_spellings(current):
+                yield current_path, spelling, current_is_key
         else:
             stack.append(_walk_children(current, current_path))
+
+
+def _numeric_spellings(value: int | float) -> Iterator[str]:
+    original = str(value)
+    yield original
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        # A finite Python float has at most 309 decimal integer digits.
+        # Keep the original spelling; each alternate consumes the same budgets.
+        decimal = str(int(value))
+        if decimal != original:
+            yield decimal
 
 
 def _walk_children(value: Any, path: str) -> Iterator[tuple[Any, str, bool]]:
@@ -692,16 +697,14 @@ def _scan_direct_fields(  # NOSONAR
                 canonical, transformations = canonicalize_content(raw, deadline=options.deadline)
             result.transformations.update(transformations)
             if options.reviewed_fields or isinstance(raw, security_provenance.ReviewedText):
-                canonical = security_provenance.ReviewedText(
-                    canonical,
-                    (
+                trusted: int | tuple[int, ...] = 0
+                if not is_key:
+                    trusted = (
                         raw.trusted
                         if isinstance(raw, security_provenance.ReviewedText)
                         else reviewed_origins.get(key, 0)
                     )
-                    if not is_key
-                    else 0,
-                )
+                canonical = security_provenance.ReviewedText(canonical, trusted)
             canonical_fields.append((key, canonical, is_key))
             if options.canonical_output is not None:
                 options.canonical_output.append((key, canonical, is_key))
