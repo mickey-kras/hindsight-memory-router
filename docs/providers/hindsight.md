@@ -23,7 +23,7 @@ The default HTTP endpoint is for an isolated Docker network shared only by Memor
 ## Facade policy
 
 - Routes are allowlisted in `memory_router/facade_routes.py`; `openapi/openclaw.json` is the contract.
-- `{bank_id}` is a writer ID. Memory Router resolves the Hindsight bank.
+- In legacy shared-token mode (`MEMORY_ROUTER_TOKEN`), `{bank_id}` is a writer ID resolved to its configured write bank. In principal mode (`MEMORY_ROUTER_PRINCIPALS`), it is the literal target bank, and the bearer token must grant the requested operation on that bank.
 - GET (including `stats?refresh=true`), reflect, dry-run extract, and dry-run refresh use recall quotas. Other writes use retain quotas.
 - Bodies use `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB). Retain, recall, and dry-run extract have stricter limits.
 - Request bodies, queries, native recall results/supplemental fields, and facade responses share four process worker slots with no unbounded queue. Request body and native recall-result scan budgets remain five seconds; queries allow 256 pairs and ten seconds. Workers terminate after the applicable budgets plus one second; callers wait at most one additional second. Responses allow 256 KiB, 8,192 fields, and 30 seconds.

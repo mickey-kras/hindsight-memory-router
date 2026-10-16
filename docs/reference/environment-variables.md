@@ -2,7 +2,7 @@
 
 [Documentation](../README.md) | [Repository](../../README.md)
 
-All tuning/deployment values below have built-in defaults. Authentication credentials remain optional and fail closed when absent. `QUARANTINE_PUBLIC_KEY` is the exception: it is required and has no default. Explicit invalid values fail startup validation.
+All tuning/deployment values below have built-in defaults. Authentication credentials remain optional and fail closed when absent. `QUARANTINE_PUBLIC_KEY` has no default and is required only for the default `rsa-oaep` wrap provider; `https-sidecar` uses its own provider settings instead. Explicit invalid values fail startup validation.
 
 | Variable                                   |              Built-in default | Purpose                                                         |
 | ------------------------------------------ | ----------------------------: | --------------------------------------------------------------- |
@@ -17,6 +17,8 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_ADMIN_CLEANUP_TOKEN`        |                          none | Admin cleanup scope                                             |
 | `MEMORY_ROUTER_ADMIN_TOKEN`                |                          none | Deprecated legacy all-admin token; removed at next major        |
 | `MEMORY_ROUTER_ALLOW_ANONYMOUS`            |                       `false` | Development-only anonymous router access; loopback binds only   |
+| `MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_MAX` |                         `120` | Authentication failures per route group/window (`router` or `admin`) |
+| `MEMORY_ROUTER_AUTH_FAILURE_RATE_LIMIT_WINDOW_MS` |                   `60000` | Authentication-failure rate-limit window in milliseconds        |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_READ_MAX`  |                         `120` | Admin read requests/window                                      |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX` |                          `30` | Admin write requests/window                                     |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS` |                       `60000` | Admin rate-limit window                                         |
@@ -26,7 +28,9 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `MEMORY_ROUTER_HUMAN_AUTH`                 |                          none | Optional OIDC human-login configuration JSON; requires principal mode |
 | `HINDSIGHT_BASE_URL`                       |       `http://hindsight:8888` | Hindsight endpoint                                              |
 | `HINDSIGHT_API_KEY`                        |                          none | Optional Hindsight API key                                      |
+| `HINDSIGHT_REQUIRE_SECURE_TRANSPORT`       |                       `false` | Require HTTPS for every Hindsight upstream, including private hosts |
 | `HINDSIGHT_TIMEOUT_MS`                     |                       `10000` | Hindsight request timeout                                       |
+| `HINDSIGHT_MAX_RESPONSE_BYTES`             |                     `4194304` | Maximum upstream response bytes; facade responses and native retain acknowledgments also have a 256 KiB scan ceiling |
 | `HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX`   |                          `30` | Retain requests per writer/window                               |
 | `HINDSIGHT_RETAIN_RATE_LIMIT_GLOBAL_MAX`   |                         `300` | Global retain requests/window                                   |
 | `HINDSIGHT_RECALL_RATE_LIMIT_WRITER_MAX`   |                         `120` | Recall requests per writer/window                               |
@@ -36,12 +40,13 @@ All tuning/deployment values below have built-in defaults. Authentication creden
 | `HINDSIGHT_RETAIN_MAX_CONTENT_BYTES`       |                      `524288` | Aggregate retain string-content bound                           |
 | `HINDSIGHT_RECALL_MAX_QUERY_BYTES`         |                       `32768` | Recall query bound                                              |
 | `HINDSIGHT_RECALL_MAX_TOKENS`              |                        `8192` | Recall `max_tokens` ceiling                                     |
-| `QUARANTINE_PUBLIC_KEY`                    |                      required | RSA public key; private key must stay off the router host       |
+| `QUARANTINE_PUBLIC_KEY`                    |                          none | Required for `rsa-oaep` only; private key must stay off the router host |
 | `QUARANTINE_DATABASE_URL`                  | `sqlite:./data/quarantine.db` | SQLite or PostgreSQL quarantine database                        |
 | `QUARANTINE_MAX_POSTPONES`                 |                           `3` | Maximum review postpones                                        |
 | `QUARANTINE_MAX_ITEM_BYTES`                |                     `1048576` | Maximum encrypted item size                                     |
 | `QUARANTINE_MAX_PENDING_ITEMS`             |                        `1000` | Global pending-item capacity                                    |
 | `QUARANTINE_MAX_PENDING_ITEMS_PER_WRITER`  |                          `50` | Per-writer pending capacity                                     |
+| `QUARANTINE_MAX_PENDING_ITEMS_PER_BANK`    |                           `0` | Per-bank pending/postponed capacity for bank-scoped items; `0` disables |
 | `QUARANTINE_MAX_ENCRYPTED_BYTES`           |                   `104857600` | Global encrypted-byte capacity                                  |
 | `QUARANTINE_RATE_LIMIT_MAX`                |                          `30` | Per-scope quarantine writes/window                              |
 | `QUARANTINE_RATE_LIMIT_GLOBAL_MAX`         |                         `300` | Global quarantine writes/window                                 |
@@ -64,6 +69,6 @@ The router binds `127.0.0.1` by default; set `MEMORY_ROUTER_HOST` to expose it o
 
 Boolean overrides accept only `true` or `false`. Integer settings are validated as non-negative or positive according to their semantics.
 
-`QUARANTINE_PUBLIC_KEY` is required at startup and accepts PEM or base64-encoded PEM. For `.env`/Compose, use base64-encoded PEM; raw multi-line PEM is suitable only when injecting the value directly into a non-Compose process environment. Generate its matching private key on a trusted admin machine and never copy that private key to the router host.
+With `QUARANTINE_WRAP_PROVIDER=rsa-oaep` (the default), `QUARANTINE_PUBLIC_KEY` is required at startup and accepts PEM or base64-encoded PEM. It is not required with `QUARANTINE_WRAP_PROVIDER=https-sidecar`. For `.env`/Compose, use base64-encoded PEM; raw multi-line PEM is suitable only when injecting the value directly into a non-Compose process environment. Generate its matching private key on a trusted admin machine and never copy that private key to the router host.
 
 Any environment variable beginning with `QUARANTINE_PRIVATE_KEY`, and any `QUARANTINE*` variable containing `UNWRAP`, is forbidden in the running router and causes startup to fail. Unwrap endpoints and private-key material must never reach the router process; unwrap happens only in the offline review tool.
