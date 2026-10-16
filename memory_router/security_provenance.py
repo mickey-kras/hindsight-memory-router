@@ -115,6 +115,18 @@ def trim(value: str, *, from_start: bool) -> ReviewedText:
     )
 
 
+def _pair_edge_windows(fragments: list[str], *, deadline: float | None) -> Iterable[ReviewedText]:
+    left = bound(trim(fragments[0], from_start=False))
+    right = bound(trim(fragments[1], from_start=True), prefix=True)
+    yield join([left, right], " ")
+    yield join([left, right])
+    # Synthesized edge matches always depend on both fields.
+    origin = occurrence_origin(fragments[0])
+    trusted = origin if origin == occurrence_origin(fragments[1]) else 0
+    for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
+        yield ReviewedText(edge, trusted)
+
+
 def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterable[ReviewedText]:
     # Retain exact source fields through bounded joins and slicing.
     if len(fragments) < 2 or (deadline is not None and time.monotonic() >= deadline):
@@ -146,15 +158,7 @@ def sequence_windows(fragments: list[str], *, deadline: float | None) -> Iterabl
     yield bounded_join(trimmed)
     yield mixed_suffix(list(trimmed))
     if len(fragments) == 2:
-        left = bound(trim(fragments[0], from_start=False))
-        right = bound(trim(fragments[1], from_start=True), prefix=True)
-        yield join([left, right], " ")
-        yield join([left, right])
-        # Synthesized edge matches always depend on both fields.
-        origin = occurrence_origin(fragments[0])
-        trusted = origin if origin == occurrence_origin(fragments[1]) else 0
-        for edge in security_rules._rule_edge_matches(*fragments, deadline=deadline):
-            yield ReviewedText(edge, trusted)
+        yield from _pair_edge_windows(fragments, deadline=deadline)
 
 
 def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
@@ -181,6 +185,11 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
             # A hit string alone cannot establish which ambiguous source variant
             # produced it. Mixed-origin windows therefore cannot be exempted.
             return reviewed(window)
+    variants = _rule_variants(originals)
+    return all(_hit_wholly_reviewed(hit, variants) for hit in finding.hits)
+
+
+def _rule_variants(originals: Iterable[ReviewedText]) -> list[ReviewedText]:
     variants: list[ReviewedText] = []
     for original in originals:
         flags = flags_for(original)
@@ -203,13 +212,14 @@ def wholly_reviewed(finding: SafetyFinding, window: ReviewedText) -> bool:
                         tuple(flags[index] for index in keep),
                     )
                 )
-    for hit in finding.hits:
-        found = False
-        for variant in variants:
-            for match in re.finditer(re.escape(hit), variant, re.I):
-                found = True
-                if not reviewed(slice_text(variant, match.start(), match.end())):
-                    return False
-        if not found:
-            return False
-    return True
+    return variants
+
+
+def _hit_wholly_reviewed(hit: str, variants: Iterable[ReviewedText]) -> bool:
+    found = False
+    for variant in variants:
+        for match in re.finditer(re.escape(hit), variant, re.I):
+            found = True
+            if not reviewed(slice_text(variant, match.start(), match.end())):
+                return False
+    return found

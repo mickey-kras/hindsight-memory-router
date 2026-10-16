@@ -12,7 +12,7 @@ from typing import Any, Literal, cast
 from pebble import ProcessExpired, ProcessPool
 
 from .errors import HttpError
-from .hindsight import MAX_FACADE_RESPONSE_BYTES
+from .hindsight import MAX_FACADE_RESPONSE_BYTES, _HindsightRecallResult
 from .logging import log_event
 from .observability import current_request_id
 from .security import (
@@ -325,9 +325,18 @@ async def scan_recalled(
     reviewed_stable: bool = False,
     reviewed_result_positions: frozenset[int] | None = None,
 ) -> SafetyResult:
+    scan_value: dict[str, object] = value
+    if reviewed_result_positions is not None:
+        scan_value = {
+            **value,
+            "results": [
+                result.scan_view() if isinstance(result, _HindsightRecallResult) else result
+                for result in value.get("results", [])
+            ],
+        }
     return await _scan_in_worker(
         {
-            "result": value,
+            "result": scan_value,
             "reviewed_stable": reviewed_stable,
             "reviewed_result_positions": sorted(reviewed_result_positions)
             if reviewed_result_positions is not None
