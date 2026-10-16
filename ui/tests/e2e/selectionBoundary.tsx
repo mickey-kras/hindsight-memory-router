@@ -4,9 +4,11 @@ import { ItemDetail } from "../../src/components/ItemDetail";
 import { fetchItem } from "../../src/lib/api";
 import type { QuarantineItemSummary } from "../../src/lib/types";
 
+const RETAIN_ID = "q_retain_0123456789abcdef";
+const RECALL_ID = "q_recall_aaaabbbbccccdddd";
 const tokens = { read: "e2e-read-token", review: "e2e-review-token", cleanup: "e2e-cleanup-token" };
-const initial = await fetchItem(tokens, "q_retain_0123456789abcdef");
-const next = await fetchItem(tokens, "q_recall_aaaabbbbccccdddd");
+const initial = await fetchItem(tokens, RETAIN_ID);
+const next = await fetchItem(tokens, RECALL_ID);
 const noop = () => {};
 
 declare global {
