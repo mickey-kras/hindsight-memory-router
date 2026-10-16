@@ -140,6 +140,8 @@ async def test_unhandled_failure_log_does_not_emit_exception_details(
         ("invalid-response", 200),
         ("network", None),
         ("response-too-large", 200),
+        ("unsafe-response", 200),
+        ("response-scan-unavailable", 200),
     ],
 )
 @pytest.mark.asyncio
@@ -148,10 +150,11 @@ async def test_every_hindsight_failure_kind_has_safe_structured_context(
     upstream_status: int | None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
+    operation = "retain" if kind in {"unsafe-response", "response-scan-unavailable"} else "recall"
     error = HindsightGatewayError(  # type: ignore[arg-type]
         kind,
         upstream_status=upstream_status,
-        operation="recall",
+        operation=operation,
         method="POST",
     )
     error.__cause__ = RuntimeError(_SENTINEL)
@@ -169,7 +172,7 @@ async def test_every_hindsight_failure_kind_has_safe_structured_context(
 
     assert response.status_code == error.status
     record = next(record for record in caplog.records if record.msg == "hindsight_request_failed")
-    assert record.operation == "recall"  # type: ignore[attr-defined]
+    assert record.operation == operation  # type: ignore[attr-defined]
     assert record.upstream_method == "POST"  # type: ignore[attr-defined]
     assert record.error_kind == kind  # type: ignore[attr-defined]
     assert record.route_class == "unmatched"  # type: ignore[attr-defined]

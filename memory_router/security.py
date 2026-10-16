@@ -158,7 +158,9 @@ def scan_recall_response(
     return _scan_fields(fields, operation="read", deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS)
 
 
-def scan_facade_result(result: Any, *, separate_page_ids: bool = False) -> SafetyResult:
+def scan_facade_result(
+    result: Any, *, separate_page_ids: bool = False, include_numbers: bool = False
+) -> SafetyResult:
     """Scan facade responses in bounded batches.
 
     Field and time budgets fail closed. Base64 state spans batches. General
@@ -188,7 +190,7 @@ def scan_facade_result(result: Any, *, separate_page_ids: bool = False) -> Safet
                 return combined
     combined.extend(
         _scan_batched_fields(
-            _walk_strings(scanned, "facade_response"),
+            _walk_strings(scanned, "facade_response", include_numbers=include_numbers),
             operation="read",
             max_fields=MAX_FACADE_SCAN_FIELDS,
             field_limit_match="facade_field_limit",
@@ -200,8 +202,12 @@ def scan_facade_result(result: Any, *, separate_page_ids: bool = False) -> Safet
     return combined
 
 
-def scan_facade_payload(payload: bytes, *, separate_page_ids: bool = False) -> SafetyResult:
-    return scan_facade_result(json.loads(payload), separate_page_ids=separate_page_ids)
+def scan_facade_payload(
+    payload: bytes, *, separate_page_ids: bool = False, include_numbers: bool = False
+) -> SafetyResult:
+    return scan_facade_result(
+        json.loads(payload), separate_page_ids=separate_page_ids, include_numbers=include_numbers
+    )
 
 
 def _scan_batched_fields(  # NOSONAR
