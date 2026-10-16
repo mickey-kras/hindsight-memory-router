@@ -21,8 +21,9 @@ def probe() -> dict[str, Any]:
     return runpy.run_path("tests/integration/recall-review-batches.py")["main"].__globals__
 
 
+@pytest.mark.parametrize("delay_seconds", [8, 14])
 async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
-    probe: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+    probe: dict[str, Any], monkeypatch: pytest.MonkeyPatch, delay_seconds: int
 ) -> None:
     scan_executor.shutdown_scan_executor()
     monkeypatch.setattr(
@@ -31,7 +32,7 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
         lambda: ProcessPool(
             max_workers=1,
             context=multiprocessing.get_context("spawn"),
-            initializer=partial(time.sleep, 8),
+            initializer=partial(time.sleep, delay_seconds),
         ),
     )
     monkeypatch.setenv("QUARANTINE_DATABASE_URL", "sqlite:unused.db")
@@ -49,7 +50,9 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
 
     monkeypatch.setitem(probe, "scan_recalled", observe)
     await probe["main"]()
-    assert attempts == ["recall safety scan timed out", "ready"]
+    assert len(attempts) >= 2
+    assert attempts[-1] == "ready"
+    assert set(attempts[:-1]) == {"recall safety scan timed out"}
     assert scan_executor._SCAN_EXECUTOR is None
 
 

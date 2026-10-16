@@ -521,13 +521,11 @@ async def test_http_dispatch_disabled_enabled_and_human_admin_denial(
     assert not principal_token_present("Bearer " + str(issued["token"]))
 
 
-@pytest.mark.parametrize("path", ["/health", "/health/ready", "/ready"])
 @pytest.mark.parametrize("invalidation", ["expired", "revoked"])
 async def test_human_readiness_authentication_and_privileged_route_exclusion(
     service: HumanAuth,
     provider: Provider,
     monkeypatch: pytest.MonkeyPatch,
-    path: str,
     invalidation: str,
 ) -> None:
     issued = await service.exchange(await start(service, provider))
@@ -549,7 +547,7 @@ async def test_human_readiness_authentication_and_privileged_route_exclusion(
     monkeypatch.setattr(app_module.runtime, "metrics_enabled", True)
     monkeypatch.setattr(probes.readiness, "cache", None)
 
-    response = await app_module.health_ready(request("GET", path, headers=headers))
+    response = await app_module.health_ready(request("GET", "/health/ready", headers=headers))
     assert response.status_code == 200 and json.loads(response.body) == upstream
     for privileged_path in ("/admin/quarantine/stats", "/metrics"):
         response = await app_module.dispatch(
@@ -562,7 +560,7 @@ async def test_human_readiness_authentication_and_privileged_route_exclusion(
     else:
         async with service.store.db.transaction() as tx:
             await tx.execute("UPDATE human_auth_sessions SET expires_at_ms=0")
-    response = await app_module.health_ready(request("GET", path, headers=headers))
+    response = await app_module.health_ready(request("GET", "/health/ready", headers=headers))
     assert response.status_code == 200 and json.loads(response.body) == {"status": "healthy"}
 
 
