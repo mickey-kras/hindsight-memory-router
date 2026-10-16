@@ -10,7 +10,11 @@ from .facade_routes import FacadeRoute
 from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
-from .openclaw_contracts import validate_facade_response, validate_openclaw_response
+from .openclaw_contracts import (
+    facade_response_scan_input,
+    validate_facade_response,
+    validate_openclaw_response,
+)
 from .scan_executor import scan_facade_response, scan_request, scan_unavailable
 from .security import SafetyResult
 
@@ -72,7 +76,7 @@ class OpenClawFacade:
         )
         if value is not None:
             await self.validate_safe_response(
-                route.resource, writer_id, source, value, bank_override
+                route.resource, writer_id, source, value, bank_override, route=route
             )
         try:
             if route.strict_contract:
@@ -147,8 +151,12 @@ class OpenClawFacade:
         source: str,
         value: Any,
         bank_id: str | None = None,
+        *,
+        route: FacadeRoute | None = None,
     ) -> None:
-        response_scan = await scan_facade_response(value, writer_id=writer_id)
+        response_scan = await scan_facade_response(
+            facade_response_scan_input(route, value), writer_id=writer_id
+        )
         if _only_scan_limit_findings(response_scan):
             error_kind = (
                 "timeout"

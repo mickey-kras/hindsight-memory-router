@@ -1,8 +1,46 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, StrictStr, ValidationError
+
+from .facade_routes import FacadeRoute
+
+
+def facade_response_scan_input(route: FacadeRoute | None, value: object) -> object:
+    if (
+        route is None
+        or route.method != "POST"
+        or route.template != "knowledge-base/pages"
+        or not isinstance(value, dict)
+        or not _generated_uuid(value.get("page_id"), "kp-")
+        or not _generated_uuid(value.get("mental_model_id"), "mm-")
+        or "operation_id" not in value
+        or (value["operation_id"] is not None and not _generated_uuid(value["operation_id"]))
+    ):
+        return value
+    # Preserve field/byte budgets; extras keep their original content and structure.
+    scanned = dict(value)
+    for key in ("page_id", "mental_model_id", "operation_id"):
+        identifier = value[key]
+        if identifier is not None:
+            scanned[key] = "." * len(identifier)
+    return scanned
+
+
+def _generated_uuid(value: object, prefix: str = "") -> bool:
+    if not isinstance(value, str) or not value.startswith(prefix):
+        return False
+    identifier = value[len(prefix) :]
+    if len(identifier) != (32 if prefix else 36):
+        return False
+    try:
+        parsed = UUID(identifier)
+    except ValueError:
+        return False
+    canonical = parsed.hex if prefix else str(parsed)
+    return parsed.version == 4 and identifier == canonical
 
 
 class _Response(BaseModel):
