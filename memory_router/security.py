@@ -196,6 +196,7 @@ def scan_facade_result(result: Any, *, separate_page_ids: bool = False) -> Safet
             time_limit_match="facade_time_limit",
         )
     )
+    security_rules._deadline_reached(combined, deadline, "facade_time_limit")
     return combined
 
 
