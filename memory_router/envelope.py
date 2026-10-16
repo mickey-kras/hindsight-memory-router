@@ -29,6 +29,7 @@ QuarantineReason = Literal[
     "suspicious_query",
     "recalled_suspicious_memory",
     "recalled_suspicious_supplemental",
+    "recalled_suspicious_aggregate",
     "denied_endpoint",
     "auth_failed",
     "openclaw_suspicious_request",

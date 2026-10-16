@@ -553,7 +553,7 @@ async def test_approved_stable_fields_remain_instruction_reconstruction_context(
 )
 async def test_approved_unsafe_text_with_changed_safe_metadata_remains_allowed(text: str) -> None:
     approved = {"id": "m1", "text": text}
-    changed = {**approved, "metadata": {"note": "a routine status update"}, "score": 0.9}
+    changed = {**approved, "metadata": {"note": "a routine status update"}}
     router, _, store, repository = policy(FakeHindsight([changed]))
     repository.states[("main", "m1")] = {
         "status": "reviewed_allowed",

@@ -171,8 +171,11 @@ class RouterPolicy:
             )
             return {"results": []}
         responses, failed_banks = await self._recall_from_banks(writer_id, read_banks, body)
+        reviewed_positions: set[int] = set()
         combined: dict[str, Any] = {
-            "results": await self._allowed_recall_results(writer_id, source, responses)
+            "results": await self._allowed_recall_results(
+                writer_id, source, responses, reviewed_positions=reviewed_positions
+            )
         }
         for field in _RECALL_RESPONSE_MAP_FIELDS:
             present, value = await self._merged_recall_field(writer_id, source, responses, field)
@@ -181,13 +184,70 @@ class RouterPolicy:
         if failed_banks:
             combined["partial"] = True
             combined["failed_banks"] = failed_banks
+        if not await self._allow_recall_aggregate(
+            writer_id,
+            source,
+            combined,
+            frozenset(reviewed_positions),
+            bank_id=read_banks[0] if len(read_banks) == 1 else None,
+        ):
+            return {
+                "results": [],
+                **({"partial": True, "failed_banks": failed_banks} if failed_banks else {}),
+            }
         return combined
+
+    async def _allow_recall_aggregate(
+        self,
+        writer_id: str,
+        source: str,
+        response: dict[str, Any],
+        reviewed_positions: frozenset[int],
+        *,
+        bank_id: str | None = None,
+    ) -> bool:
+        scan = await scan_recalled(
+            response, writer_id=writer_id, reviewed_result_positions=reviewed_positions
+        )
+        if scan.safe:
+            return True
+        digest = _audit_digest(response)
+        try:
+            await self.quarantine_security_event(
+                {
+                    "writerId": writer_id,
+                    "source": source,
+                    "kind": "security_event",
+                    "reason": "recalled_suspicious_aggregate",
+                    "bankId": bank_id,
+                    "dedupeKey": f"recalled-aggregate:{writer_id}:{digest}",
+                    "payload": {
+                        "action": "recalled_aggregate_blocked",
+                        "content_sha256": digest,
+                        "findings": [
+                            {
+                                "reason": finding.reason,
+                                **({"detector": finding.detector} if finding.detector else {}),
+                            }
+                            for finding in scan.findings
+                        ],
+                    },
+                }
+            )
+        except Exception as exc:
+            self._log_degradation(
+                "recall_aggregate_audit_unavailable",
+                {"writer_id": writer_id, "error_type": type(exc).__name__},
+            )
+        return False
 
     async def _allowed_recall_results(
         self,
         writer_id: str,
         source: str,
         responses: list[tuple[str, dict[str, Any]]],
+        *,
+        reviewed_positions: set[int] | None = None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         identities = [
@@ -213,6 +273,14 @@ class RouterPolicy:
                 if await self._allow_recalled_or_degrade(
                     writer_id, source, bank_id, result, review_states=states, invalidated=dirty
                 ):
+                    state = states.get(identity)
+                    if (
+                        reviewed_positions is not None
+                        and state
+                        and state.status == REVIEWED_ALLOWED
+                        and state.source_content_sha256 == recalled_content_digest(result)
+                    ):
+                        reviewed_positions.add(len(results))
                     results.append(result)
         return results
 
@@ -688,7 +756,10 @@ class RouterPolicy:
         _, error_kind = _QUARANTINE_ERRORS.get(str(raw_error_kind), (None, raw_error_kind))
         log_event(
             logger,
-            "error" if event == "recall_supplemental_audit_unavailable" else "warning",
+            "error"
+            if event
+            in {"recall_supplemental_audit_unavailable", "recall_aggregate_audit_unavailable"}
+            else "warning",
             event,
             request_id=current_request_id(),
             operation="recall",
