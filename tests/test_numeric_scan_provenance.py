@@ -80,11 +80,12 @@ def test_numeric_spans_keep_clipped_original_boundaries_and_never_approve() -> N
     assert bounded_join([numeric]).numeric_spans == numeric.numeric_spans
 
 
-def test_partial_numeric_card_filter_requires_only_numeric_digits_and_no_context() -> None:
+def test_partial_numeric_card_filter_requires_numeric_ownership_and_no_context() -> None:
     value = "0.5956395172012323 0.25146369743096875"
     match = next(security_rules._CARD_NUMBER.finditer(value))
     spans = ((0, 18, True), (19, len(value), True))
-    assert security_rules._synthetic_numeric_card(value, match, spans)
+    assert security_rules._synthetic_numeric_card(value, match, spans, frozenset({18}))
+    assert not security_rules._synthetic_numeric_card(value, match, spans)
     assert not security_rules._synthetic_numeric_card(value, match, spans[:1])
     contextual = "credit card " + value
     contextual_match = next(security_rules._CARD_NUMBER.finditer(contextual))
@@ -105,7 +106,17 @@ def test_same_text_numeric_and_untrusted_occurrences_do_not_share_filtered_cache
     ).safe
 
 
-@pytest.mark.parametrize("values", [[-41111111, -11111111], [-41111111.0, -11111111.0]])
+@pytest.mark.parametrize(
+    "values",
+    [
+        [-41111111, -11111111],
+        [-41111111.0, -11111111.0],
+        [-41111111, 11111111],
+        [-41111111.0, 11111111.0],
+        [41111111, -11111111],
+        [41111111.0, -11111111.0],
+    ],
+)
 def test_signed_whole_numeric_fragments_still_detect(values: list[int | float]) -> None:
     assert not security.scan_recall_response({"results": [], "values": values}).safe
 
@@ -140,3 +151,56 @@ def test_clipped_numeric_provenance_cannot_claim_adjacent_string_digits() -> Non
     for value in (prefix, suffix):
         for match in security_rules._CARD_NUMBER.finditer(value):
             assert not security_rules._synthetic_numeric_card(value, match, value.numeric_spans)
+
+
+@pytest.mark.parametrize("values", [[-41111111, 11111111], [-41111111.0, 11111111.0]])
+@pytest.mark.parametrize("reviewed", [False, True])
+def test_asymmetric_signed_fragments_in_nested_metadata_still_detect(
+    values: list[int | float], reviewed: bool
+) -> None:
+    response = {"results": [{"id": "m1", "text": "ordinary", "metadata": {"values": values}}]}
+    assert not security.scan_recall_response(
+        response, reviewed_result_positions=frozenset({0}) if reviewed else frozenset()
+    ).safe
+
+
+@pytest.mark.parametrize("separator", ["-", " "])
+@pytest.mark.parametrize("reviewed", [False, True])
+@pytest.mark.parametrize("all_hits", [False, True])
+def test_text_separator_cannot_exempt_compact_numeric_candidate(
+    separator: str, reviewed: bool, all_hits: bool
+) -> None:
+    left = ReviewedText("0.41111111", numeric_spans=((0, 10, True),))
+    right = ReviewedText("11111111", numeric_spans=((0, 8, True),))
+    window = join([left, ReviewedText(separator, 1 if reviewed else 0), right])
+    match = next(security_rules._CARD_NUMBER.finditer(window))
+    assert not security_rules._synthetic_numeric_card(window, match, window.numeric_spans)
+    assert security_rules._amg_scan(
+        "rolling.values",
+        window,
+        operation="read",
+        all_hits=all_hits,
+        numeric_spans=window.numeric_spans,
+    )
+
+
+@pytest.mark.parametrize("reviewed", [False, True])
+@pytest.mark.parametrize("text_first", [False, True])
+def test_same_text_separator_origins_do_not_share_filtered_window_cache(
+    reviewed: bool, text_first: bool
+) -> None:
+    left = ReviewedText("0.41111111", numeric_spans=((0, 10, True),))
+    right = ReviewedText("11111111", numeric_spans=((0, 8, True),))
+    synthetic = join([left, right], " ")
+    textual = join([left, ReviewedText(" ", 1 if reviewed else 0), right])
+    assert synthetic == textual
+    assert synthetic.numeric_spans == textual.numeric_spans
+    context = security._WindowScanContext(
+        security.SafetyResult(), [], set(), set(), set(), "read", None, None
+    )
+    windows = [textual, synthetic] if text_first else [synthetic, textual]
+    for window in windows:
+        context.result = security.SafetyResult()
+        security._scan_window(context, "values", window, [left, right])
+        assert context.result.safe is (window is synthetic)
+    assert len(context.scan_cache) == 2

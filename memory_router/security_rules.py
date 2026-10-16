@@ -450,6 +450,7 @@ def _amg_scan(  # NOSONAR
     deadline: float | None = None,
     all_hits: bool = False,
     numeric_spans: tuple[tuple[int, int, bool], ...] = (),
+    synthetic_separators: frozenset[int] = frozenset(),
 ) -> list[SafetyFinding]:
     if not value:
         return []
@@ -498,7 +499,9 @@ def _amg_scan(  # NOSONAR
                     matches = tuple(
                         match
                         for match in matches
-                        if not _synthetic_numeric_card(candidate, match, numeric_spans)
+                        if not _synthetic_numeric_card(
+                            candidate, match, numeric_spans, synthetic_separators
+                        )
                     )
                     if not matches:
                         continue
@@ -507,7 +510,12 @@ def _amg_scan(  # NOSONAR
                 name == "sensitive_data"
                 and (not all_hits or hits)
                 and not _keep_sensitive_detection(
-                    candidate, hits, numeric_spans=numeric_spans if candidate == value else ()
+                    candidate,
+                    hits,
+                    numeric_spans=numeric_spans if candidate == value else (),
+                    synthetic_separators=synthetic_separators
+                    if candidate == value
+                    else frozenset(),
                 )
             ):
                 continue
@@ -536,7 +544,10 @@ def _amg_scan(  # NOSONAR
 
 
 def _synthetic_numeric_card(
-    value: str, match: re.Match[str], numeric_spans: tuple[tuple[int, int, bool], ...]
+    value: str,
+    match: re.Match[str],
+    numeric_spans: tuple[tuple[int, int, bool], ...],
+    synthetic_separators: frozenset[int] = frozenset(),
 ) -> bool:
     """Reject only context-free card assembly sliced across typed numeric tokens.
 
@@ -557,16 +568,18 @@ def _synthetic_numeric_card(
         for start, end, complete in numeric_spans
         if start < match.end() and end > match.start()
     ]
+    # A leading sign is not a missing card digit. Every participating character
+    # must belong to a numeric source or a scanner-inserted separator, never text.
     return (
         len(spans) >= 2
         and any(
-            not complete or start < match.start() or end > match.end()
+            not complete or start + (value[start] in "+-") < match.start() or end > match.end()
             for start, end, complete in spans
         )
         and all(
             any(start <= index < end for start, end, _ in spans)
+            or (index in synthetic_separators and not value[index].isdigit())
             for index in range(match.start(), match.end())
-            if value[index].isdigit()
         )
     )
 
@@ -594,13 +607,17 @@ def _sensitive_context_hits(value: str, matches: Iterable[re.Match[str]]) -> tup
 
 
 def _keep_sensitive_detection(
-    value: str, hits: tuple[str, ...], *, numeric_spans: tuple[tuple[int, int, bool], ...] = ()
+    value: str,
+    hits: tuple[str, ...],
+    *,
+    numeric_spans: tuple[tuple[int, int, bool], ...] = (),
+    synthetic_separators: frozenset[int] = frozenset(),
 ) -> bool:
     all_card_matches = list(_CARD_NUMBER.finditer(value))
     card_matches = [
         match
         for match in all_card_matches
-        if not _synthetic_numeric_card(value, match, numeric_spans)
+        if not _synthetic_numeric_card(value, match, numeric_spans, synthetic_separators)
     ]
     if not all_card_matches:
         return True

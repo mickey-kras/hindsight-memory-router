@@ -585,7 +585,7 @@ class _WindowScanContext:
     skip_windows: int = 0
     limit_reached: bool = False
     scan_cache: dict[
-        tuple[str, str, bool, tuple[tuple[int, int, bool], ...]],
+        tuple[str, str, bool, tuple[tuple[int, int, bool], ...], frozenset[int]],
         tuple[list[SafetyFinding], list[SafetyFinding]],
     ] = field(default_factory=dict)
 
@@ -792,7 +792,14 @@ def _scan_window(  # NOSONAR
     numeric_spans = (
         window.numeric_spans if isinstance(window, security_provenance.ReviewedText) else ()
     )
-    cache_key = key, window, strip_inword_digits, numeric_spans
+    synthetic_separators = (
+        frozenset(
+            index for index, flag in enumerate(security_provenance.flags_for(window)) if flag == -1
+        )
+        if numeric_spans
+        else frozenset()
+    )
+    cache_key = key, window, strip_inword_digits, numeric_spans, synthetic_separators
     cached = context.scan_cache.get(cache_key)
     if cached is None:
         try:
@@ -809,6 +816,7 @@ def _scan_window(  # NOSONAR
                 deadline=context.deadline,
                 all_hits=isinstance(window, security_provenance.ReviewedText),
                 numeric_spans=numeric_spans,
+                synthetic_separators=synthetic_separators,
             )
         except UnicodeScanDeadlineExceeded:
             context.result.add(
