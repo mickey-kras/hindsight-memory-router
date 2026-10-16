@@ -27,8 +27,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
-              ".github/scripts/pr-readiness.test.py": "c5410a5a31c5be2b58cc3359c1db2f597459943525f0630910c61c075d5f42a5",
-              ".github/workflows/pr-validation.yml": "35f956997ac254bb7a74b2ec94c0ce5ecffa26f0955904f8fd9fb45be2912b76",
+              ".github/scripts/pr-readiness.test.py": "21bc6224e25a51b2c8853cfe37c3baf90f1c7199e038a7b06e8bd2ce15c25e33",
+              ".github/workflows/pr-validation.yml": "0af22ee643a2d3f46dac502d5a923c7565273d1f4cd8526ea283b49eb9d25a68",
               ".github/scripts/coverage-artifact.test.py": "511957df17377c4a403edc2d97243b3d285ed2926e2c7c2fb2bb129342f76064",
               ".github/scripts/coverage-artifact.py": "2e5cfaed56648bbaa9a54a9750ba1d0e55f4dda33019cead49609ccb71b1ec47",
               ".github/scripts/ci-impact.cjs": "5eb80b1d7919f7aba77d8a5b23ce18b6f742c1de19e28e39e1e11f6b6b8ac1ff",

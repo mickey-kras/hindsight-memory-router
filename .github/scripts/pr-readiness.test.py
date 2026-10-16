@@ -18,7 +18,7 @@ class ReadinessTests(unittest.TestCase):
     def test_lifecycle_events_and_full_callers(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())
         events = workflow.get("on", workflow.get(True))["pull_request"]["types"]
-        self.assertEqual(set(events), {"opened", "synchronize", "reopened", "ready_for_review", "converted_to_draft"})
+        self.assertEqual(set(events), {"opened", "synchronize", "reopened", "ready_for_review", "converted_to_draft", "edited"})
         jobs = workflow["jobs"]
         self.assertNotIn("if", jobs["quality"])
         for name in ["aislop", "codeql", "architecture"]:
@@ -85,18 +85,21 @@ new AsyncFunction('github', 'context', 'core', input.script)(github, context, co
   .then(() => process.stdout.write(JSON.stringify(failures)))
   .catch(() => process.exit(1));
 """
-        for current, unavailable, fails in [
-            (ready, False, False),
-            ({**ready, "draft": True}, False, True),
-            ({**ready, "draft": None}, False, True),
-            ({**ready, "state": "closed"}, False, True),
-            ({**ready, "head": {"sha": "c" * 40}}, False, True),
-            ({**ready, "base": {"sha": "c" * 40}}, False, True),
-            (ready, True, True),
+        for current, unavailable, fails, fresh_base in [
+            (ready, False, False, False),
+            ({**ready, "draft": True}, False, True, False),
+            ({**ready, "draft": None}, False, True, False),
+            ({**ready, "state": "closed"}, False, True, False),
+            ({**ready, "head": {"sha": "c" * 40}}, False, True, False),
+            ({**ready, "base": {"sha": "c" * 40}}, False, True, False),
+            (ready, True, True, False),
+            # An edited/base event must validate the fresh target, not the old payload.
+            ({**ready, "base": {"sha": "c" * 40}}, False, False, True),
         ]:
             result = subprocess.run(["node", "-e", driver], input=json.dumps({
                 "script": step["with"]["script"], "current": current,
-                "expected": expected, "unavailable": unavailable,
+                "expected": {**expected, "base": {"sha": "c" * 40}} if fresh_base else expected,
+                "unavailable": unavailable,
             }), text=True, capture_output=True, check=False)
             rejected = result.returncode != 0 or bool(json.loads(result.stdout))
             self.assertEqual(rejected, fails)
