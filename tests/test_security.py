@@ -2123,3 +2123,23 @@ def test_router_rule_public_finding_has_only_ts_keys() -> None:
         if finding.matched == "system prompt"
     )
     assert finding.public() == {"matched": "system prompt", "reason": "prompt_injection"}
+
+
+@pytest.mark.parametrize(
+    ("all_hits", "expected_hits"),
+    [
+        (False, ("system prompt",)),
+        (True, ("system prompt", "System Prompt", "SYSTEM PROMPT")),
+    ],
+)
+def test_rule_hits_preserve_scan_order_and_merge_unique_variants(
+    all_hits: bool, expected_hits: tuple[str, ...]
+) -> None:
+    from memory_router.security_rules import _rule_scan
+
+    findings = _rule_scan("SYSTEM-PROMPT system prompt System Prompt", all_hits=all_hits)
+
+    assert len(findings) == 1
+    assert findings[0].matched == "system prompt"
+    assert findings[0].reason == "prompt_injection"
+    assert findings[0].hits == expected_hits
