@@ -364,6 +364,38 @@ async def verify_batches(url: str) -> None:
         await db.close()
 
 
+async def verify_numeric_scanning() -> None:
+    # Exercise JSON serialization, the spawned worker and installed scanner together.
+    left, right = 0.5956395172012323, 0.25146369743096875
+    benign = {
+        "results": [
+            {
+                "id": "numeric",
+                "text": "ordinary",
+                "scores": {
+                    "final": left,
+                    "reranker": right,
+                },
+            }
+        ]
+    }
+    for reviewed_positions in (frozenset(), frozenset({0})):
+        safe = await scan_recalled(benign, reviewed_result_positions=reviewed_positions)
+        assert safe.safe, "typed fractional scores must not synthesize a card"
+    for fragments in (
+        [str(left), str(right)],
+        [left, str(right)],
+        [41111111, 11111111],
+        [41111111.0, 11111111.0],
+        ["credit card", left, right],
+        ["ignore", left, "previous instructions"],
+    ):
+        unsafe = await scan_recalled(
+            {"results": [], "fragments": fragments}, reviewed_result_positions=frozenset()
+        )
+        assert not unsafe.safe, "numeric provenance must preserve aggregate attack detection"
+
+
 async def verify_database() -> None:
     configured = os.environ["QUARANTINE_DATABASE_URL"]
     if not is_postgres(configured):
@@ -390,6 +422,7 @@ async def verify_database() -> None:
 async def main() -> None:
     try:
         await warm_scanner()
+        await verify_numeric_scanning()
         await verify_database()
     finally:
         await shutdown_scan_executor_async()

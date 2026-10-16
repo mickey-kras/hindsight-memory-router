@@ -197,7 +197,7 @@ docker compose -p "$project" -f "$compose_file" exec -T memory-router timeout 60
 pass_check
 
 begin_check "recall review metadata batches preserve snapshots and duplicate quarantine visibility"
-# Includes expired started/completed checkpoints read by a fresh admin client.
+# Includes numeric scanner provenance and expired recovery checkpoints.
 docker compose -p "$project" -f "$compose_file" cp tests/integration/recall-review-batches.py memory-router:/tmp/recall-review-batches.py
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python /tmp/recall-review-batches.py
 pass_check
@@ -468,7 +468,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 53bb7b58bc3a5e1e43a9b0361bcd92f17708119023acd2a4db87bc4ded9e420e
+# integration-behavior-sha256: 0eafab66740a7d48cb4169f8b6f1b8778be78cf1d61423296f25446dc4cf5fbf
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
