@@ -121,7 +121,7 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
         return [] if result.returncode == 0 else [result.stdout + result.stderr]
 
 
-def quality_gate(needs, event="pull_request", candidate_sha="", candidate_ref=""):
+def quality_gate(needs, event="pull_request", candidate_sha="", candidate_ref="", draft="false"):
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     script = workflow["jobs"]["checks"]["steps"][0]["with"]["script"]
     driver = r"""
@@ -135,7 +135,7 @@ process.stdout.write(JSON.stringify(failures));
         ["node", "-e", driver],
         input=json.dumps({"script": script}),
         env={**os.environ, "NEEDS_JSON": json.dumps(needs), "EVENT_NAME": event,
-             "CANDIDATE_SHA": candidate_sha, "CANDIDATE_REF": candidate_ref},
+             "CANDIDATE_SHA": candidate_sha, "CANDIDATE_REF": candidate_ref, "PR_DRAFT": draft},
         text=True,
         capture_output=True,
         check=True,
@@ -185,7 +185,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(jobs["checks"]["if"], "always()")
         self.assertEqual(jobs["checks"].get("name", "checks"), "checks")
         self.assertEqual(jobs["container"]["name"], "container")
-        self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request'")
+        self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request' && (github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != '')")
         self.assertNotIn("needs", jobs["security"])
         self.assertNotIn("needs", jobs["hindsight"])
         for name in ["ui", "release"]:
@@ -193,7 +193,7 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertEqual(jobs["python"]["needs"], ["changes", "hindsight"])
         self.assertEqual(jobs["container"]["needs"], "hindsight")
         for name in ["hindsight", "python", "ui", "release", "security"]:
-            self.assertNotIn("if", jobs[name])
+            self.assertEqual(jobs[name]["if"], "github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''")
         for job in jobs.values():
             self.assertNotIn("continue-on-error", job)
             for step in job["steps"]:
@@ -202,7 +202,7 @@ class ReleasePolicyTests(unittest.TestCase):
                     self.assertIs(step["with"]["persist-credentials"], False)
         self.assertFalse(any(step.get("uses", "").startswith("actions/checkout@") for step in jobs["checks"]["steps"]))
         gate = jobs["checks"]["steps"][0]
-        self.assertEqual(gate["env"], {"NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}",
+        self.assertEqual(gate["env"], {"PR_DRAFT": "${{ github.event.pull_request.draft }}", "NEEDS_JSON": "${{ toJSON(needs) }}", "EVENT_NAME": "${{ github.event_name }}",
                                        "CANDIDATE_SHA": "${{ inputs.candidate_sha }}", "CANDIDATE_REF": "${{ inputs.candidate_ref }}"})
         outputs = workflow.get("on", workflow.get(True))["workflow_call"]["outputs"]
         for name, source in [("version", "version"), ("sha", "sha"), ("image", "image")]:
@@ -269,7 +269,7 @@ class ReleasePolicyTests(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
         for name in ["python", "ui", "release"]:
             job = jobs[name]
-            self.assertNotIn("if", job)
+            self.assertEqual(job["if"], "github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''")
             expected_outputs = {"validation": "${{ steps.completed.outputs.validation }}"}
             if name == "python":
                 expected_outputs.update({

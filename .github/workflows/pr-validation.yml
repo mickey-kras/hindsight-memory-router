@@ -2,7 +2,7 @@ name: PR validation
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
@@ -18,9 +18,11 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   aislop:
+    if: github.event.pull_request.draft != true
     uses: ./.github/workflows/aislop.yml
 
   codeql:
+    if: github.event.pull_request.draft != true
     uses: ./.github/workflows/codeql.yml
 
   guard:
@@ -33,7 +35,24 @@ jobs:
     uses: ./.github/workflows/dependency-review.yml
 
   architecture:
+    if: github.event.pull_request.draft != true
     uses: ./.github/workflows/architecture.yml
 
   dependabot-policy:
     uses: ./.github/workflows/dependabot-policy-tests.yml
+
+
+  draft-feedback:
+    if: github.event.pull_request.draft == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Python syntax and tracked artifacts
+        run: |
+          python3 -m compileall -q memory_router tests
+          python3 .github/scripts/check-tracked-artifacts.py
+          python3 .github/scripts/check-tracked-artifacts.test.py
+      - name: CI classification feedback
+        run: node --test .github/scripts/ci-impact.test.cjs
