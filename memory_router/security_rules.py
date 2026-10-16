@@ -449,7 +449,7 @@ def _amg_scan(  # NOSONAR
     operation: str,
     deadline: float | None = None,
     all_hits: bool = False,
-    numeric_spans: tuple[tuple[int, int], ...] = (),
+    numeric_spans: tuple[tuple[int, int, bool], ...] = (),
 ) -> list[SafetyFinding]:
     if not value:
         return []
@@ -536,7 +536,7 @@ def _amg_scan(  # NOSONAR
 
 
 def _synthetic_numeric_card(
-    value: str, match: re.Match[str], numeric_spans: tuple[tuple[int, int], ...]
+    value: str, match: re.Match[str], numeric_spans: tuple[tuple[int, int, bool], ...]
 ) -> bool:
     """Reject only context-free card assembly sliced across typed numeric tokens.
 
@@ -553,13 +553,18 @@ def _synthetic_numeric_card(
     if _CARD_CONTEXT.search(context):
         return False
     spans = [
-        (start, end) for start, end in numeric_spans if start < match.end() and end > match.start()
+        (start, end, complete)
+        for start, end, complete in numeric_spans
+        if start < match.end() and end > match.start()
     ]
     return (
         len(spans) >= 2
-        and any(start < match.start() or end > match.end() for start, end in spans)
+        and any(
+            not complete or start < match.start() or end > match.end()
+            for start, end, complete in spans
+        )
         and all(
-            any(start <= index < end for start, end in spans)
+            any(start <= index < end for start, end, _ in spans)
             for index in range(match.start(), match.end())
             if value[index].isdigit()
         )
@@ -589,7 +594,7 @@ def _sensitive_context_hits(value: str, matches: Iterable[re.Match[str]]) -> tup
 
 
 def _keep_sensitive_detection(
-    value: str, hits: tuple[str, ...], *, numeric_spans: tuple[tuple[int, int], ...] = ()
+    value: str, hits: tuple[str, ...], *, numeric_spans: tuple[tuple[int, int, bool], ...] = ()
 ) -> bool:
     all_card_matches = list(_CARD_NUMBER.finditer(value))
     card_matches = [

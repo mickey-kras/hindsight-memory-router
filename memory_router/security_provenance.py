@@ -19,14 +19,14 @@ from .unicode_security import (
 
 class ReviewedText(str):
     trusted: int | tuple[int, ...]
-    numeric_spans: tuple[tuple[int, int], ...]
+    numeric_spans: tuple[tuple[int, int, bool], ...]
 
     def __new__(
         cls,
         value: str,
         trusted: int | tuple[int, ...] = False,
         *,
-        numeric_spans: tuple[tuple[int, int], ...] = (),
+        numeric_spans: tuple[tuple[int, int, bool], ...] = (),
     ) -> ReviewedText:
         instance = super().__new__(cls, value)
         instance.trusted = trusted
@@ -57,14 +57,15 @@ def join(parts: Iterable[str], separator: str = "") -> ReviewedText:
     entries = list(parts)
     value = separator.join(entries)
     flags: list[int] = []
-    numeric_spans: list[tuple[int, int]] = []
+    numeric_spans: list[tuple[int, int, bool]] = []
     for index, entry in enumerate(entries):
         if index:
             # Inserted separators do not introduce unreviewed source content.
             flags.extend([-1] * len(separator))
         if isinstance(entry, ReviewedText):
             numeric_spans.extend(
-                (start + len(flags), end + len(flags)) for start, end in entry.numeric_spans
+                (start + len(flags), end + len(flags), complete)
+                for start, end, complete in entry.numeric_spans
             )
         flags.extend(flags_for(entry))
     return ReviewedText(value, tuple(flags), numeric_spans=tuple(numeric_spans))
@@ -73,10 +74,14 @@ def join(parts: Iterable[str], separator: str = "") -> ReviewedText:
 def slice_text(value: ReviewedText, start: int, stop: int | None = None) -> ReviewedText:
     trusted = value.trusted if isinstance(value.trusted, int) else value.trusted[start:stop]
     start, end, _ = slice(start, stop).indices(len(value))
-    # Keep original endpoints outside the clipped view: a suffix is not a whole number.
+    # A clipped token remains incomplete, but cannot claim adjacent source characters.
     numeric_spans = tuple(
-        (left - start, right - start)
-        for left, right in value.numeric_spans
+        (
+            max(left, start) - start,
+            min(right, end) - start,
+            complete and left >= start and right <= end,
+        )
+        for left, right, complete in value.numeric_spans
         if left < end and right > start
     )
     return ReviewedText(value[start:end], trusted, numeric_spans=numeric_spans)

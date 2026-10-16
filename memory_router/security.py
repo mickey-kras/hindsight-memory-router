@@ -538,7 +538,9 @@ def _walk_strings(
             original = str(current)
             yield (
                 current_path,
-                security_provenance.ReviewedText(original, numeric_spans=((0, len(original)),)),
+                security_provenance.ReviewedText(
+                    original, numeric_spans=((0, len(original), True),)
+                ),
                 current_is_key,
             )
             if isinstance(current, float) and math.isfinite(current) and current.is_integer():
@@ -549,7 +551,7 @@ def _walk_strings(
                     yield (
                         current_path,
                         security_provenance.ReviewedText(
-                            decimal, numeric_spans=((0, len(decimal)),)
+                            decimal, numeric_spans=((0, len(decimal), True),)
                         ),
                         current_is_key,
                     )
@@ -583,7 +585,7 @@ class _WindowScanContext:
     skip_windows: int = 0
     limit_reached: bool = False
     scan_cache: dict[
-        tuple[str, str, bool, tuple[tuple[int, int], ...]],
+        tuple[str, str, bool, tuple[tuple[int, int, bool], ...]],
         tuple[list[SafetyFinding], list[SafetyFinding]],
     ] = field(default_factory=dict)
 
