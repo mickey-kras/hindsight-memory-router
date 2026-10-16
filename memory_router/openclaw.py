@@ -10,11 +10,7 @@ from .facade_routes import FacadeRoute
 from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
-from .openclaw_contracts import (
-    facade_response_scan_input,
-    validate_facade_response,
-    validate_openclaw_response,
-)
+from .openclaw_contracts import validate_facade_response, validate_openclaw_response
 from .scan_executor import scan_facade_response, scan_request, scan_unavailable
 from .security import SafetyResult
 
@@ -155,7 +151,13 @@ class OpenClawFacade:
         route: FacadeRoute | None = None,
     ) -> None:
         response_scan = await scan_facade_response(
-            facade_response_scan_input(route, value), writer_id=writer_id
+            value,
+            writer_id=writer_id,
+            separate_page_ids=bool(
+                route is not None
+                and route.method == "POST"
+                and route.template == "knowledge-base/pages"
+            ),
         )
         if _only_scan_limit_findings(response_scan):
             error_kind = (

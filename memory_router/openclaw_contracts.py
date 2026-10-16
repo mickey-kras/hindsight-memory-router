@@ -14,13 +14,13 @@ def facade_response_scan_input(route: FacadeRoute | None, value: object) -> obje
         or route.method != "POST"
         or route.template != "knowledge-base/pages"
         or not isinstance(value, dict)
+        or value.keys() != {"page_id", "mental_model_id", "operation_id"}
         or not _generated_uuid(value.get("page_id"), "kp-")
         or not _generated_uuid(value.get("mental_model_id"), "mm-")
-        or "operation_id" not in value
         or (value["operation_id"] is not None and not _generated_uuid(value["operation_id"]))
     ):
         return value
-    # Preserve field/byte budgets; extras keep their original content and structure.
+    # Preserve field/byte budgets; responses with extras retain all cross-field scans.
     scanned = dict(value)
     for key in ("page_id", "mental_model_id", "operation_id"):
         identifier = value[key]

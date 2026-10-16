@@ -5,6 +5,7 @@ import json
 import logging
 import multiprocessing
 from contextlib import suppress
+from functools import partial
 from threading import BoundedSemaphore, Lock
 from typing import Any, Literal, cast
 
@@ -168,7 +169,13 @@ def _scanner_shutdown(writer_id: str | None, kind: ScanKind) -> HttpError:
 
 
 async def _scan_in_worker(  # NOSONAR
-    value: Any, *, kind: ScanKind, task_seconds: float, wait_seconds: float, writer_id: str | None
+    value: Any,
+    *,
+    kind: ScanKind,
+    task_seconds: float,
+    wait_seconds: float,
+    writer_id: str | None,
+    separate_page_ids: bool = False,
 ) -> SafetyResult:
     try:
         admission = _acquire_scan_capacity()
@@ -196,6 +203,8 @@ async def _scan_in_worker(  # NOSONAR
             "request": _scan_request_payload,
             "recall": _scan_recalled_payload,
         }[kind]
+        if kind == "response" and separate_page_ids:
+            scanner = partial(scan_facade_payload, separate_page_ids=True)
         future = executor.schedule(
             scanner,
             args=[payload],
@@ -287,13 +296,16 @@ async def scan_request(
     )
 
 
-async def scan_facade_response(value: Any, *, writer_id: str | None = None) -> SafetyResult:
+async def scan_facade_response(
+    value: Any, *, writer_id: str | None = None, separate_page_ids: bool = False
+) -> SafetyResult:
     return await _scan_in_worker(
         value,
         kind="response",
         task_seconds=FACADE_SCAN_TASK_SECONDS,
         wait_seconds=FACADE_SCAN_WAIT_SECONDS,
         writer_id=writer_id,
+        separate_page_ids=separate_page_ids,
     )
 
 
