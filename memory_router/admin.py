@@ -431,7 +431,10 @@ class QuarantineAdminService:
         self, quarantine_id: str, body: dict[str, Any], actor: AdminActor
     ) -> dict[str, Any]:
         action = body.get("action")
-        if action not in {"confirmed_applied", "confirmed_not_applied"}:
+        if not isinstance(action, str) or action not in {
+            "confirmed_applied",
+            "confirmed_not_applied",
+        }:
             raise HttpError(
                 400,
                 "invalid_request",

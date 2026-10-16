@@ -132,7 +132,7 @@ class SidecarWrapProvider:
         await self.client.aclose()
 
     async def wrap(self, dek: bytes) -> bytes:
-        headers = {"content-type": "application/json"}
+        headers = {"content-type": "application/json", "accept-encoding": "identity"}
         if self._token:
             headers["authorization"] = f"Bearer {self._token}"
         request = self.client.build_request(
@@ -170,6 +170,8 @@ class SidecarWrapProvider:
 
 
 async def _read_bounded(response: httpx.Response) -> bytes:
+    if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+        raise WrapSidecarError("invalid-response")
     chunks: list[bytes] = []
     size = 0
     async for chunk in response.aiter_bytes():

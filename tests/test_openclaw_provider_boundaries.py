@@ -136,3 +136,47 @@ async def test_each_openclaw_conditional_route_blocks_unsafe_provider_content(
     assert blocked.value.status == 502
     assert blocked.value.code == "hindsight_unsafe_response"
     policy.quarantine_security_event.assert_awaited_once()
+
+
+@pytest.mark.parametrize("read", [True, False])
+@pytest.mark.parametrize("phase", ["request", "response"])
+async def test_scan_unavailable_only_changes_errors_after_facade_write(
+    read: bool, phase: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from memory_router import openclaw
+    from memory_router.hindsight import HindsightGatewayError
+    from memory_router.scan_executor import scan_unavailable
+
+    policy = _policy({"bank_id": "physical-main", "name": "Main"})
+    facade = OpenClawFacade(policy)
+    route = facade_route("GET", "mental-models") if read else facade_route("PUT", "")
+    assert route is not None
+    failure = scan_unavailable("scanner unavailable", error_kind="timeout")
+    monkeypatch.setattr(
+        facade,
+        "_validate_safe_request" if phase == "request" else "validate_safe_response",
+        AsyncMock(side_effect=failure),
+    )
+    if phase == "response":
+        monkeypatch.setattr(
+            openclaw, "scan_request", AsyncMock(return_value=SimpleNamespace(safe=True))
+        )
+    with pytest.raises(HttpError) as caught:
+        await facade.forward(route=route, writer_id="openclaw", params={})
+    if phase == "response":
+        policy.hindsight.openclaw_request.assert_awaited_once()
+    else:
+        policy.hindsight.openclaw_request.assert_not_awaited()
+    error = caught.value
+    if phase == "response" and not read:
+        assert isinstance(error, HindsightGatewayError)
+        assert error.status == 502
+        assert error.code == "hindsight_response_scan_unavailable"
+        assert "write may already have completed" in error.message
+        assert "verify its status before retrying" in error.message
+        assert error.details()["operation"] == f"openclaw_{route.operation}"
+        assert not error.headers
+    else:
+        assert error is failure
+        assert error.status == 503
+        assert error.headers == {"Retry-After": "1"}

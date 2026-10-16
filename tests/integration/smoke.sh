@@ -473,6 +473,14 @@ begin_check "ambiguous review side effects reconcile only from a verified snapsh
 reconcile_read_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/reconcile" -d '{"action":"confirmed_not_applied","expected_sha256":"stale","expected_updated_at":"stale"}')"
 [[ "$reconcile_read_status" == "401" ]] || fail_check "reconcile accepted the read token: ${reconcile_read_status}"
 reconcile_output="${root}/${tmp_dir}/reconcile-response.json"
+for malformed_action in '[]' '{}'; do
+  malformed_reconcile_status="$(curl --max-time 5 -sS -o "$reconcile_output" -w '%{http_code}' \
+    -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" \
+    -X POST "${router_url}/admin/quarantine/items/${tamper_id}/reconcile" \
+    -d "{\"action\":${malformed_action},\"expected_sha256\":\"stale\",\"expected_updated_at\":\"stale\"}")"
+  [[ "$malformed_reconcile_status" == "400" ]] || fail_check "malformed reconcile action ${malformed_action} returned ${malformed_reconcile_status}"
+  python3 -c 'import json,sys; assert json.load(open(sys.argv[1]))["error"] == "invalid_request"' "$reconcile_output" || fail_check "malformed reconcile action returned the wrong error"
+done
 reconcile_status="$(curl --max-time 5 -sS -o "$reconcile_output" -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/items/${tamper_id}/reconcile" -d '{"action":"confirmed_not_applied","expected_sha256":"stale","expected_updated_at":"stale"}')"
 [[ "$reconcile_status" == "409" ]] || fail_check "reconcile of a pending item returned ${reconcile_status}"
 grep -q 'invalid_review_action' "$reconcile_output" || fail_check "reconcile of a pending item did not report invalid_review_action"
@@ -487,7 +495,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 6b1df82bcd35fbc791e044cc76ed1fa61235ab14b29200393c6b5ac9a6241783
+# integration-behavior-sha256: b925b59a446afdd06d1323b67b9b6f38a0fb3ba467b188dca37ec727e8c6276c
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

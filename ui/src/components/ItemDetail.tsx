@@ -42,8 +42,10 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
   const [busy, setBusy] = useState(false);
+  const selectionGeneration = useRef(0);
 
   useEffect(() => {
+    selectionGeneration.current += 1;
     setDetail(null);
     setDecrypted(null);
     setDecryptError(null);
@@ -62,6 +64,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
       });
     return () => {
       active = false;
+      selectionGeneration.current += 1;
     };
   }, [item.quarantine_id, tokens, onUnauthorized]);
 
@@ -78,10 +81,13 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
 
   const decrypt = useCallback(async () => {
     if (!detail || !keyRef.current) return;
+    const generation = selectionGeneration.current;
     setDecryptError(null);
     try {
-      setDecrypted(await decryptEnvelope(detail.encrypted, keyRef.current));
+      const plaintext = await decryptEnvelope(detail.encrypted, keyRef.current);
+      if (generation === selectionGeneration.current) setDecrypted(plaintext);
     } catch (error) {
+      if (generation !== selectionGeneration.current) return;
       setDecrypted(null);
       setDecryptError(error instanceof DecryptError ? error.message : "decryption failed");
     }

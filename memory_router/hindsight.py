@@ -80,6 +80,7 @@ class HindsightGatewayError(HttpError):
         method: str | None = None,
         timeout_ms: int | None = None,
         client_status: int | None = None,
+        write_uncertain: bool = False,
     ) -> None:
         code = {
             "timeout": "hindsight_timeout",
@@ -99,7 +100,7 @@ class HindsightGatewayError(HttpError):
             "unsafe-response": "Upstream memory service returned unsafe content",
             "response-scan-unavailable": "Upstream memory service response could not be safety checked",
         }[kind]
-        if operation == "retain" and not (
+        if (operation == "retain" or write_uncertain) and not (
             kind == "http" and upstream_status is not None and 400 <= upstream_status < 500
         ):
             message += "; the write may already have completed; verify its status before retrying"
@@ -373,7 +374,9 @@ class HindsightGateway:
         allow_empty_response: bool = False,
     ) -> Any:
         max_response_bytes = self.max_response_bytes if response_limit is None else response_limit
-        headers = {"content-type": "application/json"} if body is not None else {}
+        headers = {"accept-encoding": "identity"}
+        if body is not None:
+            headers["content-type"] = "application/json"
         if self.api_key:
             headers["authorization"] = f"Bearer {self.api_key}"
         request_id = current_request_id()
@@ -428,6 +431,13 @@ async def _read_response(
     method: str,
     allow_empty: bool,
 ) -> Any:
+    if response.headers.get("content-encoding", "identity").strip().lower() != "identity":
+        raise HindsightGatewayError(
+            "invalid-response",
+            upstream_status=response.status_code,
+            operation=operation,
+            method=method,
+        )
     chunks: list[bytes] = []
     size = 0
     async for chunk in response.aiter_bytes():

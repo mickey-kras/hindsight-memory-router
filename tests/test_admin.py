@@ -925,12 +925,15 @@ async def test_reconcile_rejects_bad_request_wrong_state_and_stale_snapshot(
     for body in (
         {},
         {"action": "rejected"},
+        {"action": []},
+        {"action": {}},
         {"action": "confirmed_applied"},
         {"action": "confirmed_applied", "expected_sha256": "sha"},
         {"action": "confirmed_applied", "expected_sha256": 1, "expected_updated_at": "claim"},
     ):
         with pytest.raises(HttpError) as bad:
             await svc.reconcile(QID, body, ACTOR)
+        assert bad.value.status == 400
         assert bad.value.code == "invalid_request"
     confirm.assert_not_awaited()
 
