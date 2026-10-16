@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, cast
 
-from .canonical import sha256_hex
+from .canonical import canonical_json, sha256_hex
 from .db import Tx
 from .dedupe import request_family_identity, security_event_identity
 from .envelope import (
@@ -321,7 +321,10 @@ class QuarantineStore:
             and input_.get("sourceBank") is not None
             and input_.get("sourceMemoryId") is not None
         ):
-            return _deduped_id("memory", f"{input_['sourceBank']}:{input_['sourceMemoryId']}")
+            # Separate the unambiguous tuple encoding from legacy colon-joined IDs.
+            return _deduped_id(
+                "memoryv2", canonical_json([input_["sourceBank"], input_["sourceMemoryId"]])
+            )
         stamp = re.sub(r"[^0-9A-Za-z]", "", input_["timestamp"])
         return f"q_{stamp}_{secrets.token_hex(8)}"
 

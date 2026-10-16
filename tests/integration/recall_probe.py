@@ -28,13 +28,22 @@ def wait_for_marker(base_url: str, token: str, marker: str, timeout: float = 120
     )
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline = time.monotonic() + timeout
+    last_summary: dict[str, object] = {"response_received": False}
     while (remaining := deadline - time.monotonic()) > 0:
         with opener.open(request, timeout=min(5, remaining)) as response:  # noqa: S310 - caller supplies the local integration router URL
             payload = json.load(response)
         if contains_marker(payload, marker):
             return payload
+        last_summary = {
+            "result_count": len(payload["results"]),
+            "partial": bool(payload.get("partial")),
+            "failed_bank_count": len(payload.get("failed_banks") or []),
+        }
         time.sleep(min(2, max(0, deadline - time.monotonic())))
-    raise TimeoutError("seeded marker did not become recallable before the smoke deadline")
+    raise TimeoutError(
+        "seeded marker did not become recallable before the smoke deadline; "
+        + json.dumps(last_summary, sort_keys=True)
+    )
 
 
 if __name__ == "__main__":

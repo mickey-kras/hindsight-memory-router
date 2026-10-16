@@ -218,6 +218,12 @@ legacy_ready_response="$(wait_for_readiness /ready)"
 for readiness_response in "$health_response" "$ready_response" "$legacy_ready_response"; do
   printf '%s' "$readiness_response" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert isinstance(data, dict) and "status" in data and "router_health" not in data' || fail_check "router readiness alias returned unexpected health JSON"
 done
+for readiness_path in /health /health/ready /ready; do
+  curl --max-time 5 -fsS -o /dev/null -D "${tmp_dir}/readiness.headers" -H "Authorization: Bearer ${router_token}" "${router_url}${readiness_path}"
+  python3 -c 'import pathlib,sys; headers=pathlib.Path(sys.argv[1]).read_text().lower(); assert "deprecation: true" in headers' "${tmp_dir}/readiness.headers" || fail_check "legacy readiness authentication omitted deprecation header"
+  curl --max-time 5 -fsS -o /dev/null -D "${tmp_dir}/readiness.headers" "${router_url}${readiness_path}"
+  python3 -c 'import pathlib,sys; headers=pathlib.Path(sys.argv[1]).read_text().lower(); assert "deprecation:" not in headers' "${tmp_dir}/readiness.headers" || fail_check "anonymous readiness inherited legacy deprecation header"
+done
 docker compose -p "$project" -f "$compose_file" exec -T memory-router python -c "import urllib.request; response=urllib.request.urlopen('http://hindsight:8888/health', timeout=2); raise SystemExit(0 if 200 <= response.status < 300 else 1)" >/dev/null
 pass_check
 
@@ -338,7 +344,10 @@ pass_check
 
 begin_check "safe recall endpoint succeeds"
 if [[ "$mode" == "real" ]]; then
-  safe_recall="$(python3 tests/integration/recall_probe.py "$router_url" "$router_token" "$known_marker")" || fail_check "healthy recall did not return the seeded marker"
+  if ! safe_recall="$(python3 tests/integration/recall_probe.py "$router_url" "$router_token" "$known_marker")"; then
+    docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 20 python < tests/integration/recall_diagnostics.py >&2 || echo 'HMR_RECALL_DIAGNOSTICS={"available":false}' >&2
+    fail_check "healthy recall did not return the seeded marker"
+  fi
 else
   safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
   printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert not data.get("partial") and not data.get("failed_banks")'
@@ -459,7 +468,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 20a94b38d03e77f68ae51b5d0b83b6bba1eb413e7c4af863f1c781ff40bf8a6a
+# integration-behavior-sha256: 3e233584499219a7c9d4a66c4b8cbc11cd5a70b90e1073ed02b2a22eab56c094
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

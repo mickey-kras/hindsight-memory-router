@@ -13,7 +13,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from tests.integration import recall_probe
+from memory_router.security_models import SafetyFinding
+from tests.integration import recall_diagnostics, recall_probe
 
 
 @pytest.mark.parametrize(
@@ -54,7 +55,11 @@ def test_recall_probe_waits_for_async_retain_only_until_its_deadline(
 
     def open_response(request: urllib.request.Request, timeout: float) -> io.BytesIO:
         calls.append((request, timeout))
-        results = [{"text": "Retained CI_SMOKE_seed."}] if seed_appears and len(calls) > 1 else []
+        results = (
+            [{"text": "Retained CI_SMOKE_seed."}]
+            if seed_appears and len(calls) > 1
+            else [{"id": "PRIVATE-ID", "text": "PRIVATE-CONTENT"}]
+        )
         return io.BytesIO(json.dumps({"results": results}).encode())
 
     monkeypatch.setattr(recall_probe.time, "monotonic", lambda: clock[0])
@@ -66,11 +71,85 @@ def test_recall_probe_waits_for_async_retain_only_until_its_deadline(
         result = recall_probe.wait_for_marker("http://127.0.0.1:8890", "test", "CI_SMOKE_seed", 5)
         assert result["results"][0]["text"] == "Retained CI_SMOKE_seed."
     else:
-        with pytest.raises(TimeoutError, match="seeded marker"):
+        with pytest.raises(TimeoutError, match="seeded marker") as error:
             recall_probe.wait_for_marker("http://127.0.0.1:8890", "test", "CI_SMOKE_seed", 5)
         assert clock[0] == 5
+        assert '"result_count": 1' in str(error.value)
+        assert '"partial": false' in str(error.value)
+        assert '"failed_bank_count": 0' in str(error.value)
+        assert "PRIVATE" not in str(error.value)
     assert all(0 < timeout <= 5 for _, timeout in calls)
     assert len(calls) <= 3
+
+
+def test_recall_diagnostics_report_counts_without_private_values() -> None:
+    summary = recall_diagnostics.upstream_summary(
+        {"results": [{"id": "PRIVATE-ID", "text": "PRIVATE-MARKER", "score": 0.4111111111111111}]},
+        "PRIVATE-MARKER",
+    )
+    assert summary["result_count"] == summary["marker_result_count"] == 1
+    assert summary["unsafe_entry_count"] == 0
+    assert summary["raw_aggregate_safe"] is False
+    assert summary["raw_aggregate_detectors"] == {"sensitive_data": 1}
+    assert "PRIVATE" not in json.dumps(summary)
+    assert "HIDDEN" not in json.dumps(summary)
+    assert "4111111111111111" not in json.dumps(summary)
+    assert recall_diagnostics.detector_counts(
+        [
+            SafetyFinding(
+                "PRIVATE-MATCH", "PRIVATE-REASON", "PRIVATE-DETECTOR", hits=("PRIVATE-HIT",)
+            )
+        ]
+    ) == {"other": 1}
+
+
+def test_score_diagnostics_identify_structural_field_without_mutating_response() -> None:
+    response = {
+        "results": [
+            {
+                "id": "PRIVATE-ID",
+                "text": "ordinary",
+                "weight": 0.5,
+                "scores": {
+                    "final": 0.5,
+                    "reranker": 0.4111111111111111,
+                    "HIDDEN-FIELD": "ordinary",
+                },
+            }
+        ]
+    }
+    original = json.dumps(response)
+    summary = recall_diagnostics.score_diagnostics(response)
+    assert summary["score_fields"] == [
+        {"path": "results[].weight", "type": "float", "safe": True, "detectors": {}},
+        {"path": "results[].scores.final", "type": "float", "safe": True, "detectors": {}},
+        {
+            "path": "results[].scores.reranker",
+            "type": "float",
+            "safe": False,
+            "detectors": {"sensitive_data": 1},
+        },
+    ]
+    assert summary["diagnostic_without_known_score_fields_safe"] is True
+    assert not summary["score_fields_truncated"]
+    assert json.dumps(response) == original
+    assert "PRIVATE" not in json.dumps(summary)
+    assert "HIDDEN" not in json.dumps(summary)
+    assert "4111111111111111" not in json.dumps(summary)
+
+
+def test_score_diagnostics_remain_bounded_and_keep_unknown_fields() -> None:
+    response = {"results": [{"scores": {"final": 0.5}} for _ in range(25)]}
+    summary = recall_diagnostics.score_diagnostics(response)
+    assert len(summary["score_fields"]) == 20
+    assert summary["score_fields_truncated"]
+    summary = recall_diagnostics.score_diagnostics(
+        {"results": [{"scores": {"final": 0.5, "HIDDEN-FIELD": 0.4111111111111111}}]}
+    )
+    assert summary["diagnostic_without_known_score_fields_safe"] is False
+    assert summary["diagnostic_without_known_score_fields_detectors"] == {"sensitive_data": 1}
+    assert "PRIVATE" not in json.dumps(summary)
+    assert "HIDDEN" not in json.dumps(summary)
 
 
 @pytest.fixture

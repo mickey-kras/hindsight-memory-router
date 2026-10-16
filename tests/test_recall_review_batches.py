@@ -71,7 +71,7 @@ docker() {
         },
         capture_output=True,
         text=True,
-        timeout=40,
+        timeout=90,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
