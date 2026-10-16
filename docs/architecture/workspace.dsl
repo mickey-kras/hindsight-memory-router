@@ -184,6 +184,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             policy -> limits "If allowed: consume Hindsight retain budget"
             policy -> gateway "Retain to assigned Hindsight write bank"
             gateway -> hindsight "POST retain"
+            policy -> scanning "Bounded acknowledgment safety scan before release; write may have completed; failures never replay"
             autoLayout lr
         }
 

@@ -65,7 +65,15 @@ class _HindsightVersionResponse(BaseModel):
 class HindsightGatewayError(HttpError):
     def __init__(
         self,
-        kind: Literal["timeout", "http", "invalid-response", "network", "response-too-large"],
+        kind: Literal[
+            "timeout",
+            "http",
+            "invalid-response",
+            "network",
+            "response-too-large",
+            "unsafe-response",
+            "response-scan-unavailable",
+        ],
         *,
         upstream_status: int | None = None,
         operation: str | None = None,
@@ -79,6 +87,8 @@ class HindsightGatewayError(HttpError):
             "invalid-response": "hindsight_invalid_response",
             "network": "hindsight_unavailable",
             "response-too-large": "hindsight_response_too_large",
+            "unsafe-response": "hindsight_unsafe_response",
+            "response-scan-unavailable": "hindsight_response_scan_unavailable",
         }[kind]
         message = {
             "timeout": "Upstream memory service timed out",
@@ -86,7 +96,13 @@ class HindsightGatewayError(HttpError):
             "invalid-response": "Upstream memory service returned an invalid response",
             "network": "Upstream memory service is unavailable",
             "response-too-large": "Upstream memory service response exceeded the size limit",
+            "unsafe-response": "Upstream memory service returned unsafe content",
+            "response-scan-unavailable": "Upstream memory service response could not be safety checked",
         }[kind]
+        if operation == "retain" and not (
+            kind == "http" and upstream_status is not None and 400 <= upstream_status < 500
+        ):
+            message += "; the write may already have completed; verify its status before retrying"
         default_status = 504 if kind == "timeout" else 502
         status = client_status if client_status is not None else default_status
         super().__init__(status, code, message)
@@ -228,10 +244,13 @@ class HindsightGateway:
             facade["features"][feature] = False
         return facade
 
-    async def retain(self, bank_id: str, body: dict[str, Any]) -> Any:
-        return await self._request(
+    async def retain(self, bank_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        value = await self._request(
             "retain", "POST", f"/v1/default/banks/{quote(bank_id, safe='')}/memories", body
         )
+        if not isinstance(value, dict):
+            raise HindsightGatewayError("invalid-response", operation="retain", method="POST")
+        return value
 
     async def recall(self, bank_id: str, body: dict[str, Any]) -> dict[str, Any]:
         try:
