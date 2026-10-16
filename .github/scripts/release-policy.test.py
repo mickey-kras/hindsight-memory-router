@@ -43,6 +43,8 @@ if ROUTER:
     PATHS.append(".github/scripts/release-cleanup.cjs")
     PATHS.append(".github/scripts/release-cleanup.test.cjs")
     PATHS.extend([
+        ".github/workflows/pr-validation.yml",
+        ".github/scripts/pr-readiness.test.py",
         ".github/scripts/provenance.cjs",
         ".github/scripts/provenance.test.cjs",
         ".github/scripts/attest-image.cjs",

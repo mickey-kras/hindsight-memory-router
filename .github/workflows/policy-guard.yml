@@ -27,8 +27,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
-              ".github/scripts/pr-readiness.test.py": "21bc6224e25a51b2c8853cfe37c3baf90f1c7199e038a7b06e8bd2ce15c25e33",
-              ".github/workflows/pr-validation.yml": "0af22ee643a2d3f46dac502d5a923c7565273d1f4cd8526ea283b49eb9d25a68",
+              ".github/scripts/pr-readiness.test.py": "d742ba4ce9ba0b85baa83f0796589e7926fc9ec46b1a17a7df43001c353730bb",
+              ".github/workflows/pr-validation.yml": "30f155b1140b11f1c127dbccc02c71bb185a65a9deee43ad71ad716385a2951f",
               ".github/scripts/coverage-artifact.test.py": "511957df17377c4a403edc2d97243b3d285ed2926e2c7c2fb2bb129342f76064",
               ".github/scripts/coverage-artifact.py": "2e5cfaed56648bbaa9a54a9750ba1d0e55f4dda33019cead49609ccb71b1ec47",
               ".github/scripts/ci-impact.cjs": "5eb80b1d7919f7aba77d8a5b23ce18b6f742c1de19e28e39e1e11f6b6b8ac1ff",
@@ -49,7 +49,7 @@ jobs:
               ".github/scripts/release.test.cjs": "84ce8d78fced264869dbf67eb0e6b15b1f9c9d384bb3d87c1c9135e9fdb89b9b",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "dfec9e8ba4758324b295968960f2d08e37b88accbae3afc5bf996d1e5a67195a",
+              ".github/scripts/release-policy.test.py": "f4e608cd8b2ce88e699928a90b3edcf14a429474d9379542661cc4abfa201be8",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",

@@ -25,9 +25,16 @@ class ReadinessTests(unittest.TestCase):
             self.assertEqual(jobs[name]["if"], "github.event.pull_request.draft != true")
         for name in ["guard", "branch-policy", "dependency-review", "dependabot-policy"]:
             self.assertNotIn("if", jobs[name])
+        self.assertEqual(jobs["draft-feedback"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["draft-feedback"]["if"], "github.event.pull_request.draft == true")
         self.assertEqual(workflow["concurrency"]["group"], "pr-validation-${{ github.event.pull_request.number }}")
         self.assertIs(workflow["concurrency"]["cancel-in-progress"], True)
+
+    def test_readiness_policy_rejects_unreviewed_changes(self):
+        self.assertEqual(policy.policy(), [])
+        for path in [".github/workflows/pr-validation.yml", ".github/scripts/pr-readiness.test.py"]:
+            self.assertIn(path, policy.PATHS)
+            self.assertTrue(policy.policy({path: (ROOT / path).read_text() + "\n# unreviewed change\n"}))
 
     def test_expensive_jobs_defer_only_ordinary_drafts(self):
         jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]

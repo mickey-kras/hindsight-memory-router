@@ -43,6 +43,8 @@ jobs:
 
 
   draft-feedback:
+    permissions:
+      contents: read
     if: github.event.pull_request.draft == true
     runs-on: ubuntu-latest
     steps:
