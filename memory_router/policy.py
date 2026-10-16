@@ -262,14 +262,7 @@ class RouterPolicy:
         for bank_id, response in responses:
             for result in response.get("results", []):
                 identity = (bank_id, str(result["id"]))
-                # A previous result may have reopened or quarantined this identity.
-                # Refresh after mutation attempts, including failed or uncertain commits,
-                # rather than allowing them from stale approved/absent metadata.
-                if identity in dirty:
-                    refreshed = await self.repository.find_memory_review_states([identity])
-                    states.pop(identity, None)
-                    states.update(refreshed)
-                    dirty.remove(identity)
+                await self._refresh_dirty_review_state(identity, states, dirty)
                 if await self._allow_recalled_or_degrade(
                     writer_id, source, bank_id, result, review_states=states, invalidated=dirty
                 ):
@@ -283,6 +276,22 @@ class RouterPolicy:
                         reviewed_positions.add(len(results))
                     results.append(result)
         return results
+
+    async def _refresh_dirty_review_state(
+        self,
+        identity: MemoryIdentity,
+        states: dict[MemoryIdentity, MemoryReviewState],
+        dirty: set[MemoryIdentity],
+    ) -> None:
+        # A previous result may have reopened or quarantined this identity.
+        # Refresh after mutation attempts, including failed or uncertain commits,
+        # rather than allowing them from stale approved/absent metadata.
+        if identity not in dirty:
+            return
+        refreshed = await self.repository.find_memory_review_states([identity])
+        states.pop(identity, None)
+        states.update(refreshed)
+        dirty.remove(identity)
 
     async def _merged_recall_field(
         self,
