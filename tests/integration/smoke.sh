@@ -339,7 +339,7 @@ pass_check
 
 begin_check "known writer retain succeeds"
 known_response="$(retry_post_router "/v1/default/banks/main/memories" "{\"items\":[{\"content\":\"CI smoke known retain ${known_marker}\",\"context\":\"integration smoke\",\"document_id\":\"ci-known\"}],\"async\":true}")"
-printf '%s' "$known_response" | grep -Eq 'success|ok' || fail_check "known retain failed: ${known_response}"
+printf '%s' "$known_response" | python3 -c 'import json,sys; value=json.load(sys.stdin); assert isinstance(value, dict) and (value.get("success") is True or value.get("ok") is True)' || fail_check "known retain acknowledgment is invalid"
 pass_check
 
 begin_check "safe recall endpoint succeeds"
@@ -468,7 +468,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: 546c2b938aaea1d1ec9b80b66d270d4827a7ee23298d3b8025e08f7ea3d6f18c
+# integration-behavior-sha256: e79b739fc94819ddb29b081c035ba18ba64c13ccd854ac1546b3e87848971bc7
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

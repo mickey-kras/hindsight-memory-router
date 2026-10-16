@@ -21,7 +21,7 @@ from .repository import (
     MemoryIdentity,
     MemoryReviewState,
 )
-from .scan_executor import scan_recalled, scan_request
+from .scan_executor import scan_facade_response, scan_recalled, scan_request
 from .security import SafetyResult
 from .timestamps import iso_now
 
@@ -139,7 +139,25 @@ class RouterPolicy:
                 identity, source, "suspicious_content", body, target_bank, scan, identity_mode
             )
         rewritten = prepare_retain_body(body, identity, source, target_bank)
-        return await self.hindsight.retain(target_bank, rewritten)
+        value = await self.hindsight.retain(target_bank, rewritten)
+        # This check runs after the write. Never queue a replay or advise a retry
+        # when its acknowledgment cannot safely be returned.
+        try:
+            response_scan = await scan_facade_response(value, writer_id=identity)
+        except HttpError as exc:
+            raise HindsightGatewayError(
+                "response-scan-unavailable", operation="retain", method="POST"
+            ) from exc
+        if not response_scan.safe:
+            limits = {"facade_field_limit", "facade_time_limit"}
+            kind: Literal["response-scan-unavailable", "unsafe-response"] = (
+                "response-scan-unavailable"
+                if response_scan.findings
+                and all(finding.matched in limits for finding in response_scan.findings)
+                else "unsafe-response"
+            )
+            raise HindsightGatewayError(kind, operation="retain", method="POST")
+        return value
 
     async def recall(
         self, writer_id: str, body: dict[str, Any], source: str | None = None

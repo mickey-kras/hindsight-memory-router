@@ -62,4 +62,6 @@ Denied: webhooks, file upload/transfer, import/export, upstream `/metrics`, prov
 
 Quarantine administration is exposed under `/admin/quarantine/*` with separate read, review, and cleanup scopes. See [authentication](../security/authentication.md) and the OpenAPI document for request/response schemas.
 
-Stable router errors are returned for policy rejection, request bounds, rate limiting, storage/capacity failures, and mapped Hindsight failures. Upstream Hindsight response bodies are not exposed.
+Stable router errors are returned for policy rejection, request bounds, rate limiting, storage/capacity failures, and mapped Hindsight failures. Upstream Hindsight error response bodies are not exposed.
+
+Native retain returns the configured Hindsight acknowledgment object only after bounded safety scanning. Sync/async flags, operation IDs, usage, and safe additive fields are preserved. Invalid shape, unsafe content, or unavailable response scanning returns a sanitized `502`; the write may already have completed, so verify status before retrying. These post-write failures have no `Retry-After` and do not queue a replay.

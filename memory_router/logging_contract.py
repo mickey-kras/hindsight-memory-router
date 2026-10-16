@@ -92,6 +92,8 @@ ERROR_KINDS = frozenset(
         "payload-too-large",
         "rate-limit",
         "response-too-large",
+        "unsafe-response",
+        "response-scan-unavailable",
         "storage",
         "shutdown",
         "timeout",
