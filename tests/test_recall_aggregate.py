@@ -138,7 +138,7 @@ async def test_final_aggregate_is_suppressed_and_audited(location: str) -> None:
     assert len(store.items) == 1
     audit = store.items[0]
     assert audit["reason"] == "recalled_suspicious_aggregate"
-    assert set(audit["payload"]) == {"action", "content_sha256", "findings"}
+    assert set(audit["payload"]) == {"action", "content_sha256", "findings", "score_certification"}
     assert len(audit["payload"]["content_sha256"]) == 64
     assert all(
         "reason" in finding and set(finding) <= {"reason", "detector"}
@@ -303,7 +303,8 @@ async def test_aggregate_audit_is_persisted_encrypted_with_private_content_omitt
         assert envelope["reason"] == "recalled_suspicious_aggregate"
         decrypted = decrypt_envelope(envelope, private)
         payload = decrypted["payload"]
-        assert set(payload) == {"action", "content_sha256", "findings"}
+        assert set(payload) == {"action", "content_sha256", "findings", "score_certification"}
+        assert payload["score_certification"] == {"ineligible": 2}
         assert payload["action"] == "recalled_aggregate_blocked"
         assert len(payload["content_sha256"]) == 64 and payload["findings"]
         assert all(

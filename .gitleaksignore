@@ -11,3 +11,6 @@ c412fed76bebbcf1c95e1ef68f533e94a95a0d02:tests/test_security.py:generic-api-key:
 
 a7bed509e9f61f1b4559e1bfcf08eed152639c48:tests/test_principals.py:generic-api-key:372
 a7bed509e9f61f1b4559e1bfcf08eed152639c48:tests/test_foundations.py:generic-api-key:260
+
+# Non-secret synthetic quarantine ID in a superseded UI test fixture.
+5d8abfc8812a9330a6df95ff3caca0259b2612a6:ui/tests/e2e/selectionBoundary.tsx:generic-api-key:8

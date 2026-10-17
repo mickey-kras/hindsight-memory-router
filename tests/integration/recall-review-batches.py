@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from pathlib import Path
@@ -9,12 +10,14 @@ from typing import Any
 from unittest.mock import patch
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+import httpx
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from memory_router.admin import QuarantineAdminService
 from memory_router.db import PostgresDatabase, PostgresTx, SqliteTx, create_database, is_postgres
 from memory_router.errors import HttpError
+from memory_router.hindsight import HindsightGateway
 from memory_router.policy import RouterPolicy, recalled_content_digest
 from memory_router.quarantine_store import QuarantineLimits, QuarantineStore
 from memory_router.rate_limit import InMemoryRateLimiter
@@ -24,6 +27,7 @@ from memory_router.scan_executor import (
     shutdown_scan_executor_async,
     start_scan_executor,
 )
+from memory_router.security import scan_recall_response, scan_recall_result
 
 AT = "2026-10-01T00:00:00.000Z"
 SCANNER_STARTUP_SECONDS = 60
@@ -364,6 +368,40 @@ async def verify_batches(url: str) -> None:
         await db.close()
 
 
+async def verify_score_certification() -> None:
+    scores: dict[str, float] = {
+        "final": 0.5956395172012323,
+        "reranker": 0.25146369743096875,
+    }
+    result: dict[str, object] = {
+        "id": "score-fixture",
+        "text": "ordinary seeded marker",
+        "scores": scores,
+    }
+    wire: dict[str, object] = {"results": [result]}
+    for score in scores.values():
+        assert scan_recall_response({"results": [], "value": score}).safe
+    assert scan_recall_result(result).safe
+    raw = scan_recall_response(wire)
+    assert not raw.safe and any(f.detector == "sensitive_data" for f in raw.findings)
+    gateway = HindsightGateway("http://fixture", None)
+    await gateway.client.aclose()
+    gateway.client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=wire))
+    )
+    try:
+        response = await gateway.recall("main", {"query": "ordinary seeded marker"})
+        for positions in (frozenset(), frozenset({0})):
+            assert (await scan_recalled(response, reviewed_result_positions=positions)).safe
+        assert json.loads(json.dumps(response)) == wire
+        uncertified = json.loads(json.dumps(response))
+        assert not (await scan_recalled(uncertified, reviewed_result_positions=frozenset())).safe
+        response["results"][0]["scores"]["semantic"] = None
+        assert not (await scan_recalled(response, reviewed_result_positions=frozenset())).safe
+    finally:
+        await gateway.close()
+
+
 async def verify_database() -> None:
     configured = os.environ["QUARANTINE_DATABASE_URL"]
     if not is_postgres(configured):
@@ -390,6 +428,7 @@ async def verify_database() -> None:
 async def main() -> None:
     try:
         await warm_scanner()
+        await verify_score_certification()
         await verify_database()
     finally:
         await shutdown_scan_executor_async()

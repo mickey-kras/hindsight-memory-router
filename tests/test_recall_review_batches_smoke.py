@@ -39,9 +39,11 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
     attempts: list[str] = []
     scan = probe["scan_recalled"]
 
-    async def observe(value: dict[str, Any]) -> SafetyResult:
+    async def observe(
+        value: dict[str, Any], *, reviewed_result_positions: frozenset[int] | None = None
+    ) -> SafetyResult:
         try:
-            result = await scan(value)
+            result = await scan(value, reviewed_result_positions=reviewed_result_positions)
         except HttpError as exc:
             attempts.append(exc.message)
             raise
@@ -52,7 +54,8 @@ async def test_probe_waits_for_delayed_spawn_then_runs_real_duplicate_checks(
     await probe["main"]()
     assert len(attempts) >= 2
     assert attempts[-1] == "ready"
-    assert set(attempts[:-1]) == {"recall safety scan timed out"}
+    assert attempts.count("recall safety scan timed out") >= 1
+    assert set(attempts) == {"ready", "recall safety scan timed out"}
     assert scan_executor._SCAN_EXECUTOR is None
 
 
@@ -66,6 +69,7 @@ async def test_probe_always_closes_scanner(
     )
     close = AsyncMock()
     monkeypatch.setitem(probe, "warm_scanner", warm)
+    monkeypatch.setitem(probe, "verify_score_certification", AsyncMock())
     monkeypatch.setitem(probe, "verify_database", verify)
     monkeypatch.setitem(probe, "shutdown_scan_executor_async", close)
     if stage == "success":

@@ -330,6 +330,17 @@ def _scan_recalled_payload(payload: bytes) -> SafetyResult:
     return scan_recall_result(value["result"], reviewed_stable=value["reviewed_stable"])
 
 
+def recall_response_scan_input(value: dict[str, object]) -> dict[str, object]:
+    results = cast(list[dict[str, object]], value.get("results", []))
+    return {
+        **value,
+        "results": [
+            result.scan_view() if isinstance(result, _HindsightRecallResult) else result
+            for result in results
+        ],
+    }
+
+
 async def scan_recalled(
     value: dict[str, Any],
     *,
@@ -339,13 +350,7 @@ async def scan_recalled(
 ) -> SafetyResult:
     scan_value: dict[str, object] = value
     if reviewed_result_positions is not None:
-        scan_value = {
-            **value,
-            "results": [
-                result.scan_view() if isinstance(result, _HindsightRecallResult) else result
-                for result in value.get("results", [])
-            ],
-        }
+        scan_value = recall_response_scan_input(value)
     return await _scan_in_worker(
         {
             "result": scan_value,

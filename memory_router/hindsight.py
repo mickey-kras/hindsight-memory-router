@@ -201,6 +201,18 @@ class _HindsightRecallResult(dict[str, object]):
         return {**self, "scores": neutral}
 
 
+def recall_score_certification(
+    result: dict[str, object],
+) -> Literal["certified", "snapshot_changed", "eligible_without_provenance", "ineligible"]:
+    if isinstance(result, _HindsightRecallResult):
+        return "certified" if result.scan_view() is not result else "snapshot_changed"
+    return (
+        "eligible_without_provenance"
+        if _valid_recall_scores(result.get("scores"))
+        else "ineligible"
+    )
+
+
 class HindsightGateway:
     def __init__(
         self,
