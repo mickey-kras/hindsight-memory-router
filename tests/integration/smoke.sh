@@ -365,11 +365,12 @@ pass_check
 
 begin_check "safe recall endpoint succeeds"
 if [[ "$mode" == "real" ]]; then
+  docker compose -p "$project" -f "$compose_file" cp tests/integration/recall_diagnostics.py memory-router:/tmp/recall_diagnostics.py
   if ! safe_recall="$(python3 tests/integration/recall_probe.py "$router_url" "$router_token" "$known_marker")"; then
-    docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 20 python < tests/integration/recall_diagnostics.py >&2 || echo 'HMR_RECALL_DIAGNOSTICS={"available":false}' >&2
+    docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 90 python /tmp/recall_diagnostics.py >&2 || echo 'HMR_RECALL_DIAGNOSTICS={"available":false}' >&2
     fail_check "healthy recall did not return the seeded marker"
   fi
-  docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 60 python < tests/integration/recall_diagnostics.py
+  docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 90 python /tmp/recall_diagnostics.py
 else
   safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
   printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert not data.get("partial") and not data.get("failed_banks")'
@@ -751,4 +752,3 @@ done
 pass_check
 
 echo "${mode}/${router_db} integration smoke passed ${checks_passed}/${checks_total} checks"
-

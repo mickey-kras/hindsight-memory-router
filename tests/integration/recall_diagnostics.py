@@ -8,11 +8,13 @@ from typing import Any, cast, get_args
 
 from memory_router.db import PostgresDatabase, SqliteDatabase, is_postgres, sqlite_path
 from memory_router.envelope import QuarantineReason
+from memory_router.errors import HttpError
 from memory_router.hindsight import HindsightGateway, recall_score_certification
 from memory_router.scan_executor import (
     recall_response_scan_input,
     scan_recalled,
     shutdown_scan_executor_async,
+    start_scan_executor,
 )
 from memory_router.security import scan_recall_response, scan_recall_result
 from memory_router.security_models import SafetyFinding
@@ -29,6 +31,7 @@ _DETECTORS = frozenset(
 
 _SCORE_FIELDS = ("final", "reranker", "semantic", "keyword")
 _MAX_SCORE_SCANS = 20
+SCANNER_STARTUP_SECONDS = 60
 _JSON_TYPES = {str: "string", int: "integer", float: "float", bool: "boolean", type(None): "null"}
 
 
@@ -108,22 +111,50 @@ def upstream_summary(response: dict[str, Any], marker: str) -> dict[str, Any]:
     }
 
 
+async def warm_scanner() -> None:
+    # Standalone diagnostics have no application lifespan to warm spawned workers.
+    async with asyncio.timeout(SCANNER_STARTUP_SECONDS):
+        await asyncio.to_thread(start_scan_executor)
+        while True:
+            try:
+                result = await scan_recalled({"id": "warmup", "text": "ordinary"})
+            except HttpError as exc:
+                if (
+                    exc.status != 503
+                    or exc.code != "recall_scan_unavailable"
+                    or exc.message != "recall safety scan timed out"
+                ):
+                    raise
+                await asyncio.sleep(1)
+            else:
+                assert result.safe
+                return
+
+
 async def production_summary(response: dict[str, object]) -> dict[str, object]:
     # This is a fresh upstream response, not the earlier blocked policy request.
     scan_input = recall_response_scan_input(response)
     results = cast(list[dict[str, object]], response["results"])
     statuses = Counter(recall_score_certification(result) for result in results)
     effective = scan_recall_response(scan_input)
-    worker = await scan_recalled(response, reviewed_result_positions=frozenset())
-    return {
+    summary: dict[str, object] = {
         "capture": "fresh_upstream_response",
         "reviewed_result_count": 0,
         "score_certification": dict(statuses),
         "effective_aggregate_safe": effective.safe,
         "effective_aggregate_detectors": detector_counts(effective.findings),
-        "production_worker_safe": worker.safe,
-        "production_worker_detectors": detector_counts(worker.findings),
     }
+    try:
+        await warm_scanner()
+        worker = await scan_recalled(response, reviewed_result_positions=frozenset())
+    except Exception:
+        # Keep effective scanning and certification even if the worker is unavailable.
+        # Exception messages can contain upstream data and must never be printed.
+        summary["production_worker_available"] = False
+    else:
+        summary["production_worker_safe"] = worker.safe
+        summary["production_worker_detectors"] = detector_counts(worker.findings)
+    return summary
 
 
 async def quarantine_reasons(url: str) -> dict[str, int]:
@@ -158,10 +189,15 @@ async def main() -> None:
     )
     try:
         response = await gateway.recall("physical-main", {"query": os.environ["HMR_RECALL_MARKER"]})
-        summary["upstream"] = upstream_summary(response, os.environ["HMR_RECALL_MARKER"])
-        summary["production"] = await production_summary(response)
     except Exception:
         summary["upstream_available"] = False
+    else:
+        summary["upstream_available"] = True
+        try:
+            summary["upstream"] = upstream_summary(response, os.environ["HMR_RECALL_MARKER"])
+            summary["production"] = await production_summary(response)
+        except Exception:
+            summary["scanner_diagnostics_available"] = False
     finally:
         await gateway.close()
         await shutdown_scan_executor_async()
