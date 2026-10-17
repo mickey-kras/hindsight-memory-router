@@ -4,11 +4,16 @@ import asyncio
 import json
 import os
 from collections import Counter
-from typing import Any, get_args
+from typing import Any, cast, get_args
 
 from memory_router.db import PostgresDatabase, SqliteDatabase, is_postgres, sqlite_path
 from memory_router.envelope import QuarantineReason
-from memory_router.hindsight import HindsightGateway
+from memory_router.hindsight import HindsightGateway, recall_score_certification
+from memory_router.scan_executor import (
+    recall_response_scan_input,
+    scan_recalled,
+    shutdown_scan_executor_async,
+)
 from memory_router.security import scan_recall_response, scan_recall_result
 from memory_router.security_models import SafetyFinding
 
@@ -103,6 +108,24 @@ def upstream_summary(response: dict[str, Any], marker: str) -> dict[str, Any]:
     }
 
 
+async def production_summary(response: dict[str, object]) -> dict[str, object]:
+    # This is a fresh upstream response, not the earlier blocked policy request.
+    scan_input = recall_response_scan_input(response)
+    results = cast(list[dict[str, object]], response["results"])
+    statuses = Counter(recall_score_certification(result) for result in results)
+    effective = scan_recall_response(scan_input)
+    worker = await scan_recalled(response, reviewed_result_positions=frozenset())
+    return {
+        "capture": "fresh_upstream_response",
+        "reviewed_result_count": 0,
+        "score_certification": dict(statuses),
+        "effective_aggregate_safe": effective.safe,
+        "effective_aggregate_detectors": detector_counts(effective.findings),
+        "production_worker_safe": worker.safe,
+        "production_worker_detectors": detector_counts(worker.findings),
+    }
+
+
 async def quarantine_reasons(url: str) -> dict[str, int]:
     database = PostgresDatabase(url) if is_postgres(url) else SqliteDatabase(sqlite_path(url))
     await database.initialize()
@@ -136,10 +159,12 @@ async def main() -> None:
     try:
         response = await gateway.recall("physical-main", {"query": os.environ["HMR_RECALL_MARKER"]})
         summary["upstream"] = upstream_summary(response, os.environ["HMR_RECALL_MARKER"])
+        summary["production"] = await production_summary(response)
     except Exception:
         summary["upstream_available"] = False
     finally:
         await gateway.close()
+        await shutdown_scan_executor_async()
     print("HMR_RECALL_DIAGNOSTICS=" + json.dumps(summary, sort_keys=True))
 
 

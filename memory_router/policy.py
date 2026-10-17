@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from typing import Any, Literal, cast, get_args, get_origin
 
 from .canonical import canonical_json, sha256_hex
 from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
-from .hindsight import HindsightGatewayError
+from .hindsight import HindsightGatewayError, recall_score_certification
 from .logging import log_event
 from .models import RecallResponse
 from .observability import current_request_id
@@ -226,6 +227,9 @@ class RouterPolicy:
         *,
         bank_id: str | None = None,
     ) -> bool:
+        score_certification = dict(
+            Counter(recall_score_certification(result) for result in response.get("results", []))
+        )
         scan = await scan_recalled(
             response, writer_id=writer_id, reviewed_result_positions=reviewed_positions
         )
@@ -244,6 +248,7 @@ class RouterPolicy:
                     "payload": {
                         "action": "recalled_aggregate_blocked",
                         "content_sha256": digest,
+                        "score_certification": score_certification,
                         "findings": [
                             {
                                 "reason": finding.reason,

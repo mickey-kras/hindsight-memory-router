@@ -369,6 +369,7 @@ if [[ "$mode" == "real" ]]; then
     docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 20 python < tests/integration/recall_diagnostics.py >&2 || echo 'HMR_RECALL_DIAGNOSTICS={"available":false}' >&2
     fail_check "healthy recall did not return the seeded marker"
   fi
+  docker compose -p "$project" -f "$compose_file" exec -T -e HMR_RECALL_MARKER="$known_marker" memory-router timeout 60 python < tests/integration/recall_diagnostics.py
 else
   safe_recall="$(retry_post_router "/v1/default/banks/main/memories/recall" '{"query":"CI smoke known retain"}')"
   printf '%s' "$safe_recall" | python3 -c 'import json,sys; data=json.load(sys.stdin); assert not data.get("partial") and not data.get("failed_banks")'
@@ -497,7 +498,7 @@ admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
 pass_check
 
-# integration-behavior-sha256: a8648bb50ed7ea9d2aa5a2651a1a7cb7f54bed224ddbfefbdbbc21d5a90b1576
+# integration-behavior-sha256: f01a5231b3a73f3f3668424751facec1baa016cf8cce47390e7a08c2f9d456ef
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
@@ -750,3 +751,4 @@ done
 pass_check
 
 echo "${mode}/${router_db} integration smoke passed ${checks_passed}/${checks_total} checks"
+
