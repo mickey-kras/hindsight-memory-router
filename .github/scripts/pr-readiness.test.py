@@ -23,7 +23,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertNotIn("if", jobs["quality"])
         for name in ["aislop", "codeql", "architecture"]:
             self.assertEqual(jobs[name]["if"], "github.event.pull_request.draft != true")
-        for name in ["guard", "branch-policy", "dependency-review", "dependabot-policy"]:
+        for name in ["branch-policy", "dependency-review", "dependabot-policy"]:
             self.assertNotIn("if", jobs[name])
         self.assertEqual(jobs["draft-feedback"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["draft-feedback"]["if"], "github.event.pull_request.draft == true")

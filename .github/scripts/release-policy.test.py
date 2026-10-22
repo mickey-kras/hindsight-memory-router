@@ -53,26 +53,33 @@ if ROUTER:
     ])
 
 
-def policy(overrides=None):
+def policy(overrides=None, paths=None, reviews=None, rules=None, pull=None, base_overrides=None, statuses=None, current_pull=None):
     files = {
         str(path.relative_to(ROOT)): path.read_text()
         for path in (ROOT / ".github").rglob("*")
         if path.is_file() and path.suffix in {".yml", ".yaml", ".cjs", ".py", ".sh", ".json"}
     }
     files["package.json"] = (ROOT / "package.json").read_text()
+    files[".github/CODEOWNERS"] = (ROOT / ".github/CODEOWNERS").read_text()
+    base_files = {**files, **(base_overrides or {})}
     files.update(overrides or {})
     guard = yaml.safe_load(GUARD.read_text())
     steps = guard["jobs"]["guard"]["steps"]
     if ROUTER:
-        script = next(step["with"]["script"] for step in steps if "with" in step)
+        script = next(step["with"]["script"] for step in steps if "script" in step.get("with", {}))
         driver = r"""
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const failures = [];
-const github = { paginate: async () => input.paths.map(filename => ({filename, status: 'modified'})),
-  rest: { pulls: {listFiles() {}}, repos: {getContent: async ({path}) => ({data: {
-    content: Buffer.from(input.files[path]).toString('base64'), encoding: 'base64'
-  }})}}};
-const context = {repo: {owner: 'test', repo: 'test'}, payload: {pull_request: {number: 1, head: {sha: 'test'}}}};
+let pullReads = 0;
+const github = { paginate: async method => method === github.rest.pulls.listReviews ? input.reviews :
+    typeof method === 'string' ? input.rules :
+    input.paths.map(filename => ({filename, status: input.statuses[filename] || 'modified'})),
+  request: async () => ({data: input.rules}),
+  rest: { pulls: {listFiles() {}, listReviews() {}, get: async () => ({data: pullReads++ ? input.current_pull || input.pull : input.pull})},
+    repos: {getContent: async ({path, ref}) => ({data: {
+      type: 'file', content: Buffer.from((ref === input.pull.base.sha ? input.base_files : input.files)[path]).toString('base64'), encoding: 'base64'
+    }})}}};
+const context = {repo: {owner: 'test', repo: 'test'}, payload: {pull_request: input.pull}};
 const core = {setFailed: text => failures.push(text), info() {}};
 const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor;
 new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, context, core, require)
@@ -80,7 +87,11 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
 """
         result = subprocess.run(
             ["node", "-e", driver],
-            input=json.dumps({"script": script, "files": files, "paths": PATHS}),
+            env={**os.environ, "POLICY_TOOLS_DIRECTORY": os.environ.get("POLICY_TOOLS_DIRECTORY", str(ROOT / ".github/scripts"))},
+            input=json.dumps({"script": script, "files": files, "base_files": base_files, "paths": paths if paths is not None else PATHS,
+                              "reviews": reviews or [], "rules": rules or [], "statuses": statuses or {}, "current_pull": current_pull,
+                              "pull": pull or {"number": 1, "state": "open", "head": {"sha": "a" * 40}, "base": {"sha": "b" * 40, "ref": "main"},
+                                               "user": {"login": "mickey-kras", "type": "User"}}}),
             text=True,
             capture_output=True,
             check=True,
@@ -1275,6 +1286,179 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         )
         changed = (ROOT / MAIN).read_text().replace(action, action.split("@")[0] + "@" + "f" * 40)
         self.assertEqual(policy({MAIN: changed}), [])
+
+
+class AdmissionPolicyTests(unittest.TestCase):
+    lock_path = '.github/scripts/package-lock.json'
+    source_path = '.github/scripts/release-settings.cjs'
+
+    def lock_change(self, update):
+        lock = json.loads((ROOT / self.lock_path).read_text())
+        update(lock)
+        return policy({self.lock_path: json.dumps(lock)}, paths=[self.lock_path])
+
+    def test_registry_update_needs_no_hash_admission(self):
+        def update(lock):
+            entry = lock['packages']['node_modules/jose']
+            entry['version'] = '6.2.13'
+            entry['resolved'] = 'https://registry.npmjs.org/jose/-/jose-6.2.13.tgz'
+        self.assertEqual(self.lock_change(update), [])
+
+    def test_lockfile_rejects_untrusted_sources_integrity_and_scripts(self):
+        for field, value in [
+            ('resolved', 'https://registry.npmjs.org.evil.test/jose/-/jose.tgz'),
+            ('resolved', 'https://registry.npmjs.org@evil.test/jose/-/jose.tgz'),
+            ('resolved', 'http://registry.npmjs.org/jose/-/jose.tgz'),
+            ('resolved', 'git+https://github.com/example/jose.git'),
+            ('resolved', 'file:../../evil'),
+            ('resolved', 'https://registry.npmjs.org/jose/-/jose.tgz?token=x'),
+            ('resolved', 'https://registry.npmjs.org/other/-/other-6.2.12.tgz'),
+            ('resolved', 'https://registry.npmjs.org/jose/-/jose-99.0.0.tgz'),
+            ('name', 'other'), ('hasShrinkwrap', True), ('hasShrinkwrap', False),
+            ('integrity', 'sha1-YWJj'), ('integrity', ''),
+            ('hasInstallScript', True), ('hasInstallScript', 'false'),
+            ('link', True), ('inBundle', True), ('bundled', False),
+        ]:
+            with self.subTest(field=field, value=value):
+                self.assertTrue(self.lock_change(lambda lock: lock['packages']['node_modules/jose'].__setitem__(field, value)))
+        self.assertTrue(self.lock_change(lambda lock: lock['packages']['node_modules/jose'].pop('integrity')))
+        self.assertTrue(self.lock_change(lambda lock: lock['packages']['']['dependencies'].__setitem__('jose', '*')))
+        self.assertTrue(self.lock_change(lambda lock: lock.__setitem__('lockfileVersion', 2)))
+
+    def test_existing_install_script_does_not_admit_another_dependency(self):
+        original = json.loads((ROOT / self.lock_path).read_text())
+        original['packages']['node_modules/jose']['hasInstallScript'] = True
+        modified = json.loads(json.dumps(original))
+        modified['packages']['node_modules/semver']['hasInstallScript'] = True
+        self.assertTrue(policy({self.lock_path: json.dumps(modified)}, paths=[self.lock_path],
+                               base_overrides={self.lock_path: json.dumps(original)}))
+        self.assertEqual(policy({self.lock_path: json.dumps(original)}, paths=[self.lock_path],
+                                base_overrides={self.lock_path: json.dumps(original)}), [])
+
+    def test_existing_alias_remains_bound_to_its_original_package(self):
+        original = json.loads((ROOT / self.lock_path).read_text())
+        name = 'node_modules/jose/node_modules/legacy-name'
+        original['packages'][name] = {**original['packages']['node_modules/jose'], 'name': 'jose'}
+        self.assertEqual(policy({self.lock_path: json.dumps(original)}, paths=[self.lock_path],
+                                base_overrides={self.lock_path: json.dumps(original)}), [])
+        self.assertTrue(policy({self.lock_path: json.dumps(original)}, paths=[self.lock_path]))
+        modified = json.loads(json.dumps(original))
+        modified['packages'][name]['name'] = 'other'
+        modified['packages'][name]['resolved'] = 'https://registry.npmjs.org/other/-/other-6.2.12.tgz'
+        self.assertTrue(policy({self.lock_path: json.dumps(modified)}, paths=[self.lock_path],
+                               base_overrides={self.lock_path: json.dumps(original)}))
+
+    def admission(self, reviews=None, rules=None, user=None, base_overrides=None):
+        return policy({self.source_path: (ROOT / self.source_path).read_text() + '\n// reviewed update\n'},
+                      paths=[self.source_path], reviews=reviews, rules=rules,
+                      pull={'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40}, 'base': {'sha': 'b' * 40, 'ref': 'main'},
+                            'user': user or {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}},
+                      base_overrides=base_overrides)
+
+    def approval(self, **values):
+        return {'id': 1, 'user': {'login': 'mickey-kras', 'type': 'User', 'id': 24433677}, 'state': 'APPROVED', 'commit_id': 'a' * 40, **values}
+
+    def rules(self):
+        return [{'type': 'pull_request', 'parameters': {'require_code_owner_review': True,
+                 'dismiss_stale_reviews_on_push': True, 'require_last_push_approval': True,
+                 'required_approving_review_count': 1}}]
+
+    def test_exact_head_owner_admission_requires_independent_bot_and_live_controls(self):
+        self.assertEqual(self.admission([self.approval()], self.rules()), [])
+        self.assertTrue(self.admission([self.approval()], []))
+        self.assertTrue(self.admission([], self.rules()))
+        for key in self.rules()[0]['parameters']:
+            rules = self.rules()
+            rules[0]['parameters'][key] = False
+            self.assertTrue(self.admission([self.approval()], rules))
+        for user in [{'login': 'mickey-kras', 'type': 'User'}, {'login': 'someone', 'type': 'User'},
+                     {'login': 'mickey-kras', 'type': 'Bot'}]:
+            self.assertTrue(self.admission([self.approval()], self.rules(), user))
+        self.assertTrue(self.admission([self.approval()], self.rules(), base_overrides={'.github/CODEOWNERS': '/.github/ @someone\n'}))
+
+    def test_stale_revoked_and_nonowner_reviews_cannot_admit(self):
+        for review in [self.approval(commit_id='c' * 40), self.approval(state='DISMISSED'),
+                       self.approval(user={'login': 'someone', 'type': 'User'}),
+                       self.approval(user={'login': 'mickey-kras', 'type': 'User', 'id': 999})]:
+            self.assertTrue(self.admission([review], self.rules()))
+        for state in ['DISMISSED', 'CHANGES_REQUESTED']:
+            self.assertTrue(self.admission([self.approval(), self.approval(id=2, state=state)], self.rules()))
+        self.assertEqual(self.admission([self.approval(), self.approval(id=2, state='COMMENTED')], self.rules()), [])
+
+    def test_npm_configuration_and_shadow_locks_are_rejected_without_lock_changes(self):
+        for path in ['.npmrc', '.github/.npmrc', '.github/scripts/.npmrc', '.github/scripts/npm-shrinkwrap.json']:
+            with self.subTest(path=path):
+                result = policy(paths=[path], reviews=[self.approval()], rules=self.rules(),
+                                pull={'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40},
+                                      'base': {'sha': 'b' * 40, 'ref': 'main'},
+                                      'user': {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}})
+                self.assertIn('must not override the registry or governed lockfile', '\n'.join(result))
+
+    def test_owner_approval_cannot_disable_workflow_execution(self):
+        path = '.github/workflows/ci.yml'
+        original = (ROOT / path).read_text()
+        changes = [
+            original.replace('      - name: Gitleaks\n', '      - name: Gitleaks\n        if: false\n'),
+            original.replace('      - name: Gitleaks\n', '      - name: Gitleaks\n        continue-on-error: true\n'),
+            original.replace('        run: bandit -q -r memory_router', '        run: true'),
+            original.replace('        uses: gitleaks/gitleaks-action@', '        uses: attacker/skip-action@'),
+            original.replace('  security:\n', '  security:\n    continue-on-error: true\n'),
+        ]
+        for changed in changes:
+            self.assertNotEqual(changed, original)
+            result = policy({path: changed}, paths=[path], reviews=[self.approval()], rules=self.rules(),
+                            pull={'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40},
+                                  'base': {'sha': 'b' * 40, 'ref': 'main'},
+                                  'user': {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}})
+            self.assertIn('cannot change the trusted workflow execution contract', '\n'.join(result))
+
+    def test_owner_approval_can_add_steps_without_replacing_existing_controls(self):
+        path = '.github/workflows/ci.yml'
+        original = (ROOT / path).read_text()
+        changed = original.replace('      - name: Gitleaks\n', '      - name: Supplementary check\n        run: echo supplementary\n      - name: Gitleaks\n')
+        args = {'paths': [path], 'reviews': [self.approval()], 'rules': self.rules(),
+                'pull': {'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40},
+                         'base': {'sha': 'b' * 40, 'ref': 'main'},
+                         'user': {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}}}
+        self.assertEqual(policy({path: changed}, **args), [])
+        self.assertTrue(policy({path: changed}, **{**args, 'reviews': []}))
+        extra_job = original + '\n  supplemental:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo supplementary\n'
+        self.assertEqual(policy({path: extra_job}, **args), [])
+
+    def test_live_pull_changes_fail_closed_after_validation(self):
+        ready = {'state': 'open', 'head': {'sha': 'a' * 40}, 'base': {'sha': 'b' * 40}}
+        self.assertEqual(policy(paths=[self.source_path], current_pull=ready), [])
+        for current in [{**ready, 'head': {'sha': 'c' * 40}},
+                        {**ready, 'base': {'sha': 'c' * 40}}, {**ready, 'state': 'closed'}]:
+            with self.subTest(current=current), self.assertRaises(subprocess.CalledProcessError):
+                policy(paths=[self.source_path], current_pull=current)
+
+    def test_owner_approval_cannot_remove_the_guard(self):
+        path = '.github/workflows/policy-guard.yml'
+        result = policy(paths=[path], statuses={path: 'removed'}, reviews=[self.approval()], rules=self.rules(),
+                        pull={'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40},
+                              'base': {'sha': 'b' * 40, 'ref': 'main'},
+                              'user': {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}})
+        self.assertIn('protected policy must not be removed', '\n'.join(result))
+
+    def test_guard_is_base_owned_and_lock_hash_cannot_return(self):
+        workflow = yaml.safe_load(GUARD.read_text())
+        self.assertEqual(set(workflow.get('on', workflow.get(True))), {'pull_request_target'})
+        self.assertEqual(workflow['jobs']['guard']['name'], 'guard / guard')
+        self.assertEqual(workflow['permissions'], {'contents': 'read', 'pull-requests': 'read'})
+        steps = workflow['jobs']['guard']['steps']
+        checkouts = [step for step in steps if step.get('uses', '').startswith('actions/checkout@')]
+        self.assertEqual(len(checkouts), 1)
+        self.assertEqual(checkouts[0]['with'], {'ref': '${{ github.workflow_sha }}', 'path': '.policy-tools',
+                                               'sparse-checkout': '.github/scripts', 'persist-credentials': False})
+        install = next(step for step in steps if step.get('name') == 'Install trusted policy parser')
+        self.assertEqual(install['working-directory'], '.policy-tools/.github/scripts')
+        self.assertEqual(install['run'], 'npm ci --ignore-scripts --registry=https://registry.npmjs.org --userconfig=/dev/null')
+        source = next(step['with']['script'] for step in steps if 'script' in step.get('with', {}))
+        pins = source.split('const releaseProtected = {', 1)[1].split('};', 1)[0]
+        self.assertNotIn('package-lock.json', pins)
+        self.assertNotRegex(pins, r':\s*\[')
+        self.assertNotIn('guard', yaml.safe_load((ROOT / '.github/workflows/pr-validation.yml').read_text())['jobs'])
 
 
 if __name__ == "__main__":

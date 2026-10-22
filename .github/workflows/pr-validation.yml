@@ -25,9 +25,6 @@ jobs:
     if: github.event.pull_request.draft != true
     uses: ./.github/workflows/codeql.yml
 
-  guard:
-    uses: ./.github/workflows/policy-guard.yml
-
   branch-policy:
     uses: ./.github/workflows/branch-policy.yml
 
