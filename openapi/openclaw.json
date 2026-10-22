@@ -4985,9 +4985,13 @@
                 "additionalProperties": true,
                 "properties": {
                   "mode": {
-                    "type": "string",
+                    "type": [
+                      "string",
+                      "null"
+                    ],
                     "enum": [
-                      "full"
+                      "full",
+                      null
                     ],
                     "description": "Regenerate content once without changing the stored trigger mode."
                   }

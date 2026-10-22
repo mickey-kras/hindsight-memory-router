@@ -1376,9 +1376,11 @@ async def test_hindsight_1_1_filters_forward_to_resolved_bank(
     )
 
 
-@pytest.mark.parametrize("body", [None, {"mode": "full"}])
+@pytest.mark.parametrize("body", [None, {"mode": "full"}, {"mode": None}])
 @pytest.mark.asyncio
-async def test_mental_model_refresh_preserves_optional_mode(body: dict[str, str] | None) -> None:
+async def test_mental_model_refresh_preserves_optional_mode(
+    body: dict[str, str | None] | None,
+) -> None:
     policy = _policy({"operation_id": "op-1"})
     app_module.runtime.policy = policy
     path = "/v1/default/banks/openclaw/mental-models/model-1/refresh"
@@ -1428,3 +1430,20 @@ async def test_hindsight_1_1_inputs_are_scanned_before_forwarding(
 
     assert blocked.value.code == "suspicious_content"
     policy.hindsight.openclaw_request.assert_not_awaited()
+
+
+@pytest.mark.parametrize("body", [None, {"mode": "full"}, {"mode": None}])
+@pytest.mark.asyncio
+async def test_mental_model_refresh_accepts_empty_upstream_success(
+    body: dict[str, str | None] | None,
+) -> None:
+    policy = _policy(None)
+    app_module.runtime.policy = policy
+    path = "/v1/default/banks/openclaw/mental-models/model-1/refresh"
+
+    response = await app_module.dispatch(path.lstrip("/"), request("POST", path, body=body))
+
+    assert response.status_code == 200
+    assert _payload(response) is None
+    assert policy.hindsight.openclaw_request.await_args.args[3] == body
+    policy.quarantine_security_event.assert_not_awaited()
