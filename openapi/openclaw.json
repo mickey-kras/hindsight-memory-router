@@ -3307,6 +3307,21 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "call_type",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "llm",
+                "embedding",
+                "rerank",
+                "decision"
+              ]
+            },
+            "description": "Filter by model call type."
           }
         ],
         "responses": {
@@ -3407,6 +3422,21 @@
               "type": "string"
             },
             "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "call_type",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "llm",
+                "embedding",
+                "rerank",
+                "decision"
+              ]
+            },
+            "description": "Filter by model call type."
           }
         ],
         "responses": {
@@ -4276,6 +4306,16 @@
               "type": "integer"
             },
             "style": "form"
+          },
+          {
+            "in": "query",
+            "name": "exclude_knowledge_pages",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "List standalone mental models without knowledge pages."
           }
         ],
         "responses": {
@@ -4931,6 +4971,29 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          }
+        },
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "full"
+                    ],
+                    "description": "Regenerate content once without changing the stored trigger mode."
+                  }
+                }
+              }
+            }
           }
         }
       }

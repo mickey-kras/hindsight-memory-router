@@ -94,7 +94,7 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         read=True,
         body="none",
         strict=True,
-        query=("tags", "tags_match", "detail", "limit", "offset"),
+        query=("tags", "tags_match", "detail", "limit", "offset", "exclude_knowledge_pages"),
     ),
     _route(
         "POST", "mental-models", read=False, body="required", strict=True, body_label="mental-model"
@@ -225,7 +225,7 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         query=("tags", "tags_match", "tag_groups"),
     ),
     # Mental model operations.
-    _route("POST", "mental-models/{mental_model_id}/refresh", read=False, body="none"),
+    _route("POST", "mental-models/{mental_model_id}/refresh", read=False, body="optional"),
     _route("POST", "mental-models/{mental_model_id}/clear", read=False, body="none"),
     _route("POST", "mental-models/{mental_model_id}/dry-run-refresh", read=True, body="none"),
     _route(
@@ -307,6 +307,7 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
             "status",
             "operation",
             "scope",
+            "call_type",
             "provider",
             "trace_id",
             "document_id",
@@ -318,7 +319,13 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
             "offset",
         ),
     ),
-    _route("GET", "llm-requests/stats", read=True, body="none", query=("operation", "period")),
+    _route(
+        "GET",
+        "llm-requests/stats",
+        read=True,
+        body="none",
+        query=("operation", "call_type", "period"),
+    ),
 )
 
 

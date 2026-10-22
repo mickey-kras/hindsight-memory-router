@@ -10,8 +10,8 @@
   "source_blob_shas": {
     "plugin": "8eb20c4d8c1e80753e7528b415ee229a10d96993",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
-    "client": "f2a58cb58da0313497efc2244ed57621fd6f11a6",
-    "facade_spec": "da7965863e2382803426c671e6b48848a17676bc",
+    "client": "9b0c42fd2d361269add39a1a23f4a862b3515da1",
+    "facade_spec": "514972185705ce1ed49ba136a63fc99fc525aec9",
     "memory_provider": "d7037deb856c8ad5d724afec6cc0a09c56b7f672"
   },
   "plugin_client_methods": [
@@ -19,6 +19,6 @@
     "recall",
     "retain"
   ],
-  "upstream_version": "1.0.0",
-  "upstream_commit": "39c65ffe2f140d0c84cee58566cad8900c5b9908"
+  "upstream_version": "1.1.0",
+  "upstream_commit": "a5a619b5ca59c5c39e0f96be6f7a31fabd136bd5"
 }
