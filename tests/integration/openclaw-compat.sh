@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: d4b8cb26e4520e96831cfee0a0f556c1cd83e322867fcf1bba880ac3470c2da6
+# integration-behavior-sha256: 75cd299bbb72d718e75e4a806e26f1040c0374bb35f5b06891091ae485dbdcc3
 
 openclaw_request() {
   local method="$1"
@@ -130,7 +130,9 @@ page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer
 [[ "$page_status" == "201" ]] || fail_check "knowledge-base page create returned ${page_status}"
 openclaw_request PATCH "/v1/default/banks/main/knowledge-base/nodes/node-1" '{"title":"Runbook"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
-openclaw_request GET "/v1/default/banks/main/llm-requests/stats" >/dev/null
+openclaw_request GET "/v1/default/banks/main/llm-requests?call_type=decision" >/dev/null
+openclaw_request GET "/v1/default/banks/main/llm-requests/stats?call_type=embedding" >/dev/null
+openclaw_request POST "/v1/default/banks/main/mental-models/page-1/refresh" '{"mode":"full"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/observations/scopes?limit=1&offset=5" >/dev/null
 openclaw_request DELETE "/v1/default/banks/main/observations" >/dev/null
 python3 - "$state_file" "$facade_events_start" <<'PY' || fail_check "facade events did not resolve through physical-main"
@@ -162,7 +164,9 @@ expected = {
     ),
     ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
     ("GET", "audit-logs"): ("", None),
-    ("GET", "llm-requests/stats"): ("", None),
+    ("GET", "llm-requests"): ("?call_type=decision", None),
+    ("GET", "llm-requests/stats"): ("?call_type=embedding", None),
+    ("POST", "mental-models/page-1/refresh"): ("", {"mode": "full"}),
     ("GET", "observations/scopes"): ("?limit=1&offset=5", None),
     ("DELETE", "observations"): ("", None),
 }
