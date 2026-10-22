@@ -9,19 +9,40 @@ Quarantine review console for hindsight-memory-router. Static export, no backend
 
 ## Package
 
-`memory-router-ui` ships as a signed tarball (`memory-router-ui-<version>.tgz`
-plus a cosign sign-blob bundle) attached to each router GitHub release; it is
-not on npm. Packaging is registry-agnostic: the same `npm pack` artifact can be
-republished to npm or GitHub Packages later without changes. The tarball
-contains only `dist/` plus `README.md`/`LICENSE`; verify with
-`npm run test:package` or:
+Release automation publishes `@mickey-kras/memory-router-ui` to public npm with
+provenance. The package contains the built `dist/`, metadata, README and license.
+It is a static application; no Node server is included.
+
+After the [first-publication setup](../docs/RELEASING.md#npm-first-publication):
 
 ```bash
-cosign verify-blob --bundle memory-router-ui-<version>.tgz.sigstore.json \
-  --certificate-identity-regexp 'https://github.com/mickey-kras/hindsight-memory-router/' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  memory-router-ui-<version>.tgz
+npm install --ignore-scripts @mickey-kras/memory-router-ui@<version>
+# Serve node_modules/@mickey-kras/memory-router-ui/dist/ with your static host.
+
+# Or download and extract without installing dependencies:
+npm pack @mickey-kras/memory-router-ui@<version> --ignore-scripts
+mkdir ui-static
+tar -xzf mickey-kras-memory-router-ui-<version>.tgz -C ui-static
+python3 -m http.server 8080 --bind 127.0.0.1 --directory ui-static/package/dist
 ```
+
+The Python command is a local preview. Production hosting needs HTTPS and the
+security headers below. Configure the router URL and allowed origin as described
+under **Embedding**.
+
+The npm tarball is byte-identical to the signed GitHub release asset. Download its
+`.sigstore.json` bundle from the same release, then verify:
+
+```bash
+cosign verify-blob --bundle mickey-kras-memory-router-ui-<version>.tgz.sigstore.json \
+  --certificate-identity 'https://github.com/mickey-kras/hindsight-memory-router/.github/workflows/publish.yml@refs/heads/main' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  mickey-kras-memory-router-ui-<version>.tgz
+```
+
+The former unscoped package/asset `memory-router-ui-<version>.tgz` becomes
+`@mickey-kras/memory-router-ui` / `mickey-kras-memory-router-ui-<version>.tgz`.
+Update download scripts and installed paths; older releases keep their original names.
 
 ### Embedding
 

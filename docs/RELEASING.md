@@ -71,11 +71,13 @@ Router publishes the tested Linux amd64 image to GHCR/Docker Hub, signs/attests 
 reproducible bytes, attests it to both registries as an OCI referrer, attaches it to the GitHub release
 as `sbom.cdx.json`, and records its checksum as `sbom=` in `image-digests.txt`. It also builds the
 quarantine UI package (`npm pack` in `ui/`), signs the tarball keyless with cosign sign-blob, attaches
-`memory-router-ui-<version>.tgz` and its `.sigstore.json` bundle to the release, and records the tarball
+`mickey-kras-memory-router-ui-<version>.tgz` and its `.sigstore.json` bundle to the release, and records the tarball
 checksum as `ui-package=` in `image-digests.txt`. The UI version comes from `ui/package.json`; bump it
-when the consumed admin API contract changes. Integrations publishes
-tarballs, checksums and provenance to GitHub, without npm or
-Docker publication. `latest` tracks the highest released version; older-line fixes cannot move it backwards.
+whenever packaged bytes change, including metadata and documentation. After verifying the
+immutable GitHub assets and UI signature, the workflow publishes that exact tarball to public npm
+as `@mickey-kras/memory-router-ui`, with OIDC and provenance, without rebuilding or repacking.
+Retries require matching npm SHA-512 integrity and provenance. Integration package publication is
+described in that repository's release guide. `latest` tracks the highest released version; older-line fixes cannot move it backwards.
 
 Pull requests run dependency review. Dependencies a PR adds or updates fail the check on HIGH or CRITICAL
 advisories or on a forbidden license (`.github/dependency-review-config.yml`). Existing dependencies are
@@ -117,6 +119,44 @@ grandfathered; reviewed exceptions go into `allow-dependencies-licenses` as exac
 Release fix PRs assume a single maintainer: zero required approvals, owner-reviewed squash merges.
 Require independent approval before granting another person write access. CODEOWNERS cannot provide
 self-approval. Sonar stays main-only by design; release tests, CodeQL, Aislop and Trivy remain required.
+
+## npm first publication
+
+[Trusted publishing requirements](https://docs.npmjs.com/trusted-publishers/):
+GitHub-hosted runner, Node >=22.14, npm >=11.5.1, `id-token: write`, public repository/package.
+The workflow pins its npm CLI and uses no npm token secret.
+
+1. If the scoped package does not exist, publish a bootstrap version from a disposable checkout.
+   Set `ui/package.json` and its lockfile to an unused version lower than the intended release
+   (for example `0.0.0`), build and pack with `npm ci --prefix ui` and
+   `npm pack ./ui --pack-destination .`. Use `npm login` locally, then
+   `npm publish ./mickey-kras-memory-router-ui-0.0.0.tgz --access public --ignore-scripts --tag bootstrap`.
+   Keep bootstrap edits out of main. This setup version has no CI provenance and is not a release;
+   never use the intended release version for it, since npm versions cannot be overwritten.
+2. In npm package **Settings > Trusted publishing**, add GitHub Actions:
+
+   | Field | Value |
+   | --- | --- |
+   | Owner | `mickey-kras` |
+   | Repository | `hindsight-memory-router` |
+   | Workflow filename | `release.yml` |
+   | Environment | `release-automation` |
+   | Allowed action | Direct `npm publish` |
+
+   npm checks the caller `release.yml`; cosign's signing identity is the reusable `publish.yml`.
+   Restrict publishing access to require 2FA and disallow tokens. Newly configured trust must
+   complete a publish within npm's configuration expiry window.
+3. Dispatch **release** from main. The intended UI version must be unused, or already have
+   identical bytes and provenance. npm publication failure retains the candidate and skips
+   version-bump/branch-deletion follow-up; rerun failed jobs after correcting npm setup.
+4. Confirm `npm view @mickey-kras/memory-router-ui@<version> dist --json` reports integrity and
+   provenance. Download with `npm pack @mickey-kras/memory-router-ui@<version> --ignore-scripts`,
+   compare SHA-256 with `ui-package=` in the GitHub release's `image-digests.txt`, and verify
+   the signature using [the UI instructions](../ui/README.md#package).
+
+Do not mark first publication complete until installation/download, integrity and provenance
+are verified against the actual public registry. A manually published release version without
+provenance requires a new UI version; the retry check does not bypass provenance.
 
 ## Recovery
 

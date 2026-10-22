@@ -1,5 +1,5 @@
 {
-  "name": "memory-router-ui",
+  "name": "@mickey-kras/memory-router-ui",
   "version": "0.2.0",
   "description": "Quarantine review console for hindsight-memory-router. Static SPA; decrypts locally, never in the router.",
   "license": "MIT",
@@ -40,5 +40,14 @@
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mickey-kras/hindsight-memory-router.git",
+    "directory": "ui"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

@@ -805,6 +805,24 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         self.assertIn("uiPackageAssets", script)
         self.assertIn(".sigstore.json", script)
 
+    def test_npm_publication_requires_verified_release_bytes(self):
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = publish["steps"]
+        names = [step.get("name") for step in steps]
+        ordered = ["Sign the UI package", "Upload image digests", "Publish immutable release",
+                   "Verify signed UI package", "Publish verified UI tarball to public npm",
+                   "Promote latest released image"]
+        self.assertEqual(sorted(names.index(name) for name in ordered),
+                         [names.index(name) for name in ordered])
+        npm = next(step for step in steps if step.get("name") == ordered[-2])
+        self.assertEqual(npm["if"], "steps.push.outputs.published == 'true'")
+        self.assertIn("node .github/scripts/publish-npm.cjs", npm["run"])
+        self.assertNotIn("npm pack", npm["run"])
+        self.assertEqual(publish["permissions"]["id-token"], "write")
+        self.assertEqual(publish["environment"], "release-automation")
+        self.assertNotIn("NODE_AUTH_TOKEN", json.dumps(publish))
+        self.assertIs(json.loads((ROOT / "package.json").read_text())["private"], True)
+
     def test_release_cleanup_contract(self):
         main = yaml.safe_load((ROOT / MAIN).read_text())
         publish = main["jobs"]["publish"]

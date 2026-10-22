@@ -1,7 +1,7 @@
 {
   "name": "hindsight-memory-router",
   "version": "0.0.0",
-  "private": false,
+  "private": true,
   "type": "module",
   "engines": {
     "node": ">=22.13"

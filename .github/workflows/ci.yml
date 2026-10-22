@@ -415,7 +415,7 @@ jobs:
 
       - name: Release automation tests
         if: ${{ needs.changes.outputs.release != 'false' }}
-        run: node --test .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs .github/scripts/provenance.test.cjs .github/scripts/attest-image.test.cjs
+        run: node --test .github/scripts/publish-npm.test.cjs .github/scripts/release.test.cjs .github/scripts/publish-image.test.cjs .github/scripts/release-cleanup.test.cjs .github/scripts/provenance.test.cjs .github/scripts/attest-image.test.cjs
 
       - name: Install Cosign for local attestation smoke
         if: ${{ needs.changes.outputs.release != 'false' }}

@@ -218,9 +218,9 @@ function prepared(m) {
   writeFileSync("image-digests.txt", `ghcr=${digest}\ndockerhub=${digest}\n`);
   writeFileSync("sbom.cdx.json", '{"bomFormat":"CycloneDX"}\n');
   mkdirSync("ui", { recursive: true });
-  put("ui/package.json", { name: "memory-router-ui", version: "0.2.0" });
-  writeFileSync("memory-router-ui-0.2.0.tgz", "tgz\n");
-  writeFileSync("memory-router-ui-0.2.0.tgz.sigstore.json", "{}\n");
+  put("ui/package.json", { name: "@mickey-kras/memory-router-ui", version: "0.2.0" });
+  writeFileSync("mickey-kras-memory-router-ui-0.2.0.tgz", "tgz\n");
+  writeFileSync("mickey-kras-memory-router-ui-0.2.0.tgz.sigstore.json", "{}\n");
   return manifest;
 }
 
@@ -365,8 +365,8 @@ test("finalization publishes only after uploading assets and never moves or recr
       "asset:release.json",
       "asset:image-digests.txt",
       "asset:sbom.cdx.json",
-      "asset:memory-router-ui-0.2.0.tgz",
-      "asset:memory-router-ui-0.2.0.tgz.sigstore.json",
+      "asset:mickey-kras-memory-router-ui-0.2.0.tgz",
+      "asset:mickey-kras-memory-router-ui-0.2.0.tgz.sigstore.json",
       "publish",
     ]);
     assert.equal(m.outputs.latest, "true");
@@ -769,7 +769,7 @@ test("partial publication restores its original signature bytes before resuming 
     const m = mock();
     prepared(m);
     const hash = (path) => `sha256:${createHash("sha256").update(readFileSync(path)).digest("hex")}`;
-    writeFileSync("image-digests.txt", `commit=${sha}\nversion=0.1.0\nsbom=${hash("sbom.cdx.json")}\nui-package=${hash("memory-router-ui-0.2.0.tgz")}\n`);
+    writeFileSync("image-digests.txt", `commit=${sha}\nversion=0.1.0\nsbom=${hash("sbom.cdx.json")}\nui-package=${hash("mickey-kras-memory-router-ui-0.2.0.tgz")}\n`);
     mkdirSync("saved");
     for (const path of ["image-digests.txt", "sbom.cdx.json", ...release.uiPackageAssets()]) {
       writeFileSync(join("saved", path), readFileSync(path));
@@ -781,7 +781,7 @@ test("partial publication restores its original signature bytes before resuming 
       return result;
     };
     await assert.rejects(release.finalize(m), /acknowledgement lost/);
-    writeFileSync("memory-router-ui-0.2.0.tgz.sigstore.json", '{"regenerated":"different bytes"}');
+    writeFileSync("mickey-kras-memory-router-ui-0.2.0.tgz.sigstore.json", '{"regenerated":"different bytes"}');
     await assert.rejects(release.finalize(m), /Existing release asset differs/);
     release.restoreReleaseAssets({ context: m.context, directory: "saved" });
     await release.finalize(m);

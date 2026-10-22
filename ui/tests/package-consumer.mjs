@@ -39,6 +39,9 @@ try {
     readFileSync(path.join(extracted, "package", "package.json"), "utf8"),
   );
   assert.equal(packedManifest.private, undefined, "published package must not stay private");
+  assert.equal(packedManifest.name, "@mickey-kras/memory-router-ui");
+  assert.equal(packedManifest.publishConfig.access, "public");
+  assert.equal(packedManifest.repository.directory, "ui");
   assert.equal(packedManifest.version, pkg.version);
   assert.equal(packedManifest.license, "MIT");
 
