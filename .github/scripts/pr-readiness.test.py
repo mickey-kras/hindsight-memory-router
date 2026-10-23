@@ -63,6 +63,7 @@ class ReadinessTests(unittest.TestCase):
         self.assertEqual(policy.quality_gate(needs, draft="false"), [])
         for event in ["push", "workflow_dispatch"]:
             needs["container"]["result"] = "skipped"
+            needs["docs-ste"]["result"] = "skipped"
             self.assertEqual(policy.quality_gate(needs, event=event, draft="true"), [])
 
     def test_full_gate_remains_fail_closed_after_readiness(self):

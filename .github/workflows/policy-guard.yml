@@ -29,7 +29,7 @@ jobs:
             const releaseProtected = {
               ".github/scripts/publish-npm.test.cjs": "c6bd1a7d72727fd85c0610756642084cf021daa9c935838657df327ead16871b",
               ".github/scripts/publish-npm.cjs": "41b763efb6719ae2ec7478b93af449a40f127591bd8d1ac6196da35ed84d7fac",
-              ".github/scripts/pr-readiness.test.py": "d742ba4ce9ba0b85baa83f0796589e7926fc9ec46b1a17a7df43001c353730bb",
+              ".github/scripts/pr-readiness.test.py": "8d9a3a0765a6125c48cf9e834df5b288023ae142c85ebc3851bc15e06081cd3f",
               ".github/workflows/pr-validation.yml": "30f155b1140b11f1c127dbccc02c71bb185a65a9deee43ad71ad716385a2951f",
               ".github/scripts/coverage-artifact.test.py": "511957df17377c4a403edc2d97243b3d285ed2926e2c7c2fb2bb129342f76064",
               ".github/scripts/coverage-artifact.py": "2e5cfaed56648bbaa9a54a9750ba1d0e55f4dda33019cead49609ccb71b1ec47",
