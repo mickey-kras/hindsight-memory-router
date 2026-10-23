@@ -44,6 +44,7 @@ if ROUTER:
     PATHS.append(".github/scripts/release-cleanup.test.cjs")
     PATHS.extend([
         ".github/workflows/pr-validation.yml",
+        ".github/workflows/docs-ste.yml",
         ".github/scripts/pr-readiness.test.py",
         ".github/scripts/provenance.cjs",
         ".github/scripts/provenance.test.cjs",
@@ -1181,6 +1182,27 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         for path in [".github/scripts/coverage-artifact.py", ".github/scripts/coverage-artifact.test.py"]:
             with self.subTest(path=path):
                 self.assertTrue(policy({path: (ROOT / path).read_text() + "\n# unreviewed change\n"}))
+
+    def test_ste_workflow_replacement_fails_reviewed_policy(self):
+        if not ROUTER:
+            self.skipTest("router STE workflow required")
+        path = ".github/workflows/docs-ste.yml"
+        replacement = """name: docs-ste
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  pass:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo passed
+"""
+        self.assertEqual(policy(), [])
+        self.assertIn(
+            f"{path}: release automation must match its reviewed policy",
+            "\n".join(policy({path: replacement})),
+        )
 
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])
