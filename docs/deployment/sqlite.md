@@ -10,7 +10,10 @@ Default URL:
 sqlite:./data/quarantine.db
 ```
 
-In the Docker image, the working directory is `/app`, so the default resolves to `/app/data/quarantine.db`. Compose mounts the persistent `memory-router-data` named volume at `/app/data`; the database and SQLite WAL sidecars therefore remain inside that volume.
+In the Docker image, the working directory is `/app`.
+For this reason, the default URL resolves to `/app/data/quarantine.db`.
+Compose mounts the persistent `memory-router-data` named volume at `/app/data`.
+The database and SQLite WAL sidecars stay in that volume.
 
 ## Upgrade from the former default path
 
@@ -26,8 +29,18 @@ to:
 sqlite:./data/quarantine.db
 ```
 
-Deployments that relied on the former default must migrate deliberately before upgrading. Either keep the existing database location by setting `QUARANTINE_DATABASE_URL` explicitly, or move the existing database (including applicable SQLite sidecar state while the router is stopped) to the new persistent location before starting the upgraded router. Otherwise the new default can create a fresh empty quarantine database and make the previous review queue appear missing.
+Deployments that used the former default must migrate before upgrading.
+To keep the existing database location, set `QUARANTINE_DATABASE_URL` explicitly.
+Alternatively, stop the router.
+Move the existing database and applicable SQLite sidecar state to the new persistent location.
+Start the upgraded router only after the move.
 
-Memory Router validates SQLite directory/file writability at startup and fails fast if the configured storage is not writable. Embedded deployments that construct the server programmatically can opt out of startup storage validation with `validateStorage: false`.
+Without migration, the new default can create a new empty quarantine database.
+The previous review queue can then appear missing.
 
-Use an explicit `sqlite:` URL only when you need a different location. SQLite is not exposed as a network service and does not require direct host access.
+Memory Router validates at startup that it can write to the SQLite directory and file.
+Startup fails immediately if the configured storage is not writable.
+Embedded deployments that construct the server programmatically can disable startup storage validation with `validateStorage: false`.
+
+Use an explicit `sqlite:` URL only for a different location. SQLite is not a network service, and it does not use direct host access.
+

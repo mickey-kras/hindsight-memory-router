@@ -31,3 +31,7 @@ tests/integration/tmp/
 # Aislop local state
 .aislop/history.jsonl
 .aislop/agent/
+
+# Vale downloads its styles here. Only the project vocabulary is tracked.
+.vale/styles/*
+!.vale/styles/config/

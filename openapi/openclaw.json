@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Memory Router OpenClaw Compatibility Surface",
+    "title": "OpenClaw compatibility for the Memory Router",
     "version": "0.9.0",
-    "description": "Conditional Hindsight endpoints used by the current OpenClaw integration. With MEMORY_ROUTER_PRINCIPALS, bank_id is a literal Hindsight bank ID authorized against the principal's per-bank operation grants. In legacy shared-token mode, bank_id is a Memory Router writer ID resolved to its configured write bank.",
+    "description": "Conditional Hindsight endpoints for the current OpenClaw integration. With MEMORY_ROUTER_PRINCIPALS, bank_id is a literal Hindsight bank ID. The router checks the principal operation grants for that bank. In legacy shared-token mode, bank_id is a writer ID for the Memory Router. The router resolves that ID to its configured write bank.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -241,7 +241,7 @@
     },
     "/v1/default/banks/{bank_id}/audit-logs": {
       "get": {
-        "summary": "List resolved bank audit log entries",
+        "summary": "List entries in the audit log of the resolved bank",
         "operationId": "hindsightGetAuditLogs",
         "security": [
           {
@@ -315,14 +315,14 @@
             "style": "form"
           },
           {
-            "description": "Max items to return",
+            "description": "Maximum number of items to return",
             "explode": true,
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
-              "description": "Max items to return",
+              "description": "Maximum number of items to return",
               "maximum": 500,
               "minimum": 1,
               "type": "integer"
@@ -394,12 +394,12 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
+        "description": "Principal mode must have memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/audit-logs/stats": {
       "get": {
-        "summary": "Get resolved bank audit log statistics",
+        "summary": "Get statistics for the audit log of the resolved bank",
         "operationId": "hindsightGetAuditLogsStats",
         "security": [
           {
@@ -889,7 +889,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Filter directives by execution scope. Omit or pass [] to list all directives.",
+            "description": "Filter directives by execution scope. To list all directives, omit this parameter or pass [].",
             "explode": true,
             "in": "query",
             "name": "tags",
@@ -906,14 +906,14 @@
             "style": "form"
           },
           {
-            "description": "How tagged directives match the requested scope. Untagged/global directives are included.",
+            "description": "Method to match tagged directives to the requested scope. Results also include untagged and global directives.",
             "explode": true,
             "in": "query",
             "name": "tags_match",
             "required": false,
             "schema": {
               "default": "any",
-              "description": "How tagged directives match the requested scope. Untagged/global directives are included.",
+              "description": "Method to match tagged directives to the requested scope. Results also include untagged and global directives.",
               "enum": [
                 "any",
                 "all",
@@ -1353,7 +1353,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Case-insensitive substring filter on document ID (e.g. 'report' matches 'report-2024')",
+            "description": "Case-insensitive substring filter for the document ID. For example, 'report' matches 'report-2024'.",
             "explode": true,
             "in": "query",
             "name": "q",
@@ -1427,7 +1427,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Time axis used for filtering and ordering."
+            "description": "Time axis for filters and sort order."
           },
           {
             "name": "start_date",
@@ -2463,7 +2463,7 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
+        "description": "Principal mode must have memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/knowledge-base/folders": {
@@ -3014,7 +3014,7 @@
     },
     "/v1/default/banks/{bank_id}/knowledge-base/tree": {
       "get": {
-        "summary": "Get the resolved bank knowledge base tree",
+        "summary": "Get the knowledge base tree for the resolved bank",
         "operationId": "hindsightGetKnowledgeBaseTree",
         "security": [
           {
@@ -3197,7 +3197,7 @@
             "style": "form"
           },
           {
-            "description": "Filter to one operation run (all LLM calls sharing a trace)",
+            "description": "Filter to one operation run. A run includes all LLM calls with the same trace.",
             "explode": true,
             "in": "query",
             "name": "trace_id",
@@ -3225,7 +3225,7 @@
             "style": "form"
           },
           {
-            "description": "Filter to the operation run(s) that produced or consumed a given memory_unit",
+            "description": "Filter to the operation runs that produced or used a specified memory_unit.",
             "explode": true,
             "in": "query",
             "name": "memory_id",
@@ -3239,14 +3239,14 @@
             "style": "form"
           },
           {
-            "description": "Paginate by operation run (trace) instead of by call; returns whole runs",
+            "description": "Divide results into pages by operation run (trace), instead of by call. Results contain complete runs.",
             "explode": true,
             "in": "query",
             "name": "group",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Paginate by operation run (trace) instead of by call; returns whole runs",
+              "description": "Divide results into pages by operation run (trace), instead of by call. Results contain complete runs.",
               "type": "boolean"
             },
             "style": "form"
@@ -3280,14 +3280,14 @@
             "style": "form"
           },
           {
-            "description": "Max items to return",
+            "description": "Maximum number of items to return",
             "explode": true,
             "in": "query",
             "name": "limit",
             "required": false,
             "schema": {
               "default": 50,
-              "description": "Max items to return",
+              "description": "Maximum number of items to return",
               "maximum": 500,
               "minimum": 1,
               "type": "integer"
@@ -3374,12 +3374,12 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "Principal mode requires memory.recall for the target bank because this response can contain memory content."
+        "description": "Principal mode must have memory.recall for the target bank because this response can contain memory content."
       }
     },
     "/v1/default/banks/{bank_id}/llm-requests/stats": {
       "get": {
-        "summary": "Get resolved bank LLM request statistics",
+        "summary": "Get statistics for LLM requests in the resolved bank",
         "operationId": "hindsightGetLlmRequestsStats",
         "security": [
           {
@@ -3511,7 +3511,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Optional fact type filter (world, experience, observation)",
+            "description": "Optional filter by fact type (world, experience, observation)",
             "explode": true,
             "in": "query",
             "name": "type",
@@ -3579,7 +3579,7 @@
     },
     "/v1/default/banks/{bank_id}/memories/dry-run-extract": {
       "post": {
-        "summary": "Preview fact extraction without persisting",
+        "summary": "Preview fact extraction without storage",
         "operationId": "hindsightCreateMemoriesDryRunExtract",
         "security": [
           {
@@ -3825,7 +3825,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Time axis used for filtering and ordering."
+            "description": "Time axis for filters and sort order."
           },
           {
             "name": "start_date",
@@ -4265,14 +4265,14 @@
             "style": "form"
           },
           {
-            "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+            "description": "Detail level: 'metadata' includes only names and tags. 'content' adds content and configuration. 'full' includes reflect_response.",
             "explode": true,
             "in": "query",
             "name": "detail",
             "required": false,
             "schema": {
               "default": "full",
-              "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+              "description": "Detail level: 'metadata' includes only names and tags. 'content' adds content and configuration. 'full' includes reflect_response.",
               "enum": [
                 "metadata",
                 "content",
@@ -4461,14 +4461,14 @@
             "$ref": "#/components/parameters/MentalModelId"
           },
           {
-            "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+            "description": "Detail level: 'metadata' includes only names and tags. 'content' adds content and configuration. 'full' includes reflect_response.",
             "explode": true,
             "in": "query",
             "name": "detail",
             "required": false,
             "schema": {
               "default": "full",
-              "description": "Detail level: 'metadata' (names/tags only), 'content' (adds content/config), 'full' (includes reflect_response)",
+              "description": "Detail level: 'metadata' includes only names and tags. 'content' adds content and configuration. 'full' includes reflect_response.",
               "enum": [
                 "metadata",
                 "content",
@@ -4993,7 +4993,7 @@
                       "full",
                       null
                     ],
-                    "description": "Regenerate content once without changing the stored trigger mode."
+                    "description": "Generate the content again once. Keep the stored trigger mode unchanged."
                   }
                 }
               }
@@ -5187,7 +5187,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Filter by status: pending, processing, completed, failed, or cancelled",
+            "description": "Filter by status: `pending`, `processing`, `completed`, `failed`, or `cancelled`",
             "explode": true,
             "in": "query",
             "name": "status",
@@ -5244,14 +5244,14 @@
             "style": "form"
           },
           {
-            "description": "Exclude parent batch operations from results",
+            "description": "Exclude parent operations for batches from results",
             "explode": true,
             "in": "query",
             "name": "exclude_parents",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Exclude parent batch operations from results",
+              "description": "Exclude parent operations for batches from results",
               "type": "boolean"
             },
             "style": "form"
@@ -5332,14 +5332,14 @@
             "$ref": "#/components/parameters/OperationId"
           },
           {
-            "description": "Include the raw task payload (submission params) in the response. May be large.",
+            "description": "Include the raw task payload (submission parameters) in the response. This payload can be large.",
             "explode": true,
             "in": "query",
             "name": "include_payload",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Include the raw task payload (submission params) in the response. May be large.",
+              "description": "Include the raw task payload (submission parameters) in the response. This payload can be large.",
               "type": "boolean"
             },
             "style": "form"
@@ -5395,7 +5395,7 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "Principal mode requires bank.config.read for status without payloads, or memory.recall if any include_payload value is true. Repeated values are checked individually; invalid boolean values return 400. Legacy-mode query forwarding is unchanged."
+        "description": "In principal mode, status without payloads must have bank.config.read. If an include_payload value is true, the request must have memory.recall. The router checks each repeated value. Invalid boolean values return 400. Legacy mode keeps its existing query forwarding rules."
       },
       "delete": {
         "summary": "Cancel one background operation",
@@ -5756,14 +5756,14 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Force a fresh recompute, bypassing the cached value (and refreshing the cache).",
+            "description": "Calculate a new value instead of using the cached value. Store the new value in the cache.",
             "explode": true,
             "in": "query",
             "name": "refresh",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Force a fresh recompute, bypassing the cached value (and refreshing the cache).",
+              "description": "Calculate a new value instead of using the cached value. Store the new value in the cache.",
               "type": "boolean"
             },
             "style": "form"
@@ -5823,7 +5823,7 @@
     },
     "/v1/default/banks/{bank_id}/stats/memories-timeseries": {
       "get": {
-        "summary": "Get memory count time series for the resolved bank",
+        "summary": "Get counts of memories over time for the resolved bank",
         "operationId": "hindsightGetStatsMemoriesTimeseries",
         "security": [
           {
@@ -5852,14 +5852,14 @@
             "style": "form"
           },
           {
-            "description": "Timestamp column to bucket on. `created_at` (default) = ingest time; `mentioned_at` / `occurred_start` = event time, useful for migrated corpora where ingest time is a single point and doesn't reflect the underlying knowledge timeline. Unknown values fall back to `created_at`.",
+            "description": "Timestamp column for time buckets. `created_at` is the default and represents ingest time. `mentioned_at` and `occurred_start` represent event time. Event time is useful for migrated corpora with one ingest time and different knowledge dates. Unknown values use `created_at`.",
             "explode": true,
             "in": "query",
             "name": "time_field",
             "required": false,
             "schema": {
               "default": "created_at",
-              "description": "Timestamp column to bucket on. `created_at` (default) = ingest time; `mentioned_at` / `occurred_start` = event time, useful for migrated corpora where ingest time is a single point and doesn't reflect the underlying knowledge timeline. Unknown values fall back to `created_at`.",
+              "description": "Timestamp column for time buckets. `created_at` is the default and represents ingest time. `mentioned_at` and `occurred_start` represent event time. Event time is useful for migrated corpora with one ingest time and different knowledge dates. Unknown values use `created_at`.",
               "type": "string"
             },
             "style": "form"
@@ -5937,7 +5937,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Wildcard pattern to filter tags (e.g., 'user:*' for user:alice, '*-admin' for role-admin). Use '*' as wildcard. Case-insensitive.",
+            "description": "Wildcard pattern to filter tags. For example, 'user:*' matches user:alice, and '*-admin' matches role-admin. Use '*' as the wildcard. Matching is case-insensitive.",
             "explode": true,
             "in": "query",
             "name": "q",
@@ -5951,14 +5951,14 @@
             "style": "form"
           },
           {
-            "description": "Where to read tags from: 'memories' (memory_units, default) or 'mental_models'.",
+            "description": "Source of tags: 'memories' (memory_units) or 'mental_models'. The default is 'memories'.",
             "explode": true,
             "in": "query",
             "name": "source",
             "required": false,
             "schema": {
               "default": "memories",
-              "description": "Where to read tags from: 'memories' (memory_units, default) or 'mental_models'.",
+              "description": "Source of tags: 'memories' (memory_units) or 'mental_models'. The default is 'memories'.",
               "enum": [
                 "memories",
                 "mental_models"
@@ -6054,18 +6054,18 @@
       "RouterToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Legacy MEMORY_ROUTER_TOKEN; mutually exclusive with principal mode."
+        "description": "Legacy MEMORY_ROUTER_TOKEN. You cannot use this token with principal mode."
       },
       "PrincipalToken": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Per-principal token configured by MEMORY_ROUTER_PRINCIPALS; requires the operation scope on the literal target bank."
+        "description": "Principal token configured by MEMORY_ROUTER_PRINCIPALS. The token must have the operation scope on the literal target bank."
       },
       "HumanToken": {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "mrh_<key-id>_<secret>",
-        "description": "Short-lived, revocable human session returned by interactive OIDC login. Bank operations require the corresponding configured human grant; admin, metrics, bank administration, and config writes are excluded."
+        "description": "Interactive OIDC login returns a short-lived human session that permits revocation. Bank operations must have the related configured human grant. The session excludes admin operations, metrics, bank administration, and configuration writes."
       }
     },
     "parameters": {
@@ -6073,7 +6073,7 @@
         "name": "bank_id",
         "in": "path",
         "required": true,
-        "description": "Principal mode: literal target bank ID checked against per-bank grants. Legacy shared-token mode: Memory Router writer ID resolved to its configured write bank.",
+        "description": "In principal mode, this is the literal target bank ID. The router checks its per-bank grants. In legacy shared-token mode, this is a writer ID for the Memory Router. The router resolves the writer ID to its configured write bank.",
         "schema": {
           "type": "string",
           "minLength": 1
@@ -6184,7 +6184,7 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "Request exceeds the router body or route-specific bound",
+        "description": "Request is more than the router body or route-specific bound",
         "content": {
           "application/json": {
             "schema": {
@@ -6204,10 +6204,10 @@
         }
       },
       "RateLimited": {
-        "description": "Router retain/recall quota or upstream client rate limit exceeded",
+        "description": "The rate or concurrency of retain or recall requests is more than a router quota or an upstream client limit",
         "headers": {
           "Retry-After": {
-            "description": "Seconds until the router quota window resets, when supplied",
+            "description": "Seconds until the quota window of the router resets, if supplied",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -6233,10 +6233,10 @@
         }
       },
       "ScanUnavailable": {
-        "description": "Request scanner failure or saturation returns request_scan_unavailable. Read-response scanner failure, saturation, or field/time limit returns facade_scan_unavailable. Post-write response-scan failures use 502 hindsight_response_scan_unavailable instead, without Retry-After. Operational scanner failures do not quarantine content.",
+        "description": "Request scanner failure or saturation returns request_scan_unavailable. A read-response scan returns facade_scan_unavailable after scanner failure, saturation, or a field or time limit. Response-scan failures after a write return 502 hindsight_response_scan_unavailable without Retry-After. Operational scanner failures do not quarantine content.",
         "headers": {
           "Retry-After": {
-            "description": "Seconds before retrying",
+            "description": "Seconds before a retry",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -6252,7 +6252,7 @@
         }
       },
       "UpstreamFailure": {
-        "description": "Hindsight unavailable, redirected, unauthorized, invalid, oversized, unsafe, or failed. A response-scan failure after a successful upstream write returns hindsight_response_scan_unavailable without Retry-After; the write may already have completed, so verify its status before retrying. No replay is queued",
+        "description": "Hindsight cannot serve the request. Possible causes include redirection, authorization failure, an invalid or oversized response, unsafe content, and other upstream failures. A response-scan failure after a successful upstream write returns hindsight_response_scan_unavailable without Retry-After. The write can be complete. Examine the write status before you retry. The router does not queue a replay.",
         "content": {
           "application/json": {
             "schema": {
@@ -6272,7 +6272,7 @@
         }
       },
       "Forbidden": {
-        "description": "Principal lacks the required operation scope on the target bank (authorization_denied).",
+        "description": "The principal does not have the necessary operation scope on the target bank (authorization_denied).",
         "content": {
           "application/json": {
             "schema": {
@@ -6414,3 +6414,5 @@
     }
   }
 }
+
+

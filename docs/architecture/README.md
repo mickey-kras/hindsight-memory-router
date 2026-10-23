@@ -5,19 +5,28 @@
 Canonical model: [`workspace.dsl`](workspace.dsl)  
 Interactive architecture: [Structurizr site](https://mickey-kras.github.io/hindsight-memory-router/)
 
-C1 to C3, dynamic, and deployment views are architecture-as-code maintained in `workspace.dsl`. Structurizr validates and renders that model; it does not infer architecture from Python. Architecture-affecting runtime changes must update the DSL in the same PR. Files under `generated/` are generated from the DSL or the README overview generator; do not hand-edit them.
+`workspace.dsl` defines C1 to C3, dynamic, and deployment views as architecture code.
+Structurizr validates and renders the model.
+It does not infer architecture from Python.
+Update the DSL in the same PR as runtime changes that affect architecture.
+Files under `generated/` come from the DSL or README overview generator.
+Do not edit generated files manually.
 
-Dynamic views cover principal authorization, client coordination, routing, policy, security and review workflows. Health/version endpoints stay in the structural and API references. The model stops at C3.
+Dynamic views cover principal authorization, client coordination, routing, policy, security and review workflows. The health and version endpoints stay in the structural and API references. The model stops at C3.
 
 ## README overview
 
-Each README uses the same topology and highlights its own repository, with separate light/dark SVG assets. Generate this repository's pair with `python3 scripts/architecture-overview.py` (also run by `make architecture`). Export the integrations pair directly into that repository:
+Each README uses the same topology and highlights its own repository.
+Each has separate SVG assets for the light and dark themes.
+Generate this repository's pair with `python3 scripts/architecture-overview.py`.
+`make architecture` also runs that command.
+Export the integrations pair directly into that repository:
 
 ```sh
 python3 scripts/architecture-overview.py --repository integrations --output-dir ../hindsight-memory-router-integrations/docs/architecture
 ```
 
-Only each repository's own pair is committed there. The diagrams deliberately omit deployment details; README `<picture>` elements select the theme and provide a light fallback.
+Each repository commits only its own pair there. The diagrams deliberately omit deployment details. README `<picture>` elements select the theme and give a light fallback.
 
 ## Overview and detailed views
 
@@ -35,32 +44,40 @@ Only each repository's own pair is committed there. The diagrams deliberately om
 
 ## Dynamic views
 
-- [Principal authorization](https://mickey-kras.github.io/hindsight-memory-router/#PrincipalAuthorization): authenticate credentials and check bank/scope grants before memory access.
+- [Principal authorization](https://mickey-kras.github.io/hindsight-memory-router/#PrincipalAuthorization): authenticate credentials and check bank and scope grants before memory access.
 - [Integration reads](https://mickey-kras.github.io/hindsight-memory-router/#IntegrationReads): client fan-out, shared budget, partial results, and authorization failure handling.
 - [Retain queue / replay](https://mickey-kras.github.io/hindsight-memory-router/#RetainReplay): transient outage queuing and current write-bank checks.
-- [Retain](https://mickey-kras.github.io/hindsight-memory-router/#Retain)
-- [Recall](https://mickey-kras.github.io/hindsight-memory-router/#Recall)
-- [Compatibility operations](https://mickey-kras.github.io/hindsight-memory-router/#CompatibilityOperations): shared flow for supported bank/config/mental-model/reflect operations used by the integrations.
+- [Retain](https://mickey-kras.github.io/hindsight-memory-router/#Retain): the write path.
+- [Recall](https://mickey-kras.github.io/hindsight-memory-router/#Recall): the read path.
+- [Compatibility operations](https://mickey-kras.github.io/hindsight-memory-router/#CompatibilityOperations): the shared flow for the bank, config, mental-model and reflect operations that the integrations use.
 - [Quarantine / review](https://mickey-kras.github.io/hindsight-memory-router/#QuarantineReview): browser or CLI decryption and decision outcomes.
-- [Quarantine recovery](https://mickey-kras.github.io/hindsight-memory-router/#QuarantineRecovery): verified reconciliation after ambiguous side effects.
+- [Quarantine recovery](https://mickey-kras.github.io/hindsight-memory-router/#QuarantineRecovery): reconciliation after an operator examines ambiguous side effects.
 - [Startup / shutdown](https://mickey-kras.github.io/hindsight-memory-router/#StartupShutdown)
 
-### Implementation boundaries
+### Limits of the implementation
 
-Principal-mode requests authorize the explicit bank and operation scope. Legacy writer mode maps writer IDs to banks; its server-side recall fan-out is separate from client-side multi-bank coordination. The client mapping never grants server access.
+Principal-mode requests authorize the explicit bank and operation scope. In the legacy writer mode, the router maps writer IDs to banks. Its server-side recall fan-out is separate from the client-side coordination of more than one bank. The client mapping never grants server access.
 
-Integration retain queues hold **plaintext transcripts on the agent host**. They are separate from the router's encrypted quarantine. OpenClaw and the MCP adapter use the shared coordinator where configured; coding-agent adapters also have harness-specific capture and cursor behavior.
+Integration retain queues hold **plaintext transcripts on the agent host**. They are separate from the router's encrypted quarantine. OpenClaw and the MCP adapter use the shared coordinator when you configure it. Coding-agent adapters also have harness-specific capture and cursor behavior.
 
-Review approval of a retained request rechecks its original destination and current grant, then writes to Hindsight. Approval of a recalled memory allows that reviewed memory without another retain; rejection invalidates it. Rejecting a retained request does not write it. Postpone defers review. After an ambiguous side effect, an operator verifies Hindsight and reconciles the current snapshot; the router does not blindly replay the operation. See [review operations](../operations/quarantine-review.md).
+Review approval of a kept request examines its original destination and current grant again. Then it writes to Hindsight.
+Approval of a recalled memory permits that reviewed memory without another retain.
+Rejection invalidates the recalled memory.
+If a reviewer rejects a kept request, the router does not write it.
+Postpone defers review.
 
-The browser console decrypts RSA-OAEP envelopes with WebCrypto. Provider-wrapped envelopes require review tooling configured for the matching provider; see [quarantine review](../operations/quarantine-review.md).
+After an ambiguous side effect, an operator examines Hindsight and reconciles the current snapshot.
+The router does not replay the operation without verification.
+See [review operations](../operations/quarantine-review.md).
 
-These flows are grounded in `memory_router/principal_gate.py`, `request_dispatch.py`, `policy.py`, and `admin.py`; client flows follow the integrations repository's `src/shared/recall-coordinator.ts`, `retain-coordinator.ts`, and `src/mcp/server.ts`.
+The browser console decrypts RSA-OAEP envelopes with WebCrypto. Provider-wrapped envelopes must have review tooling configured for the same provider. See [quarantine review](../operations/quarantine-review.md).
+
+These flows come from `memory_router/principal_gate.py`, `request_dispatch.py`, `policy.py`, and `admin.py`. The client flows follow the integrations repository's `src/shared/recall-coordinator.ts`, `retain-coordinator.ts`, and `src/mcp/server.ts`.
 
 ## Deployment
 
-- [Single-node + SQLite](https://mickey-kras.github.io/hindsight-memory-router/#SingleNode)
-- [Clustered + PostgreSQL](https://mickey-kras.github.io/hindsight-memory-router/#Clustered)
+- [Single node with SQLite](https://mickey-kras.github.io/hindsight-memory-router/#SingleNode)
+- [Cluster with PostgreSQL](https://mickey-kras.github.io/hindsight-memory-router/#Clustered)
 
 ## View names
 
@@ -70,7 +87,9 @@ The interactive site uses explicit human-facing prefixes:
 - `Dynamic:` for runtime interaction views.
 - `Deployment:` for deployment views.
 
-The static site opens on System Context when no view is linked and adds a persistent view selector; Structurizr's built-in quick navigation remains available with `Space`.
+If the link names no view, the static site opens on System Context.
+It adds a persistent view selector.
+The built-in quick navigation of Structurizr is available with `Space`.
 
 ## Updating
 
@@ -78,5 +97,6 @@ The static site opens on System Context when no view is linked and adds a persis
 make architecture
 ```
 
-Requires Docker. `make architecture-site` builds the uncommitted static site used by GitHub Pages.
+Docker is necessary. `make architecture-site` builds the uncommitted static site used by GitHub Pages.
+
 

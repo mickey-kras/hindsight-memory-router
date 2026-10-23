@@ -1,0 +1,8 @@
+# ste-cli configuration for the ASD-STE100 documentation gate.
+# The ASD-STE100 dictionary is not used: the specification does not permit redistribution.
+presets: [software]
+exclude:
+  - "*requirements.txt"
+  - "THIRD_PARTY_NOTICES.md"
+  - "licenses/**"
+  - "CHANGELOG.md"
