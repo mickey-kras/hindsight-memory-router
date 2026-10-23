@@ -44,6 +44,7 @@ if ROUTER:
     PATHS.append(".github/scripts/release-cleanup.test.cjs")
     PATHS.extend([
         ".github/workflows/pr-validation.yml",
+        ".github/workflows/docs-ste.yml",
         ".github/scripts/pr-readiness.test.py",
         ".github/scripts/provenance.cjs",
         ".github/scripts/provenance.test.cjs",
@@ -164,7 +165,7 @@ process.stdout.write(JSON.stringify(failures));
 
 def successful_quality_needs():
     needs = {name: {"result": "success", "outputs": {}} for name in
-             ["changes", "hindsight", "python", "ui", "release", "security", "container"]}
+             ["changes", "hindsight", "python", "ui", "release", "security", "container", "docs-ste"]}
     needs["changes"]["outputs"] = {name: "true" for name in ["python", "ui", "release"]}
     for name in ["python", "ui", "release"]:
         needs[name]["outputs"] = {"validation": "full"}
@@ -199,12 +200,14 @@ class ReleasePolicyTests(unittest.TestCase):
         workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         jobs = workflow["jobs"]
         self.assertEqual(workflow["name"], "ci")
-        self.assertEqual(set(jobs), {"changes", "hindsight", "python", "ui", "release", "security", "checks", "container"})
+        self.assertEqual(set(jobs), {"changes", "hindsight", "python", "ui", "release", "security", "checks", "container", "docs-ste"})
         self.assertEqual(set(jobs["checks"]["needs"]), set(jobs) - {"checks"})
         self.assertEqual(jobs["checks"]["if"], "always()")
         self.assertEqual(jobs["checks"].get("name", "checks"), "checks")
         self.assertEqual(jobs["container"]["name"], "container")
         self.assertEqual(jobs["container"]["if"], "github.event_name == 'pull_request' && (github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != '')")
+        self.assertEqual(jobs["docs-ste"]["uses"], "./.github/workflows/docs-ste.yml")
+        self.assertEqual(jobs["docs-ste"]["if"], "github.event_name == 'pull_request'")
         self.assertNotIn("needs", jobs["security"])
         self.assertNotIn("needs", jobs["hindsight"])
         for name in ["ui", "release"]:
@@ -215,7 +218,7 @@ class ReleasePolicyTests(unittest.TestCase):
             self.assertEqual(jobs[name]["if"], "github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''")
         for job in jobs.values():
             self.assertNotIn("continue-on-error", job)
-            for step in job["steps"]:
+            for step in job.get("steps", []):
                 self.assertNotIn("continue-on-error", step)
                 if step.get("uses", "").startswith("actions/checkout@"):
                     self.assertIs(step["with"]["persist-credentials"], False)
@@ -246,16 +249,17 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertTrue(quality_gate({**passing, "unreviewed": {"result": "success"}}))
         self.assertTrue(quality_gate({}))
 
-    def test_quality_gate_allows_only_the_known_non_pr_container_skip_and_reruns(self):
+    def test_quality_gate_allows_only_the_known_non_pr_skips_and_reruns(self):
         passing = successful_quality_needs()
         for event in ["push", "workflow_dispatch"]:
             with self.subTest(event=event):
-                baseline = {**passing, "container": {"result": "skipped"}}
+                baseline = {**passing, "container": {"result": "skipped"}, "docs-ste": {"result": "skipped"}}
                 self.assertEqual(quality_gate(baseline, event), [])
                 self.assertTrue(quality_gate({**baseline, "security": {"result": "skipped"}}, event))
-                for state in ["success", "failure", "cancelled", None]:
-                    self.assertTrue(quality_gate({**baseline, "container": {"result": state}}, event))
-                self.assertTrue(quality_gate({key: value for key, value in baseline.items() if key != "container"}, event))
+                for name in ["container", "docs-ste"]:
+                    for state in ["success", "failure", "cancelled", None]:
+                        self.assertTrue(quality_gate({**baseline, name: {"result": state}}, event))
+                    self.assertTrue(quality_gate({key: value for key, value in baseline.items() if key != name}, event))
                 self.assertTrue(quality_gate({**baseline, "python": {"result": "failure"}}, event))
                 # A failed-job rerun may retain successful results from the first attempt.
                 self.assertEqual(quality_gate(baseline, event), [])
@@ -364,8 +368,8 @@ class ReleasePolicyTests(unittest.TestCase):
         self.assertLess(runtime_install, ui_test)
         self.assertTrue(any(step.get("uses", "").startswith("actions/setup-python@") for step in ui_steps[:runtime_install]))
         for job in jobs.values():
-            steps = {step.get("name"): step for step in job["steps"]}
-            step_ids = {step["id"] for step in job["steps"] if "id" in step}
+            steps = {step.get("name"): step for step in job.get("steps", [])}
+            step_ids = {step["id"] for step in job.get("steps", []) if "id" in step}
             for name, step in steps.items():
                 if name and name.startswith("Upload"):
                     for source in re.findall(r"steps\.([\w-]+)\.outcome", step.get("if", "")):
@@ -378,7 +382,7 @@ class ReleasePolicyTests(unittest.TestCase):
         original = (ROOT / path).read_text()
         mutations = [
             original.replace("    if: always()", "    if: success()"),
-            original.replace("needs: [changes, hindsight, python, ui, release, security, container]", "needs: [changes, hindsight, python, ui, release, security]"),
+            original.replace("needs: [changes, hindsight, python, ui, release, security, container, docs-ste]", "needs: [changes, hindsight, python, ui, release, security, container]"),
             original.replace("result !== expected", "false"),
             original.replace("  security:\n", "  security:\n    continue-on-error: true\n"),
             original.replace("  ui:\n", "  ui:\n    if: false\n"),
@@ -1069,7 +1073,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
 
     def test_two_validation_stages_keep_artifacts_distinct(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-        steps = {step.get("name"): step for job in ci["jobs"].values() for step in job["steps"]}
+        steps = {step.get("name"): step for job in ci["jobs"].values() for step in job.get("steps", [])}
         self.assertIs(steps["Gitleaks"]["env"]["GITLEAKS_ENABLE_UPLOAD_ARTIFACT"], False)
         upload = steps["Upload redacted secret scan"]
         self.assertIn("inputs.candidate_sha || github.sha", upload["with"]["name"])
@@ -1195,6 +1199,27 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         for path in [".github/scripts/coverage-artifact.py", ".github/scripts/coverage-artifact.test.py"]:
             with self.subTest(path=path):
                 self.assertTrue(policy({path: (ROOT / path).read_text() + "\n# unreviewed change\n"}))
+
+    def test_ste_workflow_replacement_fails_reviewed_policy(self):
+        if not ROUTER:
+            self.skipTest("router STE workflow required")
+        path = ".github/workflows/docs-ste.yml"
+        replacement = """name: docs-ste
+on:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  pass:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo passed
+"""
+        self.assertEqual(policy(), [])
+        self.assertIn(
+            f"{path}: owner review cannot change the trusted workflow execution contract",
+            "\n".join(policy({path: replacement})),
+        )
 
     def test_reviewed_release_workflows_pass(self):
         self.assertEqual(policy(), [])

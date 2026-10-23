@@ -418,7 +418,19 @@ Human review and agent-generated code must never use the same owner credential.
    Without review, it must fail.
    Approval of the exact head must pass.
    A later push or dismissed review must prevent the merge.
-4. Merge the migration through the existing protected process.
+4. In repository **Settings > Actions > Policies**, add an active event policy.
+   Apply it to `.github/workflows/policy-guard.yml` and allow `pull_request_target`.
+   Keep all other event and actor restrictions.
+   If actor rules apply, permit the implementation App and Dependabot.
+   Check inherited policies and **Policy insights** for blocks.
+   Test a new PR and a later push. Confirm that `guard / guard` runs on each current head.
+   Record the policy settings, run links and head SHAs in the migration PR.
+   Complete this check before you require `guard / guard`.
+
+   GitHub's default public-repository policy will block this event from November 2, 2026.
+   See [GitHub Actions event policies](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
+   The guard must only run trusted base code and inspect candidate files as data.
+5. Merge the migration through the existing protected process.
    If the old guard cannot admit the migration, the owner must record a one-time exception in that PR.
    Record the exact reviewed head, evidence and inherited failures.
    The owner must explicitly authorize this initial exception.
