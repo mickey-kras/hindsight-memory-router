@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import process from "node:process";
 import { URL } from "node:url";
@@ -176,7 +177,7 @@ function chatCompletionWithToolCall(body) {
   };
 }
 
-createServer(async (req, res) => {
+const server = createServer(async (req, res) => {
   try {
     const method = req.method ?? "GET";
     const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
@@ -274,6 +275,12 @@ createServer(async (req, res) => {
   } catch {
     return send(res, 500, { error: "internal error" });
   }
-}).listen(PORT, () => {
-  process.stdout.write(`fake-llm listening on ${PORT}\n`);
+});
+
+server.listen(PORT, () => {
+  const address = server.address();
+  if (process.env.READY_FILE) {
+    writeFileSync(process.env.READY_FILE, JSON.stringify({ port: address.port }));
+  }
+  process.stdout.write(`fake-llm listening on ${address.port}\n`);
 });

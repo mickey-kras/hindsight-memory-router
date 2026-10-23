@@ -83,19 +83,24 @@ test("older publication does not move latest backwards", async () => {
 });
 
 test("publication visibility is retried with a bounded wait", async () => {
-  const { options, published } = fixture();
+  const { options, published, calls } = fixture();
   const waits = [];
   let lookups = 0;
-  options.lookup = async (_name, version) => version === "latest" ? null : ++lookups === 4 ? published : null;
+  options.lookup = async (_name, version) => version === "latest" ? null : ++lookups === 12 ? published : null;
   options.wait = async (ms) => { waits.push(ms); };
   await publishPackage(options);
-  assert.deepEqual(waits, [2000, 4000]);
+  assert.equal(waits.reduce((total, ms) => total + ms, 0), 300_000);
+  assert.equal(calls.length, 1);
 });
 
 test("missing publication and failed npm command fail loudly", async () => {
-  const { options } = fixture();
+  const { options, calls } = fixture();
+  const waits = [];
   options.lookup = async () => null;
-  await assert.rejects(publishPackage(options), /publication not visible/);
+  options.wait = async (ms) => { waits.push(ms); };
+  await assert.rejects(publishPackage(options), /publication not visible after 10 minutes/);
+  assert.equal(waits.reduce((total, ms) => total + ms, 0), 600_000);
+  assert.equal(calls.length, 1);
   options.publish = () => { throw new Error("npm failed"); };
   await assert.rejects(publishPackage(options), /npm failed/);
 });
