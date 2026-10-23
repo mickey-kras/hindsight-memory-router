@@ -51,7 +51,7 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "4ec36d52d4f7d5fe4c7cd9bcd3602436baf3cb0a4c0a383c5e2332d2ebb0d423",
+              ".github/scripts/release-policy.test.py": "aba638ae9b1d93cd2566f7f8445e67e77348c0c398dbf84f13b5c7548beaf647",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
