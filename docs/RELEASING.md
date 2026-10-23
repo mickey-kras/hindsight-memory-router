@@ -358,7 +358,7 @@ The guard can admit a new code hash in the same PR only when all these condition
   They need approval of the latest push by someone other than its pusher.
   The applicable repository ruleset must be active and have no bypass actors.
   The guard checks its current source and review parameters.
-  If the API hides bypass actors, the guard needs the administrator's readback for that revision of the ruleset.
+  If bypass actors are hidden, the guard needs the administrator's readback for that revision of the ruleset.
 - The owner's latest decisive review is `APPROVED` for the exact current head SHA.
   A later change request or dismissal invalidates it.
   API errors cause the guard to fail.
@@ -428,7 +428,7 @@ Human review and agent-generated code must never use the same owner credential.
    Complete this check before you make `guard / guard` mandatory.
 
    The default policy for public repositories will block this event from November 2, 2026.
-   See [GitHub Actions event policies](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
+   See [Event policies for GitHub Actions](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
    The guard must only run trusted base code and inspect candidate files as data.
 5. Merge the migration through the existing protected process.
    If the old guard cannot admit the migration, the owner must record a one-time exception in that PR.
