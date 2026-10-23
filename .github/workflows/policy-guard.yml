@@ -58,7 +58,7 @@ jobs:
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "a740c759eb4f1f143433abd2016825fb91f12a1331a3f20e9e6a63e6401f0c3b",
               ".github/workflows/release.yml": "588a6dfc6f4dd61cc94b78334e324da8d54f3ae12eead536f805786797311634",
-              ".github/workflows/ci.yml": "dd32a0e8bc7d4ca5f38dca92341b6c74b224da063ec65c186a4ba303c4e57822",
+              ".github/workflows/ci.yml": "bd9ae490aa43b61ca397bfe8c9cd9793c6d7c274db8f761e1e10496c98fb5562",
               ".github/workflows/aislop.yml": "0ecc80af57e081678cb78f6c088eb9f89f10b497d7c8105b4b74b88a0ce9a724",
               ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
               ".github/workflows/architecture.yml": "542a6d4f5fea1a60c5562c4439af26443cfcdaddd8303fa55b2aa09e6f3cfe09",
