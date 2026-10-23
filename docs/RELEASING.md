@@ -358,7 +358,7 @@ The guard can admit a new code hash in the same PR only when all these condition
   They need approval of the latest push by someone other than its pusher.
   The applicable repository ruleset must be active and have no bypass actors.
   The guard checks its current source and review parameters.
-  If the API hides bypass actors, the guard needs the administrator's readback for that exact ruleset revision.
+  If the API hides bypass actors, the guard needs the administrator's readback for that revision of the ruleset.
 - The owner's latest decisive review is `APPROVED` for the exact current head SHA.
   A later change request or dismissal invalidates it.
   API errors cause the guard to fail.
@@ -405,7 +405,7 @@ Human review and agent-generated code must never use the same owner credential.
 
    Replace `RULESET_ID` with the applicable rule's numeric ID.
    Store the JSON output in the repository Actions variable `CI_POLICY_SETTINGS_REVIEW`.
-   Only an administrator may configure this trusted variable.
+   Only an administrator can configure this trusted variable.
    Never give the guard an administrator token.
 
    The normal read-only token can hide bypass actors.
@@ -421,13 +421,13 @@ Human review and agent-generated code must never use the same owner credential.
 4. In repository **Settings > Actions > Policies**, add an active event policy.
    Apply it to `.github/workflows/policy-guard.yml` and allow `pull_request_target`.
    Keep all other event and actor restrictions.
-   If actor rules apply, permit the implementation App and Dependabot.
-   Check inherited policies and **Policy insights** for blocks.
+   If actor rules apply, let the implementation App and Dependabot run the guard.
+   Check the inherited policies and **Policy insights** for blocks.
    Test a new PR and a later push. Confirm that `guard / guard` runs on each current head.
    Record the policy settings, run links and head SHAs in the migration PR.
-   Complete this check before you require `guard / guard`.
+   Complete this check before you make `guard / guard` mandatory.
 
-   GitHub's default public-repository policy will block this event from November 2, 2026.
+   The default policy for public repositories will block this event from November 2, 2026.
    See [GitHub Actions event policies](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
    The guard must only run trusted base code and inspect candidate files as data.
 5. Merge the migration through the existing protected process.
