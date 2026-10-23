@@ -232,9 +232,7 @@ def test_fake_llm_startup_reports_bounded_logs_and_reaps_process(
     assert "startup diagnostic" in str(error.value)
     assert "discarded-prefix" not in str(error.value)
     assert len(str(error.value)) < 4200
-    assert actions == (
-        ["wait"] if exit_code is not None else ["terminate", "wait", "kill", "wait"]
-    )
+    assert actions == (["wait"] if exit_code is not None else ["terminate", "wait", "kill", "wait"])
 
 
 def test_fake_embeddings_keep_query_and_passage_vectors_identical(fake_llm_url: str) -> None:
