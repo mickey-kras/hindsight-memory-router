@@ -5,8 +5,7 @@ name: docs-ste
 # Neither tool uses the ASD-STE100 dictionary: the specification does not permit redistribution.
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_call:
 
 concurrency:
   group: docs-ste-${{ github.event.pull_request.number }}
