@@ -183,9 +183,13 @@ Existing dependencies do not prove license approval.
    Release the integrations.
    Examine the manifests, the immutable releases and the registry digests.
 
-The release fix PRs assume a single maintainer: zero required approvals and owner-reviewed squash merges.
-Make independent approval mandatory before you give write access to another person.
-CODEOWNERS cannot give self-approval.
+The release fix PRs use the independent implementation App and owner-reviewed squash merges.
+After activation of the CI review ruleset, every fix PR requires approval.
+The person who approves the latest push must not be its pusher.
+CI changes also need code-owner approval.
+
+Follow the activation procedure below.
+Dry-run and release checks stay mandatory.
 Sonar runs only on `main` by design.
 The release tests, CodeQL, Aislop and Trivy stay mandatory.
 
@@ -295,3 +299,145 @@ The workflow reports a missing originating run as a failure.
 
 This consolidation of the router workflows does not change the release automation of the integrations.
 
+
+## CI policy admission
+
+The `policy` workflow runs from the trusted base with `pull_request_target`.
+It reads candidate files through the GitHub API.
+It never uses `git checkout` to load PR code.
+It never executes PR code.
+The YAML parser comes from `.github/scripts` at the executing `github.workflow_sha`.
+Its installation disables lifecycle scripts.
+
+The guard never loads the candidate manifest, lockfile or parser.
+
+The required check stays `guard / guard`.
+Do not call the guard from a candidate `pull_request` workflow.
+That would let the candidate replace its own validator.
+
+### Lockfile checks
+
+The guard checks `.github/scripts/package-lock.json` as npm lockfile version 3.
+Each dependency must have these properties:
+
+- An HTTPS tarball from exactly `registry.npmjs.org`.
+- A tarball path that matches its package name and version.
+- Canonical SHA-512 integrity.
+- No new install script compared with the immutable base lockfile.
+
+The guard rejects linked packages, bundled packages and nested shrinkwrap files.
+The root dependency declarations must match the separately checked `package.json`.
+These checks constrain the source and installation behavior.
+They do not prove that registry content is safe or free from vulnerabilities.
+Dependency review, audit and all other required CI checks still apply.
+
+Changes to `.npmrc` in the repository root, `.github`, or `.github/scripts` are forbidden.
+A shadow `.github/scripts/npm-shrinkwrap.json` is also forbidden.
+This restriction applies when the checked lockfile has no changes.
+These files can redirect registry requests or replace the checked lockfile.
+
+A routine lockfile update does not need changes to the guard hashes.
+Do not restore a lockfile hash allowlist.
+Do not admit an old vulnerable lockfile to release a package.
+
+### Code approval
+
+Executable workflows, helpers and security configuration keep one reviewed hash per path.
+Replace the existing hash when you update an admission.
+Do not append an older version.
+Policy source must equal the trusted base or receive the same independent review as an unknown code hash.
+
+The guard can admit a new code hash in the same PR only when all these conditions apply:
+
+- A GitHub App bot (`type: Bot`) is the PR author.
+  It must be separate from the owner.
+  A machine-user account has `type: User` and cannot use this approval path.
+- The base branch's `.github/CODEOWNERS` assigns `/.github/` to `@mickey-kras`.
+- Live branch rules need code-owner approval and at least one approval.
+  They dismiss stale approvals.
+  They need approval of the latest push by someone other than its pusher.
+  The applicable repository ruleset must be active and have no bypass actors.
+  The guard checks its current source and review parameters.
+  If the API does not show bypass actors, the guard needs the administrator's readback for that revision of the ruleset.
+- The owner's latest decisive review is `APPROVED` for the exact current head SHA.
+  A later change request or dismissal invalidates it.
+  API errors cause the guard to fail.
+
+Approval admits only the changed code hash.
+It cannot override workflow security checks, malformed lockfiles, removal protection or required CI checks.
+Protected workflows must keep their existing execution controls from the immutable base.
+These include jobs, dependencies, conditions and the order of existing steps.
+Existing commands, action targets, inputs, environment variables and failure handling must stay unchanged.
+Action commit pins can change.
+
+Independent owner review can admit more jobs or steps in the same PR.
+Reviewers must check that additions do not weaken existing checks.
+Removal or change of mandatory controls requires an explicit trusted-policy migration.
+Ordinary hash approval is not enough.
+
+After approval, rerun the failed trusted-base `policy` job.
+The next push requires a new approval and run.
+Native rules dismiss stale reviews even after a successful job.
+Human review and agent-generated code must never use the same owner credential.
+
+### One-time administrative activation
+
+1. Create a separate implementation GitHub App.
+   Install it in the repository.
+   Give it only the necessary contents, pull-request and workflow write permissions.
+   Keep administration, review approval and release credentials out of this identity.
+   Configure the implementation connection to use the App.
+   Check that a test PR has that bot as its author.
+   The human owner must review it independently.
+2. Add `.github/CODEOWNERS`.
+   Import `.github/rulesets/require-ci-owner-review.json` as a separate active ruleset for the default and release branches.
+   Keep existing status checks, protections and bypass restrictions.
+   A JSON file in Git does not activate a rule.
+   This template requires one review for every PR and code-owner approval for CI files.
+   The review ruleset must have no bypass actors.
+3. Check the live rule through `GET /repos/{owner}/{repo}/rules/branches/{branch}`.
+   Get its `ruleset_id`.
+   With an administrator's local `gh` login, read the full ruleset:
+
+   ```sh
+   gh api repos/mickey-kras/hindsight-memory-router/rulesets/RULESET_ID --jq 'if has("bypass_actors") and .bypass_actors == [] then {repository: .source, ruleset_id: .id, updated_at: .updated_at, bypass_actors: []} else error("Administrator readback must show no bypass actors") end'
+   ```
+
+   Replace `RULESET_ID` with the applicable rule's numeric ID.
+   Store the JSON output in the repository Actions variable `CI_POLICY_SETTINGS_REVIEW`.
+   Only an administrator can configure this trusted variable.
+   Never give the guard an administrator token.
+
+   The normal read-only token can hide bypass actors.
+   The guard then needs an exact repository, ruleset ID and `updated_at` match with this readback.
+   Missing, malformed or stale data disables same-PR code approval.
+   After any ruleset change, repeat the administrator readback.
+   A visible bypass list must always be empty, even with a matching readback.
+
+   Test a policy PR that the bot created.
+   Without review, it must fail.
+   Approval of the exact head must pass.
+   A later push or dismissed review must prevent the merge.
+4. In repository **Settings > Actions > Policies**, add an active event policy.
+   Apply it to `.github/workflows/policy-guard.yml` and allow `pull_request_target`.
+   Keep all other event and actor restrictions.
+   If actor rules apply, let the implementation App and Dependabot run the guard.
+   Check the inherited policies and **Policy insights** for blocks.
+   Test a new PR and a later push. Confirm that `guard / guard` runs on each current head.
+   Record the policy settings, run links and head SHAs in the migration PR.
+   Complete this check before you make `guard / guard` mandatory.
+
+   The default policy for public repositories will block this event from November 2, 2026.
+   See [Event policies for GitHub Actions](https://docs.github.com/en/actions/how-tos/administer/control-workflow-execution).
+   The guard must only run trusted base code and inspect candidate files as data.
+5. Merge the migration through the existing protected process.
+   If the old guard cannot admit the migration, the owner must record a one-time exception in that PR.
+   Record the exact reviewed head, evidence and inherited failures.
+   The owner must explicitly authorize this initial exception.
+   Never write false check results or introduce a permanent bypass.
+
+Until the administrator installs the independent bot and activates the live rules, same-PR code approval stays disabled.
+Repository files cannot create the App, change the connection identity or activate rulesets.
+After activation, use the single-PR review procedure.
+Do not return to paired hash-admission PRs or owner bypasses.
+Registry integrity does not replace human approval of executable code.

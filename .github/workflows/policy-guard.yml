@@ -1,7 +1,8 @@
 name: policy
 
 on:
-  workflow_call:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
 
 permissions:
   contents: read
@@ -9,17 +10,44 @@ permissions:
 
 jobs:
   guard:
-    name: guard
+    name: guard / guard
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout trusted policy dependencies
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .policy-tools
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install trusted policy parser
+        working-directory: .policy-tools/.github/scripts
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org --userconfig=/dev/null
       - name: Inspect PR policy-sensitive files
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          POLICY_TOOLS_DIRECTORY: ${{ github.workspace }}/.policy-tools/.github/scripts
+          CI_POLICY_SETTINGS_REVIEW: ${{ vars.CI_POLICY_SETTINGS_REVIEW }}
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const pull_number = context.payload.pull_request.number;
-            const headSha = context.payload.pull_request.head.sha;
+            const { data: pull } = await github.rest.pulls.get({owner, repo, pull_number});
+            if (pull.state !== 'open') throw new Error('Pull request must be open');
+            const headSha = pull.head.sha;
+            const baseSha = pull.base.sha;
+            if (!/^[0-9a-f]{40}$/.test(headSha) || !/^[0-9a-f]{40}$/.test(baseSha)) {
+              throw new Error('Invalid immutable pull request revision');
+            }
+            if (headSha !== context.payload.pull_request.head.sha) throw new Error('Stale pull request event');
+            const lockPaths = new Set(['.github/scripts/package-lock.json']);
+            const forbiddenInstallInputs = new Set([
+              '.npmrc', '.github/.npmrc', '.github/scripts/.npmrc', '.github/scripts/npm-shrinkwrap.json',
+            ]);
 
             const wfDir = ['.github', 'workflows'].join('/');
             const publishPath = [wfDir, 'publish.yml'].join('/');
@@ -27,10 +55,13 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/CODEOWNERS": "9b847e665150fab23893753a76743f32d159f2d347766a011906848e34f95af0",
+              ".github/rulesets/require-ci-owner-review.json": "1decb20b1e1239ca11c56b0a3004d956efb21250bb7a49170fe2d41886fa55d8",
+
               ".github/scripts/publish-npm.test.cjs": "c6bd1a7d72727fd85c0610756642084cf021daa9c935838657df327ead16871b",
               ".github/scripts/publish-npm.cjs": "41b763efb6719ae2ec7478b93af449a40f127591bd8d1ac6196da35ed84d7fac",
-              ".github/scripts/pr-readiness.test.py": "8d9a3a0765a6125c48cf9e834df5b288023ae142c85ebc3851bc15e06081cd3f",
-              ".github/workflows/pr-validation.yml": "30f155b1140b11f1c127dbccc02c71bb185a65a9deee43ad71ad716385a2951f",
+              ".github/scripts/pr-readiness.test.py": "7d69f541bdb2aa211326f99b35421564fb4e95467697af5fec784c4348a1edff",
+              ".github/workflows/pr-validation.yml": "858ebe160cd05c3d06fb0117bc042efe2f50273f830d5462e62af8cccbc0e731",
               ".github/scripts/coverage-artifact.test.py": "511957df17377c4a403edc2d97243b3d285ed2926e2c7c2fb2bb129342f76064",
               ".github/scripts/coverage-artifact.py": "2e5cfaed56648bbaa9a54a9750ba1d0e55f4dda33019cead49609ccb71b1ec47",
               ".github/scripts/ci-impact.cjs": "5eb80b1d7919f7aba77d8a5b23ce18b6f742c1de19e28e39e1e11f6b6b8ac1ff",
@@ -39,8 +70,7 @@ jobs:
               ".github/dependency-review-config.yml": "f92f128addcb10acd3d874579771b0d44675a3db4809d5c274211c4f0bb9374f",
               ".github/scripts/pr-branch-updater.cjs": "fadcbf9a09c8fb44a64c3b5a876dfb00aa1e9ab3e13e326a99c2ef1bb8274e59",
               ".github/workflows/pr-branch-updater.yml": "b01f1ae6071f3c7b68e067bb92fd85d85be5bcbfa43519005497474638951966",
-              ".github/scripts/package.json": ["5d9048ba18038b031d0f1a2d38f8c2b2dafe774ad2d147fe9f97cc951a0d373d", "75f13119ae2a3706a259e1795784d8ddd81c333eb14e6d8290efbc9532f9ed45"],
-              ".github/scripts/package-lock.json": ["e9845e680c96ac80042a2240ca2c331043c90dc891f3daea6bfeb3088c82ff7b", "6d50bac913fcf940647ca467a98746279a5893750c2771e8787e858fc7d80077"],
+              ".github/scripts/package.json": "75f13119ae2a3706a259e1795784d8ddd81c333eb14e6d8290efbc9532f9ed45",
               ".github/scripts/release.cjs": "4866a1d152fdfff74a204d52425351d4e87c2620f7dea7de149685659781df77",
               ".github/scripts/provenance.cjs": "46a0cbdad205a0f6c69142021789d528c803dda013acdc6f6b7de544fc471b23",
               ".github/scripts/provenance.test.cjs": "5c157020e6179cf2dd200309849e6747d521297cc6ff29e6d29612782d12007c",
@@ -51,7 +81,7 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "0c7e4edfb0ec426f571c34ef69cb913554d0524674e54bf2bbdb4c7dc445009a",
+              ".github/scripts/release-policy.test.py": "3be2b55b3760b9bafecd9e7a673b7e613997f6ee5ebeb2ccf96a5f424bcd9945",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
@@ -96,6 +126,8 @@ jobs:
               per_page: 100,
             });
 
+            if (files.length >= 3000) throw new Error('Pull request file list may be truncated');
+
             const changed = new Set(
               files.flatMap((file) =>
                 file.previous_filename
@@ -118,20 +150,185 @@ jobs:
                 (path.endsWith('.yml') || path.endsWith('.yaml')),
             );
             const policySensitiveChanged =
-              workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath) ||
-              changed.has(dependabotScriptPath) || Object.keys(releaseProtected).some(path => changed.has(path));
+              [...forbiddenInstallInputs].some(path => changed.has(path)) || workflowChanged || changed.has(packagePath) || changed.has(failureReporterPath) ||
+              changed.has(dependabotScriptPath) || [...lockPaths].some(path => changed.has(path)) || Object.keys(releaseProtected).some(path => changed.has(path));
             const failures = [];
 
-            async function readFileAtHead(path) {
+            async function readFileAtHead(path, ref = headSha) {
               const response = await github.rest.repos.getContent({
                 owner,
                 repo,
                 path,
-                ref: headSha,
+                ref,
               });
               const data = response.data;
-              if (!('content' in data)) return '';
+              if (!('content' in data) || data.type !== 'file') throw new Error(`${path}: expected a regular file`);
               return Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
+            }
+
+
+            function workflowContractPreserved(candidate, baseline, path) {
+              const yaml = require(`${process.env.POLICY_TOOLS_DIRECTORY}/node_modules/yaml`);
+              const parse = source => {
+                const doc = yaml.parseDocument(source, { uniqueKeys: true });
+                if (doc.errors.length || doc.warnings.length) throw new Error('Invalid workflow YAML');
+                return doc.toJS({ maxAliasCount: 0 });
+              };
+              const normalize = value => {
+                if (Array.isArray(value)) return value.map(normalize);
+                if (value && typeof value === 'object') {
+                  return Object.fromEntries(Object.entries(value).sort().map(([key, entry]) => {
+                    if (key === '<<') throw new Error('Workflow merge keys are not admitted');
+                    return [key, key === 'uses' && typeof entry === 'string' ? entry.replace(/@[a-f0-9]{40}$/, '@PINNED') : normalize(entry)];
+                  }));
+                }
+                return value;
+              };
+              const equal = (left, right) => JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
+              let next;
+              try {
+                next = parse(candidate);
+                normalize(next);
+              } catch {
+                fail(`${path}: candidate workflow contains invalid or unsupported YAML`);
+                return false;
+              }
+              if (!next || typeof next !== 'object' || Array.isArray(next)) return false;
+              const before = parse(baseline);
+              const {jobs: nextJobs, ...nextRoot} = next;
+              const {jobs: baseJobs, ...baseRoot} = before;
+              if (!equal(nextRoot, baseRoot) || !nextJobs || typeof nextJobs !== 'object' || Array.isArray(nextJobs) || !baseJobs) return false;
+              for (const [name, job] of Object.entries(baseJobs)) {
+                if (!Object.hasOwn(nextJobs, name) || !nextJobs[name] || typeof nextJobs[name] !== 'object' || Array.isArray(nextJobs[name])) return false;
+                const {steps: oldSteps = [], ...oldControls} = job;
+                const {steps: newSteps = [], ...newControls} = nextJobs[name];
+                if (!equal(oldControls, newControls) || !Array.isArray(oldSteps) || !Array.isArray(newSteps)) return false;
+                if (newSteps.some(step => !step || typeof step !== 'object' || Array.isArray(step))) return false;
+                const ids = newSteps.filter(step => step.id !== undefined).map(step => step.id);
+                if (new Set(ids).size !== ids.length) return false;
+                let position = 0;
+                for (const step of oldSteps) {
+                  while (position < newSteps.length && !equal(step, newSteps[position])) position += 1;
+                  if (position === newSteps.length) return false;
+                  position += 1;
+                }
+              }
+              return true;
+            }
+
+            function reviewRequired(rule) {
+              const parameters = rule?.parameters;
+              return rule?.type === 'pull_request' && parameters?.require_code_owner_review === true &&
+                parameters.dismiss_stale_reviews_on_push === true && parameters.require_last_push_approval === true &&
+                Number.isSafeInteger(parameters.required_approving_review_count) && parameters.required_approving_review_count >= 1;
+            }
+
+            async function reviewSourceActive(rule) {
+              const repository = `${owner}/${repo}`;
+              if (rule.ruleset_source_type !== 'Repository' || rule.ruleset_source !== repository ||
+                  !Number.isSafeInteger(rule.ruleset_id) || rule.ruleset_id <= 0) return false;
+              const {data: source} = await github.rest.repos.getRepoRuleset({owner, repo, ruleset_id: rule.ruleset_id});
+              if (!source || source.id !== rule.ruleset_id || source.source_type !== 'Repository' ||
+                  source.source !== repository || source.target !== 'branch' || source.enforcement !== 'active' ||
+                  !Array.isArray(source.rules) || !source.rules.some(reviewRequired)) return false;
+              if (Object.hasOwn(source, 'bypass_actors')) {
+                return Array.isArray(source.bypass_actors) && source.bypass_actors.length === 0;
+              }
+              // The read-only token cannot see bypass actors. An administrator
+              // records the no-bypass readback; any settings revision invalidates it.
+              let reviewed;
+              try { reviewed = JSON.parse(process.env.CI_POLICY_SETTINGS_REVIEW || ''); } catch { return false; }
+              const revision = source.updated_at;
+              return reviewed !== null && typeof reviewed === 'object' && !Array.isArray(reviewed) &&
+                reviewed.repository === repository && reviewed.ruleset_id === source.id &&
+                typeof revision === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(revision) &&
+                Number.isFinite(Date.parse(revision)) && new Date(revision).toISOString() === revision.replace('Z', '.000Z') &&
+                reviewed.updated_at === revision && Array.isArray(reviewed.bypass_actors) && reviewed.bypass_actors.length === 0;
+            }
+
+            async function reviewedHead() {
+              if (pull.user?.type !== 'Bot' || !Number.isInteger(pull.user?.id) || pull.user.id <= 0 ||
+                  pull.user.id === 24433677 || pull.user?.login === 'mickey-kras') return false;
+              const owners = await readFileAtHead('.github/CODEOWNERS', baseSha);
+              if (owners.trim() !== '/.github/ @mickey-kras') return false;
+              const rules = await github.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
+                owner, repo, branch: pull.base.ref, per_page: 100,
+              });
+              if (!Array.isArray(rules)) return false;
+              let activeReviewSource = false;
+              for (const rule of rules.filter(reviewRequired)) {
+                if (await reviewSourceActive(rule)) { activeReviewSource = true; break; }
+              }
+              if (!activeReviewSource) return false;
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number, per_page: 100,
+              });
+              const decisions = reviews.filter(review => review.user?.login === 'mickey-kras' &&
+                review.user?.type === 'User' && review.user?.id === 24433677 && ['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state));
+              decisions.sort((a, b) => b.id - a.id);
+              return decisions[0]?.state === 'APPROVED' && decisions[0]?.commit_id === headSha;
+            }
+            let approval;
+            async function admitReviewedHead() {
+              approval ??= reviewedHead();
+              return approval;
+            }
+
+            function validateLock(path, content, beforeContent, manifestContent) {
+              const lock = JSON.parse(content);
+              const before = JSON.parse(beforeContent);
+              const manifest = JSON.parse(manifestContent);
+              const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+              if (!object(lock) || lock.lockfileVersion !== 3 || !object(lock.packages) || !object(lock.packages['']) ||
+                  !object(before.packages) || Object.hasOwn(lock, 'dependencies')) {
+                fail(`${path}: expected an npm v3 registry lockfile`);
+                return;
+              }
+              const root = lock.packages[''];
+              for (const field of ['name', 'version', 'dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+                const normalized = value => object(value) ? Object.fromEntries(Object.entries(value).sort()) : value;
+                if (JSON.stringify(normalized(root[field])) !== JSON.stringify(normalized(manifest[field]))) {
+                  fail(`${path}: root ${field} must match the gated package manifest`);
+                }
+              }
+              for (const [name, entry] of Object.entries(lock.packages)) {
+                if (!object(entry)) { fail(`${path}: invalid package metadata`); continue; }
+                if (['link', 'inBundle', 'bundled', 'bundleDependencies', 'hasShrinkwrap'].some(field => Object.hasOwn(entry, field))) {
+                  fail(`${path}: linked, bundled or shrinkwrapped dependencies are not admitted`);
+                }
+                if (Object.hasOwn(entry, 'hasInstallScript') && typeof entry.hasInstallScript !== 'boolean') {
+                  fail(`${path}: malformed install-script metadata`);
+                }
+                if (entry.hasInstallScript && before.packages[name]?.hasInstallScript !== true) {
+                  fail(`${path}: new install script at ${name || '<root>'}`);
+                }
+                if (!name) continue;
+                if (!name.startsWith('node_modules/') || name.split('/').some(part => !part || part === '.' || part === '..') || name.includes('\\')) {
+                  fail(`${path}: invalid dependency path`);
+                }
+                if (typeof entry.version !== 'string' || !entry.version) fail(`${path}: missing package version`);
+                let url;
+                try { url = new URL(entry.resolved); } catch {}
+                if (!url || url.protocol !== 'https:' || url.hostname !== 'registry.npmjs.org' || url.port ||
+                    url.username || url.password || url.search || url.hash ||
+                    !/^https:\/\/registry\.npmjs\.org\/[^?#]+\/-\/[^/?#]+\.tgz$/.test(entry.resolved)) {
+                  fail(`${path}: dependency must resolve to an npm registry tarball`);
+                }
+                const installedName = name.split('node_modules/').at(-1);
+                const packageName = entry.name ?? installedName;
+                if (packageName !== installedName && before.packages[name]?.name !== packageName) {
+                  fail(`${path}: new or retargeted package aliases are not admitted`);
+                }
+                const tarball = `https://registry.npmjs.org/${packageName}/-/${packageName.split('/').at(-1)}-${entry.version}.tgz`;
+                if (entry.resolved !== tarball) {
+                  fail(`${path}: tarball must match the dependency name and version`);
+                }
+                const integrity = entry.integrity;
+                if (typeof integrity !== 'string' || !/^sha512-[A-Za-z0-9+/]{86}==$/.test(integrity) ||
+                    Buffer.from(integrity.slice(7), 'base64').toString('base64') !== integrity.slice(7)) {
+                  fail(`${path}: dependency requires a canonical sha512 integrity`);
+                }
+              }
             }
 
             function fail(message) {
@@ -263,6 +460,17 @@ jobs:
               }
             }
 
+            for (const path of forbiddenInstallInputs) {
+              if (changed.has(path)) fail(`${path}: CI installation configuration must not override the registry or governed lockfile`);
+            }
+
+            for (const path of lockPaths) {
+              if (!changed.has(path)) continue;
+              if (removedOrRenamed.has(path)) { fail(`${path}: protected lockfile must not be removed`); continue; }
+              const manifest = path.replace('package-lock.json', 'package.json');
+              validateLock(path, await readFileAtHead(path), await readFileAtHead(path, baseSha), await readFileAtHead(manifest));
+            }
+
             for (const [path, expected] of Object.entries(releaseProtected)) {
               if (!changed.has(path)) continue;
               if (removedOrRenamed.has(path)) {
@@ -272,7 +480,25 @@ jobs:
               const raw = await readFileAtHead(path);
               const content = path.endsWith('.yml') ? raw.replace(/(uses:\s*[^\s@]+)@[a-f0-9]{40}[^\n]*/g, '$1@PINNED') : raw;
               const digest = require('node:crypto').createHash('sha256').update(content).digest('hex');
-              if (!(Array.isArray(expected) ? expected : [expected]).includes(digest)) fail(`${path}: release automation must match its reviewed policy`);
+              if (digest !== expected) {
+                if (path.startsWith(`${wfDir}/`) && path.endsWith('.yml')) {
+                  const baseline = await readFileAtHead(path, baseSha);
+                  if (!workflowContractPreserved(raw, baseline, path)) {
+                    fail(`${path}: owner review cannot change the trusted workflow execution contract`);
+                    continue;
+                  }
+                }
+                if (!await admitReviewedHead()) fail(`${path}: release automation must match its reviewed policy`);
+              }
+            }
+
+            const policyPath = `${wfDir}/policy-guard.yml`;
+            if (changed.has(policyPath)) {
+              if (removedOrRenamed.has(policyPath)) {
+                fail(`${policyPath}: protected policy must not be removed`);
+              } else if (await readFileAtHead(policyPath) !== await readFileAtHead(policyPath, baseSha) && !await admitReviewedHead()) {
+                fail(`${policyPath}: policy changes require independent approval of this exact head`);
+              }
             }
 
             if (changed.has(publishPath)) {
@@ -457,7 +683,6 @@ jobs:
                   'ci.yml',
                   'aislop.yml',
                   'codeql.yml',
-                  'policy-guard.yml',
                   'branch-policy.yml',
                   'architecture.yml',
                   'dependabot-policy-tests.yml',
@@ -523,8 +748,14 @@ jobs:
               }
             }
 
+            const {data: current} = await github.rest.pulls.get({owner, repo, pull_number});
+            if (current.state !== 'open' || current.head.sha !== headSha || current.base.sha !== baseSha) {
+              throw new Error('Pull request changed during policy validation; rerun against the current head');
+            }
+
             if (failures.length > 0) {
               core.setFailed(`Policy guard failed:\n- ${failures.join('\n- ')}`);
             } else {
               core.info('Policy guard passed.');
             }
+

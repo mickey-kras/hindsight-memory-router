@@ -14,7 +14,9 @@
 - The rulesets do not restrict the names of branches in external forks.
 - Resolve review conversations.
   Merge through a pull request after required checks pass.
-  Use squash merge. GitHub automatically deletes merged same-repository head branches. Required approving reviews are `0` while the repository has a single maintainer.
+  Use squash merge. GitHub automatically deletes merged same-repository head branches.
+  CI policy changes need a separate implementation App and independent owner review.
+  See [CI policy admission](../docs/RELEASING.md#ci-policy-admission) for activation instructions.
 - Base pushes automatically refresh eligible same-repository PRs only while auto-merge is on. Dependabot uses its scheduled native rebasing.
 - To refresh a manual PR, run `pr branch updater` on its base branch (`main` or `release/X.Y.Z`).
   Supply the PR's `pull_number`. This refreshes only that PR and reports conflicts or update failures. If you enable auto-merge after the last base push, do an explicit refresh or push the base again.
