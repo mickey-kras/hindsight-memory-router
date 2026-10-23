@@ -1,0 +1,60 @@
+name: docs-ste
+
+# ASD-STE100 Simplified Technical English gate for the documentation.
+# ste-cli checks the writing rules of the standard. Vale checks the STE style of vale-llm-slop.
+# Neither tool uses the ASD-STE100 dictionary: the specification does not permit redistribution.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: docs-ste-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ste-cli:
+    name: ste-cli
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2
+        with:
+          egress-policy: audit
+
+      # The action checks the release archive against checksums.txt before it runs. Config: .ste.yml.
+      - uses: TudorAndrei/ste-cli@8e73821bba6ef980930553fb24ca1ade2895aabf # v0.10.1
+        with:
+          version: 0.10.1
+          args: >-
+            --warnings-as-errors
+            README.md SECURITY.md .github/BRANCHING.md docs tests/integration/README.md ui/README.md
+
+  vale:
+    name: vale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: step-security/harden-runner@ccd8616d44fd3846e67624a50d5aad6d37bf2d25 # v2
+        with:
+          egress-policy: audit
+
+      # Config: .vale.ini. "vale sync" downloads the pinned vale-llm-slop release.
+      - uses: errata-ai/vale-action@518a9136acc6e6668ce7c00d367051e0941e87ff # v3.0.0
+        with:
+          version: 3.25.1
+          files: README.md,SECURITY.md,.github/BRANCHING.md,docs,tests/integration/README.md,ui/README.md
+          separator: ','
+          filter_mode: nofilter
+          fail_level: warning
+          # Without this, the action passes when the findings are more than the annotation limit.
+          fail_on_error: true

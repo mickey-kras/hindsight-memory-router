@@ -19,12 +19,12 @@ MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT=true
 QUARANTINE_DATABASE_URL=postgresql://...
 ```
 
-Required:
+Necessary:
 
-- PostgreSQL; Hindsight, quarantine, principal, admin, and auth-failure limits are shared across replicas.
+- PostgreSQL. All replicas share the Hindsight, quarantine, principal, admin, and auth-failure limits.
 - External admin limiter before all replicas.
 
-Auth failures also hit a local prefilter before PostgreSQL.
+Authentication failures also pass through a local prefilter before PostgreSQL.
 
 Minimum shared admin limits:
 
@@ -38,9 +38,13 @@ The external-limiter flag only confirms the admin limiter exists.
 ## Scale out
 
 1. Migrate quarantine to PostgreSQL.
-2. Configure and test the shared admin limiter.
+2. Configure the shared admin limiter.
+   Test the shared admin limiter.
 3. Enable cluster mode.
-4. Restart and verify one replica.
+4. Restart one replica.
+   Examine that replica.
 5. Add replicas.
 
-Rollback: return to one replica and set mode to `single`.
+To roll back, reduce the deployment to one replica.
+Set the mode to `single`.
+

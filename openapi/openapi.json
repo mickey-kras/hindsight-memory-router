@@ -3,7 +3,7 @@
   "info": {
     "title": "Hindsight Memory Router API",
     "version": "0.9.0",
-    "description": "Policy facade for Hindsight memory retain and recall operations, with an encrypted manual-review quarantine control plane. The router never possesses the quarantine private key.",
+    "description": "The router controls Hindsight retain and recall operations. It encrypts unsafe content in quarantine for manual review. The router never has the quarantine private key.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -22,15 +22,15 @@
     },
     {
       "name": "Memory",
-      "description": "Hindsight-compatible retain and recall facade. The bank path value is interpreted as a router writer ID."
+      "description": "Hindsight-compatible retain and recall interface. The router interprets the bank path value as a writer ID."
     },
     {
       "name": "Quarantine administration",
-      "description": "Capability-scoped manual review operations. Use read, review, or cleanup credentials according to the endpoint; the legacy admin credential is migration-only."
+      "description": "Manual review operations with separate credentials for each capability. Use the read, review, or cleanup credential for the applicable endpoint. Use the legacy admin credential only during migration."
     },
     {
       "name": "Human authentication",
-      "description": "Optional interactive OIDC login; disabled unless configured."
+      "description": "Optional interactive OIDC login. Login is disabled unless you configure it."
     }
   ],
   "paths": {
@@ -38,7 +38,7 @@
       "post": {
         "operationId": "cleanupQuarantine",
         "summary": "Preview or execute bulk quarantine cleanup",
-        "description": "Cleanup defaults to a dry run. Execution requires the exact count returned by a prior preview; a changed selection returns 409.",
+        "description": "Cleanup uses a dry run by default. Execution must have the exact count from a previous preview. If the selection changes, the router returns 409.",
         "tags": [
           "Quarantine administration"
         ],
@@ -87,7 +87,7 @@
       "get": {
         "operationId": "getQuarantineItem",
         "summary": "Fetch an encrypted quarantine item",
-        "description": "Returns current metadata and an encrypted envelope for local decryption. It never returns plaintext.",
+        "description": "The response contains current metadata and an encrypted envelope for local decryption. The response never contains plaintext.",
         "tags": [
           "Quarantine administration"
         ],
@@ -134,7 +134,7 @@
       "post": {
         "operationId": "approveQuarantineItem",
         "summary": "Approve the exact original quarantined object",
-        "description": "The caller decrypts locally and submits the complete object unchanged. The router verifies its original SHA-256. Retain approval preserves the original bank and requires the original principal's current memory.retain grant, or an unchanged legacy writer bank. Unknown legacy writers must be registered before approval. Pending pre-upgrade retains without verifiable origin require resubmission. Completed writes finalize without replay. Recalled memories are allowed only for their unchanged digest.",
+        "description": "The caller decrypts the object locally. The caller submits the complete object without changes. The router examines the original SHA-256.\n\nRetain approval preserves the original bank. Principal mode must have the current memory.retain grant of the original principal. Legacy mode must have the same writer bank. Register unknown legacy writers before approval. If you cannot make sure of the origin of a pending pre-upgrade retain request, submit the request again.\n\nThe router completes the review of completed writes without another write. The router permits recalled memories only while their digest stays the same.",
         "tags": [
           "Quarantine administration"
         ],
@@ -250,7 +250,7 @@
       "post": {
         "operationId": "rejectQuarantineItem",
         "summary": "Reject a quarantine item",
-        "description": "Removes an unapproved request from current quarantine state. For a recalled memory, invalidates the Hindsight memory and stores a reviewed-blocked audit state.",
+        "description": "The operation removes an unapproved request from the current quarantine state. For a recalled memory, it invalidates the Hindsight memory. It also stores a reviewed-blocked audit state.",
         "tags": [
           "Quarantine administration"
         ],
@@ -297,7 +297,7 @@
       "post": {
         "operationId": "reconcileQuarantineItem",
         "summary": "Reconcile an ambiguous review side effect",
-        "description": "Resolves an item stuck in review_side_effect_started after a timeout, network failure, or crash with a possible upstream commit. confirmed_applied finalizes the original review decision without re-triggering the upstream side effect; confirmed_not_applied returns the item to postponed for normal retry. Both actions require the expected content hash and update snapshot and use transactional compare-and-set; neither calls Hindsight.",
+        "description": "The operation resolves an item in review_side_effect_started after an uncertain upstream commit. A timeout, network failure, or crash can cause this state. confirmed_applied completes the original review decision without another upstream side effect. confirmed_not_applied returns the item to postponed for a normal retry.\n\nBoth actions must have the expected content hash and update snapshot. Both use transactional compare-and-set. Neither action calls Hindsight.",
         "tags": [
           "Quarantine administration"
         ],
@@ -353,8 +353,8 @@
     "/admin/quarantine/queue": {
       "get": {
         "operationId": "listQuarantineQueue",
-        "summary": "List items awaiting review",
-        "description": "Returns metadata only, including review_side_effect_started items awaiting reconciliation and review_side_effect_completed items awaiting finalization. Checkpoints remain visible after their original TTL. Encrypted payloads are fetched one item at a time. A principal token with a quarantine.review grant may list metadata for the granted banks only; ciphertext fetch and review actions keep admin-token auth.",
+        "summary": "List items for review",
+        "description": "The response contains metadata only. It includes review_side_effect_started items for reconciliation and review_side_effect_completed items for finalization. Checkpoints stay visible after their original TTL. The caller gets encrypted payloads one item at a time.\n\nA principal token with a quarantine.review grant can list metadata only for the banks in its grants. Ciphertext reads and review actions must have admin tokens.",
         "tags": [
           "Quarantine administration"
         ],
@@ -391,7 +391,7 @@
           {
             "name": "bank_id",
             "in": "query",
-            "description": "Only items whose canonical bank_id matches. Principal callers must hold a quarantine.review grant for this bank; without the parameter a principal sees its granted banks.",
+            "description": "Select only items with a matching canonical bank_id. Principal callers must have a quarantine.review grant for this bank. Without this parameter, a principal sees the banks in its grants.",
             "schema": {
               "type": "string"
             }
@@ -431,7 +431,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Pending, postponed, and recoverable review_side_effect_started and review_side_effect_completed checkpoints ordered by creation time.",
+            "description": "Pending and postponed items, plus recoverable review_side_effect_started and review_side_effect_completed checkpoints. The response orders these items by creation time.",
             "content": {
               "application/json": {
                 "schema": {
@@ -459,7 +459,7 @@
       "get": {
         "operationId": "getQuarantineStats",
         "summary": "Get quarantine storage statistics",
-        "description": "Admin tokens receive global counts plus the per-bank breakdown. A principal token with a quarantine.review grant receives only the per-bank breakdown for its granted banks.",
+        "description": "Admin tokens get global counts and counts for each bank. A principal token with a quarantine.review grant gets counts only for the banks in its grants.",
         "tags": [
           "Quarantine administration"
         ],
@@ -473,7 +473,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Current item, ciphertext, and append-only event counts. Principal callers receive only the grant-scoped bank breakdown.",
+            "description": "Current counts of items, ciphertext, and append-only events. Principal callers get counts only for the banks in their grants.",
             "content": {
               "application/json": {
                 "schema": {
@@ -505,7 +505,7 @@
       "get": {
         "operationId": "getHealth",
         "summary": "Check router readiness",
-        "description": "Exact alias of /health/ready. Checks router quarantine storage and Hindsight health. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
+        "description": "This endpoint is an exact alias of /health/ready. It checks router quarantine storage and Hindsight health. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "tags": [
           "Service"
         ],
@@ -523,7 +523,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field. Router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -541,7 +541,7 @@
             }
           },
           "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the health handler."
+            "description": "The HTTP server rejected a malformed client request before it called the health handler."
           }
         }
       }
@@ -550,14 +550,14 @@
       "get": {
         "operationId": "getLiveness",
         "summary": "Check router liveness",
-        "description": "Checks only that the router process/event loop can serve the request. Does not call router storage or Hindsight. Uses Hindsight's liveness response contract.",
+        "description": "This endpoint checks only that the router process and event loop can serve the request. It does not call router storage or Hindsight. It uses Hindsight's liveness response contract.",
         "tags": [
           "Service"
         ],
         "security": [],
         "responses": {
           "200": {
-            "description": "Router process is serving requests.",
+            "description": "The router process serves requests.",
             "content": {
               "application/json": {
                 "schema": {
@@ -567,7 +567,7 @@
             }
           },
           "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the liveness handler."
+            "description": "The HTTP server rejected a malformed client request before it called the liveness handler."
           }
         }
       }
@@ -576,7 +576,7 @@
       "get": {
         "operationId": "getHealthReadiness",
         "summary": "Check router readiness",
-        "description": "Checks router quarantine storage and Hindsight health. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
+        "description": "This endpoint checks router quarantine storage and Hindsight health. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "tags": [
           "Service"
         ],
@@ -594,7 +594,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field. Router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -612,7 +612,7 @@
             }
           },
           "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the readiness handler."
+            "description": "The HTTP server rejected a malformed client request before it called the readiness handler."
           }
         }
       }
@@ -621,7 +621,7 @@
       "get": {
         "operationId": "getLegacyReadiness",
         "summary": "Check router readiness (deprecated)",
-        "description": "Deprecated compatibility alias for /health/ready. Anonymous callers receive only a status field; the full validated Hindsight health payload requires router authentication (router token or principal token).",
+        "description": "This endpoint is a deprecated compatibility alias for /health/ready. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "deprecated": true,
         "tags": [
           "Service"
@@ -640,7 +640,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field; router-authenticated responses include the validated supported Hindsight health fields.",
+            "description": "Router quarantine storage and Hindsight are healthy. Anonymous responses contain only the status field. Router-authenticated responses include the validated supported Hindsight health fields.",
             "content": {
               "application/json": {
                 "schema": {}
@@ -658,7 +658,7 @@
             }
           },
           "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the readiness handler."
+            "description": "The HTTP server rejected a malformed client request before it called the readiness handler."
           }
         }
       }
@@ -667,7 +667,7 @@
       "get": {
         "operationId": "getMetrics",
         "summary": "Read router Prometheus metrics",
-        "description": "Available only when MEMORY_ROUTER_METRICS_ENABLED=true (disabled by default). Requires an admin read, review, or legacy credential, or a principal token with a quarantine.review grant on at least one bank. Metrics cover the router globally, not only the granted banks. Returns Prometheus text exposition format 0.0.4. When disabled, the request follows normal router authentication and endpoint-denial handling.",
+        "description": "Metrics are available only when MEMORY_ROUTER_METRICS_ENABLED=true. Metrics are disabled by default. Access must have an admin read, review, or legacy credential. A principal token with a quarantine.review grant on at least one bank also permits access.\n\nMetrics cover the complete router, including banks outside the grants. The response uses Prometheus text exposition format 0.0.4. If metrics are disabled, normal router authentication and endpoint-denial rules apply.",
         "tags": [
           "Service"
         ],
@@ -714,7 +714,7 @@
             }
           },
           "429": {
-            "description": "Admin read, principal, or authentication-failure rate limit exceeded.",
+            "description": "Admin read, principal, or authentication-failure rate limit is more than its configured value.",
             "content": {
               "application/json": {
                 "schema": {
@@ -740,7 +740,7 @@
       "get": {
         "operationId": "listBanks",
         "summary": "List banks visible to the authenticated principal",
-        "description": "Principal mode only. Preserves the Hindsight bank-list response and removes banks without bank.list.",
+        "description": "This endpoint operates only in principal mode. The router preserves the Hindsight bank-list response format. It removes banks without bank.list.",
         "tags": [
           "Memory"
         ],
@@ -782,7 +782,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Banks the authenticated principal may enumerate.",
+            "description": "Banks that the authenticated principal can list.",
             "content": {
               "application/json": {
                 "schema": {
@@ -810,7 +810,7 @@
       "post": {
         "operationId": "retainMemory",
         "summary": "Retain memory through writer policy",
-        "description": "Routes a clean request to the writer's configured Hindsight bank. Unknown writers or suspicious fields are encrypted into quarantine and are not written to Hindsight. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
+        "description": "The router sends a safe request to the writer's configured Hindsight bank. It encrypts unknown writers or suspicious fields in quarantine. It does not write them to Hindsight. In principal mode, the path parameter is the target bank. The principal must have the matching grant.",
         "tags": [
           "Memory"
         ],
@@ -894,7 +894,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "502": {
-            "description": "Invalid, unsafe, or unscannable Hindsight acknowledgment. The write may already have completed; verify its status before retrying. No Retry-After is supplied.",
+            "description": "The Hindsight acknowledgment is invalid, unsafe, or not possible to scan. The write can be complete. Examine the write status before you retry. The response has no Retry-After header.",
             "content": {
               "application/json": {
                 "schema": {
@@ -910,7 +910,7 @@
       "post": {
         "operationId": "recallMemory",
         "summary": "Recall memory through writer policy",
-        "description": "Fans out only to banks allowed for the writer. Unknown writers and suspicious queries return no results and are quarantined. Suspicious recalled results remain suppressed until manually reviewed. When a fanned-out bank is unavailable, the response sets partial and failed_banks. In principal mode the path parameter is the target bank and the principal must hold the matching grant.",
+        "description": "The router queries only banks that the writer can read. It quarantines unknown writers and suspicious queries and returns no results. It excludes suspicious recalled results until manual review. If a queried bank is unavailable, the response sets partial and failed_banks.\n\nIn principal mode, the path parameter is the target bank. The principal must have the matching grant.",
         "tags": [
           "Memory"
         ],
@@ -979,7 +979,7 @@
       "get": {
         "operationId": "getVersion",
         "summary": "Get Hindsight API version and features",
-        "description": "Returns a Hindsight-compatible /version response. Requires router authentication. The API version is Hindsight's; feature flags reflect capabilities exposed by this facade.",
+        "description": "The endpoint returns a Hindsight-compatible /version response. It is available only with router authentication. The API version is the Hindsight version. Feature flags identify the capabilities that this interface supports.",
         "tags": [
           "Service"
         ],
@@ -1019,7 +1019,7 @@
             }
           },
           "503": {
-            "description": "The router has no initialized Hindsight gateway or a cold concurrent probe failed fast.",
+            "description": "The router has no initialized Hindsight gateway, or a concurrent probe failed immediately without a cached result.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1039,7 +1039,7 @@
             }
           },
           "4XX": {
-            "description": "The HTTP server rejected a malformed client request before invoking the version handler."
+            "description": "The HTTP server rejected a malformed client request before it called the version handler."
           }
         }
       }
@@ -1047,7 +1047,7 @@
     "/auth/human/start": {
       "post": {
         "operationId": "startHumanLogin",
-        "summary": "startHumanLogin",
+        "summary": "Start human login",
         "tags": [
           "Human authentication"
         ],
@@ -1081,19 +1081,19 @@
             "description": "Invalid request."
           },
           "401": {
-            "description": "Login required."
+            "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication disabled or route unknown."
+            "description": "Human authentication is disabled, or the route is unknown."
           },
           "413": {
-            "description": "Request exceeds 8 KiB."
+            "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "Login rate, concurrency, or storage capacity exhausted."
+            "description": "The login rate, concurrency, or storage capacity limit is reached."
           },
           "503": {
-            "description": "Identity provider, shared state, or active policy unavailable."
+            "description": "The identity provider, shared state, or active policy is unavailable."
           }
         },
         "requestBody": {
@@ -1111,7 +1111,7 @@
     "/auth/human/exchange": {
       "post": {
         "operationId": "exchangeHumanLogin",
-        "summary": "exchangeHumanLogin",
+        "summary": "Exchange a human login code",
         "tags": [
           "Human authentication"
         ],
@@ -1164,7 +1164,7 @@
                     },
                     "expires_at": {
                       "type": "integer",
-                      "description": "UNIX seconds; at most one hour after issuance."
+                      "description": "UNIX seconds. The expiry is no more than one hour after the router issues the session."
                     }
                   },
                   "additionalProperties": false
@@ -1176,19 +1176,19 @@
             "description": "Invalid request."
           },
           "401": {
-            "description": "Login required."
+            "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication disabled or route unknown."
+            "description": "Human authentication is disabled, or the route is unknown."
           },
           "413": {
-            "description": "Request exceeds 8 KiB."
+            "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "Login rate, concurrency, or storage capacity exhausted."
+            "description": "The login rate, concurrency, or storage capacity limit is reached."
           },
           "503": {
-            "description": "Identity provider, shared state, or active policy unavailable."
+            "description": "The identity provider, shared state, or active policy is unavailable."
           }
         },
         "requestBody": {
@@ -1206,7 +1206,7 @@
     "/auth/human/sign-out": {
       "post": {
         "operationId": "signOutHumanSession",
-        "summary": "signOutHumanSession",
+        "summary": "End a human session",
         "tags": [
           "Human authentication"
         ],
@@ -1239,19 +1239,19 @@
             "description": "Invalid request."
           },
           "401": {
-            "description": "Login required."
+            "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication disabled or route unknown."
+            "description": "Human authentication is disabled, or the route is unknown."
           },
           "413": {
-            "description": "Request exceeds 8 KiB."
+            "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "Login rate, concurrency, or storage capacity exhausted."
+            "description": "The login rate, concurrency, or storage capacity limit is reached."
           },
           "503": {
-            "description": "Identity provider, shared state, or active policy unavailable."
+            "description": "The identity provider, shared state, or active policy is unavailable."
           }
         }
       }
@@ -1269,7 +1269,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "API key",
-        "description": "Bearer credential authorized for the requested admin capability: read or review for admin reads, review for approve/reject/postpone, cleanup for cleanup, or the legacy migration superuser."
+        "description": "Bearer credential for the requested admin capability. Admin reads accept read or review credentials. Approve, reject, and postpone must have review credentials. Cleanup must have cleanup credentials. The legacy migration superuser permits all these operations."
       },
       "PrincipalToken": {
         "type": "http",
@@ -1281,7 +1281,7 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "mrh_<key-id>_<secret>",
-        "description": "Short-lived, revocable human session returned by interactive OIDC login. Bank operations require the corresponding configured human grant; admin, metrics, bank administration, and config writes are excluded."
+        "description": "Interactive OIDC login returns a short-lived human session that permits revocation. Bank operations must have the related configured human grant. The session excludes admin operations, metrics, bank administration, and configuration writes."
       }
     },
     "parameters": {
@@ -1289,7 +1289,7 @@
         "name": "writer_id",
         "in": "path",
         "required": true,
-        "description": "Router writer identity. Policy maps it to one or more actual Hindsight banks.",
+        "description": "Router writer identity. The policy maps this identity to one or more Hindsight banks.",
         "schema": {
           "type": "string",
           "minLength": 1
@@ -1358,7 +1358,7 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "The HTTP body, Hindsight request bounds, or encrypted quarantine item exceeds a configured size limit.",
+        "description": "The HTTP body, Hindsight request bounds, or encrypted quarantine item is more than a configured size limit.",
         "content": {
           "application/json": {
             "schema": {
@@ -1368,10 +1368,10 @@
         }
       },
       "MemoryRateLimited": {
-        "description": "Hindsight, quarantine, or principal request/concurrency limit exceeded. Principal and Hindsight quota responses include Retry-After.",
+        "description": "Hindsight, quarantine, or principal request/concurrency limit is more than its configured value. Principal and Hindsight quota responses include Retry-After.",
         "headers": {
           "Retry-After": {
-            "description": "Seconds before retrying a Hindsight-quota-limited request.",
+            "description": "Seconds before a retry of a request that the Hindsight quota limited.",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -1390,7 +1390,7 @@
         "description": "PostgreSQL-backed principal rate or concurrency control is temporarily unavailable.",
         "headers": {
           "Retry-After": {
-            "description": "Seconds before retrying the principal request.",
+            "description": "Seconds before a retry of the principal request.",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -1406,10 +1406,10 @@
         }
       },
       "RequestScanUnavailable": {
-        "description": "Request safety scanning is busy, timed out, shut down, or failed. Returns request_scan_unavailable; no content is forwarded or quarantined for an operational scanner failure.",
+        "description": "The request safety scanner is busy, stopped, failed, or went past its time limit. The router returns request_scan_unavailable. The router does not forward or quarantine content after an operational scanner failure.",
         "headers": {
           "Retry-After": {
-            "description": "Seconds before retrying.",
+            "description": "Seconds before a retry.",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -1425,10 +1425,10 @@
         }
       },
       "MemoryUnavailable": {
-        "description": "Principal rate/concurrency control or safety scanning is temporarily unavailable. Request failures return request_scan_unavailable; native recall-result or supplemental scan failures return recall_scan_unavailable without partial results. Operational scanner failures do not quarantine content.",
+        "description": "Principal rate or concurrency control, or safety scanning, is temporarily unavailable. Request failures return request_scan_unavailable. Native recall-result or supplemental scan failures return recall_scan_unavailable without partial results. Operational scanner failures do not quarantine content.",
         "headers": {
           "Retry-After": {
-            "description": "Seconds before retrying.",
+            "description": "Seconds before a retry.",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -1444,7 +1444,7 @@
         }
       },
       "AdminRateLimited": {
-        "description": "Too many admin API requests within the configured per-process window. Reads and mutations are throttled separately.",
+        "description": "The number of admin API requests is more than the configured limit. SQLite deployments use per-process limits. PostgreSQL deployments share these limits. Separate limits apply to reads and mutations.",
         "content": {
           "application/json": {
             "schema": {
@@ -1454,7 +1454,7 @@
         }
       },
       "QuarantineCapacityExceeded": {
-        "description": "Persistent quarantine item, writer/principal, bank, ciphertext, or global security-event identity capacity is exhausted. Security-event admission is limited to 64 stored identities across replicas and returns quarantine_security_event_capacity_exceeded when full. The router fails closed.",
+        "description": "A quarantine capacity limit is reached. Limits apply to persistent items, writers or principals, banks, ciphertext, and global security-event identities. Security-event admission permits a maximum of 64 stored identities across replicas. At this limit, the router returns quarantine_security_event_capacity_exceeded. The router rejects the operation.",
         "content": {
           "application/json": {
             "schema": {
@@ -1464,7 +1464,7 @@
         }
       },
       "Forbidden": {
-        "description": "The authenticated principal lacks the required grant for this bank or scope.",
+        "description": "The authenticated principal does not have the necessary grant for this bank or scope.",
         "content": {
           "application/json": {
             "schema": {
@@ -1763,12 +1763,12 @@
           },
           "partial": {
             "type": "boolean",
-            "description": "True when at least one fanned-out bank was unavailable; results are incomplete."
+            "description": "True if at least one queried bank was unavailable. The results are incomplete."
           },
           "failed_banks": {
             "type": "integer",
             "minimum": 1,
-            "description": "Number of banks that failed during fan-out. Present only together with partial."
+            "description": "Number of banks that failed during fan-out. This field is present only with partial."
           }
         },
         "additionalProperties": true
@@ -1803,7 +1803,7 @@
       },
       "UpstreamResponse": {
         "type": "object",
-        "description": "Safety-scanned acknowledgment object returned by the configured Hindsight version, preserving synchronous/asynchronous semantics and safe additive fields.",
+        "description": "Acknowledgment object from the configured Hindsight version after a safety scan. The object preserves synchronous and asynchronous behavior and safe additional fields.",
         "additionalProperties": true
       },
       "QuarantineId": {
@@ -1896,7 +1896,7 @@
           },
           "dedupe_key": {
             "type": "string",
-            "description": "Deterministic deduplication identity. Present on items created after request-item deduplication was introduced; repeated submissions with the same identity refresh this item instead of creating a new one."
+            "description": "Deterministic deduplication identity. Items created after the introduction of request-item deduplication have this field. Repeated submissions with the same identity update this item instead of creating a new item."
           },
           "sha256": {
             "type": "string",
@@ -1912,7 +1912,7 @@
           "requarantine_count": {
             "type": "integer",
             "minimum": 0,
-            "description": "How many times a repeated submission refreshed this item via its dedupe identity."
+            "description": "Number of repeated submissions that updated this item through its deduplication identity."
           },
           "encrypted_bytes": {
             "type": "integer",
@@ -1924,7 +1924,7 @@
           },
           "bank_id": {
             "type": "string",
-            "description": "Canonical bank the item is scoped to: the writer's write_bank snapshot for known-writer retains, the source bank for single-bank recalls and suppressed recalled memories, or the path bank for security events that named one. Absent for unknown-writer rows, multi-bank recall fan-outs, and bank-less security events."
+            "description": "Canonical bank for the item. For known-writer retain requests, this is the writer's write_bank snapshot. For single-bank recalls and suppressed recalled memories, this is the source bank. For security events with a path bank, this is that bank.\n\nThis field is absent for unknown-writer rows, multi-bank recall fan-outs, and security events without a bank."
           }
         }
       },
@@ -1971,7 +1971,7 @@
               "RSA-OAEP-SHA256",
               "WRAP-SIDECAR"
             ],
-            "description": "DEK wrap identifier. RSA-OAEP-SHA256 is the in-process default; WRAP-SIDECAR is used with an HTTPS wrap sidecar and requires the provider block."
+            "description": "DEK wrap identifier. RSA-OAEP-SHA256 is the in-process default. An HTTPS wrap sidecar uses WRAP-SIDECAR and must have the provider block."
           },
           "provider": {
             "type": "object",
@@ -1980,7 +1980,7 @@
               "name",
               "version"
             ],
-            "description": "Wrap provider identity for non-default envelopes; bound into the AES-GCM AAD. Absent on RSA-OAEP-SHA256 default envelopes. The review tool selects the unwrap path from this block; the router never unwraps.",
+            "description": "Wrap provider identity for non-default envelopes. The AES-GCM AAD binds this identity. Default RSA-OAEP-SHA256 envelopes do not have this block. The review tool selects the unwrap path from this block. The router never unwraps keys.",
             "properties": {
               "name": {
                 "type": "string",
@@ -2099,7 +2099,7 @@
             "type": "string"
           },
           "payload": {
-            "description": "Complete decrypted JSON payload. It must be submitted unchanged for approval."
+            "description": "Complete decrypted JSON payload. Submit the payload without changes for approval."
           }
         }
       },
@@ -2240,7 +2240,7 @@
               "approve",
               "reject"
             ],
-            "description": "Original review decision being confirmed as applied. Optional and constrained per kind: retain requests only accept approve, recalled memories only accept reject (the sole side-effecting action for each kind)."
+            "description": "Original review decision to confirm as applied. This field is optional. Retain requests accept only approve. Recalled memories accept only reject. These are the only actions with side effects for their respective kinds."
           },
           "expected_sha256": {
             "type": "string",
@@ -2341,7 +2341,7 @@
           },
           "banks": {
             "type": "array",
-            "description": "Per-bank breakdown of held items. Only rows with a canonical bank_id are counted; unknown-writer and multi-bank rows appear in the global totals only.",
+            "description": "Counts of held items for each bank. These counts include only rows with a canonical bank_id. Global totals also include unknown-writer and multi-bank rows.",
             "items": {
               "$ref": "#/components/schemas/QuarantineBankStats"
             }
@@ -2357,7 +2357,7 @@
         "properties": {
           "banks": {
             "type": "array",
-            "description": "Grant-scoped per-bank breakdown returned to quarantine.review principals.",
+            "description": "Counts for each bank in the grants of a quarantine.review principal.",
             "items": {
               "$ref": "#/components/schemas/QuarantineBankStats"
             }
@@ -2418,7 +2418,7 @@
           "older_than": {
             "type": "string",
             "format": "date-time",
-            "description": "Select items created strictly before this instant. Requires seconds and an explicit timezone (Z or +/-HH:MM). Fractional seconds are supported, including sub-millisecond precision. Equivalent offsets select the same items; invalid or out-of-range timestamps return 400."
+            "description": "Select items created strictly before this instant. The timestamp must have seconds and an explicit timezone (Z or +/-HH:MM). Fractional seconds are supported, including sub-millisecond precision. Equivalent offsets select the same items. Invalid or out-of-range timestamps return 400."
           },
           "dry_run": {
             "type": "boolean",
@@ -2427,7 +2427,7 @@
           "expected_count": {
             "type": "integer",
             "minimum": 0,
-            "description": "Required when dry_run is false. Use the count returned by a prior preview."
+            "description": "Necessary when dry_run is false. Use the count from a previous preview."
           }
         }
       },
@@ -2581,3 +2581,4 @@
     }
   }
 }
+
