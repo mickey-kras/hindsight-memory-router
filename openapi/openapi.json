@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Hindsight Memory Router API",
+    "title": "API for the Hindsight Memory Router",
     "version": "0.9.0",
-    "description": "The router controls Hindsight retain and recall operations. It encrypts unsafe content in quarantine for manual review. The router never has the quarantine private key.",
+    "description": "The router controls the retain and recall operations of Hindsight. It encrypts unsafe content in quarantine for manual review. The router never has the quarantine private key.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -30,7 +30,7 @@
     },
     {
       "name": "Human authentication",
-      "description": "Optional interactive OIDC login. Login is disabled unless you configure it."
+      "description": "Optional interactive OIDC login. Login is off unless you configure it."
     }
   ],
   "paths": {
@@ -297,7 +297,7 @@
       "post": {
         "operationId": "reconcileQuarantineItem",
         "summary": "Reconcile an ambiguous review side effect",
-        "description": "The operation resolves an item in review_side_effect_started after an uncertain upstream commit. A timeout, network failure, or crash can cause this state. confirmed_applied completes the original review decision without another upstream side effect. confirmed_not_applied returns the item to postponed for a normal retry.\n\nBoth actions must have the expected content hash and update snapshot. Both use transactional compare-and-set. Neither action calls Hindsight.",
+        "description": "The operation resolves an item in review_side_effect_started after an uncertain upstream commit. A timeout, network failure, or crash can cause this state. `confirmed_applied` completes the original review decision without another upstream side effect. `confirmed_not_applied` returns the item to `postponed` for a normal retry.\n\nBoth actions must have the expected content hash and update snapshot. Both use transactional compare-and-set. Neither action calls Hindsight.",
         "tags": [
           "Quarantine administration"
         ],
@@ -504,8 +504,8 @@
     "/health": {
       "get": {
         "operationId": "getHealth",
-        "summary": "Check router readiness",
-        "description": "This endpoint is an exact alias of /health/ready. It checks router quarantine storage and Hindsight health. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
+        "summary": "Check the router readiness",
+        "description": "This endpoint is an exact alias of `/health/ready`. It checks router quarantine storage and Hindsight health. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "tags": [
           "Service"
         ],
@@ -549,7 +549,7 @@
     "/health/live": {
       "get": {
         "operationId": "getLiveness",
-        "summary": "Check router liveness",
+        "summary": "Check the router liveness",
         "description": "This endpoint checks only that the router process and event loop can serve the request. It does not call router storage or Hindsight. It uses Hindsight's liveness response contract.",
         "tags": [
           "Service"
@@ -575,7 +575,7 @@
     "/health/ready": {
       "get": {
         "operationId": "getHealthReadiness",
-        "summary": "Check router readiness",
+        "summary": "Check the router readiness",
         "description": "This endpoint checks router quarantine storage and Hindsight health. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "tags": [
           "Service"
@@ -620,8 +620,8 @@
     "/ready": {
       "get": {
         "operationId": "getLegacyReadiness",
-        "summary": "Check router readiness (deprecated)",
-        "description": "This endpoint is a deprecated compatibility alias for /health/ready. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
+        "summary": "Check the router readiness (deprecated)",
+        "description": "This endpoint is a deprecated compatibility alias for `/health/ready`. Anonymous callers get only a status field. An accepted router, application-principal, or human-session credential permits the full validated Hindsight health payload.",
         "deprecated": true,
         "tags": [
           "Service"
@@ -667,7 +667,7 @@
       "get": {
         "operationId": "getMetrics",
         "summary": "Read router Prometheus metrics",
-        "description": "Metrics are available only when MEMORY_ROUTER_METRICS_ENABLED=true. Metrics are disabled by default. Access must have an admin read, review, or legacy credential. A principal token with a quarantine.review grant on at least one bank also permits access.\n\nMetrics cover the complete router, including banks outside the grants. The response uses Prometheus text exposition format 0.0.4. If metrics are disabled, normal router authentication and endpoint-denial rules apply.",
+        "description": "Metrics are available only when MEMORY_ROUTER_METRICS_ENABLED=true. Metrics are off by default. Access must have an admin read, review, or legacy credential. A principal token with a quarantine.review grant on at least one bank also permits access.\n\nMetrics cover the complete router, including banks outside the grants. The response uses Prometheus text exposition format 0.0.4. If metrics are off, normal router authentication and endpoint-denial rules apply.",
         "tags": [
           "Service"
         ],
@@ -704,7 +704,7 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "404": {
-            "description": "Metrics are disabled and router authentication succeeded.",
+            "description": "Metrics are off and router authentication succeeded.",
             "content": {
               "application/json": {
                 "schema": {
@@ -714,7 +714,7 @@
             }
           },
           "429": {
-            "description": "Admin read, principal, or authentication-failure rate limit is more than its configured value.",
+            "description": "The rate of admin reads, principal requests, or authentication failures is more than its configured limit.",
             "content": {
               "application/json": {
                 "schema": {
@@ -740,7 +740,7 @@
       "get": {
         "operationId": "listBanks",
         "summary": "List banks visible to the authenticated principal",
-        "description": "This endpoint operates only in principal mode. The router preserves the Hindsight bank-list response format. It removes banks without bank.list.",
+        "description": "This endpoint operates only in principal mode. The router preserves the response format of the Hindsight bank list. It removes banks without bank.list.",
         "tags": [
           "Memory"
         ],
@@ -978,7 +978,7 @@
     "/version": {
       "get": {
         "operationId": "getVersion",
-        "summary": "Get Hindsight API version and features",
+        "summary": "Get the API version and features of Hindsight",
         "description": "The endpoint returns a Hindsight-compatible /version response. It is available only with router authentication. The API version is the Hindsight version. Feature flags identify the capabilities that this interface supports.",
         "tags": [
           "Service"
@@ -1047,7 +1047,7 @@
     "/auth/human/start": {
       "post": {
         "operationId": "startHumanLogin",
-        "summary": "Start human login",
+        "summary": "Start a human login",
         "tags": [
           "Human authentication"
         ],
@@ -1084,13 +1084,13 @@
             "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication is disabled, or the route is unknown."
+            "description": "Human authentication is off, or the route is unknown."
           },
           "413": {
             "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "The login rate, concurrency, or storage capacity limit is reached."
+            "description": "The login rate, concurrency, or storage use is at its limit."
           },
           "503": {
             "description": "The identity provider, shared state, or active policy is unavailable."
@@ -1179,13 +1179,13 @@
             "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication is disabled, or the route is unknown."
+            "description": "Human authentication is off, or the route is unknown."
           },
           "413": {
             "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "The login rate, concurrency, or storage capacity limit is reached."
+            "description": "The login rate, concurrency, or storage use is at its limit."
           },
           "503": {
             "description": "The identity provider, shared state, or active policy is unavailable."
@@ -1242,13 +1242,13 @@
             "description": "A login is necessary."
           },
           "404": {
-            "description": "Human authentication is disabled, or the route is unknown."
+            "description": "Human authentication is off, or the route is unknown."
           },
           "413": {
             "description": "The request is more than 8 KiB."
           },
           "429": {
-            "description": "The login rate, concurrency, or storage capacity limit is reached."
+            "description": "The login rate, concurrency, or storage use is at its limit."
           },
           "503": {
             "description": "The identity provider, shared state, or active policy is unavailable."
@@ -1338,7 +1338,7 @@
         }
       },
       "NotFound": {
-        "description": "Quarantine item was not found.",
+        "description": "The quarantine item does not exist.",
         "content": {
           "application/json": {
             "schema": {
@@ -1368,7 +1368,7 @@
         }
       },
       "MemoryRateLimited": {
-        "description": "Hindsight, quarantine, or principal request/concurrency limit is more than its configured value. Principal and Hindsight quota responses include Retry-After.",
+        "description": "The request rate or concurrency for Hindsight, quarantine, or a principal is more than its configured limit. Principal and Hindsight quota responses include Retry-After.",
         "headers": {
           "Retry-After": {
             "description": "Seconds before a retry of a request that the Hindsight quota limited.",
@@ -1454,7 +1454,7 @@
         }
       },
       "QuarantineCapacityExceeded": {
-        "description": "A quarantine capacity limit is reached. Limits apply to persistent items, writers or principals, banks, ciphertext, and global security-event identities. Security-event admission permits a maximum of 64 stored identities across replicas. At this limit, the router returns quarantine_security_event_capacity_exceeded. The router rejects the operation.",
+        "description": "Quarantine use is at a capacity limit. Limits apply to persistent items, writers or principals, banks, ciphertext, and global security-event identities. Security-event admission permits a maximum of 64 stored identities across replicas. At this limit, the router returns quarantine_security_event_capacity_exceeded. The router rejects the operation.",
         "content": {
           "application/json": {
             "schema": {
@@ -1803,7 +1803,7 @@
       },
       "UpstreamResponse": {
         "type": "object",
-        "description": "Acknowledgment object from the configured Hindsight version after a safety scan. The object preserves synchronous and asynchronous behavior and safe additional fields.",
+        "description": "Acknowledgment object from the configured Hindsight version after a safety scan. The object preserves synchronous and asynchronous behavior and safe extra fields.",
         "additionalProperties": true
       },
       "QuarantineId": {
@@ -2418,7 +2418,7 @@
           "older_than": {
             "type": "string",
             "format": "date-time",
-            "description": "Select items created strictly before this instant. The timestamp must have seconds and an explicit timezone (Z or +/-HH:MM). Fractional seconds are supported, including sub-millisecond precision. Equivalent offsets select the same items. Invalid or out-of-range timestamps return 400."
+            "description": "Select items created strictly before this instant. The timestamp must have seconds and an explicit timezone (Z or +/-HH:MM). The timestamp permits fractional seconds, including sub-millisecond precision. Different timestamp offsets that represent the same instant select the same items. Invalid or out-of-range timestamps return 400."
           },
           "dry_run": {
             "type": "boolean",
@@ -2581,4 +2581,5 @@
     }
   }
 }
+
 

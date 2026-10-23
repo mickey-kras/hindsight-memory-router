@@ -144,10 +144,11 @@ Write failures can leave a partial final record. See [cleanup](../operations/cle
 Limit failures stay fail-closed:
 
 - `413`: The encrypted item is too large.
-- `429`: The writes are more than the quarantine rate limit.
+- `429`: Too many quarantine writes in the configured time window.
 - `507`: The quarantine has no capacity.
 
 All router replicas share the quarantine rate limits in PostgreSQL. These limits use the PostgreSQL clock. SQLite and in-memory limits are process-local.
 
 See [quarantine review](../operations/quarantine-review.md) for offline decryption and review.
+
 

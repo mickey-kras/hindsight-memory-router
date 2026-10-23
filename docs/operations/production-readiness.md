@@ -92,7 +92,7 @@ Unauthenticated callers get only `{"status":"healthy"}` or `{"status":"unhealthy
 A recognized router token or principal can get the validated, supported health fields of Hindsight.
 The response omits unknown fields.
 Failure of either dependency returns `503 {"status":"unhealthy"}`.
-Health probes do not use authentication.
+Health probes accept unauthenticated requests.
 
 Operational telemetry is partially complete.
 With `MEMORY_ROUTER_METRICS_ENABLED=true`, `GET /metrics` exposes the following metrics in Prometheus text format.
@@ -128,4 +128,5 @@ Work through unresolved items in this order:
 
 Update this checklist after you resolve each item.
 Keep the runtime diagrams in the architecture document consistent with the implemented behavior.
+
 

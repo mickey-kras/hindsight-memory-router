@@ -1,9 +1,9 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Memory Router OpenClaw Compatibility Surface",
+    "title": "OpenClaw compatibility for the Memory Router",
     "version": "0.9.0",
-    "description": "Conditional Hindsight endpoints for the current OpenClaw integration. With MEMORY_ROUTER_PRINCIPALS, bank_id is a literal Hindsight bank ID. The router checks the principal operation grants for that bank. In legacy shared-token mode, bank_id is a Memory Router writer ID. The router resolves that ID to its configured write bank.",
+    "description": "Conditional Hindsight endpoints for the current OpenClaw integration. With MEMORY_ROUTER_PRINCIPALS, bank_id is a literal Hindsight bank ID. The router checks the principal operation grants for that bank. In legacy shared-token mode, bank_id is a writer ID for the Memory Router. The router resolves that ID to its configured write bank.",
     "license": {
       "name": "MIT",
       "identifier": "MIT"
@@ -241,7 +241,7 @@
     },
     "/v1/default/banks/{bank_id}/audit-logs": {
       "get": {
-        "summary": "List resolved bank audit log entries",
+        "summary": "List entries in the audit log of the resolved bank",
         "operationId": "hindsightGetAuditLogs",
         "security": [
           {
@@ -399,7 +399,7 @@
     },
     "/v1/default/banks/{bank_id}/audit-logs/stats": {
       "get": {
-        "summary": "Get resolved bank audit log statistics",
+        "summary": "Get statistics for the audit log of the resolved bank",
         "operationId": "hindsightGetAuditLogsStats",
         "security": [
           {
@@ -3014,7 +3014,7 @@
     },
     "/v1/default/banks/{bank_id}/knowledge-base/tree": {
       "get": {
-        "summary": "Get the resolved bank knowledge base tree",
+        "summary": "Get the knowledge base tree for the resolved bank",
         "operationId": "hindsightGetKnowledgeBaseTree",
         "security": [
           {
@@ -3379,7 +3379,7 @@
     },
     "/v1/default/banks/{bank_id}/llm-requests/stats": {
       "get": {
-        "summary": "Get resolved bank LLM request statistics",
+        "summary": "Get statistics for LLM requests in the resolved bank",
         "operationId": "hindsightGetLlmRequestsStats",
         "security": [
           {
@@ -3511,7 +3511,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Optional fact type filter (world, experience, observation)",
+            "description": "Optional filter by fact type (world, experience, observation)",
             "explode": true,
             "in": "query",
             "name": "type",
@@ -5187,7 +5187,7 @@
             "$ref": "#/components/parameters/BankId"
           },
           {
-            "description": "Filter by status: pending, processing, completed, failed, or cancelled",
+            "description": "Filter by status: `pending`, `processing`, `completed`, `failed`, or `cancelled`",
             "explode": true,
             "in": "query",
             "name": "status",
@@ -5244,14 +5244,14 @@
             "style": "form"
           },
           {
-            "description": "Exclude parent batch operations from results",
+            "description": "Exclude parent operations for batches from results",
             "explode": true,
             "in": "query",
             "name": "exclude_parents",
             "required": false,
             "schema": {
               "default": false,
-              "description": "Exclude parent batch operations from results",
+              "description": "Exclude parent operations for batches from results",
               "type": "boolean"
             },
             "style": "form"
@@ -5395,7 +5395,7 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "In principal mode, status without payloads must have bank.config.read. If an include_payload value is true, the request must have memory.recall. The router checks each repeated value. Invalid boolean values return 400. Legacy-mode query forwarding is unchanged."
+        "description": "In principal mode, status without payloads must have bank.config.read. If an include_payload value is true, the request must have memory.recall. The router checks each repeated value. Invalid boolean values return 400. In legacy mode, the router forwards queries without changes."
       },
       "delete": {
         "summary": "Cancel one background operation",
@@ -5823,7 +5823,7 @@
     },
     "/v1/default/banks/{bank_id}/stats/memories-timeseries": {
       "get": {
-        "summary": "Get memory count time series for the resolved bank",
+        "summary": "Get counts of memories over time for the resolved bank",
         "operationId": "hindsightGetStatsMemoriesTimeseries",
         "security": [
           {
@@ -6073,7 +6073,7 @@
         "name": "bank_id",
         "in": "path",
         "required": true,
-        "description": "In principal mode, this is the literal target bank ID. The router checks its per-bank grants. In legacy shared-token mode, this is a Memory Router writer ID. The router resolves the writer ID to its configured write bank.",
+        "description": "In principal mode, this is the literal target bank ID. The router checks its per-bank grants. In legacy shared-token mode, this is a writer ID for the Memory Router. The router resolves the writer ID to its configured write bank.",
         "schema": {
           "type": "string",
           "minLength": 1
@@ -6204,10 +6204,10 @@
         }
       },
       "RateLimited": {
-        "description": "Router retain/recall quota or upstream client rate limit is more than its configured value",
+        "description": "The rate or concurrency of retain or recall requests is more than a router quota or an upstream client limit",
         "headers": {
           "Retry-After": {
-            "description": "Seconds until the router quota window resets, if supplied",
+            "description": "Seconds until the quota window of the router resets, if supplied",
             "schema": {
               "type": "integer",
               "minimum": 1
@@ -6252,7 +6252,7 @@
         }
       },
       "UpstreamFailure": {
-        "description": "Hindsight is unavailable, redirected, unauthorized, invalid, oversized, unsafe, or failed. A response-scan failure after a successful upstream write returns hindsight_response_scan_unavailable without Retry-After. The write can be complete. Examine its status before you retry. The router does not queue a replay.",
+        "description": "Hindsight cannot serve the request. Possible causes include redirection, authorization failure, an invalid or oversized response, unsafe content, and other upstream failures. A response-scan failure after a successful upstream write returns hindsight_response_scan_unavailable without Retry-After. The write can be complete. Examine the write status before you retry. The router does not queue a replay.",
         "content": {
           "application/json": {
             "schema": {
@@ -6414,4 +6414,5 @@
     }
   }
 }
+
 

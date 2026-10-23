@@ -34,7 +34,7 @@ Set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to make HTTPS mandatory for every 
 
 - `memory_router/facade_routes.py` holds the route allowlist. `openapi/openclaw.json` is the contract.
 - In legacy shared-token mode (`MEMORY_ROUTER_TOKEN`), `{bank_id}` is a writer ID resolved to its configured write bank. In principal mode (`MEMORY_ROUTER_PRINCIPALS`), it is the literal target bank, and the bearer token must grant the requested operation on that bank.
-- These operations use the recall quotas: GET (with `stats?refresh=true`), reflect, dry-run extract, and dry-run refresh. Other writes use the retain quotas.
+- All GET operations use recall quotas. This includes `stats?refresh=true`. Reflect, dry-run extract, and dry-run refresh also use recall quotas. Other writes use retain quotas.
 - Bodies use `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB). Retain, recall, and dry-run extract have stricter limits.
 - Request bodies, queries, native recall results and supplemental fields, and facade responses share four process worker slots. The queue has a limit.
 
@@ -96,4 +96,5 @@ Retain and recall have separate per-writer and global sliding-window budgets. Re
 All router replicas share the PostgreSQL-backed limits. Authenticated requests use quota before the content scan. Thus, blocked or quarantined scans, upstream failures, and response-scan failures count. Unknown writers and cheap structural failures do not.
 
 The router supports no other memory backends.
+
 
