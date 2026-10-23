@@ -183,10 +183,11 @@ Existing dependencies do not prove license approval.
    Release the integrations.
    Examine the manifests, the immutable releases and the registry digests.
 
-Release fix PRs use the independent implementation App and owner-reviewed squash merges.
+The release fix PRs use the independent implementation App and owner-reviewed squash merges.
 After activation of the CI review ruleset, every fix PR requires approval.
 The person who approves the latest push must not be its pusher.
-CI changes also require code-owner approval.
+CI changes also need code-owner approval.
+
 Follow the activation procedure below.
 Dry-run and release checks stay mandatory.
 Sonar runs only on `main` by design.
@@ -303,9 +304,11 @@ This consolidation of the router workflows does not change the release automatio
 
 The `policy` workflow runs from the trusted base with `pull_request_target`.
 It reads candidate files through the GitHub API.
-It never checks out or executes PR code.
+It never uses `git checkout` to load PR code.
+It never executes PR code.
 The YAML parser comes from `.github/scripts` at the executing `github.workflow_sha`.
 Its installation disables lifecycle scripts.
+
 The guard never loads the candidate manifest, lockfile or parser.
 
 The required check stays `guard / guard`.
@@ -331,9 +334,9 @@ Dependency review, audit and all other required CI checks still apply.
 Changes to `.npmrc` in the repository root, `.github`, or `.github/scripts` are forbidden.
 A shadow `.github/scripts/npm-shrinkwrap.json` is also forbidden.
 This restriction applies when the checked lockfile has no changes.
-These files could redirect registry requests or replace the checked lockfile.
+These files can redirect registry requests or replace the checked lockfile.
 
-A routine lockfile update does not require changes to the guard hashes.
+A routine lockfile update does not need changes to the guard hashes.
 Do not restore a lockfile hash allowlist.
 Do not admit an old vulnerable lockfile to release a package.
 
@@ -350,9 +353,9 @@ The guard can admit a new code hash in the same PR only when all these condition
   It must be separate from the owner.
   A machine-user account has `type: User` and cannot use this approval path.
 - The base branch's `.github/CODEOWNERS` assigns `/.github/` to `@mickey-kras`.
-- Live branch rules require code-owner approval and at least one approval.
+- Live branch rules need code-owner approval and at least one approval.
   They dismiss stale approvals.
-  They require approval of the latest push by someone other than its pusher.
+  They need approval of the latest push by someone other than its pusher.
 - The owner's latest decisive review is `APPROVED` for the exact current head SHA.
   A later change request or dismissal invalidates it.
   API errors cause the guard to fail.
@@ -364,13 +367,13 @@ These include jobs, dependencies, conditions and the order of existing steps.
 Existing commands, action targets, inputs, environment variables and failure handling must stay unchanged.
 Action commit pins can change.
 
-Independent owner review can admit additional jobs or steps in the same PR.
+Independent owner review can admit more jobs or steps in the same PR.
 Reviewers must check that additions do not weaken existing checks.
 Removal or change of mandatory controls requires an explicit trusted-policy migration.
-Ordinary hash approval is not sufficient.
+Ordinary hash approval is not enough.
 
 After approval, rerun the failed trusted-base `policy` job.
-A subsequent push requires a new approval and run.
+The next push requires a new approval and run.
 Native rules dismiss stale reviews even after a successful job.
 Human review and agent-generated code must never use the same owner credential.
 
@@ -381,15 +384,15 @@ Human review and agent-generated code must never use the same owner credential.
    Give it only the necessary contents, pull-request and workflow write permissions.
    Keep administration, review approval and release credentials out of this identity.
    Configure the implementation connection to use the App.
-   Verify that a test PR has that bot as its author.
+   Check that a test PR has that bot as its author.
    The human owner must review it independently.
 2. Add `.github/CODEOWNERS`.
-   Import `.github/rulesets/require-ci-owner-review.json` as an additional active ruleset for the default and release branches.
+   Import `.github/rulesets/require-ci-owner-review.json` as a separate active ruleset for the default and release branches.
    Keep existing status checks, protections and bypass restrictions.
    A JSON file in Git does not activate a rule.
    This template requires one review for every PR and code-owner approval for CI files.
    Do not add the implementation App to a bypass list.
-3. Verify the live rule through `GET /repos/{owner}/{repo}/rules/branches/{branch}`.
+3. Check the live rule through `GET /repos/{owner}/{repo}/rules/branches/{branch}`.
    Test a policy PR that the bot created.
    Without review, it must fail.
    Approval of the exact head must pass.
@@ -400,7 +403,7 @@ Human review and agent-generated code must never use the same owner credential.
    The owner must explicitly authorize this initial exception.
    Never write false check results or introduce a permanent bypass.
 
-Until the independent bot and live rules are installed, same-PR code approval stays disabled.
+Until the administrator installs the independent bot and activates the live rules, same-PR code approval stays disabled.
 Repository files cannot create the App, change the connection identity or activate rulesets.
 After activation, use the single-PR review procedure.
 Do not return to paired hash-admission PRs or owner bypasses.
