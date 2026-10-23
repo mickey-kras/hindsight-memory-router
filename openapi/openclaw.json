@@ -5395,7 +5395,7 @@
             "$ref": "#/components/responses/Forbidden"
           }
         },
-        "description": "In principal mode, status without payloads must have bank.config.read. If an include_payload value is true, the request must have memory.recall. The router checks each repeated value. Invalid boolean values return 400. In legacy mode, the router forwards queries without changes."
+        "description": "In principal mode, status without payloads must have bank.config.read. If an include_payload value is true, the request must have memory.recall. The router checks each repeated value. Invalid boolean values return 400. Legacy mode keeps its existing query forwarding rules."
       },
       "delete": {
         "summary": "Cancel one background operation",
