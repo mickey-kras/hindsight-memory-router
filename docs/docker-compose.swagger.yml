@@ -1,6 +1,6 @@
 services:
   swagger-ui:
-    image: swaggerapi/swagger-ui:v5.33.2@sha256:1f00ef02fcd0e4294657963cbc933202d644dc56f8d72ca5fdc35bfaa80c240e
+    image: swaggerapi/swagger-ui:v5.33.3@sha256:b26661cd754a7efbb2e1aab419ffb5603320d8f35f0bd086d1d7506e23934d23
     profiles: ["docs"]
     environment:
       URLS: '[{"url":"/spec/openapi.json","name":"Memory Router"},{"url":"/spec/openclaw.json","name":"OpenClaw compatibility"}]'
