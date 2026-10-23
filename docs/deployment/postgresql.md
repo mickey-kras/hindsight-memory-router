@@ -10,8 +10,10 @@ Set:
 QUARANTINE_DATABASE_URL=postgresql://user:password@database:5432/quarantine
 ```
 
-`postgres://` is also accepted. Use a database/schema isolated from Hindsight application data.
+The router also accepts `postgres://`. Use a database or schema that is separate from the Hindsight application data.
 
-On startup Memory Router connects, initializes/validates its schema, and fails closed if the database is unavailable or lacks required privileges.
+At startup, Memory Router connects to PostgreSQL and initializes or validates its schema.
+Startup fails closed if the database is unavailable or does not have the necessary privileges.
 
-PostgreSQL also provides shared rate-limit state used by router replicas. For multi-instance operation, see [clustered deployment](clustered.md).
+PostgreSQL also keeps the shared rate-limit state for router replicas. For multi-instance operation, see [clustered deployment](clustered.md).
+

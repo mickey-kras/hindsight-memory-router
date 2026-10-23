@@ -2,7 +2,8 @@
 
 [Documentation](../README.md) | [Repository](../../README.md)
 
-Legacy filesystem quarantine data can be imported into the current database-backed quarantine without modifying the source files.
+You can import legacy filesystem quarantine data into the current database-backed quarantine.
+Import does not change the source files.
 
 ```bash
 private-key-command | memory-router-migrate-legacy-quarantine \
@@ -13,6 +14,7 @@ private-key-command | memory-router-migrate-legacy-quarantine \
 
 From a source checkout, install the project first with `python -m pip install -e .`.
 
-The migration command is idempotent. Verify its summary before removing any legacy data.
+The migration command is idempotent. Examine the summary of the command before you remove legacy data.
 
 Keep the private key outside the router runtime during migration, exactly as for normal quarantine review.
+

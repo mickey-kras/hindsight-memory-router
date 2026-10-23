@@ -2,13 +2,13 @@
 
 [Documentation](../README.md) | [Repository](../../README.md)
 
-Use the [Memory Router integrations package](https://github.com/mickey-kras/hindsight-memory-router-integrations) for per-agent credentials, assigned write/read banks and HTTPS transport. Follow its [OpenClaw setup](https://github.com/mickey-kras/hindsight-memory-router-integrations/blob/main/docs/OPENCLAW.md) after creating matching [principal grants](../security/authentication.md).
+Use the [integrations package](https://github.com/mickey-kras/hindsight-memory-router-integrations) for per-agent credentials, assigned write and read banks, and HTTPS transport. Follow its [OpenClaw setup](https://github.com/mickey-kras/hindsight-memory-router-integrations/blob/main/docs/OPENCLAW.md) after creating matching [principal grants](../security/authentication.md).
 
 ## Legacy upstream Hindsight plugin
 
-The configuration below is for the upstream Hindsight plugin with the deprecated shared router-token mode. It is not the per-agent Memory Router plugin configuration.
+The configuration below is for the upstream Hindsight plugin with the deprecated shared router-token mode. It is not the configuration of the per-agent plugin.
 
-Point the OpenClaw Hindsight plugin at Memory Router instead of directly at Hindsight:
+Configure the OpenClaw Hindsight plugin to connect to Memory Router:
 
 ```text
 hindsightApiUrl = http://memory-router:8890
@@ -24,6 +24,10 @@ Writer IDs must exist in the configured Memory Router registry or their requests
 
 Compatible clients in legacy token mode use the same values: router URL, router token, and writer ID as bank ID.
 
-Denied: webhooks, file transfer, import/export, upstream metrics, LLM health, cross-writer listings and deprecated endpoints. The router's own opt-in metrics endpoint has separate [admin authorization](../reference/api.md).
+Denied: webhooks, file transfer, import, export, upstream metrics, LLM health, cross-writer listings and deprecated endpoints. The router's own opt-in metrics endpoint has separate [admin authorization](../reference/api.md).
 
-Compatibility is reviewed against Hindsight v1.1.0, including native memory-provider search and get. Legacy mental-model routes remain supported. CI and the daily upstream compatibility workflow check the latest stable release; source drift requires review before inventory hashes are updated.
+Compatibility review covers Hindsight v1.1.0, including native memory-provider search and get.
+The router still supports legacy mental-model routes.
+CI and the daily upstream compatibility workflow check the latest stable release.
+Review source changes before you update inventory hashes.
+

@@ -8,7 +8,7 @@ Create these in GitHub:
 Settings -> Secrets and variables -> Actions -> New repository secret
 ```
 
-## Required for Docker Hub publish
+## Necessary for Docker Hub publication
 
 ```text
 DOCKERHUB_USERNAME=<your Docker Hub username>
@@ -23,7 +23,7 @@ Scope it only for publishing this image if Docker Hub allows scoped tokens for y
 Rotate it if it is ever pasted into chat, logs, shell history, or a public place.
 ```
 
-## Required for SonarQube
+## Necessary for SonarQube
 
 ```text
 SONAR_TOKEN=<project analysis token>
@@ -41,9 +41,9 @@ TAILSCALE_AUDIENCE=<OIDC audience>
 
 The current workflow uses Tailscale. Replace that connection step if your SonarQube network uses another method.
 
-## Built-in GitHub secrets/tokens
+## Built-in GitHub secrets and tokens
 
-No manual setup needed:
+The token that follows has no manual setup:
 
 ```text
 GITHUB_TOKEN
@@ -63,7 +63,7 @@ GitHub Actions permissions
 FOSSA_API_KEY=<only if FOSSA is enabled later>
 ```
 
-Not currently required.
+Not necessary at this time.
 
 ## Never add as repository secrets
 
@@ -76,4 +76,6 @@ private-network addresses or service tokens
 
 Keep them in your private deployment environment.
 
-Release branch/tag creation also requires the dedicated App and `release-automation` environment described in [Releasing](RELEASING.md). Registry publishing runs only on release branches.
+To create a release branch or tag, you must have the dedicated App and `release-automation` environment described in [Releasing](RELEASING.md).
+Registry publishing runs only on release branches.
+
