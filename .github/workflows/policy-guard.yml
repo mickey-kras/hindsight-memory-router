@@ -30,6 +30,7 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         env:
           POLICY_TOOLS_DIRECTORY: ${{ github.workspace }}/.policy-tools/.github/scripts
+          CI_POLICY_SETTINGS_REVIEW: ${{ vars.CI_POLICY_SETTINGS_REVIEW }}
         with:
           script: |
             const owner = context.repo.owner;
@@ -80,7 +81,7 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "aba8fecd2cd5310851835cc8e7487ebd0be2080ce09cf96e698c98df0e652674",
+              ".github/scripts/release-policy.test.py": "1b6edf6d0084ca26f9052e17a4c64312cf29a12159dfab06872c33d01c5e890d",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
@@ -214,6 +215,36 @@ jobs:
               return true;
             }
 
+            function reviewRequired(rule) {
+              const parameters = rule?.parameters;
+              return rule?.type === 'pull_request' && parameters?.require_code_owner_review === true &&
+                parameters.dismiss_stale_reviews_on_push === true && parameters.require_last_push_approval === true &&
+                Number.isSafeInteger(parameters.required_approving_review_count) && parameters.required_approving_review_count >= 1;
+            }
+
+            async function reviewSourceActive(rule) {
+              const repository = `${owner}/${repo}`;
+              if (rule.ruleset_source_type !== 'Repository' || rule.ruleset_source !== repository ||
+                  !Number.isSafeInteger(rule.ruleset_id) || rule.ruleset_id <= 0) return false;
+              const {data: source} = await github.rest.repos.getRepoRuleset({owner, repo, ruleset_id: rule.ruleset_id});
+              if (!source || source.id !== rule.ruleset_id || source.source_type !== 'Repository' ||
+                  source.source !== repository || source.target !== 'branch' || source.enforcement !== 'active' ||
+                  !Array.isArray(source.rules) || !source.rules.some(reviewRequired)) return false;
+              if (Object.hasOwn(source, 'bypass_actors')) {
+                return Array.isArray(source.bypass_actors) && source.bypass_actors.length === 0;
+              }
+              // The read-only token cannot see bypass actors. An administrator
+              // records the no-bypass readback; any settings revision invalidates it.
+              let reviewed;
+              try { reviewed = JSON.parse(process.env.CI_POLICY_SETTINGS_REVIEW || ''); } catch { return false; }
+              const revision = source.updated_at;
+              return reviewed !== null && typeof reviewed === 'object' && !Array.isArray(reviewed) &&
+                reviewed.repository === repository && reviewed.ruleset_id === source.id &&
+                typeof revision === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(revision) &&
+                Number.isFinite(Date.parse(revision)) && new Date(revision).toISOString() === revision.replace('Z', '.000Z') &&
+                reviewed.updated_at === revision && Array.isArray(reviewed.bypass_actors) && reviewed.bypass_actors.length === 0;
+            }
+
             async function reviewedHead() {
               if (pull.user?.type !== 'Bot' || !Number.isInteger(pull.user?.id) || pull.user.id <= 0 ||
                   pull.user.id === 24433677 || pull.user?.login === 'mickey-kras') return false;
@@ -222,11 +253,12 @@ jobs:
               const rules = await github.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
                 owner, repo, branch: pull.base.ref, per_page: 100,
               });
-              if (!Array.isArray(rules) || !rules.some(rule => rule.type === 'pull_request' &&
-                rule.parameters?.require_code_owner_review === true &&
-                rule.parameters?.dismiss_stale_reviews_on_push === true &&
-                rule.parameters?.require_last_push_approval === true &&
-                rule.parameters?.required_approving_review_count >= 1)) return false;
+              if (!Array.isArray(rules)) return false;
+              let activeReviewSource = false;
+              for (const rule of rules.filter(reviewRequired)) {
+                if (await reviewSourceActive(rule)) { activeReviewSource = true; break; }
+              }
+              if (!activeReviewSource) return false;
               const reviews = await github.paginate(github.rest.pulls.listReviews, {
                 owner, repo, pull_number, per_page: 100,
               });
@@ -725,3 +757,4 @@ jobs:
             } else {
               core.info('Policy guard passed.');
             }
+

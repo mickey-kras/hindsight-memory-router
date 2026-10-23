@@ -53,7 +53,8 @@ if ROUTER:
     ])
 
 
-def policy(overrides=None, paths=None, reviews=None, rules=None, pull=None, base_overrides=None, statuses=None, current_pull=None):
+def policy(overrides=None, paths=None, reviews=None, rules=None, pull=None, base_overrides=None, statuses=None, current_pull=None,
+           sources=None, settings_review=""):
     files = {
         str(path.relative_to(ROOT)): path.read_text()
         for path in (ROOT / ".github").rglob("*")
@@ -76,7 +77,8 @@ const github = { paginate: async method => method === github.rest.pulls.listRevi
     input.paths.map(filename => ({filename, status: input.statuses[filename] || 'modified'})),
   request: async () => ({data: input.rules}),
   rest: { pulls: {listFiles() {}, listReviews() {}, get: async () => ({data: pullReads++ ? input.current_pull || input.pull : input.pull})},
-    repos: {getContent: async ({path, ref}) => ({data: {
+    repos: {getRepoRuleset: async ({ruleset_id}) => ({data: input.sources[String(ruleset_id)]}),
+      getContent: async ({path, ref}) => ({data: {
       type: 'file', content: Buffer.from((ref === input.pull.base.sha ? input.base_files : input.files)[path]).toString('base64'), encoding: 'base64'
     }})}}};
 const context = {repo: {owner: 'test', repo: 'test'}, payload: {pull_request: input.pull}};
@@ -87,9 +89,13 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
 """
         result = subprocess.run(
             ["node", "-e", driver],
-            env={**os.environ, "POLICY_TOOLS_DIRECTORY": os.environ.get("POLICY_TOOLS_DIRECTORY", str(ROOT / ".github/scripts"))},
+            env={**os.environ, "POLICY_TOOLS_DIRECTORY": os.environ.get("POLICY_TOOLS_DIRECTORY", str(ROOT / ".github/scripts")),
+                 "CI_POLICY_SETTINGS_REVIEW": settings_review},
             input=json.dumps({"script": script, "files": files, "base_files": base_files, "paths": paths if paths is not None else PATHS,
                               "reviews": reviews or [], "rules": rules or [], "statuses": statuses or {}, "current_pull": current_pull,
+                              "sources": sources if sources is not None else {"42": {
+                                  "id": 42, "source_type": "Repository", "source": "test/test", "enforcement": "active",
+                                  "target": "branch", "updated_at": "2026-10-23T00:00:00Z", "bypass_actors": [], "rules": rules or []}},
                               "pull": pull or {"number": 1, "state": "open", "head": {"sha": "a" * 40}, "base": {"sha": "b" * 40, "ref": "main"},
                                                "user": {"login": "mickey-kras", "type": "User"}}}),
             text=True,
@@ -1348,20 +1354,59 @@ class AdmissionPolicyTests(unittest.TestCase):
         self.assertTrue(policy({self.lock_path: json.dumps(modified)}, paths=[self.lock_path],
                                base_overrides={self.lock_path: json.dumps(original)}))
 
-    def admission(self, reviews=None, rules=None, user=None, base_overrides=None):
+    def admission(self, reviews=None, rules=None, user=None, base_overrides=None, **kwargs):
         return policy({self.source_path: (ROOT / self.source_path).read_text() + '\n// reviewed update\n'},
                       paths=[self.source_path], reviews=reviews, rules=rules,
                       pull={'number': 1, 'state': 'open', 'head': {'sha': 'a' * 40}, 'base': {'sha': 'b' * 40, 'ref': 'main'},
                             'user': user or {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}},
-                      base_overrides=base_overrides)
+                      base_overrides=base_overrides, **kwargs)
 
     def approval(self, **values):
         return {'id': 1, 'user': {'login': 'mickey-kras', 'type': 'User', 'id': 24433677}, 'state': 'APPROVED', 'commit_id': 'a' * 40, **values}
 
     def rules(self):
-        return [{'type': 'pull_request', 'parameters': {'require_code_owner_review': True,
+        return [{'type': 'pull_request', 'ruleset_id': 42, 'ruleset_source_type': 'Repository', 'ruleset_source': 'test/test',
+                 'parameters': {'require_code_owner_review': True,
                  'dismiss_stale_reviews_on_push': True, 'require_last_push_approval': True,
                  'required_approving_review_count': 1}}]
+
+    def source(self, **values):
+        return {'42': {'id': 42, 'source_type': 'Repository', 'source': 'test/test', 'enforcement': 'active',
+                       'target': 'branch', 'updated_at': '2026-10-23T00:00:00Z', 'rules': self.rules(),
+                       'bypass_actors': [], **values}}
+
+    def settings_review(self, **values):
+        return json.dumps({'repository': 'test/test', 'ruleset_id': 42, 'updated_at': '2026-10-23T00:00:00Z',
+                           'bypass_actors': [], **values})
+
+    def test_review_source_bypasses_and_redaction_fail_closed(self):
+        args = ([self.approval()], self.rules())
+        for bypasses in [[{'actor_type': 'Integration', 'actor_id': 123, 'bypass_mode': 'pull_request'}], None, {}, '']:
+            with self.subTest(bypasses=bypasses):
+                self.assertTrue(self.admission(*args, sources=self.source(bypass_actors=bypasses),
+                                               settings_review=self.settings_review()))
+        redacted = self.source()
+        del redacted['42']['bypass_actors']
+        for review in ['', '{}', 'null', '[]', '{', self.settings_review(repository='other/test'),
+                       self.settings_review(ruleset_id=43), self.settings_review(ruleset_id='42'),
+                       self.settings_review(updated_at='2026-10-22T00:00:00Z'), self.settings_review(bypass_actors=[{}])]:
+            with self.subTest(review=review):
+                self.assertTrue(self.admission(*args, sources=redacted, settings_review=review))
+        self.assertEqual(self.admission(*args, sources=redacted, settings_review=self.settings_review()), [])
+        redacted['42']['updated_at'] = '2026-10-23T00:00:01Z'
+        self.assertTrue(self.admission(*args, sources=redacted, settings_review=self.settings_review()))
+
+    def test_review_source_must_still_enforce_the_applicable_review_rule(self):
+        for values in [{'enforcement': 'disabled'}, {'enforcement': 'evaluate'}, {'target': 'tag'}, {'id': 43},
+                       {'source_type': 'Organization'}, {'source': 'other/test'}, {'rules': []},
+                       {'rules': [{'type': 'pull_request', 'parameters': {'required_approving_review_count': 1}}]}]:
+            with self.subTest(values=values):
+                self.assertTrue(self.admission([self.approval()], self.rules(), sources=self.source(**values),
+                                               settings_review=self.settings_review()))
+        for values in [{'ruleset_id': 0}, {'ruleset_id': '42'}, {'ruleset_source_type': 'Organization'},
+                       {'ruleset_source': 'other/test'}]:
+            rules = [{**self.rules()[0], **values}]
+            self.assertTrue(self.admission([self.approval()], rules))
 
     def test_exact_head_owner_admission_requires_independent_bot_and_live_controls(self):
         self.assertEqual(self.admission([self.approval()], self.rules()), [])
@@ -1463,3 +1508,4 @@ class AdmissionPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

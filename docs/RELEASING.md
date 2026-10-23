@@ -356,6 +356,9 @@ The guard can admit a new code hash in the same PR only when all these condition
 - Live branch rules need code-owner approval and at least one approval.
   They dismiss stale approvals.
   They need approval of the latest push by someone other than its pusher.
+  The applicable repository ruleset must be active and have no bypass actors.
+  The guard checks its current source and review parameters.
+  If the API hides bypass actors, the guard needs the administrator's readback for that exact ruleset revision.
 - The owner's latest decisive review is `APPROVED` for the exact current head SHA.
   A later change request or dismissal invalidates it.
   API errors cause the guard to fail.
@@ -391,8 +394,26 @@ Human review and agent-generated code must never use the same owner credential.
    Keep existing status checks, protections and bypass restrictions.
    A JSON file in Git does not activate a rule.
    This template requires one review for every PR and code-owner approval for CI files.
-   Do not add the implementation App to a bypass list.
+   The review ruleset must have no bypass actors.
 3. Check the live rule through `GET /repos/{owner}/{repo}/rules/branches/{branch}`.
+   Get its `ruleset_id`.
+   With an administrator's local `gh` login, read the full ruleset:
+
+   ```sh
+   gh api repos/mickey-kras/hindsight-memory-router/rulesets/RULESET_ID --jq 'if has("bypass_actors") and .bypass_actors == [] then {repository: .source, ruleset_id: .id, updated_at: .updated_at, bypass_actors: []} else error("Administrator readback must show no bypass actors") end'
+   ```
+
+   Replace `RULESET_ID` with the applicable rule's numeric ID.
+   Store the JSON output in the repository Actions variable `CI_POLICY_SETTINGS_REVIEW`.
+   Only an administrator may configure this trusted variable.
+   Never give the guard an administrator token.
+
+   The normal read-only token can hide bypass actors.
+   The guard then needs an exact repository, ruleset ID and `updated_at` match with this readback.
+   Missing, malformed or stale data disables same-PR code approval.
+   After any ruleset change, repeat the administrator readback.
+   A visible bypass list must always be empty, even with a matching readback.
+
    Test a policy PR that the bot created.
    Without review, it must fail.
    Approval of the exact head must pass.
