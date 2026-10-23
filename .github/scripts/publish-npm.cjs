@@ -56,15 +56,15 @@ async function publishPackage({
   const tag = latest && semver.gt(latest.version, pkg.version) ? `release-${pkg.version}` : "latest";
   publish(["publish", resolve(tarball), "--registry", registry, "--access", "public",
     "--provenance", "--ignore-scripts", "--tag", tag]);
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt <= 20; attempt++) {
     const published = await lookup(pkg.name, pkg.version);
     if (published) {
       verifyPublished(pkg, published, integrity);
       return;
     }
-    if (attempt < 4) await wait(2000 * (attempt + 1));
+    if (attempt < 20) await wait(30_000);
   }
-  throw new Error(`npm publication not visible: ${pkg.name}@${pkg.version}`);
+  throw new Error(`npm publication not visible after 10 minutes; rerun the release to verify the existing version: ${pkg.name}@${pkg.version}`);
 }
 
 if (require.main === module) {
