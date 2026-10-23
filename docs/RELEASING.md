@@ -358,7 +358,7 @@ The guard can admit a new code hash in the same PR only when all these condition
   They need approval of the latest push by someone other than its pusher.
   The applicable repository ruleset must be active and have no bypass actors.
   The guard checks its current source and review parameters.
-  If bypass actors are hidden, the guard needs the administrator's readback for that revision of the ruleset.
+  If the API does not show bypass actors, the guard needs the administrator's readback for that revision of the ruleset.
 - The owner's latest decisive review is `APPROVED` for the exact current head SHA.
   A later change request or dismissal invalidates it.
   API errors cause the guard to fail.
