@@ -3,13 +3,13 @@ from __future__ import annotations
 import io
 import json
 import os
-import socket
 import subprocess
 import time
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import BinaryIO
 
 import pytest
 
@@ -153,32 +153,88 @@ def test_score_diagnostics_remain_bounded_and_keep_unknown_fields() -> None:
 
 
 @pytest.fixture
-def fake_llm_url() -> Iterator[str]:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    process = subprocess.Popen(  # noqa: S603 - checked-in integration fixture
-        ["node", str(Path("tests/integration/fake-llm.js").resolve())],  # noqa: S607
-        env={**os.environ, "PORT": str(port)},
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    base_url = f"http://127.0.0.1:{port}"
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        deadline = time.monotonic() + 5
-        while True:
+def fake_llm_url(tmp_path: Path) -> Iterator[str]:
+    ready_path = tmp_path / "fake-llm-ready.json"
+    with (tmp_path / "fake-llm.log").open("w+b") as log:
+        process = subprocess.Popen(  # noqa: S603 - checked-in integration fixture
+            ["node", str(Path("tests/integration/fake-llm.js").resolve())],  # noqa: S607
+            env={**os.environ, "PORT": "0", "READY_FILE": str(ready_path)},
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        try:
+            deadline = time.monotonic() + 15
+            while True:
+                exit_code = process.poll()
+                remaining = deadline - time.monotonic()
+                if exit_code is not None or remaining <= 0:
+                    reason = (
+                        f"exited with code {exit_code}"
+                        if exit_code is not None
+                        else "timed out after 15 seconds"
+                    )
+                    log.seek(max(0, log.seek(0, os.SEEK_END) - 4096))
+                    diagnostics = log.read(4096).decode("utf-8", errors="replace")
+                    raise RuntimeError(f"fake LLM {reason}\n{diagnostics}")
+                try:
+                    port = json.loads(ready_path.read_text())["port"]
+                    base_url = f"http://127.0.0.1:{port}"
+                    with opener.open(  # noqa: S310 - loopback fixture
+                        f"{base_url}/health", timeout=min(0.2, remaining)
+                    ):
+                        break
+                except (OSError, ValueError):
+                    time.sleep(min(0.05, max(0, deadline - time.monotonic())))
+            yield base_url
+        finally:
+            if process.poll() is None:
+                process.terminate()
             try:
-                with opener.open(f"{base_url}/health", timeout=0.2):  # noqa: S310 - loopback fixture
-                    break
-            except OSError:
-                if process.poll() is not None or time.monotonic() >= deadline:
-                    raise RuntimeError("fake LLM failed to start") from None
-                time.sleep(0.05)
-        yield base_url
-    finally:
-        process.terminate()
-        process.wait(timeout=5)
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+
+@pytest.mark.parametrize("exit_code", [42, None])
+def test_fake_llm_startup_reports_bounded_logs_and_reaps_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, exit_code: int | None
+) -> None:
+    actions: list[str] = []
+    clock = iter((0.0, 16.0))
+
+    def wait(timeout: float) -> int:
+        actions.append("wait")
+        if exit_code is None and "kill" not in actions:
+            raise subprocess.TimeoutExpired("node", timeout)
+        return exit_code or -9
+
+    def start(
+        command: list[str], *, env: dict[str, str], stdout: BinaryIO, stderr: int
+    ) -> SimpleNamespace:
+        stdout.write(b"discarded-prefix" + b"x" * 5000 + b"startup diagnostic")
+        stdout.flush()
+        assert env["PORT"] == "0"
+        return SimpleNamespace(
+            poll=lambda: exit_code,
+            terminate=lambda: actions.append("terminate"),
+            kill=lambda: actions.append("kill"),
+            wait=wait,
+        )
+
+    monkeypatch.setattr(subprocess, "Popen", start)
+    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
+    reason = "exited with code 42" if exit_code is not None else "timed out after 15 seconds"
+    fixture = fake_llm_url.__wrapped__(tmp_path)
+    with pytest.raises(RuntimeError, match=reason) as error:
+        next(fixture)
+    assert "startup diagnostic" in str(error.value)
+    assert "discarded-prefix" not in str(error.value)
+    assert len(str(error.value)) < 4200
+    assert actions == (
+        ["wait"] if exit_code is not None else ["terminate", "wait", "kill", "wait"]
+    )
 
 
 def test_fake_embeddings_keep_query_and_passage_vectors_identical(fake_llm_url: str) -> None:
