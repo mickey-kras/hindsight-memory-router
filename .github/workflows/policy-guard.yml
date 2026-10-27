@@ -81,20 +81,30 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "3be2b55b3760b9bafecd9e7a673b7e613997f6ee5ebeb2ccf96a5f424bcd9945",
+              ".github/scripts/release-policy.test.py": "04d3a48021cf870e90d1bcf93d9804bd3a135d9d5bc501e98b9d345cc6922793",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "a740c759eb4f1f143433abd2016825fb91f12a1331a3f20e9e6a63e6401f0c3b",
               ".github/workflows/release.yml": "588a6dfc6f4dd61cc94b78334e324da8d54f3ae12eead536f805786797311634",
-              ".github/workflows/ci.yml": "bd9ae490aa43b61ca397bfe8c9cd9793c6d7c274db8f761e1e10496c98fb5562",
+              ".github/workflows/ci.yml": "1e4386932e1996fcebcb36006563057c98c6e0d44368716dc859d112efc3a3e5",
               ".github/workflows/docs-ste.yml": "bfc2b7110c8b9f1d005cb745ec8d0d559ccba05d36d9a1279019227fd84ab26d",
-              ".github/workflows/aislop.yml": "0ecc80af57e081678cb78f6c088eb9f89f10b497d7c8105b4b74b88a0ce9a724",
-              ".github/workflows/codeql.yml": "16ec8bb6cfbf41ea2146bff1a1637d6c49b6b7627212fbef1d8ebad741679654",
+              ".github/workflows/aislop.yml": "53187db8e7380df2ef5a2ae891564db475269ef5d8ab20047369aef198671587",
+              ".github/workflows/codeql.yml": "cf33e1c5682c11567cba9b0e74f808cddadf7a2c42cf1f83978717ff4758348e",
               ".github/workflows/architecture.yml": "542a6d4f5fea1a60c5562c4439af26443cfcdaddd8303fa55b2aa09e6f3cfe09",
               ".github/scripts/report-main-failures.cjs": "652f29115b78eee5f7b56a8043cddda94e9cf7e74cb8559d1398a5c972697222",
-              ".github/scripts/report-main-failures.test.cjs": "d04d0c13fc4df189b57486c3c81f9072e65810496fd6079702cb1eeaa95eaef5"
+              ".github/scripts/report-main-failures.test.cjs": "d04d0c13fc4df189b57486c3c81f9072e65810496fd6079702cb1eeaa95eaef5",
+              ".github/trusted-ci/safe-path.cjs": "20ed6e4deab7325f6c9e154321480a66ee1ef16100fbf55cf8fa3da7c0fc1f50",
+              ".github/trusted-ci/aislop.mjs": "800840cf5efd8a03e87f879ee4fa95ea41984a25c2b1e687324e4cdaaa0882f4",
+              ".github/trusted-ci/gitleaks.test.cjs": "28fc5e7d85773b459c63ca23ba8c342534561700ff4d19d1cbb17160e0b6b18f",
+              ".github/trusted-ci/scan-tree.cjs": "3999d761df05d681ae87c1fd6b0b0cbf88d269367b01afb6c7f008eb6eb71602",
+              ".github/trusted-ci/scan-tree.test.cjs": "29f0015cc984f43d01177f462f9adfb01b18e1647d2cc61974b1b406b501daa7",
+              ".github/scripts/npm-audit.cjs": "15f7f9149cf46ce8c0ceadbb3760a341e683acf53bc6dbcc26f6d7c77d20dcfb",
+              ".aislop/config.yml": "c1ed7cb914c6790cff70d53e68a7248886d341ae0a1779cf7bd801b37f7ca6f4",
+              ".semgrep.yml": "6d0b85f3d9b030725922112399d7c14017e4e80df95b3a62e362e5a8c17ac89a",
+              ".gitleaks.toml": "c5ca8909130b7c1c61402fc1bccd9fb4ef74e0c70e0ea31207db7f1a7aaea983",
+              ".gitleaksignore": "55ba75f2f2d014b6b1f8dc69e4536339d6db8b12a634e38859271454b5860e89",
             };
             const prValidationPath = [wfDir, 'pr-validation.yml'].join('/');
             const ciPath = [wfDir, 'ci.yml'].join('/');
@@ -638,10 +648,10 @@ jobs:
                 if (!ci.includes('Gitleaks')) fail('ci.yml: Gitleaks step must stay present');
                 if (!ci.includes('Semgrep')) fail('ci.yml: Semgrep step must stay present');
                 if (!ci.includes('Hadolint')) fail('ci.yml: Hadolint step must stay present');
-                if (!ci.includes('pip-audit -r requirements.txt')) {
+                if (!ci.includes('pip-audit --require-hashes --disable-pip -r')) {
                   fail('ci.yml: Python dependency audit must stay present');
                 }
-                if (!ci.includes('node .github/scripts/npm-audit.cjs')) {
+                if (!ci.includes('node trusted/.github/scripts/npm-audit.cjs')) {
                   fail('ci.yml: Node dependency audit must stay present');
                 }
                 if (!hasYamlScalar(ci, 'run', 'node --test .github/scripts/aislop-cli.test.cjs')) {
@@ -703,7 +713,7 @@ jobs:
                 if (!aislop.includes('name: aislop status')) {
                   fail('aislop.yml: required aislop status job must stay present');
                 }
-                if (!hasYamlScalar(aislop, 'run', 'npm run --silent aislop:ci -- --sarif > aislop.sarif')) {
+                if (!hasYamlScalar(aislop, 'run', 'node trusted/.github/trusted-ci/aislop.mjs "$RUNNER_TEMP/scan" sarif > aislop.sarif')) {
                   fail('aislop.yml: one full-repository SARIF scan must preserve the CLI quality exit status');
                 }
                 if (!hasYamlScalar(aislop, 'category', '.github/workflows/publish.yml:status')) {

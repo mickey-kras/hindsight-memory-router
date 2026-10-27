@@ -315,6 +315,28 @@ The required check stays `guard / guard`.
 Do not call the guard from a candidate `pull_request` workflow.
 That would let the candidate replace its own validator.
 
+### Scanner inputs
+
+Security and Aislop use tools, helpers and settings from one reviewed commit.
+The commit reference is immutable.
+Each job scans the proposed code in a separate directory.
+It does not install packages from that code.
+
+For Node audits, the job copies manifests and lockfiles without npm settings.
+Python audits accept only pinned versions with SHA-256 hashes and do not invoke pip.
+
+Semgrep uses trusted rules. Candidate ignore files and inline exclusions cannot suppress its findings.
+Gitleaks uses trusted exclusions and scans the complete Git history, including binary-marked files.
+Aislop uses trusted settings and rejects candidate links.
+It rejects exclusion directives for Aislop, ESLint, Oxlint and Biome.
+
+Existing Python inline `noqa` and `nosec` exclusions keep their current behavior.
+CodeQL uses its pinned action without a candidate build.
+
+A scanner pin update changes the trusted execution contract and requires policy migration.
+The initial change uses the administrative migration procedure below.
+Do not remove required checks or replace their results.
+
 ### Lockfile checks
 
 The guard checks `.github/scripts/package-lock.json` as npm lockfile version 3.

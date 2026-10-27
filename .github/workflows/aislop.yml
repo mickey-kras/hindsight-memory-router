@@ -23,24 +23,33 @@ jobs:
     name: aislop status
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out trusted scanner implementation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: mickey-kras/hindsight-memory-router
+          ref: c7bc4209e23912459829f3887e9aee64084df00b
+          path: trusted
+          persist-credentials: false
+      - name: Check out candidate source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.candidate_sha }}
+          path: candidate
           fetch-depth: 0
-
+          persist-credentials: false
       - uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2 # v2
         with:
           egress-policy: audit
-
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: npm
-
-      - run: npm ci
-
+          package-manager-cache: false
+      - name: Install trusted scanner dependencies
+        run: npm ci --prefix trusted --ignore-scripts --no-audit --no-fund --registry=https://registry.npmjs.org --userconfig=/dev/null
+      - name: Prepare confined scanner inputs
+        run: node trusted/.github/trusted-ci/scan-tree.cjs candidate "$RUNNER_TEMP/scan"
       - name: Aislop quality gate
-        run: npm run --silent aislop:ci -- --sarif > aislop.sarif
+        run: node trusted/.github/trusted-ci/aislop.mjs "$RUNNER_TEMP/scan" sarif > aislop.sarif
 
       - name: Aislop findings gate
         if: always()
@@ -93,6 +102,7 @@ jobs:
           }}
         uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4
         with:
+          checkout_path: ${{ runner.temp }}/scan
           sarif_file: aislop.sarif
           category: .github/workflows/publish.yml:status
           ref: ${{ inputs.candidate_ref }}
