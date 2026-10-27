@@ -322,8 +322,7 @@ The commit reference is immutable.
 Each job scans the proposed code in a separate directory.
 It does not install packages from that code.
 
-Node audits use copies of manifests and lockfiles.
-These copies exclude npm configuration files.
+For Node audits, the job copies manifests and lockfiles without npm settings.
 Python audits accept only pinned versions with SHA-256 hashes and do not invoke pip.
 
 Semgrep uses trusted rules. Candidate ignore files and inline exclusions cannot suppress its findings.
