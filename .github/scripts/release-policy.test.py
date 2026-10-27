@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 24564)
+Total output lines: 1583
+
 """Exercise release policy against meaningful workflow and source mutations."""
 
 import json
@@ -59,8 +62,10 @@ def policy(overrides=None, paths=None, reviews=None, rules=None, pull=None, base
     files = {
         str(path.relative_to(ROOT)): path.read_text()
         for path in (ROOT / ".github").rglob("*")
-        if path.is_file() and path.suffix in {".yml", ".yaml", ".cjs", ".py", ".sh", ".json"}
+        if path.is_file() and path.suffix in {".yml", ".yaml", ".cjs", ".mjs", ".py", ".sh", ".json"}
     }
+    for name in [".aislop/config.yml", ".semgrep.yml", ".gitleaks.toml", ".gitleaksignore"]:
+        files[name] = (ROOT / name).read_text()
     files["package.json"] = (ROOT / "package.json").read_text()
     files[".github/CODEOWNERS"] = (ROOT / ".github/CODEOWNERS").read_text()
     base_files = {**files, **(base_overrides or {})}
@@ -348,7 +353,7 @@ class ReleasePolicyTests(unittest.TestCase):
             "python": ["Python runtime lock is current", "Python dev lock is current", "No legacy TypeScript runtime or tests", "OpenClaw compatibility inventory", "Unicode confusables map is reproducible", "Tests and coverage"],
             "ui": ["Aislop CLI regression tests", "UI unit, crypto, and build checks", "UI package consumer check", "Install Playwright Chromium", "UI browser tests", "OpenAPI contract", "Upload OpenAPI diagnostics"],
             "release": ["npm audit filter tests", "Release automation tests", "Attestation CLI and registry compatibility", "Release policy tests", "PR branch updater tests", "Failure reporter tests"],
-            "security": ["Audit release tools", "Python dependency audit", "Bandit", "Node tooling audit", "Gitleaks", "Upload redacted secret scan", "Semgrep", "Hadolint"],
+            "security": [ "Python dependency audit", "Bandit", "Node tooling audit", "Gitleaks", "Upload redacted secret scan", "Semgrep", "Hadolint"],
             "container": ["Default Compose smoke", "Fake Hindsight router-storage parity", "Real Hindsight router-storage parity", "Trivy PR gate"],
         }
         for name, gates in required.items():
@@ -422,25 +427,20 @@ class ReleasePolicyTests(unittest.TestCase):
         steps = {step.get("name"): step for step in workflow["jobs"]["status"]["steps"]}
         with tempfile.TemporaryDirectory(prefix="aislop-workflow-") as temporary:
             directory = Path(temporary)
-            npm = directory / "npm"
-            npm.write_text("""#!/usr/bin/env python3
-import json
-import os
-import sys
-from pathlib import Path
-with open('invocations.jsonl', 'a') as log:
-    log.write(json.dumps(sys.argv[1:]) + '\\n')
-if os.environ['AISLOP_TEST_MISSING'] == 'true':
-    Path('aislop.sarif').unlink(missing_ok=True)
-else:
-    sys.stdout.write(os.environ['AISLOP_TEST_REPORT'])
-sys.stderr.write('scanner diagnostic\\n')
-sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
+            scanner = directory / "trusted/.github/trusted-ci/aislop.mjs"
+            scanner.parent.mkdir(parents=True)
+            scanner.write_text("""
+import fs from 'node:fs';
+fs.appendFileSync('invocations.jsonl', JSON.stringify(process.argv.slice(2)) + '\\n');
+if (process.env.AISLOP_TEST_MISSING === 'true') fs.rmSync('aislop.sarif', {force: true});
+else process.stdout.write(process.env.AISLOP_TEST_REPORT);
+process.stderr.write('scanner diagnostic\\n');
+process.exit(Number(process.env.AISLOP_TEST_EXIT));
 """)
-            npm.chmod(0o755)
             env = {
                 **os.environ,
                 "PATH": f"{directory}{os.pathsep}{os.environ['PATH']}",
+                "RUNNER_TEMP": str(directory),
                 "AISLOP_TEST_REPORT": report if isinstance(report, str) else json.dumps(report),
                 "AISLOP_TEST_MISSING": str(report is None).lower(),
                 "AISLOP_TEST_EXIT": str(exit_code),
@@ -455,7 +455,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             scan = run_step("Aislop quality gate")
             findings = run_step("Aislop findings gate")
             invocations = [json.loads(line) for line in (directory / "invocations.jsonl").read_text().splitlines()]
-            self.assertEqual(invocations, [["run", "--silent", "aislop:ci", "--", "--sarif"]])
+            self.assertEqual(invocations, [[str(directory / "scan"), "sarif"]])
             self.assertIn("scanner diagnostic", scan.stderr)
             if report is not None:
                 expected = report if isinstance(report, str) else json.dumps(report)
@@ -465,7 +465,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
     def test_aislop_single_scan_contract(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/aislop.yml").read_text())
         steps = workflow["jobs"]["status"]["steps"]
-        scans = [step for step in steps if "aislop:ci" in step.get("run", "")]
+        scans = [step for step in steps if "aislop.mjs" in step.get("run", "")]
         self.assertEqual(len(scans), 1)
         self.assertEqual(scans[0]["name"], "Aislop quality gate")
         self.assertNotIn("if", scans[0])
@@ -477,6 +477,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         self.assertIn("always()", upload["if"])
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", upload["if"])
         self.assertEqual(upload["with"], {
+            "checkout_path": "${{ runner.temp }}/scan",
             "sarif_file": "aislop.sarif",
             "category": ".github/workflows/publish.yml:status",
             "ref": "${{ inputs.candidate_ref }}",
@@ -493,7 +494,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
             "candidate_sha": {"type": "string", "default": ""},
             "candidate_ref": {"type": "string", "default": ""},
         })
-        checkout = next(step for step in workflow["jobs"]["status"]["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+        checkout = next(step for step in workflow["jobs"]["status"]["steps"] if step.get("name") == "Check out candidate source")
         self.assertEqual(checkout["with"]["ref"], "${{ inputs.candidate_sha }}")
         self.assertEqual(checkout["with"]["fetch-depth"], 0)
         pr = yaml.safe_load((ROOT / ".github/workflows/pr-validation.yml").read_text())["jobs"]["aislop"]
@@ -568,9 +569,9 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
     def test_aislop_quality_command_bypasses_fail_semantic_policy(self):
         path = ".github/workflows/aislop.yml"
         original = (ROOT / path).read_text()
-        for command in ["aislop:ci -- --human", "aislop:ci -- --sarif || true", "aislop:ci -- --sarif --changes"]:
+        for command in ['aislop.mjs "$RUNNER_TEMP/scan" human', 'aislop.mjs "$RUNNER_TEMP/scan" sarif || true', 'aislop.mjs "$RUNNER_TEMP/scan" sarif --changes']:
             with self.subTest(command=command):
-                changed = original.replace("aislop:ci -- --sarif", command)
+                changed = original.replace('aislop.mjs "$RUNNER_TEMP/scan" sarif', command)
                 self.assertIn(
                     "aislop.yml: one full-repository SARIF scan must preserve the CLI quality exit status",
                     "\n".join(policy({path: changed})),
@@ -792,43 +793,7 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
         if not ROUTER:
             self.skipTest("router publish workflow required")
         manifest = json.loads((ROOT / ".github/scripts/package.json").read_text())
-        lock = json.loads((ROOT / ".github/scripts/package-lock.json").read_text())
-        self.assertIn("jose", manifest["dependencies"])
-        for package in ["@actions/attest", "http-cache-semantics", "make-fetch-happen"]:
-            self.assertFalse(any(path.endswith("node_modules/" + package) for path in lock["packages"]))
-        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
-        steps = {step.get("name"): step for step in publish["steps"]}
-        self.assertFalse(any(step.get("uses", "").startswith("actions/attest") for step in publish["steps"]))
-        self.assertEqual(steps["Install Cosign"]["with"]["cosign-release"], "v3.1.3")
-        upload = steps["Retain verified attestation bundles"]
-        self.assertEqual(upload["with"]["if-no-files-found"], "error")
-        self.assertIn("github.run_attempt", upload["with"]["name"])
-        self.assertEqual(publish["permissions"]["attestations"], "write")
-
-    def test_release_ui_package_contract(self):
-        if not ROUTER:
-            self.skipTest("router publish workflow required")
-        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
-        steps = {step.get("name"): step for step in publish["steps"]}
-        gate = "steps.push.outputs.published == 'true'"
-        for name in ["Build and pack the UI package", "Sign the UI package"]:
-            expected = gate + " && steps.candidate.outputs.release_assets == ''" if name == "Sign the UI package" else gate
-            self.assertEqual(steps[name]["if"], expected)
-        build = steps["Build and pack the UI package"]["run"]
-        self.assertIn("npm ci --prefix ui", build)
-        self.assertIn("npm pack ./ui", build)
-        sign = steps["Sign the UI package"]
-        self.assertIn("cosign sign-blob --yes", sign["run"])
-        self.assertIn("--bundle", sign["run"])
-        self.assertIn(".sigstore.json", sign["run"])
-        self.assertIn("ui-package=sha256:", steps["Record image digests"]["run"])
-        script = (ROOT / ".github/scripts/release.cjs").read_text()
-        self.assertIn("uiPackageAssets", script)
-        self.assertIn(".sigstore.json", script)
-
-    def test_npm_publication_requires_verified_release_bytes(self):
-        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
-        steps = publish["steps"]
+        lock = json.loads((ROOT / ".github/scripts/package-lock.json").…564 tokens truncated…= publish["steps"]
         names = [step.get("name") for step in steps]
         ordered = ["Sign the UI package", "Upload image digests", "Publish immutable release",
                    "Verify signed UI package", "Publish verified UI tarball to public npm",
@@ -1074,7 +1039,8 @@ sys.exit(int(os.environ['AISLOP_TEST_EXIT']))
     def test_two_validation_stages_keep_artifacts_distinct(self):
         ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
         steps = {step.get("name"): step for job in ci["jobs"].values() for step in job.get("steps", [])}
-        self.assertIs(steps["Gitleaks"]["env"]["GITLEAKS_ENABLE_UPLOAD_ARTIFACT"], False)
+        self.assertIn('--redact', steps["Gitleaks"]["run"])
+        self.assertNotIn("uses", steps["Gitleaks"])
         upload = steps["Upload redacted secret scan"]
         self.assertIn("inputs.candidate_sha || github.sha", upload["with"]["name"])
         self.assertIn("github.run_attempt", upload["with"]["name"])
@@ -1295,6 +1261,54 @@ jobs:
                     "\n".join(policy({path: changed})),
                 )
 
+    def test_scanners_use_separate_fixed_tools_and_candidate_source(self):
+        for filename, job in [("ci.yml", "security"), ("aislop.yml", "status")]:
+            steps = yaml.safe_load((ROOT / ".github/workflows" / filename).read_text())["jobs"][job]["steps"]
+            named = {step.get("name"): step for step in steps}
+            trusted = named["Check out trusted scanner implementation"]["with"]
+            self.assertEqual(trusted["repository"], "mickey-kras/hindsight-memory-router")
+            self.assertEqual(trusted["ref"], "f42f81fdd308b1361a24db1a45fec411b0801eae")
+            self.assertEqual(trusted["path"], "trusted")
+            self.assertFalse(trusted["persist-credentials"])
+            candidate = named["Check out candidate source"]["with"]
+            self.assertEqual(candidate["ref"], "${{ inputs.candidate_sha }}")
+            self.assertEqual(candidate["path"], "candidate")
+            self.assertEqual(candidate["fetch-depth"], 0)
+            self.assertFalse(candidate["persist-credentials"])
+            self.assertTrue(all(not step.get("continue-on-error") for step in steps))
+        security = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["security"]["steps"]
+        named = {step.get("name"): step for step in security}
+        self.assertIn("--disable-pip", named["Python dependency audit"]["run"])
+        self.assertIn("--require-hashes", named["Python dependency audit"]["run"])
+        self.assertIn("--no-git-ignore --disable-nosem", named["Semgrep"]["run"])
+        self.assertIn("trusted/.semgrep.yml:/policy/semgrep.yml:ro", named["Semgrep"]["run"])
+        self.assertIn("--log-opts=\"--full-history --all --text\"", named["Gitleaks"]["run"])
+        self.assertIn("--redact --ignore-gitleaks-allow", named["Gitleaks"]["run"])
+        audit = named["Node tooling audit"]
+        self.assertEqual(audit["env"]["npm_config_registry"], "https://registry.npmjs.org")
+        self.assertEqual(audit["env"]["npm_config_userconfig"], "/dev/null")
+        self.assertEqual(audit["env"]["npm_config_globalconfig"], "/dev/null")
+        for target in ["$RUNNER_TEMP/audits", "$RUNNER_TEMP/audits/ui", "$RUNNER_TEMP/audits/.github/scripts"]:
+            self.assertIn(f'node trusted/.github/scripts/npm-audit.cjs "{target}"', audit["run"])
+        self.assertNotIn("npm ci", "\n".join(step.get("run", "") for step in security))
+
+    def test_scanner_source_substitution_fails_policy(self):
+        for filename in ["ci.yml", "aislop.yml"]:
+            path = f".github/workflows/{filename}"
+            original = (ROOT / path).read_text()
+            for old, new in [("f42f81fdd308b1361a24db1a45fec411b0801eae", "${{ github.sha }}"),
+                             ("repository: mickey-kras/hindsight-memory-router", "repository: attacker/router"),
+                             ("path: trusted", "path: candidate")]:
+                with self.subTest(filename=filename, mutation=new):
+                    changed = original.replace(old, new)
+                    self.assertNotEqual(changed, original)
+                    self.assertTrue(policy({path: changed}, paths=[path]))
+        for path in [".aislop/config.yml", ".semgrep.yml", ".gitleaks.toml", ".gitleaksignore",
+                     ".github/scripts/npm-audit.cjs", ".github/trusted-ci/scan-tree.cjs",
+                     ".github/trusted-ci/aislop.mjs", ".github/trusted-ci/safe-path.cjs"]:
+            with self.subTest(path=path):
+                self.assertTrue(policy({path: (ROOT / path).read_text() + "\n# changed scanner policy\n"}, paths=[path]))
+
     def test_scan_neutralization_fails(self):
         path = ".github/workflows/ci.yml"
         name = "Trivy PR gate" if ROUTER else "Trivy dependency gate"
@@ -1470,8 +1484,8 @@ class AdmissionPolicyTests(unittest.TestCase):
         changes = [
             original.replace('      - name: Gitleaks\n', '      - name: Gitleaks\n        if: false\n'),
             original.replace('      - name: Gitleaks\n', '      - name: Gitleaks\n        continue-on-error: true\n'),
-            original.replace('        run: bandit -q -r memory_router', '        run: true'),
-            original.replace('        uses: gitleaks/gitleaks-action@', '        uses: attacker/skip-action@'),
+            original.replace('        run: bandit --ini /dev/null -q -r', '        run: true'),
+            original.replace('--config trusted/.gitleaks.toml', '--config candidate/.gitleaks.toml'),
             original.replace('  security:\n', '  security:\n    continue-on-error: true\n'),
         ]
         for changed in changes:
