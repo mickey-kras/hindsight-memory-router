@@ -1300,7 +1300,7 @@ jobs:
             named = {step.get("name"): step for step in steps}
             trusted = named["Check out trusted scanner implementation"]["with"]
             self.assertEqual(trusted["repository"], "mickey-kras/hindsight-memory-router")
-            self.assertEqual(trusted["ref"], "f42f81fdd308b1361a24db1a45fec411b0801eae")
+            self.assertEqual(trusted["ref"], "c7bc4209e23912459829f3887e9aee64084df00b")
             self.assertEqual(trusted["path"], "trusted")
             self.assertFalse(trusted["persist-credentials"])
             candidate = named["Check out candidate source"]["with"]
@@ -1320,16 +1320,31 @@ jobs:
         audit = named["Node tooling audit"]
         self.assertEqual(audit["env"]["npm_config_registry"], "https://registry.npmjs.org")
         self.assertEqual(audit["env"]["npm_config_userconfig"], "/dev/null")
-        self.assertEqual(audit["env"]["npm_config_globalconfig"], "/dev/null")
+        self.assertEqual(audit["env"]["npm_config_globalconfig"], "${{ runner.temp }}/npm-global.rc")
         for target in ["$RUNNER_TEMP/audits", "$RUNNER_TEMP/audits/ui", "$RUNNER_TEMP/audits/.github/scripts"]:
             self.assertIn(f'node trusted/.github/scripts/npm-audit.cjs "{target}"', audit["run"])
         self.assertNotIn("npm ci", "\n".join(step.get("run", "") for step in security))
+
+    def test_isolated_npm_configuration_loads_without_candidate_settings(self):
+        security = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["security"]["steps"]
+        audit = next(step for step in security if step.get("name") == "Node tooling audit")
+        with tempfile.TemporaryDirectory(prefix="scanner-npm-") as temporary:
+            directory = Path(temporary)
+            (directory / "npm-global.rc").write_text("")
+            env = {**os.environ, **{
+                key: value.replace("${{ runner.temp }}", temporary)
+                for key, value in audit["env"].items()
+            }}
+            result = subprocess.run(["npm", "config", "get", "registry"], cwd=directory,
+                                    env=env, text=True, capture_output=True, timeout=15, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "https://registry.npmjs.org")
 
     def test_scanner_source_substitution_fails_policy(self):
         for filename in ["ci.yml", "aislop.yml"]:
             path = f".github/workflows/{filename}"
             original = (ROOT / path).read_text()
-            for old, new in [("f42f81fdd308b1361a24db1a45fec411b0801eae", "${{ github.sha }}"),
+            for old, new in [("c7bc4209e23912459829f3887e9aee64084df00b", "${{ github.sha }}"),
                              ("repository: mickey-kras/hindsight-memory-router", "repository: attacker/router"),
                              ("path: trusted", "path: candidate")]:
                 with self.subTest(filename=filename, mutation=new):

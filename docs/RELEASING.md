@@ -317,13 +317,20 @@ That would let the candidate replace its own validator.
 
 ### Scanner inputs
 
-Security and Aislop jobs load tools, helpers and configuration from one immutable reviewed commit.
-They load candidate source into a separate directory and do not install candidate dependencies.
-Node audits use copies of candidate manifests and lockfiles without npm configuration files.
+Security and Aislop use tools, helpers and settings from one reviewed commit.
+The commit reference is immutable.
+Each job scans the proposed code in a separate directory.
+It does not install packages from that code.
+
+Node audits use copies of manifests and lockfiles.
+These copies exclude npm configuration files.
 Python audits accept only pinned versions with SHA-256 hashes and do not invoke pip.
+
 Semgrep uses trusted rules. Candidate ignore files and inline exclusions cannot suppress its findings.
 Gitleaks uses trusted exclusions and scans the complete Git history, including binary-marked files.
-Aislop uses trusted settings and rejects candidate links and Aislop, ESLint and Biome exclusion directives.
+Aislop uses trusted settings and rejects candidate links.
+It rejects exclusion directives for Aislop, ESLint, Oxlint and Biome.
+
 Existing Python inline `noqa` and `nosec` exclusions keep their current behavior.
 CodeQL uses its pinned action without a candidate build.
 

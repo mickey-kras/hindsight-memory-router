@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: mickey-kras/hindsight-memory-router
-          ref: f42f81fdd308b1361a24db1a45fec411b0801eae
+          ref: c7bc4209e23912459829f3887e9aee64084df00b
           path: trusted
           persist-credentials: false
       - name: Check out candidate source
