@@ -38,7 +38,7 @@ function prepare(source, destination, trusted = path.resolve(__dirname, "../..")
   const duplicateSuppression = new RegExp(
     "aislop" + "[- ]ignore(?:-next-block|-file)?\\b.*\\b(?:duplicate-block|code-quality\\/duplicate-block)\\b",
   );
-  const nativeDirectives = ["eslint" + "-disable", "biome" + "-ignore"].join("|");
+  const nativeDirectives = ["eslint" + "-disable", "oxlint" + "-disable", "biome" + "-ignore", directive].join("|");
   const nativeComment = new RegExp(`(?:\\/\\/|\\/\\*+|\\*)\\s*(?:${nativeDirectives})\\b`);
   const rawHtmlSuppression = new RegExp(`(?:${nativeDirectives}).*(?:noDangerouslySetInnerHtml|dangerouslySetInnerHTML|dangerously-set-innerhtml)`, "i");
   function copy(from, to) {

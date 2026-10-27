@@ -136,3 +136,17 @@ test('binary candidate bytes remain unchanged', () => fixture((f) => {
   prepare(f.candidate, f.scan, f.trusted);
   assert.deepEqual(fs.readFileSync(path.join(f.scan, 'image.bin')), bytes);
 }));
+
+
+for (const suffix of ['', '-next-line', '-line', '-file']) {
+  test(`candidate oxlint exclusion ${suffix || 'block'} fails before scanning`, () => fixture((f) => {
+    f.write(f.candidate, 'debug.js', '// ' + 'oxlint' + '-disable' + suffix + ' no-debugger\ndebugger;\n');
+    assert.throws(() => prepare(f.candidate, f.scan, f.trusted), /native scanner suppression/);
+  }));
+}
+
+test('quoted Aislop directive cannot suppress adjacent raw HTML', () => fixture((f) => {
+  f.write(f.candidate, 'view.tsx', 'const marker = "' + 'aislop' + '-ignore dangerouslySetInnerHTML";\n' +
+    'export const View = ({value}) => <div dangerouslySetInnerHTML={{__html:value}}/>;\n');
+  assert.throws(() => prepare(f.candidate, f.scan, f.trusted), /native scanner suppression/);
+}));
