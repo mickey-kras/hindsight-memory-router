@@ -112,3 +112,27 @@ test('security tree retains configuration files as scan targets', () => fixture(
   assert.equal(fs.readFileSync(path.join(f.scan, 'pyproject.toml'), 'utf8'), '[tool.malicious]\nsecret = "scan this"\n');
   assert.ok(fs.existsSync(path.join(f.scan, '.github/workflows/unsafe.yml')));
 }));
+
+
+
+for (const directive of ['eslint' + '-disable-next-line', 'biome' + '-ignore']) {
+  test(`candidate ${directive} cannot suppress raw HTML findings`, () => fixture((f) => {
+    f.write(f.candidate, 'view.tsx', '// ' + directive + ' react/no-danger dangerouslySetInnerHTML\n' +
+      'export const View = ({value}) => <div dangerouslySetInnerHTML={{__html:value}}/>;\n');
+    assert.throws(() => prepare(f.candidate, f.scan, f.trusted), /native scanner suppression/);
+  }));
+}
+
+test('ordinary quoted directive text remains unchanged', () => fixture((f) => {
+  const source = 'const quoted = "' + 'biome' + '-ignore lint: fixture";\n';
+  f.write(f.candidate, 'fixture.ts', source);
+  prepare(f.candidate, f.scan, f.trusted);
+  assert.equal(fs.readFileSync(path.join(f.scan, 'fixture.ts'), 'utf8'), source);
+}));
+
+test('binary candidate bytes remain unchanged', () => fixture((f) => {
+  const bytes = Buffer.from([0, 255, 254, 128, 10]);
+  f.write(f.candidate, 'image.bin', bytes);
+  prepare(f.candidate, f.scan, f.trusted);
+  assert.deepEqual(fs.readFileSync(path.join(f.scan, 'image.bin')), bytes);
+}));

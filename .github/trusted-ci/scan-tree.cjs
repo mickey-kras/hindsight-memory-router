@@ -38,6 +38,9 @@ function prepare(source, destination, trusted = path.resolve(__dirname, "../..")
   const duplicateSuppression = new RegExp(
     "aislop" + "[- ]ignore(?:-next-block|-file)?\\b.*\\b(?:duplicate-block|code-quality\\/duplicate-block)\\b",
   );
+  const nativeDirectives = ["eslint" + "-disable", "biome" + "-ignore"].join("|");
+  const nativeComment = new RegExp(`(?:\\/\\/|\\/\\*+|\\*)\\s*(?:${nativeDirectives})\\b`);
+  const rawHtmlSuppression = new RegExp(`(?:${nativeDirectives}).*(?:noDangerouslySetInnerHtml|dangerouslySetInnerHTML|dangerously-set-innerhtml)`, "i");
   function copy(from, to) {
     for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
       const input = path.join(from, entry.name);
@@ -62,6 +65,8 @@ function prepare(source, destination, trusted = path.resolve(__dirname, "../..")
             assert.ok(!Object.hasOwn(pkg[key] || {}, "knip"), "Candidate Knip execution is not permitted");
           }
         }
+        assert.ok(security || (!nativeComment.test(content) && !rawHtmlSuppression.test(content)),
+          `Candidate native scanner suppression rejected: ${path.relative(source, input)}`);
         fs.copyFileSync(input, output, fs.constants.COPYFILE_EXCL);
       }
     }
