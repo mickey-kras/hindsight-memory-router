@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 24564)
-Total output lines: 1583
-
 """Exercise release policy against meaningful workflow and source mutations."""
 
 import json
@@ -793,7 +790,43 @@ process.exit(Number(process.env.AISLOP_TEST_EXIT));
         if not ROUTER:
             self.skipTest("router publish workflow required")
         manifest = json.loads((ROOT / ".github/scripts/package.json").read_text())
-        lock = json.loads((ROOT / ".github/scripts/package-lock.json").…564 tokens truncated…= publish["steps"]
+        lock = json.loads((ROOT / ".github/scripts/package-lock.json").read_text())
+        self.assertIn("jose", manifest["dependencies"])
+        for package in ["@actions/attest", "http-cache-semantics", "make-fetch-happen"]:
+            self.assertFalse(any(path.endswith("node_modules/" + package) for path in lock["packages"]))
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        self.assertFalse(any(step.get("uses", "").startswith("actions/attest") for step in publish["steps"]))
+        self.assertEqual(steps["Install Cosign"]["with"]["cosign-release"], "v3.1.3")
+        upload = steps["Retain verified attestation bundles"]
+        self.assertEqual(upload["with"]["if-no-files-found"], "error")
+        self.assertIn("github.run_attempt", upload["with"]["name"])
+        self.assertEqual(publish["permissions"]["attestations"], "write")
+
+    def test_release_ui_package_contract(self):
+        if not ROUTER:
+            self.skipTest("router publish workflow required")
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = {step.get("name"): step for step in publish["steps"]}
+        gate = "steps.push.outputs.published == 'true'"
+        for name in ["Build and pack the UI package", "Sign the UI package"]:
+            expected = gate + " && steps.candidate.outputs.release_assets == ''" if name == "Sign the UI package" else gate
+            self.assertEqual(steps[name]["if"], expected)
+        build = steps["Build and pack the UI package"]["run"]
+        self.assertIn("npm ci --prefix ui", build)
+        self.assertIn("npm pack ./ui", build)
+        sign = steps["Sign the UI package"]
+        self.assertIn("cosign sign-blob --yes", sign["run"])
+        self.assertIn("--bundle", sign["run"])
+        self.assertIn(".sigstore.json", sign["run"])
+        self.assertIn("ui-package=sha256:", steps["Record image digests"]["run"])
+        script = (ROOT / ".github/scripts/release.cjs").read_text()
+        self.assertIn("uiPackageAssets", script)
+        self.assertIn(".sigstore.json", script)
+
+    def test_npm_publication_requires_verified_release_bytes(self):
+        publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
+        steps = publish["steps"]
         names = [step.get("name") for step in steps]
         ordered = ["Sign the UI package", "Upload image digests", "Publish immutable release",
                    "Verify signed UI package", "Publish verified UI tarball to public npm",
