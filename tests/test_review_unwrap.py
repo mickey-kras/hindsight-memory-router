@@ -376,17 +376,21 @@ async def test_review_agent_request_byte_boundary(
     thread = threading.Thread(target=agent.serve_forever)
     thread.start()
     try:
-        conn = HTTPConnection("127.0.0.1", agent.server_port)
-        conn.request(
-            "POST",
-            "/decrypt",
-            body + b" " * extra_bytes,
-            headers={
-                "Origin": agent.origin,
-                "Authorization": "Bearer " + "t" * 32,
-                "Content-Type": "application/json",
-            },
-        )
+        conn = HTTPConnection("127.0.0.1", agent.server_port, timeout=5)
+        headers = {
+            "Origin": agent.origin,
+            "Authorization": "Bearer " + "t" * 32,
+            "Content-Type": "application/json",
+        }
+        if expected_status == 400:
+            # Prove rejection before body reads without racing the server's connection close.
+            conn.putrequest("POST", "/decrypt")
+            for name, value in headers.items():
+                conn.putheader(name, value)
+            conn.putheader("Content-Length", str(len(body) + extra_bytes))
+            conn.endheaders()
+        else:
+            conn.request("POST", "/decrypt", body + b" " * extra_bytes, headers=headers)
         response = conn.getresponse()
         assert response.status == expected_status
         result = json.loads(response.read())
