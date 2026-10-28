@@ -36,6 +36,7 @@ HTTP traffic stays on the workstation's loopback interface.
 This transport assumes a trusted workstation and browser.
 Do not expose the agent through a proxy or port forwarding.
 Use HTTPS for a hosted review console.
+
 The agent checks the exact `Host` and `Origin` headers and requires a random bearer credential before decryption.
 These checks do not encrypt the credential or plaintext on loopback.
 They do not protect against privileged packet capture, local process impersonation, or a compromised browser.
