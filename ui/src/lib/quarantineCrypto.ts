@@ -63,13 +63,15 @@ function aad(envelope: EncryptedQuarantineEnvelope): Uint8Array {
   if (envelope.writer_id !== undefined) aadObject["writer_id"] = envelope.writer_id;
   if (envelope.source !== undefined) aadObject["source"] = envelope.source;
   aadObject["sha256"] = envelope.sha256;
-  aadObject["encryption"] = {
+  const aadEncryption: Record<string, unknown> = {
     algorithm: enc.algorithm,
     key_wrap: enc.key_wrap,
     aad: AAD_FORMAT,
     wrapped_key_b64: enc.wrapped_key_b64,
     iv_b64: enc.iv_b64,
   };
+  if (enc.provider !== undefined) aadEncryption["provider"] = enc.provider;
+  aadObject["encryption"] = aadEncryption;
   return new TextEncoder().encode(canonicalJson(aadObject));
 }
 
@@ -117,7 +119,7 @@ function canonicalDecrypted(value: DecryptedQuarantineObject): string {
 // Mirrors _validate_wrap_provider: a provider block declares a pluggable
 // key-wrap and must be exactly {name, version} with a positive integer
 // version. This package unwraps RSA-OAEP-SHA256 only, so any well-formed
-// provider block is rejected in decryptEnvelope.
+// provider block is rejected in decryptEnvelope (the PEM-only path).
 function validateWrapProvider(enc: EncryptedQuarantineEnvelope["encryption"]): void {
   // Python requires str: a numeric key_wrap must not regex-coerce into a match.
   if (typeof enc.key_wrap !== "string" || !KEY_WRAP_TOKEN_RE.test(enc.key_wrap)) {
@@ -234,6 +236,25 @@ export async function decryptEnvelope(
   } catch (error) {
     if (error instanceof DecryptError) throw error;
     throw new DecryptError("decrypted quarantine object is not valid JSON");
+  }
+  for (const field of ["quarantine_id", "created_at", "reason", "writer_id", "source"] as const) {
+    if (parsed[field] !== envelope[field]) {
+      throw new DecryptError("quarantine envelope metadata mismatch");
+    }
+  }
+  return parsed;
+}
+
+// A local review agent performs the token/provider unwrap and all Python envelope
+// checks. Recheck its returned object before it can be submitted for approval.
+export async function verifyReviewedObject(
+  envelope: EncryptedQuarantineEnvelope,
+  value: unknown,
+): Promise<DecryptedQuarantineObject> {
+  validateEnvelope(envelope);
+  const parsed = parseDecrypted(value);
+  if ((await sha256Hex(canonicalDecrypted(parsed))) !== envelope.sha256) {
+    throw new DecryptError("quarantine object digest mismatch");
   }
   for (const field of ["quarantine_id", "created_at", "reason", "writer_id", "source"] as const) {
     if (parsed[field] !== envelope[field]) {
