@@ -167,8 +167,9 @@ def test_external_entrypoint_is_selected_explicitly(
         load_review_provider("other-provider")
 
 
+@pytest.mark.parametrize("always_authenticate", [False, True])
 def test_native_rsa_compatibility_and_pkcs11_boundary(
-    rsa_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch
+    rsa_key: rsa.RSAPrivateKey, monkeypatch: pytest.MonkeyPatch, always_authenticate: bool
 ) -> None:
     public_pem = (
         rsa_key.public_key()
@@ -195,7 +196,16 @@ def test_native_rsa_compatibility_and_pkcs11_boundary(
             seen["lookup"] = kwargs
             return self
 
+        def __getitem__(self, attribute: int) -> bool:
+            assert attribute == 6
+            return always_authenticate
+
         def decrypt(self, wrapped: bytes, **kwargs: Any) -> bytes:
+            if always_authenticate:
+                # Session login alone does not authorize an ALWAYS_AUTHENTICATE key.
+                assert kwargs.get("pin") == "pin"
+            else:
+                assert "pin" not in kwargs
             seen["mechanism"] = kwargs
             return rsa_key.decrypt(wrapped, OAEP)
 
@@ -216,6 +226,7 @@ def test_native_rsa_compatibility_and_pkcs11_boundary(
         ObjectClass=SimpleNamespace(PRIVATE_KEY=1),
         KeyType=SimpleNamespace(RSA=2),
         Mechanism=SimpleNamespace(RSA_PKCS_OAEP=3, SHA256=4),
+        Attribute=SimpleNamespace(ALWAYS_AUTHENTICATE=6),
     )
     monkeypatch.setitem(sys.modules, "pkcs11", mock_module)
     monkeypatch.setitem(
@@ -223,12 +234,17 @@ def test_native_rsa_compatibility_and_pkcs11_boundary(
     )
     hardware = Pkcs11RsaOaepProvider("module.so", "review-token", "review-key", "pin")
     assert ReviewProviderRegistry([hardware]).decrypt(envelope) == ITEM
+    assert ReviewProviderRegistry([hardware]).decrypt(envelope) == ITEM
     assert seen == {
         "module": "module.so",
         "token": "review-token",
         "pin": "pin",
         "lookup": {"object_class": 1, "key_type": 2, "label": "review-key"},
-        "mechanism": {"mechanism": 3, "mechanism_param": (4, 5, None)},
+        "mechanism": {
+            "mechanism": 3,
+            "mechanism_param": (4, 5, None),
+            **({"pin": "pin"} if always_authenticate else {}),
+        },
     }
 
 
@@ -244,17 +260,21 @@ def test_review_agent_authentication_and_bounded_audit(
 
     class NativeMock:
         identity = ReviewProviderId("RSA-OAEP-SHA256")
+        fail = False
 
         def unwrap(self, wrapped_dek: bytes, _: Mapping[str, Any]) -> bytes:
+            if self.fail:
+                raise RuntimeError("private provider failure details")
             return rsa_key.decrypt(wrapped_dek, OAEP)
 
     audit = ReviewAudit(tmp_path / "review.sqlite3")
+    provider = NativeMock()
     agent = ReviewAgent(
         0,
         "http://localhost:5173",
         "t" * 32,
         "misha",
-        ReviewProviderRegistry([NativeMock()]),
+        ReviewProviderRegistry([provider]),
         audit,
     )
     thread = threading.Thread(target=agent.serve_forever)
@@ -280,10 +300,20 @@ def test_review_agent_authentication_and_bounded_audit(
 
         assert request("http://evil.example", "t" * 32, {"envelope": envelope})[0] == 403
         assert request("http://localhost:5173", "wrong", {"envelope": envelope})[0] == 403
+        assert request("http://localhost:5173", "wrong", {"malformed": True})[0] == 403
+        assert request("http://localhost:5173", "é" * 32, {"envelope": envelope}) == (
+            403,
+            {"error": "unauthorized"},
+        )
         status, payload = request("http://localhost:5173", "t" * 32, {"envelope": envelope})
         assert status == 200
         assert payload == {"decrypted": ITEM}
         assert request("http://localhost:5173", "t" * 32, {"envelope": {}})[0] == 400
+        provider.fail = True
+        assert request("http://localhost:5173", "t" * 32, {"envelope": envelope}) == (
+            422,
+            {"error": "review_decrypt_failed"},
+        )
         with sqlite3.connect(tmp_path / "review.sqlite3") as db:
             rows = db.execute(
                 "SELECT reviewer, quarantine_id, outcome FROM review_audit ORDER BY id"
@@ -291,14 +321,177 @@ def test_review_agent_authentication_and_bounded_audit(
         assert rows == [
             ("misha", None, "unauthorized"),
             ("misha", None, "unauthorized"),
+            ("misha", None, "unauthorized"),
+            ("misha", None, "unauthorized"),
             ("misha", ITEM["quarantine_id"], "verified"),
             ("misha", None, "failed"),
+            ("misha", ITEM["quarantine_id"], "failed"),
         ]
         for _ in range(1001):
             audit.record("misha", None, "unauthorized")
+        with sqlite3.connect(tmp_path / "review.sqlite3") as db:
+            assert db.execute("SELECT COUNT(*) FROM review_audit").fetchone() == (103,)
+            assert db.execute(
+                "SELECT quarantine_id FROM review_audit WHERE outcome = 'verified'"
+            ).fetchall() == [(ITEM["quarantine_id"],)]
+            assert db.execute(
+                "SELECT COUNT(*) FROM review_audit WHERE outcome = 'failed'"
+            ).fetchone() == (2,)
+        for _ in range(1001):
+            audit.record("misha", None, "failed")
         with sqlite3.connect(tmp_path / "review.sqlite3") as db:
             assert db.execute("SELECT COUNT(*) FROM review_audit").fetchone() == (1000,)
     finally:
         agent.shutdown()
         agent.server_close()
         thread.join()
+
+
+@pytest.mark.parametrize("extra_bytes, expected_status", [(0, 200), (1, 200), (2, 400)])
+@pytest.mark.parametrize("plaintext_bytes", [0, 2 * 1024 * 1024])
+async def test_review_agent_request_byte_boundary(
+    tmp_path: Path,
+    provider_envelope: dict[str, Any],
+    rsa_key: rsa.RSAPrivateKey,
+    extra_bytes: int,
+    expected_status: int,
+    plaintext_bytes: int,
+) -> None:
+    expected_item = ITEM
+    if plaintext_bytes:
+        expected_item = {**ITEM, "payload": {"text": "x" * plaintext_bytes}}
+        provider_envelope = await create_provider_envelope(
+            expected_item, WrapFixture(rsa_key.public_key())
+        )
+    body = json.dumps({"envelope": provider_envelope}).encode()
+    agent = ReviewAgent(
+        0,
+        "http://localhost:5173",
+        "t" * 32,
+        "reviewer",
+        ReviewProviderRegistry([MockExternalUnwrapper(rsa_key)]),
+        ReviewAudit(tmp_path / "audit.sqlite3"),
+        max_request_bytes=len(body) + 1,
+    )
+    thread = threading.Thread(target=agent.serve_forever)
+    thread.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", agent.server_port)
+        conn.request(
+            "POST",
+            "/decrypt",
+            body + b" " * extra_bytes,
+            headers={
+                "Origin": agent.origin,
+                "Authorization": "Bearer " + "t" * 32,
+                "Content-Type": "application/json",
+            },
+        )
+        response = conn.getresponse()
+        assert response.status == expected_status
+        result = json.loads(response.read())
+        assert result == (
+            {"decrypted": expected_item}
+            if expected_status == 200
+            else {"error": "invalid_envelope"}
+        )
+        conn.close()
+    finally:
+        agent.shutdown()
+        agent.server_close()
+        thread.join()
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "1.5", "invalid"])
+def test_review_agent_cli_rejects_invalid_request_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    value: str,
+) -> None:
+    from memory_router.cli.review_agent import main
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "memory-router-review-agent",
+            "--origin",
+            "http://localhost:5173",
+            "--reviewer",
+            "reviewer",
+            "--credential-file",
+            str(tmp_path / "credential"),
+            "--audit-db",
+            str(tmp_path / "audit"),
+            "--max-request-bytes",
+            value,
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 2
+
+
+def test_review_agent_cli_fixed_port_and_request_limit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    rsa_key: rsa.RSAPrivateKey,
+) -> None:
+    import memory_router.cli.review_agent as module
+
+    credential = tmp_path / "credential"
+    credential.write_text("t" * 32)
+    credential.chmod(0o600)
+    server = Mock(server_port=8765)
+    constructor = Mock(return_value=server)
+    monkeypatch.setattr(module, "ReviewAgent", constructor)
+    monkeypatch.setattr(module, "load_review_provider", lambda _: MockExternalUnwrapper(rsa_key))
+    argv = [
+        "memory-router-review-agent",
+        "--origin",
+        "http://localhost:5173",
+        "--reviewer",
+        "reviewer",
+        "--credential-file",
+        str(credential),
+        "--audit-db",
+        str(tmp_path / "audit"),
+        "--external-provider",
+        "fixture",
+    ]
+    for limit in (1, 128 * 1024 * 1024, None):
+        monkeypatch.setattr(
+            sys, "argv", argv + ([] if limit is None else ["--max-request-bytes", str(limit)])
+        )
+        module.main()
+        assert constructor.call_args.args[0] == 8765
+        assert constructor.call_args.kwargs["max_request_bytes"] == (
+            module.MAX_REQUEST_BYTES if limit is None else limit
+        )
+    monkeypatch.setattr(sys, "argv", [*argv, "--port", "8766"])
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("credential", ["a" * 31, "é" * 32])
+def test_review_agent_rejects_invalid_configured_credential(
+    tmp_path: Path,
+    credential: str,
+) -> None:
+    from memory_router.cli.review_agent import _read_credential
+
+    path = tmp_path / "credential"
+    path.write_text(credential)
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="32 ASCII characters"):
+        _read_credential(path)
+    with pytest.raises(ValueError, match="32 ASCII characters"):
+        ReviewAgent(
+            0,
+            "http://localhost:5173",
+            credential,
+            "reviewer",
+            ReviewProviderRegistry([]),
+            ReviewAudit(tmp_path / "audit.sqlite3"),
+        )

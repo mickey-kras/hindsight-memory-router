@@ -431,6 +431,21 @@ unknown_plaintext="$(decrypt_local "$encrypted_file")"
 printf '%s' "$unknown_plaintext" | grep -q "$unknown_marker" || fail_check "local decryption did not recover unknown payload"
 pass_check
 
+begin_check "local review agent CLI exposes bounded requests and the fixed console port"
+docker run --rm hindsight-memory-router:ci python -c '
+import subprocess,sys
+command=[sys.executable,"-m","memory_router.cli.review_agent"]
+help_result=subprocess.run([*command,"--help"],capture_output=True,text=True,check=True)
+assert "--max-request-bytes" in help_result.stdout
+assert "--port" not in help_result.stdout
+required=["--origin","http://localhost:5173","--reviewer","smoke","--credential-file","/unused","--audit-db","/unused"]
+for options,message in [(["--max-request-bytes","0"],"request byte limit must be positive"),(["--port","8766"],"unrecognized arguments")]:
+    result=subprocess.run([*command,*required,*options],capture_output=True,text=True)
+    assert result.returncode == 2, result
+    assert message in result.stderr, result.stderr
+' || fail_check "review agent CLI did not enforce request limits and its fixed port"
+pass_check
+
 begin_check "unknown item can be rejected without a Hindsight write"
 reject_response="$(admin_review_post "/admin/quarantine/items/${unknown_id}/reject")"
 printf '%s' "$reject_response" | grep -q 'rejected' || fail_check "unknown reject failed"
@@ -501,7 +516,7 @@ unwrap_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Author
 [[ "$unwrap_status" == "404" ]] || fail_check "router exposed a review-side unwrap endpoint: ${unwrap_status}"
 pass_check
 
-# integration-behavior-sha256: 00b96d321349ab65e340064824eabb6237af7d16dc72f0c6f1be29f22705d448
+# integration-behavior-sha256: 9ba1add86a05e37e70194fa8062f132ebd628a77d3773e64be9b9017b654e882
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

@@ -30,6 +30,7 @@ Select **Use a hardware-backed key via local review agent** to use a hardware-he
 
 The agent is not a router endpoint.
 It listens only on `127.0.0.1:8765`.
+The port is fixed to match the console and its Content Security Policy.
 It checks the exact console origin and a random access credential.
 The agent unwraps the DEK and verifies AES-256-GCM, AAD, SHA-256, and metadata.
 
@@ -55,6 +56,7 @@ memory-router-review-agent \
 
 The agent prompts for the PIN on its terminal.
 The token enforces its PIN and touch policy.
+For keys with `CKA_ALWAYS_AUTHENTICATE`, the agent also supplies the PIN for each unwrap operation.
 Paste the *local agent credential* into the console's agent field.
 Do not use the router token or token PIN in this field.
 
@@ -63,6 +65,16 @@ Set `--origin` to the exact console origin (scheme, hostname, and port).
 The console uses a fixed loopback address and cannot send envelopes to arbitrary hosts.
 
 For a hosted console, allow access to loopback under your browser's local-network policy.
+
+The agent accepts JSON requests up to 2,097,152 bytes by default.
+Use `--max-request-bytes` to set a positive integer limit in bytes.
+Set this limit above the router's `QUARANTINE_MAX_ITEM_BYTES`, which already
+counts the encrypted envelope, including base64 expansion and metadata.
+The agent also receives the outer `{"envelope":...}` JSON wrapper (13 extra
+bytes with compact serialization), plus any additional serialization whitespace.
+Measure the complete serialized request when setting a tight limit.
+Larger router items may require a higher
+agent limit. Choose a limit that fits the reviewer workstation's memory budget.
 
 For an external provider, use `--external-provider ENTRY_POINT`.
 You can use this option with or without the PKCS#11 options.
@@ -79,6 +91,9 @@ Keep provider packages and credentials outside the router deployment.
 The registry rejects duplicate identities and never falls back to a different key or provider.
 
 The local SQLite audit keeps at most 1,000 events.
+It reserves separate rolling quotas of 100 unauthorized events and 900 authenticated
+`verified` or `failed` events. Unauthenticated requests, including malformed ones,
+cannot evict authenticated review history.
 Each event contains a timestamp, configured reviewer, validated quarantine ID, and outcome.
 Outcomes are `verified`, `failed`, or `unauthorized`.
 The audit never stores plaintext, keys, PINs, credentials, or request bodies.

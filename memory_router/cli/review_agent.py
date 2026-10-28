@@ -25,7 +25,14 @@ from memory_router.review_unwrap import (
 
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_AUDIT_ROWS = 1000
+MAX_UNAUTHORIZED_AUDIT_ROWS = 100
 REVIEWER_RE = re.compile(r"[A-Za-z0-9._@-]{1,128}")
+
+
+def _validate_credential(credential: str) -> str:
+    if len(credential) < 32 or not credential.isascii():
+        raise ValueError("review agent credential must be at least 32 ASCII characters")
+    return credential
 
 
 class ReviewAudit:
@@ -51,11 +58,17 @@ class ReviewAudit:
                 "VALUES (?, ?, ?, ?)",
                 (datetime.now(UTC).isoformat(), reviewer, quarantine_id, outcome),
             )
-            db.execute(
-                "DELETE FROM review_audit WHERE id NOT IN "
-                "(SELECT id FROM review_audit ORDER BY id DESC LIMIT ?)",
-                (MAX_AUDIT_ROWS,),
-            )
+            # Untrusted traffic must never evict authenticated review history.
+            for unauthorized, limit in (
+                (True, MAX_UNAUTHORIZED_AUDIT_ROWS),
+                (False, MAX_AUDIT_ROWS - MAX_UNAUTHORIZED_AUDIT_ROWS),
+            ):
+                db.execute(
+                    "DELETE FROM review_audit WHERE (outcome = 'unauthorized') = ? AND id NOT IN "
+                    "(SELECT id FROM review_audit WHERE (outcome = 'unauthorized') = ? "
+                    "ORDER BY id DESC LIMIT ?)",
+                    (unauthorized, unauthorized, limit),
+                )
 
 
 class ReviewAgent(ThreadingHTTPServer):
@@ -69,7 +82,10 @@ class ReviewAgent(ThreadingHTTPServer):
         reviewer: str,
         providers: ReviewProviderRegistry,
         audit: ReviewAudit,
+        max_request_bytes: int = MAX_REQUEST_BYTES,
     ) -> None:
+        if isinstance(max_request_bytes, bool) or max_request_bytes <= 0:
+            raise ValueError("request byte limit must be positive")
         parsed = urlsplit(origin)
         if (
             parsed.scheme not in {"http", "https"}
@@ -83,13 +99,12 @@ class ReviewAgent(ThreadingHTTPServer):
             raise ValueError("origin must be an exact http(s) origin")
         if not REVIEWER_RE.fullmatch(reviewer):
             raise ValueError("invalid reviewer identity")
-        if len(credential) < 32:
-            raise ValueError("review agent credential must be at least 32 characters")
         self.origin = origin.rstrip("/")
-        self.credential = credential
+        self.credential = _validate_credential(credential)
         self.reviewer = reviewer
         self.providers = providers
         self.audit = audit
+        self.max_request_bytes = max_request_bytes
         self.unwrap_lock = threading.Lock()
         super().__init__(("127.0.0.1", port), ReviewHandler)
 
@@ -137,6 +152,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
         if (
             self.path != "/decrypt"
             or not self._trusted_origin()
+            or not token.isascii()
             or not hmac.compare_digest(token, f"Bearer {self.server.credential}")
         ):
             self.server.audit.record(self.server.reviewer, None, "unauthorized")
@@ -144,7 +160,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", ""))
-            if not 0 < length <= MAX_REQUEST_BYTES:
+            if not 0 < length <= self.server.max_request_bytes:
                 raise ValueError("invalid request size")
             if self.headers.get("Content-Type") != "application/json":
                 raise ValueError("invalid content type")
@@ -173,10 +189,17 @@ class ReviewHandler(BaseHTTPRequestHandler):
 def _read_credential(path: Path) -> str:
     if path.stat().st_mode & 0o077:
         raise ValueError("review agent credential file must be owner-only")
-    credential = path.read_text(encoding="utf-8").strip()
-    if len(credential) < 32:
-        raise ValueError("review agent credential must be at least 32 characters")
-    return credential
+    return _validate_credential(path.read_text(encoding="utf-8").strip())
+
+
+def _request_byte_limit(value: str) -> int:
+    try:
+        limit = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("request byte limit must be an integer") from exc
+    if limit <= 0:
+        raise argparse.ArgumentTypeError("request byte limit must be positive")
+    return limit
 
 
 def main() -> None:
@@ -185,7 +208,12 @@ def main() -> None:
     parser.add_argument("--reviewer", required=True, help="Identity recorded in the local audit")
     parser.add_argument("--credential-file", type=Path, required=True)
     parser.add_argument("--audit-db", type=Path, required=True)
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--max-request-bytes",
+        type=_request_byte_limit,
+        default=MAX_REQUEST_BYTES,
+        help="Maximum JSON request bytes (positive integer; default: 2097152)",
+    )
     parser.add_argument("--pkcs11-module", help="Path to local PKCS#11 driver")
     parser.add_argument("--pkcs11-token", help="Hardware token label")
     parser.add_argument("--pkcs11-key", help="Private-key object label")
@@ -206,12 +234,13 @@ def main() -> None:
     if not providers:
         parser.error("configure a PKCS#11 key or an external review provider")
     agent = ReviewAgent(
-        args.port,
+        8765,
         args.origin,
         _read_credential(args.credential_file),
         args.reviewer,
         ReviewProviderRegistry(providers),
         ReviewAudit(args.audit_db),
+        max_request_bytes=args.max_request_bytes,
     )
     print(f"Review agent listening on loopback 127.0.0.1:{agent.server_port}")
     try:

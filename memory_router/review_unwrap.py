@@ -103,12 +103,16 @@ class Pkcs11RsaOaepProvider:
                 key_type=pkcs11.KeyType.RSA,
                 label=self._key_label,
             )
+            # python-pkcs11 performs context-specific login after DecryptInit for
+            # keys whose policy requires fresh authentication for each operation.
+            auth = {"pin": self._pin} if key[pkcs11.Attribute.ALWAYS_AUTHENTICATE] else {}
             return cast(
                 bytes,
                 key.decrypt(
                     wrapped_dek,
                     mechanism=pkcs11.Mechanism.RSA_PKCS_OAEP,
                     mechanism_param=(pkcs11.Mechanism.SHA256, mgf.SHA256, None),
+                    **auth,
                 ),
             )
 

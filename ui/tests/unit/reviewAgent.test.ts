@@ -64,4 +64,13 @@ describe("local review agent", () => {
       await expect(decryptWithReviewAgent(envelope, "s".repeat(32))).rejects.toThrow(DecryptError);
     }
   });
+
+  it("rejects envelope metadata mismatch after the reviewed object's digest passes", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ decrypted }), { status: 200 },
+    )));
+    await expect(decryptWithReviewAgent(
+      { ...envelope, reason: "auth_failed" }, "s".repeat(32),
+    )).rejects.toThrow("metadata mismatch");
+  });
 });

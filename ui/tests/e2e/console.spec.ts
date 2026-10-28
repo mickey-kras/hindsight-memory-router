@@ -368,3 +368,42 @@ for (const outcome of ["success", "error"] as const) {
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
 }
+
+for (const mode of ["provider", "hardware"] as const) {
+  test(`${mode} agent review routes the envelope and approves the exact verified object`, async ({ page }, testInfo) => {
+    const original = JSON.parse(readFileSync(path.join(FIXTURES, `${RETAIN_ID}.envelope.json`), "utf8"));
+    const encrypted = mode === "provider" ? {
+      ...original,
+      encryption: { ...original.encryption, key_wrap: "WRAP-SIDECAR", provider: { name: "mock-external", version: 1 } },
+    } : original;
+    const decrypted = JSON.parse(readFileSync(path.join(FIXTURES, `${RETAIN_ID}.decrypted.json`), "utf8"));
+    await page.route(`**/admin/quarantine/items/${RETAIN_ID}`, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json();
+      await route.fulfill({ response, json: { ...body, encrypted } });
+    });
+    const agentRequests: unknown[] = [];
+    await page.route("http://127.0.0.1:8765/decrypt", async (route) => {
+      expect(route.request().headers().authorization).toBe(`Bearer ${"a".repeat(32)}`);
+      agentRequests.push(route.request().postDataJSON());
+      await route.fulfill({ json: { decrypted }, headers: { "Access-Control-Allow-Origin": "*" } });
+    });
+    await connect(page);
+    const prefix = testInfo.project.name === "phone" ? "card" : "row";
+    await page.getByTestId(`${prefix}-${RETAIN_ID}`).click();
+    if (mode === "hardware") await page.getByTestId("use-agent").check();
+    else await expect(page.getByTestId("use-agent")).toHaveCount(0);
+    await expect(page.getByTestId("key-input")).toHaveCount(0);
+    await expect(page.getByTestId("approve-open")).toBeDisabled();
+    await page.getByTestId("agent-credential").fill("a".repeat(32));
+    await page.getByTestId("decrypt-agent").click();
+    await expect(page.getByTestId("payload")).toContainText(RETAIN_ID);
+    expect(agentRequests).toEqual([{ envelope: encrypted }]);
+    await page.getByTestId("approve-open").click();
+    const approval = page.waitForRequest(`**/admin/quarantine/items/${RETAIN_ID}/approve`);
+    await page.getByTestId("confirm-action").click();
+    expect((await approval).postDataJSON()).toEqual({ decrypted });
+    await expect(page.getByText(`approved ${RETAIN_ID}`)).toBeVisible();
+    expect((await mockActions(page)).find((action) => action.action === "approve")?.decrypted).toEqual(decrypted);
+  });
+}
