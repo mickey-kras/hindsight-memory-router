@@ -168,7 +168,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if not isinstance(body, dict) or set(body) != {"envelope"}:
                 raise ValueError("invalid request")
             envelope = parse_envelope(body["envelope"])
-        except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, TypeError, KeyError):
             self.server.audit.record(self.server.reviewer, None, "failed")
             self._respond(400, {"error": "invalid_envelope"})
             return
@@ -244,6 +244,8 @@ def main() -> None:
     )
     print(f"Review agent listening on loopback 127.0.0.1:{agent.server_port}")
     try:
+        # HTTP stays on the fixed loopback socket of a trusted reviewer workstation.
+        # See docs/operations/quarantine-review.md for this transport's trust boundary.
         agent.serve_forever()
     except KeyboardInterrupt as exc:
         raise SystemExit(130) from exc

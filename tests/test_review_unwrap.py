@@ -280,13 +280,16 @@ def test_review_agent_authentication_and_bounded_audit(
     thread = threading.Thread(target=agent.serve_forever)
     thread.start()
     try:
+        assert agent.socket.getsockname() == ("127.0.0.1", agent.server_port)
 
-        def request(origin: str, token: str, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        def request(
+            origin: str, token: str, body: dict[str, Any] | bytes
+        ) -> tuple[int, dict[str, Any]]:
             conn = HTTPConnection("127.0.0.1", agent.server_port)
             conn.request(
                 "POST",
                 "/decrypt",
-                json.dumps(body),
+                body if isinstance(body, bytes) else json.dumps(body),
                 headers={
                     "Origin": origin,
                     "Authorization": f"Bearer {token}",
@@ -309,6 +312,11 @@ def test_review_agent_authentication_and_bounded_audit(
         assert status == 200
         assert payload == {"decrypted": ITEM}
         assert request("http://localhost:5173", "t" * 32, {"envelope": {}})[0] == 400
+        for malformed_body in (b"{", b"\xff"):
+            assert request("http://localhost:5173", "t" * 32, malformed_body) == (
+                400,
+                {"error": "invalid_envelope"},
+            )
         provider.fail = True
         assert request("http://localhost:5173", "t" * 32, {"envelope": envelope}) == (
             422,
@@ -325,18 +333,20 @@ def test_review_agent_authentication_and_bounded_audit(
             ("misha", None, "unauthorized"),
             ("misha", ITEM["quarantine_id"], "verified"),
             ("misha", None, "failed"),
+            ("misha", None, "failed"),
+            ("misha", None, "failed"),
             ("misha", ITEM["quarantine_id"], "failed"),
         ]
         for _ in range(1001):
             audit.record("misha", None, "unauthorized")
         with sqlite3.connect(tmp_path / "review.sqlite3") as db:
-            assert db.execute("SELECT COUNT(*) FROM review_audit").fetchone() == (103,)
+            assert db.execute("SELECT COUNT(*) FROM review_audit").fetchone() == (105,)
             assert db.execute(
                 "SELECT quarantine_id FROM review_audit WHERE outcome = 'verified'"
             ).fetchall() == [(ITEM["quarantine_id"],)]
             assert db.execute(
                 "SELECT COUNT(*) FROM review_audit WHERE outcome = 'failed'"
-            ).fetchone() == (2,)
+            ).fetchone() == (4,)
         for _ in range(1001):
             audit.record("misha", None, "failed")
         with sqlite3.connect(tmp_path / "review.sqlite3") as db:

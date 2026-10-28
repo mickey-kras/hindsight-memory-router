@@ -516,7 +516,9 @@ unwrap_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Author
 [[ "$unwrap_status" == "404" ]] || fail_check "router exposed a review-side unwrap endpoint: ${unwrap_status}"
 pass_check
 
-# integration-behavior-sha256: 9ba1add86a05e37e70194fa8062f132ebd628a77d3773e64be9b9017b654e882
+# Review-agent exception simplification preserves behavior; malformed JSON and UTF-8
+# rejection remain covered by tests/test_review_unwrap.py.
+# integration-behavior-sha256: 410f8f1c327e94d454e109f1fa1fce4caa9b1948e8f48717664ecbc5f7045bd4
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"
