@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from importlib import import_module
 from importlib.metadata import entry_points
 from typing import Any, Protocol, cast
 
@@ -91,9 +92,9 @@ class Pkcs11RsaOaepProvider:
     def unwrap(self, wrapped_dek: bytes, envelope: Mapping[str, Any]) -> bytes:
         if "provider" in envelope["encryption"]:
             raise ValueError("PKCS#11 adapter only supports native RSA envelopes")
-        # Optional dependency lives on the reviewer's machine only.
-        import pkcs11  # type: ignore[import-not-found]
-        from pkcs11.mechanisms import MGF  # type: ignore[import-not-found]
+        # Load the optional python-pkcs11 distribution only in the reviewer process.
+        pkcs11 = import_module("pkcs11")
+        mgf = import_module("pkcs11.mechanisms").MGF
 
         token = pkcs11.lib(self._module).get_token(token_label=self._token_label)
         with token.open(user_pin=self._pin) as session:
@@ -107,7 +108,7 @@ class Pkcs11RsaOaepProvider:
                 key.decrypt(
                     wrapped_dek,
                     mechanism=pkcs11.Mechanism.RSA_PKCS_OAEP,
-                    mechanism_param=(pkcs11.Mechanism.SHA256, MGF.SHA256, None),
+                    mechanism_param=(pkcs11.Mechanism.SHA256, mgf.SHA256, None),
                 ),
             )
 

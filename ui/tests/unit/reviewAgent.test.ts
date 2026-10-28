@@ -18,6 +18,15 @@ const decrypted: DecryptedQuarantineObject = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("local review agent", () => {
+  it("allows the fixed loopback origin in the shipped and example CSP", () => {
+    const origin = new URL(REVIEW_AGENT_URL).origin;
+    const directive = `connect-src 'self' ${origin}`;
+    const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+    const deployment = readFileSync(new URL("../../README.md", import.meta.url), "utf8");
+    expect(html).toContain(directive);
+    expect(deployment).toContain(directive);
+  });
+
   it("verifies an agent-reviewed provider envelope without sending router tokens", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ decrypted }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);

@@ -57,6 +57,7 @@ The agent prompts for the PIN on its terminal.
 The token enforces its PIN and touch policy.
 Paste the *local agent credential* into the console's agent field.
 Do not use the router token or token PIN in this field.
+
 The credential stays in that browser tab. The console clears it when you change items.
 Set `--origin` to the exact console origin (scheme, hostname, and port).
 The console uses a fixed loopback address and cannot send envelopes to arbitrary hosts.
@@ -86,7 +87,7 @@ The router's authenticated approval and rejection audit remains unchanged.
 
 ### Manual PKCS#11/PIV smoke test
 
-1. Create a **synthetic** native RSA envelope with the token's public key. Check its `key_wrap` and absence of `provider` metadata. Do not use production evidence.
+1. Create a **synthetic** native RSA envelope with the token's public key. Check the envelope's `key_wrap` and confirm that it has no `provider` metadata. Do not use production evidence.
 2. Start the agent with the PKCS#11 module, token label, key label, credential, and console origin. Enter the token PIN.
 3. Select the synthetic item. Enable **Use a hardware-backed key**. Paste the agent credential. Click **Decrypt with local agent**.
 4. Check the token touch prompt, decrypted object, and `verified` audit record.

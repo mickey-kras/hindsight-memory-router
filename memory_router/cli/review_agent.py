@@ -216,8 +216,8 @@ def main() -> None:
     print(f"Review agent listening on loopback 127.0.0.1:{agent.server_port}")
     try:
         agent.serve_forever()
-    except KeyboardInterrupt:
-        print("Review agent stopping")
+    except KeyboardInterrupt as exc:
+        raise SystemExit(130) from exc
     finally:
         agent.server_close()
 
