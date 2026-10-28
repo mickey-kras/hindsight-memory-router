@@ -206,8 +206,8 @@ provider_value = {
 provider_envelope = asyncio.run(
     create_provider_envelope(provider_value, _InertProvider(public_pem))
 )
-# The router's own decrypt rejects provider envelopes; the UI must fail closed
-# on this fixture too (RSA-OAEP-only support).
+# The legacy PEM decrypt path rejects provider envelopes. The separate review
+# agent is the only supported provider unwrap path.
 try:
     decrypt_envelope(provider_envelope, private_pem)
 except ValueError:

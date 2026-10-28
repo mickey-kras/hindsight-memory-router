@@ -177,7 +177,7 @@ Serve `dist/` with nginx and proxy the admin API:
 server {
     listen 8080;
     root /usr/share/nginx/html;
-    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'" always;
+    add_header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' http://127.0.0.1:8765; img-src 'self' data:; font-src 'self'; base-uri 'none'; form-action 'none'" always;
     add_header Referrer-Policy no-referrer always;
     location /admin/  { proxy_pass http://memory-router:8890; }
     location = /health { proxy_pass http://memory-router:8890; }

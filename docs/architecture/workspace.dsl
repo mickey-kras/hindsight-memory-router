@@ -10,6 +10,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         hostProxy = softwareSystem "Authenticated Host Proxy (optional)" "Authenticates host sessions, authorizes each action, rejects CSRF mutations, and injects existing scoped admin credentials server-side."
         hindsight = softwareSystem "Hindsight" "Only implemented memory backend."
         identityProvider = softwareSystem "OIDC Identity Provider (optional)" "Configured issuer for native human login using authorization code and S256 PKCE."
+        hardwareToken = softwareSystem "Review Hardware Token" "Hardware-held PIV/PKCS#11 RSA private key. PIN and touch policy remain local."
 
         memoryRouter = softwareSystem "Memory Router" "Principal authorization, policy, and security boundary between agent integrations and Hindsight." {
             api = container "Memory Router API" "Hindsight-compatible HTTP facade, routing, policy, security, quarantine, and review API." "Python 3.12 / FastAPI / Uvicorn" {
@@ -32,6 +33,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             quarantineStorage = container "Quarantine Storage" "Encrypted quarantine/review state, audit history, and shared rate-limit state when PostgreSQL is used." "SQLite (single-node) or PostgreSQL (clustered)" "Database"
             console = container "Quarantine Console" "Standalone token session or optional same-origin host authentication. Local WebCrypto decryption; embed layout retains actions." "React / TypeScript"
             reviewTool = container "Offline Review Tooling" "Decrypts exported quarantine envelopes outside the router process. The private key is supplied locally and is never available to Memory Router." "Python CLI" "Offline"
+            reviewAgent = container "Trusted Local Review Agent" "Exact provider unwrap, authenticated loopback review, end-to-end envelope verification, and bounded local audit." "Python / PKCS#11 / HTTP"
         }
 
         operator -> console "Reviews quarantine in the browser" "HTTPS"
@@ -50,6 +52,9 @@ workspace "Hindsight Memory Router" "As-built architecture" {
         operator -> api "Uses quarantine review API" "Admin HTTP/JSON + scoped Bearer"
         operator -> http "Reads quarantine records and submits review decisions" "Admin HTTP/JSON + scoped Bearer"
         operator -> reviewTool "Decrypts exported evidence with private key" "Local CLI/stdin + file"
+        operator -> reviewAgent "Starts trusted provider session with local PIN and credential" "Local CLI"
+        console -> reviewAgent "Sends one encrypted item with scoped agent credential" "Authenticated loopback HTTP/JSON"
+        reviewAgent -> hardwareToken "Unwraps RSA DEK without exporting private key" "PKCS#11"
 
         bridge -> http "Sends supported Hindsight-compatible requests" "HTTP/JSON + Bearer"
         http -> principals "Authenticates principal token and checks bank/scope grant"
@@ -116,6 +121,7 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             }
             deploymentNode "Reviewer workstation" "Private-key boundary" {
                 containerInstance reviewTool
+                containerInstance reviewAgent
             }
         }
 
@@ -140,18 +146,19 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             }
             deploymentNode "Reviewer workstation" "Private-key boundary" {
                 containerInstance reviewTool
+                containerInstance reviewAgent
             }
         }
     }
 
     views {
         systemContext memoryRouter "SystemContext" "Current supported topology and review boundary." {
-            include agents integrations memoryRouter hindsight operator hostProxy
+            include agents integrations memoryRouter hindsight operator hostProxy hardwareToken
             autoLayout lr
         }
 
         container memoryRouter "Containers" "Memory Router runtime and dependency boundaries." {
-            include bridge api quarantineStorage reviewTool console hindsight operator hostProxy
+            include bridge api quarantineStorage reviewTool reviewAgent console hindsight operator hostProxy hardwareToken
             autoLayout lr
         }
 
@@ -260,6 +267,9 @@ workspace "Hindsight Memory Router" "As-built architecture" {
             operator -> console "Open quarantine console with scoped review access"
             console -> http "Fetch encrypted evidence; optional host mode uses authenticated proxy"
             operator -> console "RSA-OAEP: decrypt locally with WebCrypto; private key stays in browser"
+            console -> reviewAgent "Provider-wrapped or hardware RSA: submit item with local agent credential"
+            reviewAgent -> hardwareToken "Hardware RSA: perform token-governed OAEP-SHA256 unwrap"
+            reviewAgent -> console "Return verified object after AES-GCM, AAD, digest and metadata checks"
             operator -> reviewTool "Alternative: decrypt exported envelope locally with CLI and private key"
             operator -> http "Approve with exact decrypted evidence, or reject/postpone"
             http -> review "Authenticate scoped admin action; verify approval digest and claim state"

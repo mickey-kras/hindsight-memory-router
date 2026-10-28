@@ -431,6 +431,21 @@ unknown_plaintext="$(decrypt_local "$encrypted_file")"
 printf '%s' "$unknown_plaintext" | grep -q "$unknown_marker" || fail_check "local decryption did not recover unknown payload"
 pass_check
 
+begin_check "local review agent CLI exposes bounded requests and the fixed console port"
+docker run --rm hindsight-memory-router:ci python -c '
+import subprocess,sys
+command=[sys.executable,"-m","memory_router.cli.review_agent"]
+help_result=subprocess.run([*command,"--help"],capture_output=True,text=True,check=True)
+assert "--max-request-bytes" in help_result.stdout
+assert "--port" not in help_result.stdout
+required=["--origin","http://localhost:5173","--reviewer","smoke","--credential-file","/unused","--audit-db","/unused"]
+for options,message in [(["--max-request-bytes","0"],"request byte limit must be positive"),(["--port","8766"],"unrecognized arguments")]:
+    result=subprocess.run([*command,*required,*options],capture_output=True,text=True)
+    assert result.returncode == 2, result
+    assert message in result.stderr, result.stderr
+' || fail_check "review agent CLI did not enforce request limits and its fixed port"
+pass_check
+
 begin_check "unknown item can be rejected without a Hindsight write"
 reject_response="$(admin_review_post "/admin/quarantine/items/${unknown_id}/reject")"
 printf '%s' "$reject_response" | grep -q 'rejected' || fail_check "unknown reject failed"
@@ -497,9 +512,11 @@ denied_status="$(curl --max-time 5 -sS -o "$denied_output" -w '%{http_code}' -H 
 grep -q 'endpoint denied by memory-router policy' "$denied_output" || fail_check "unsupported router endpoint did not use policy denial"
 admin_denied_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_read_token}" "${router_url}/admin/quarantine/not-supported")"
 [[ "$admin_denied_status" == "404" ]] || fail_check "unsupported admin endpoint returned ${admin_denied_status}"
+unwrap_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${admin_review_token}" -H "Content-Type: application/json" -X POST "${router_url}/admin/quarantine/unwrap" -d '{}')"
+[[ "$unwrap_status" == "404" ]] || fail_check "router exposed a review-side unwrap endpoint: ${unwrap_status}"
 pass_check
 
-# integration-behavior-sha256: f01a5231b3a73f3f3668424751facec1baa016cf8cce47390e7a08c2f9d456ef
+# integration-behavior-sha256: 9ba1add86a05e37e70194fa8062f132ebd628a77d3773e64be9b9017b654e882
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

@@ -36,3 +36,68 @@ test("selection clears old plaintext before passive effects can run", async ({ p
   await page.getByTestId("decrypt").click();
   await expect(page.getByTestId("payload")).toContainText("q_recall_aaaabbbbccccdddd");
 });
+
+for (const outcome of ["success", "error"] as const) {
+  test(`selection clears agent credentials and ignores late agent ${outcome}`, async ({ page, request }) => {
+    await request.post(`${MOCK_ORIGIN}/__reset`);
+    const fixture = (id: string) => JSON.parse(readFileSync(path.join(ROOT, `tests/fixtures/${id}.decrypted.json`), "utf8"));
+    const retain = fixture("q_retain_0123456789abcdef");
+    const recall = fixture("q_recall_aaaabbbbccccdddd");
+    let startOld!: () => void;
+    let releaseOld!: () => void;
+    const started = new Promise<void>((resolve) => { startOld = resolve; });
+    const released = new Promise<void>((resolve) => { releaseOld = resolve; });
+    await page.route("http://127.0.0.1:8765/decrypt", async (route) => {
+      const id = route.request().postDataJSON().envelope.quarantine_id;
+      if (id === retain.quarantine_id) {
+        expect(route.request().headers().authorization).toBe(`Bearer ${"a".repeat(32)}`);
+        startOld();
+        await released;
+        await route.fulfill({
+          status: outcome === "success" ? 200 : 422,
+          json: outcome === "success" ? { decrypted: retain } : { error: "review_decrypt_failed" },
+          headers: { "Access-Control-Allow-Origin": "*" },
+        });
+      } else {
+        expect(id).toBe(recall.quarantine_id);
+        expect(route.request().headers().authorization).toBe(`Bearer ${"b".repeat(32)}`);
+        await route.fulfill({ json: { decrypted: recall }, headers: { "Access-Control-Allow-Origin": "*" } });
+      }
+    });
+    await page.goto(harnessUrl);
+    await page.evaluate(() => {
+      const state = window as typeof window & { reviewedDigests: number };
+      state.reviewedDigests = 0;
+      const original = crypto.subtle.digest.bind(crypto.subtle);
+      crypto.subtle.digest = async (algorithm, data) => {
+        const result = await original(algorithm, data);
+        state.reviewedDigests += 1;
+        return result;
+      };
+    });
+    await page.getByTestId("use-agent").check();
+    await page.getByTestId("agent-credential").fill("a".repeat(32));
+    await page.getByTestId("decrypt-agent").click();
+    await started;
+    await page.evaluate(() => window.selectBoundaryItem());
+    await expect(page.getByTestId("agent-credential")).toHaveValue("");
+    await expect(page.getByTestId("decrypt-agent")).toBeDisabled();
+    await expect(page.getByTestId("payload")).toHaveCount(0);
+    await page.getByTestId("agent-credential").fill("b".repeat(32));
+    await page.getByTestId("decrypt-agent").click();
+    await expect(page.getByTestId("payload")).toContainText(recall.quarantine_id);
+    const oldResponse = page.waitForResponse((response) =>
+      response.url() === "http://127.0.0.1:8765/decrypt" &&
+      response.request().postDataJSON().envelope.quarantine_id === retain.quarantine_id,
+    );
+    releaseOld();
+    await (await oldResponse).finished();
+    if (outcome === "success") {
+      await page.waitForFunction(() => (window as typeof window & { reviewedDigests: number }).reviewedDigests === 2);
+    }
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByTestId("payload")).toContainText(recall.quarantine_id);
+    await expect(page.getByTestId("payload")).not.toContainText(retain.quarantine_id);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}

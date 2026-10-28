@@ -13,6 +13,7 @@ import {
   decryptEnvelope,
   importDecryptionKeyPem,
 } from "../lib/quarantineCrypto";
+import { decryptWithReviewAgent } from "../lib/reviewAgent";
 import type {
   DecryptedQuarantineObject,
   QuarantineItemResponse,
@@ -38,6 +39,8 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const [keyPem, setKeyPem] = useState("");
   const keyRef = useRef<CryptoKey | null>(null);
   const [keyLoaded, setKeyLoaded] = useState(false);
+  const [useAgent, setUseAgent] = useState(false);
+  const [agentCredential, setAgentCredential] = useState("");
   const [decrypted, setDecrypted] = useState<DecryptedQuarantineObject | null>(null);
   const [decryptError, setDecryptError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<PendingAction>(null);
@@ -52,6 +55,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
     setDecryptError(null);
     setPendingAction(null);
     setLoadError(null);
+    setAgentCredential("");
     let active = true;
     fetchItem(tokens, item.quarantine_id)
       .then((response) => {
@@ -81,18 +85,25 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   }, [keyPem]);
 
   const decrypt = useCallback(async () => {
-    if (!detail || !keyRef.current) return;
+    if (!detail) return;
+    const needsAgent = detail.encrypted.encryption.provider !== undefined || useAgent;
+    if (!needsAgent && !keyRef.current) return;
     const generation = selectionGeneration.current;
     setDecryptError(null);
     try {
-      const plaintext = await decryptEnvelope(detail.encrypted, keyRef.current);
+      if (needsAgent && tokens !== "host" && !tokens.review) {
+        throw new DecryptError("review token required");
+      }
+      const plaintext = needsAgent
+        ? await decryptWithReviewAgent(detail.encrypted, agentCredential)
+        : await decryptEnvelope(detail.encrypted, keyRef.current!);
       if (generation === selectionGeneration.current) setDecrypted(plaintext);
     } catch (error) {
       if (generation !== selectionGeneration.current) return;
       setDecrypted(null);
       setDecryptError(error instanceof DecryptError ? error.message : "decryption failed");
     }
-  }, [detail]);
+  }, [detail, useAgent, agentCredential, tokens]);
 
   const runAction = useCallback(
     async (action: "approve" | "reject" | "postpone" | ReconcileAction) => {
@@ -141,6 +152,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const canReject = canFinalize && record.kind === "recalled_memory";
   const canReview = record.status === "pending" || record.status === "postponed";
   const canReconcile = record.status === "review_side_effect_started";
+  const needsAgent = detail?.encrypted.encryption.provider !== undefined || useAgent;
 
   return (
     <section
@@ -151,44 +163,21 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
 
       {loadError && <Banner kind="error" text={loadError} />}
       {detail && !decrypted && (
-        <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <div className="text-xs text-zinc-400">
-            Encrypted envelope loaded ({formatBytes(JSON.stringify(detail.encrypted).length)}).
-            {keyLoaded
-              ? " Decryption key imported (non-extractable)."
-              : " Paste the quarantine decryption key. It never leaves this browser tab."}
-          </div>
-          {!keyLoaded && (
-            <>
-              <textarea
-                value={keyPem}
-                onChange={(e) => setKeyPem(e.target.value)}
-                rows={4}
-                spellCheck={false}
-                data-testid="key-input"
-                placeholder="Paste PKCS8 PEM here"
-                className="mono rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-xs outline-none focus:border-sky-500"
-              />
-              <button
-                onClick={() => void importKey()}
-                disabled={!keyPem.trim()}
-                data-testid="import-key"
-                className="self-start rounded-lg border border-zinc-600 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-              >
-                Import key
-              </button>
-            </>
-          )}
-          {keyLoaded && (
-            <button
-              onClick={() => void decrypt()}
-              data-testid="decrypt"
-              className="self-start rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500"
-            >
-              Decrypt item
-            </button>
-          )}
-        </div>
+        <DecryptControls
+          detail={detail}
+          needsAgent={needsAgent}
+          useAgent={useAgent}
+          setUseAgent={setUseAgent}
+          agentCredential={agentCredential}
+          setAgentCredential={setAgentCredential}
+          keyPem={keyPem}
+          setKeyPem={setKeyPem}
+          keyLoaded={keyLoaded}
+          busy={busy}
+          authorized={tokens === "host" || Boolean(tokens.review)}
+          onImport={() => void importKey()}
+          onDecrypt={() => void decrypt()}
+        />
       )}
 
       {decryptError && <Banner kind="error" text={decryptError} onDismiss={() => setDecryptError(null)} />}
@@ -327,6 +316,102 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         </div>
       )}
     </section>
+  );
+}
+
+interface DecryptControlsProps {
+  detail: QuarantineItemResponse;
+  needsAgent: boolean;
+  useAgent: boolean;
+  setUseAgent: (value: boolean) => void;
+  agentCredential: string;
+  setAgentCredential: (value: string) => void;
+  keyPem: string;
+  setKeyPem: (value: string) => void;
+  keyLoaded: boolean;
+  busy: boolean;
+  authorized: boolean;
+  onImport: () => void;
+  onDecrypt: () => void;
+}
+
+function DecryptControls({
+  detail, needsAgent, useAgent, setUseAgent, agentCredential, setAgentCredential,
+  keyPem, setKeyPem, keyLoaded, busy, authorized, onImport, onDecrypt,
+}: DecryptControlsProps) {
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+      <div className="text-xs text-zinc-400">
+        Encrypted envelope loaded ({formatBytes(JSON.stringify(detail.encrypted).length)}).
+        {needsAgent
+          ? " Use the trusted local review agent; no token private key enters the browser."
+          : keyLoaded
+            ? " Decryption key imported (non-extractable)."
+            : " Paste the quarantine decryption key. It never leaves this browser tab."}
+      </div>
+      {detail.encrypted.encryption.provider === undefined && (
+        <label className="flex items-center gap-2 text-xs text-zinc-300">
+          <input
+            type="checkbox"
+            checked={useAgent}
+            onChange={(e) => setUseAgent(e.target.checked)}
+            data-testid="use-agent"
+          />
+          Use a hardware-backed key via local review agent
+        </label>
+      )}
+      {needsAgent && (
+        <>
+          <input
+            type="password"
+            value={agentCredential}
+            onChange={(e) => setAgentCredential(e.target.value)}
+            autoComplete="off"
+            data-testid="agent-credential"
+            placeholder="Local review agent credential"
+            className="mono rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-xs outline-none focus:border-sky-500"
+          />
+          <button
+            onClick={onDecrypt}
+            disabled={agentCredential.length < 32 || busy || !authorized}
+            data-testid="decrypt-agent"
+            className="self-start rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500 disabled:opacity-40"
+          >
+            Decrypt with local agent
+          </button>
+        </>
+      )}
+      {!needsAgent && !keyLoaded && (
+        <>
+          <textarea
+            value={keyPem}
+            onChange={(e) => setKeyPem(e.target.value)}
+            rows={4}
+            spellCheck={false}
+            data-testid="key-input"
+            placeholder="Paste PKCS8 PEM here"
+            className="mono rounded-lg border border-zinc-700 bg-zinc-900 p-2 text-xs outline-none focus:border-sky-500"
+          />
+          <button
+            onClick={onImport}
+            disabled={!keyPem.trim()}
+            data-testid="import-key"
+            className="self-start rounded-lg border border-zinc-600 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            Import key
+          </button>
+        </>
+      )}
+      {!needsAgent && keyLoaded && (
+        <button
+          onClick={onDecrypt}
+          data-testid="decrypt"
+          className="self-start rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-sky-500"
+        >
+          Decrypt item
+        </button>
+      )}
+    </div>
   );
 }
 
