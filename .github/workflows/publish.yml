@@ -610,6 +610,10 @@ jobs:
             ${{ steps.ui-package.outputs.tarball }}.sigstore.json
           if-no-files-found: error
 
+      - name: Check npm package availability
+        if: steps.push.outputs.published == 'true'
+        run: node .github/scripts/publish-npm.cjs --check
+
       - name: Release App token
         if: inputs.candidate_sha != ''
         id: app

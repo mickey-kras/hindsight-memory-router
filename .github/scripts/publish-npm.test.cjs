@@ -44,6 +44,35 @@ test("retry skips an identical version with provenance", async () => {
   assert.deepEqual(calls, []);
 });
 
+test("preflight accepts unused or identical versions without publishing", async () => {
+  for (const exists of [false, true]) {
+    const { options, published, calls } = fixture();
+    options.checkOnly = true;
+    options.lookup = async (name, version) => {
+      assert.equal(name, options.pkg.name);
+      assert.equal(version, options.pkg.version);
+      return exists ? published : null;
+    };
+    options.wait = async () => assert.fail("preflight must not wait for publication");
+    await publishPackage(options);
+    assert.deepEqual(calls, []);
+  }
+});
+
+test("preflight rejects an existing version with different bytes or missing provenance", async () => {
+  for (const change of [
+    (published) => { published.dist.integrity = "sha512-other"; },
+    (published) => { delete published.dist.attestations; },
+  ]) {
+    const { options, published, calls } = fixture();
+    options.checkOnly = true;
+    change(published);
+    options.lookup = async () => published;
+    await assert.rejects(publishPackage(options), /integrity mismatch|provenance missing/);
+    assert.deepEqual(calls, []);
+  }
+});
+
 test("rejects changed bytes, duplicate checksums, and invalid package identity before lookup", async () => {
   for (const change of [
     (options) => { options.digests = "ui-package=sha256:wrong"; },

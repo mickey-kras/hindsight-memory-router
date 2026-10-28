@@ -828,11 +828,15 @@ process.exit(Number(process.env.AISLOP_TEST_EXIT));
         publish = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["publish"]
         steps = publish["steps"]
         names = [step.get("name") for step in steps]
-        ordered = ["Sign the UI package", "Upload image digests", "Publish immutable release",
+        ordered = ["Sign the UI package", "Upload image digests", "Check npm package availability",
+                   "Publish immutable release",
                    "Verify signed UI package", "Publish verified UI tarball to public npm",
                    "Promote latest released image"]
         self.assertEqual(sorted(names.index(name) for name in ordered),
                          [names.index(name) for name in ordered])
+        preflight = next(step for step in steps if step.get("name") == "Check npm package availability")
+        self.assertEqual(preflight["if"], "steps.push.outputs.published == 'true'")
+        self.assertEqual(preflight["run"], "node .github/scripts/publish-npm.cjs --check")
         npm = next(step for step in steps if step.get("name") == ordered[-2])
         self.assertEqual(npm["if"], "steps.push.outputs.published == 'true'")
         self.assertIn("node .github/scripts/publish-npm.cjs", npm["run"])
