@@ -75,8 +75,8 @@ Set the agent limit above the router's `QUARANTINE_MAX_ITEM_BYTES`.
 The router counts the bytes in the encrypted envelope.
 This count includes base64 encoding and metadata.
 
-The agent also receives the outer `{"envelope":...}` JSON wrapper.
-With compact serialization, this wrapper adds 13 bytes.
+The agent receives a JSON object: `{"envelope":...}`.
+With compact serialization, this object adds 13 bytes around the envelope.
 Serialization whitespace adds more bytes.
 
 Measure the complete serialized request before you set a tight limit.
@@ -101,9 +101,11 @@ The local SQLite audit keeps at most 1,000 events.
 It reserves separate rolling quotas of 100 unauthorized events and 900 authenticated
 `verified` or `failed` events. Unauthenticated requests, including malformed ones,
 cannot evict authenticated review history.
+
 Each event contains a timestamp, configured reviewer, validated quarantine ID, and outcome.
 Outcomes are `verified`, `failed`, or `unauthorized`.
 The audit never stores plaintext, keys, PINs, credentials, or request bodies.
+
 Use an owner-only workstation directory.
 The router's authenticated approval and rejection audit remains unchanged.
 
