@@ -392,6 +392,13 @@ def decrypt_envelope(value: Any, private_key_input: str) -> dict[str, Any]:
         base64.b64decode(encryption[ENVELOPE_WRAPPED_FIELD]),
         padding.OAEP(mgf=padding.MGF1(hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
     )
+    return decrypt_unwrapped_envelope(envelope, key)
+
+
+def decrypt_unwrapped_envelope(value: Any, key: bytes) -> dict[str, Any]:
+    """Verify an envelope after a trusted review tool has unwrapped its DEK."""
+    envelope = parse_envelope(value)
+    encryption = envelope["encryption"]
     if len(key) != 32:
         raise ValueError("invalid decrypted quarantine key length")
     combined = base64.b64decode(envelope["ciphertext_b64"]) + base64.b64decode(
