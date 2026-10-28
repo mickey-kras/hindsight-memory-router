@@ -168,7 +168,7 @@ class ReviewHandler(BaseHTTPRequestHandler):
             if not isinstance(body, dict) or set(body) != {"envelope"}:
                 raise ValueError("invalid request")
             envelope = parse_envelope(body["envelope"])
-        except (ValueError, TypeError, KeyError, UnicodeDecodeError, json.JSONDecodeError):
+        except (ValueError, TypeError, KeyError):
             self.server.audit.record(self.server.reviewer, None, "failed")
             self._respond(400, {"error": "invalid_envelope"})
             return
