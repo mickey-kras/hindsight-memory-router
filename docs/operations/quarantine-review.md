@@ -32,7 +32,15 @@ The agent is not a router endpoint.
 It listens only on `127.0.0.1:8765`.
 The agent uses port `8765` to match the console and its Content Security Policy.
 
-It checks the exact console origin and a random access credential.
+HTTP traffic stays on the workstation's loopback interface.
+This transport assumes a trusted workstation and browser.
+Do not expose the agent through a proxy or port forwarding.
+Use HTTPS for a hosted review console.
+The agent checks the exact `Host` and `Origin` headers and requires a random bearer credential before decryption.
+These checks do not encrypt the credential or plaintext on loopback.
+They do not protect against privileged packet capture, local process impersonation, or a compromised browser.
+The HTTP security hotspot is safe only within this local trust boundary.
+
 The agent unwraps the DEK and verifies AES-256-GCM, AAD, SHA-256, and metadata.
 
 It sends only the verified object back to the console.

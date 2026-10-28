@@ -244,6 +244,8 @@ def main() -> None:
     )
     print(f"Review agent listening on loopback 127.0.0.1:{agent.server_port}")
     try:
+        # HTTP stays on the fixed loopback socket of a trusted reviewer workstation.
+        # See docs/operations/quarantine-review.md for this transport's trust boundary.
         agent.serve_forever()
     except KeyboardInterrupt as exc:
         raise SystemExit(130) from exc

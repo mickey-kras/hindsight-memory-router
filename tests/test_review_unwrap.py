@@ -280,6 +280,7 @@ def test_review_agent_authentication_and_bounded_audit(
     thread = threading.Thread(target=agent.serve_forever)
     thread.start()
     try:
+        assert agent.socket.getsockname() == ("127.0.0.1", agent.server_port)
 
         def request(
             origin: str, token: str, body: dict[str, Any] | bytes
