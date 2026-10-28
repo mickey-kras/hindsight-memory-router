@@ -501,7 +501,7 @@ unwrap_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Author
 [[ "$unwrap_status" == "404" ]] || fail_check "router exposed a review-side unwrap endpoint: ${unwrap_status}"
 pass_check
 
-# integration-behavior-sha256: f880bdd8f39a77540d37f25243cfe94789ad69a1136c6de4e22cf685d874c4fb
+# integration-behavior-sha256: f1d2014ea9c2c84cb5e33bfb82ef102bca250dabe4556c8d68223a1c645eddfb
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

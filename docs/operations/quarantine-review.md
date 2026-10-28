@@ -32,16 +32,17 @@ The agent is not a router endpoint.
 It listens only on `127.0.0.1:8765`.
 It checks the exact console origin and a random access credential.
 The agent unwraps the DEK and verifies AES-256-GCM, AAD, SHA-256, and metadata.
+
 It sends only the verified object back to the console.
 The private key and PIN stay outside the browser and router.
 The router verifies the stored SHA-256 again during approval.
 
-On the **trusted reviewer workstation**, create an owner-only credential and install the optional PKCS#11 library:
+On the **trusted reviewer workstation**, install the `review` extra and create an owner-only credential:
 
 ```bash
 umask 077
 openssl rand -hex 32 > review-agent-credential
-python -m pip install python-pkcs11
+python -m pip install 'hindsight-memory-router[review]'
 memory-router-review-agent \
   --origin https://your-review-console.example \
   --reviewer your-reviewer-id \
@@ -56,10 +57,11 @@ The agent prompts for the PIN on its terminal.
 The token enforces its PIN and touch policy.
 Paste the *local agent credential* into the console's agent field.
 Do not use the router token or token PIN in this field.
-The credential stays in that browser tab and is cleared when you change items.
+The credential stays in that browser tab. The console clears it when you change items.
 Set `--origin` to the exact console origin (scheme, hostname, and port).
 The console uses a fixed loopback address and cannot send envelopes to arbitrary hosts.
-For a hosted console, permit access to loopback under your browser's local-network policy.
+
+For a hosted console, allow access to loopback under your browser's local-network policy.
 
 For an external provider, use `--external-provider ENTRY_POINT`.
 You can use this option with or without the PKCS#11 options.
@@ -68,7 +70,7 @@ Register its zero-argument factory under Python entry-point group `hindsight_mem
 The factory returns an object with:
 
 - `identity: ReviewProviderId(key_wrap, name, version)` matching the envelope exactly (for native RSA: `ReviewProviderId("RSA-OAEP-SHA256")`).
-- `unwrap(wrapped_dek: bytes, envelope: Mapping[str, Any]) -> bytes`, returning a 32-byte DEK. The envelope is already validated, and the agent authenticates and verifies the decrypted object after unwrapping.
+- `unwrap(wrapped_dek: bytes, envelope: Mapping[str, Any]) -> bytes`, returning a 32-byte DEK. The agent validates the envelope before it calls the provider. The agent checks the decrypted object after unwrapping.
 
 An independent package can register `my-review-provider = "my_package.review:make_provider"`.
 Enable it with `--external-provider my-review-provider`.
@@ -84,11 +86,13 @@ The router's authenticated approval and rejection audit remains unchanged.
 
 ### Manual PKCS#11/PIV smoke test
 
-1. Prepare a **synthetic** native RSA quarantine envelope whose wrapping public key corresponds to the hardware-held private key. Confirm its `key_wrap` is `RSA-OAEP-SHA256` and has no `provider` block. Do not use production evidence for this test.
-2. Launch the local review agent with the PKCS#11 module, token/key labels, a random credential, and the exact console origin. Enter the token PIN at the workstation prompt.
-3. Select the synthetic item in the authenticated console, enable **Use a hardware-backed key**, paste the agent credential, and click **Decrypt with local agent**. Verify the device requests touch when configured, the plaintext matches the original synthetic object, and the audit records `verified`.
-4. Repeat with an incorrect key/token or denied PIN/touch. Decryption must fail; approval remains disabled; audit records `failed`.
-5. Tamper with ciphertext, AAD-bound metadata, or digest, then retry. No plaintext may be displayed and approval remains disabled. Ensure that the token's private key was never exported or mounted in the router process.
+1. Create a **synthetic** native RSA envelope with the token's public key. Check its `key_wrap` and absence of `provider` metadata. Do not use production evidence.
+2. Start the agent with the PKCS#11 module, token label, key label, credential, and console origin. Enter the token PIN.
+3. Select the synthetic item. Enable **Use a hardware-backed key**. Paste the agent credential. Click **Decrypt with local agent**.
+4. Check the token touch prompt, decrypted object, and `verified` audit record.
+5. Retry with an incorrect key or denied PIN or touch. Confirm failure and a `failed` audit event. Approval must stay disabled.
+6. Change the ciphertext, AAD metadata, and digest in separate tests. Confirm the console shows no plaintext and approval stays disabled.
+7. Keep the private key inside the hardware token. Do not copy it to the router.
 
 Automated tests use a simulated PKCS#11 driver and an independent mock provider.
 Confirm real PIN and touch behavior with the manual test.

@@ -217,7 +217,7 @@ def main() -> None:
     try:
         agent.serve_forever()
     except KeyboardInterrupt:
-        pass
+        print("Review agent stopping")
     finally:
         agent.server_close()
 

@@ -26,6 +26,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+review = [
+  "python-pkcs11==0.10.1",
+]
 dev = [
   "bandit==1.9.4",
   "coverage==7.16.2",
