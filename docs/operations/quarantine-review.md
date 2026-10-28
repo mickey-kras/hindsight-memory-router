@@ -30,7 +30,8 @@ Select **Use a hardware-backed key via local review agent** to use a hardware-he
 
 The agent is not a router endpoint.
 It listens only on `127.0.0.1:8765`.
-The port is fixed to match the console and its Content Security Policy.
+The agent uses port `8765` to match the console and its Content Security Policy.
+
 It checks the exact console origin and a random access credential.
 The agent unwraps the DEK and verifies AES-256-GCM, AAD, SHA-256, and metadata.
 
@@ -57,6 +58,7 @@ memory-router-review-agent \
 The agent prompts for the PIN on its terminal.
 The token enforces its PIN and touch policy.
 For keys with `CKA_ALWAYS_AUTHENTICATE`, the agent also supplies the PIN for each unwrap operation.
+
 Paste the *local agent credential* into the console's agent field.
 Do not use the router token or token PIN in this field.
 
@@ -68,13 +70,18 @@ For a hosted console, allow access to loopback under your browser's local-networ
 
 The agent accepts JSON requests up to 2,097,152 bytes by default.
 Use `--max-request-bytes` to set a positive integer limit in bytes.
-Set this limit above the router's `QUARANTINE_MAX_ITEM_BYTES`, which already
-counts the encrypted envelope, including base64 expansion and metadata.
-The agent also receives the outer `{"envelope":...}` JSON wrapper (13 extra
-bytes with compact serialization), plus any additional serialization whitespace.
-Measure the complete serialized request when setting a tight limit.
-Larger router items may require a higher
-agent limit. Choose a limit that fits the reviewer workstation's memory budget.
+
+Set the agent limit above the router's `QUARANTINE_MAX_ITEM_BYTES`.
+The router counts the bytes in the encrypted envelope.
+This count includes base64 encoding and metadata.
+
+The agent also receives the outer `{"envelope":...}` JSON wrapper.
+With compact serialization, this wrapper adds 13 bytes.
+Serialization whitespace adds more bytes.
+
+Measure the complete serialized request before you set a tight limit.
+For larger router items, increase the agent limit.
+Make sure your workstation has enough memory for this limit.
 
 For an external provider, use `--external-provider ENTRY_POINT`.
 You can use this option with or without the PKCS#11 options.
