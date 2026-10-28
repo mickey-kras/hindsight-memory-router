@@ -30,6 +30,7 @@ function verifyPublished(pkg, published, integrity) {
 async function publishPackage({
   pkg,
   digests,
+  checkOnly = false,
   read = readFileSync,
   lookup = metadata,
   publish = (args) => execFileSync("npm", args, { stdio: "inherit", timeout: 120_000 }),
@@ -51,6 +52,7 @@ async function publishPackage({
     verifyPublished(pkg, existing, integrity);
     return;
   }
+  if (checkOnly) return;
   const latest = await lookup(pkg.name, "latest");
   if (latest && !semver.valid(latest.version)) throw new Error("Invalid npm latest version");
   const tag = latest && semver.gt(latest.version, pkg.version) ? `release-${pkg.version}` : "latest";
@@ -71,6 +73,7 @@ if (require.main === module) {
   publishPackage({
     pkg: JSON.parse(readFileSync("ui/package.json", "utf8")),
     digests: readFileSync("image-digests.txt", "utf8"),
+    checkOnly: process.argv.includes("--check"),
   }).catch((error) => {
     console.error(error.message);
     process.exitCode = 1;

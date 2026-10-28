@@ -114,10 +114,21 @@ It records the tarball checksum as `ui-package=` in `image-digests.txt`.
 
 The UI version comes from `ui/package.json`.
 Increase it whenever packaged bytes change, including metadata and documentation.
+Before it publishes the immutable GitHub release, the workflow checks the UI version in npm.
+An existing version must have the same tarball bytes and provenance.
+This check does not reserve the npm version.
+The publication step checks it again.
+
 The workflow examines the immutable GitHub assets and the UI signature.
 It then publishes that exact tarball to public npm as `@mickey-kras/memory-router-ui`, with OIDC and provenance.
 It does not rebuild or repack the tarball.
 Retries must have the same npm SHA-512 integrity and provenance.
+
+If npm rejects different bytes after the GitHub release is immutable, do not replace either artifact.
+Increase both the router release version and the UI package version through a main PR.
+Update `pyproject.toml` and the UI lock file to match.
+After that PR merges, start a new release from main.
+A retry of the old run uses the same frozen bytes and cannot resolve this conflict.
 
 The integrations repository's release guide describes integration package publication.
 `latest` tracks the highest released version.
