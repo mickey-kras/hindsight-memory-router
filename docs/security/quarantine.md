@@ -36,7 +36,10 @@ The data-encryption key (DEK) wrap is pluggable behind one provider interface wi
 
 Provider envelopes keep `version: 1` and add an `encryption.provider` block (`{name, version}`).
 AES-GCM AAD binds that block together with `key_wrap`. The offline review tool selects its unwrap method from that block.
-The router never unwraps keys. Local decryption fails closed on every provider envelope, with no RSA fallback.
+The router never unwraps keys.
+The legacy PEM decrypt routine rejects provider envelopes without RSA fallback.
+The separate authenticated [review agent](../operations/quarantine-review.md#provider-wrapped-and-hardware-key-review) selects a provider by exact `key_wrap` and `encryption.provider` identity.
+It verifies the complete envelope before it returns the decrypted object to the console.
 The envelope parser rejects malformed provider blocks and names that cannot pass the provider's own validation after serialization.
 
 Sidecar behavior fails closed. The router calls the sidecar one time for each wrap, with no retry. This prevents ambiguous duplicate wraps.
