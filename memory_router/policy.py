@@ -5,6 +5,7 @@ import logging
 from collections import Counter
 from typing import Any, Literal, cast, get_args, get_origin
 
+from .audit_summary import normalized_method, normalized_route
 from .canonical import canonical_json, sha256_hex
 from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
@@ -22,6 +23,7 @@ from .repository import (
     MemoryIdentity,
     MemoryReviewState,
 )
+from .review_capture import contains_credentials, joined_response_text
 from .scan_executor import scan_facade_response, scan_recalled, scan_request
 from .security import SafetyResult
 from .timestamps import iso_now
@@ -199,18 +201,39 @@ class RouterPolicy:
             )
         }
         for field in _RECALL_RESPONSE_MAP_FIELDS:
-            present, value = await self._merged_recall_field(writer_id, source, responses, field)
+            present, value = await self._merged_recall_field(
+                writer_id, source, responses, field, request_body=body
+            )
             if present:
                 combined[field] = value
         if failed_banks:
             combined["partial"] = True
             combined["failed_banks"] = failed_banks
+        contributing_results = {id(result) for result in combined["results"]}
         if not await self._allow_recall_aggregate(
             writer_id,
             source,
             combined,
             frozenset(reviewed_positions),
             bank_id=read_banks[0] if len(read_banks) == 1 else None,
+            context={
+                "bank_ids": read_banks,
+                "request_sha256": _audit_digest(body),
+                "contributors": [
+                    {
+                        "bank_id": bank,
+                        "memory_id": result.get("id"),
+                        "content_sha256": _audit_digest(result),
+                    }
+                    for bank, response in responses
+                    for result in response.get("results", [])
+                    if id(result) in contributing_results
+                ],
+                "source_responses": [
+                    {"bank_id": bank, "response_sha256": _audit_digest(response)}
+                    for bank, response in responses
+                ],
+            },
         ):
             return {
                 "results": [],
@@ -226,6 +249,7 @@ class RouterPolicy:
         reviewed_positions: frozenset[int],
         *,
         bank_id: str | None = None,
+        context: dict[str, Any] | None = None,
     ) -> bool:
         score_certification = dict(
             Counter(recall_score_certification(result) for result in response.get("results", []))
@@ -264,6 +288,18 @@ class RouterPolicy:
                 "recall_aggregate_audit_unavailable",
                 {"writer_id": writer_id, "error_type": type(exc).__name__},
             )
+        await self.capture_blocked_content(
+            writer_id,
+            source,
+            "recalled_suspicious_aggregate",
+            bank_id,
+            {
+                "response": response,
+                "joined_text": joined_response_text(response),
+                "context": context or {},
+                "content_sha256": digest,
+            },
+        )
         return False
 
     async def _allowed_recall_results(
@@ -324,6 +360,8 @@ class RouterPolicy:
         source: str,
         responses: list[tuple[str, dict[str, Any]]],
         field: str,
+        *,
+        request_body: dict[str, Any] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         merged: dict[str, Any] = {}
         present = False
@@ -336,7 +374,18 @@ class RouterPolicy:
             if not isinstance(value, dict):
                 continue
             map_present = True
-            await self._merge_recall_map(writer_id, source, bank_id, field, value, merged)
+            await self._merge_recall_map(
+                writer_id,
+                source,
+                bank_id,
+                field,
+                value,
+                merged,
+                context={
+                    "request_sha256": _audit_digest(request_body or {}),
+                    "response_sha256": _audit_digest(response),
+                },
+            )
         return present, merged if map_present else None
 
     async def _merge_recall_map(
@@ -347,16 +396,18 @@ class RouterPolicy:
         field: str,
         value: dict[str, Any],
         merged: dict[str, Any],
+        *,
+        context: dict[str, str] | None = None,
     ) -> None:
         if field == "trace":
             if await self._allow_recall_supplemental_or_degrade(
-                writer_id, source, bank_id, field, None, value
+                writer_id, source, bank_id, field, None, value, context=context
             ):
                 merged.update(value)
             return
         for key, entry in value.items():
             if await self._allow_recall_supplemental_or_degrade(
-                writer_id, source, bank_id, field, str(key), entry
+                writer_id, source, bank_id, field, str(key), entry, context=context
             ):
                 merged[key] = entry
 
@@ -376,7 +427,11 @@ class RouterPolicy:
                 "reason": "denied_endpoint",
                 "bankId": bank_id,
                 "dedupeKey": dedupe,
-                "payload": {"action": "denied_endpoint", "method": method, "path": path},
+                "payload": {
+                    "action": "denied_endpoint",
+                    "method": normalized_method(method),
+                    "path": normalized_route(path),
+                },
             }
         )
         return {"error": "endpoint denied by memory-router policy"}
@@ -410,6 +465,8 @@ class RouterPolicy:
         field: str,
         key: str | None,
         value: Any,
+        *,
+        context: dict[str, str] | None = None,
     ) -> bool:
         evidence = {field: value} if key is None else {field: {key: value}}
         scan = await scan_recalled(evidence, writer_id=writer_id)
@@ -445,6 +502,20 @@ class RouterPolicy:
                     "error_type": type(exc).__name__,
                 },
             )
+        await self.capture_blocked_content(
+            writer_id,
+            source,
+            "recalled_suspicious_supplemental",
+            bank_id,
+            {
+                "entry": value,
+                "field": field,
+                "entry_key": key,
+                "bank_id": bank_id,
+                "context": context or {},
+                "content_sha256": digest,
+            },
+        )
         return False
 
     async def _quarantine_placeholder_or_degrade(
@@ -766,6 +837,61 @@ class RouterPolicy:
                     "status": exc.status,
                     "code": exc.code,
                 },
+            )
+
+    async def capture_blocked_content(
+        self,
+        writer_id: str,
+        source: str,
+        reason: str,
+        bank_id: str | None,
+        payload: dict[str, Any],
+    ) -> None:
+        try:
+            if reason in {
+                "recalled_suspicious_aggregate",
+                "recalled_suspicious_supplemental",
+                "openclaw_suspicious_provider_response",
+            }:
+                evidence = payload.get("response", payload.get("entry"))
+                if (
+                    reason == "recalled_suspicious_supplemental"
+                    and payload.get("entry_key") is not None
+                ):
+                    evidence = {payload["entry_key"]: evidence}
+                if contains_credentials(evidence, getattr(self.hindsight, "api_key", None)):
+                    self._log_degradation(
+                        "blocked_content_capture_unavailable",
+                        {
+                            "writer_id": writer_id,
+                            "reason": reason,
+                            "error_type": "provider_credentials",
+                        },
+                    )
+                    return
+            context = payload.get("context", {})
+            review_banks = context.get("bank_ids", [bank_id] if bank_id is not None else [])
+            await self.quarantine_security_event(
+                {
+                    "writerId": writer_id,
+                    "source": source,
+                    "kind": "blocked_content",
+                    "reviewBanks": review_banks,
+                    "reason": reason,
+                    "bankId": bank_id,
+                    "payload": {
+                        **payload,
+                        "principal_id": writer_id,
+                        "authorization_scope": {"bank_id": bank_id, "source": source},
+                        "decision_scope": "classification_only",
+                        "policy": "current_scan_required_on_every_request",
+                    },
+                }
+            )
+        except Exception as exc:
+            self._log_degradation(
+                "blocked_content_capture_unavailable",
+                {"writer_id": writer_id, "reason": reason, "error_type": type(exc).__name__},
             )
 
     async def quarantine_security_event(self, values: dict[str, Any]) -> dict[str, str]:

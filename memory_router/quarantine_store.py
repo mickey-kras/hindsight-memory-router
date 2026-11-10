@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, cast
 
+from .audit_summary import security_audit_summary
 from .canonical import canonical_json, sha256_hex
 from .db import Tx
 from .dedupe import request_family_identity, security_event_identity
@@ -227,6 +228,8 @@ class QuarantineStore:
             "source_content_sha256": input_.get("sourceContentSha256"),
             "dedupe_key": input_.get("dedupeKey"),
             "bank_id": input_.get("bankId"),
+            "audit_summary": security_audit_summary(input_),
+            "review_banks": input_.get("reviewBanks", []),
             "sha256": encrypted["sha256"],
             "encrypted": encrypted,
             "status": PENDING,

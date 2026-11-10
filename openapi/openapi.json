@@ -134,7 +134,7 @@
       "post": {
         "operationId": "approveQuarantineItem",
         "summary": "Approve the exact original quarantined object",
-        "description": "The caller decrypts the object locally. The caller submits the complete object without changes. The router examines the original SHA-256.\n\nRetain approval preserves the original bank. Principal mode must have the current memory.retain grant of the original principal. Legacy mode must have the same writer bank. Register unknown legacy writers before approval. If you cannot make sure of the origin of a pending pre-upgrade retain request, submit the request again.\n\nThe router completes the review of completed writes without another write. The router permits recalled memories only while their digest stays the same.",
+        "description": "The caller decrypts the object locally. The caller submits the complete object without changes. The router examines the original SHA-256.\n\nRetain approval preserves the original bank. Principal mode must have the current memory.retain grant of the original principal. Legacy mode must have the same writer bank. Register unknown legacy writers before approval. If you cannot make sure of the origin of a pending pre-upgrade retain request, submit the request again.\n\nThe router completes the review of completed writes without another write. The router permits recalled memories only while their digest stays the same.\n\nFor blocked_content, approval classifies only the exact finding as false positive. Runtime blocks remain in force. The decision does not allow other content, bypass scanning, replay requests, or change source memories. The router rejects approval of audit-only security events.",
         "tags": [
           "Quarantine administration"
         ],
@@ -160,7 +160,7 @@
         },
         "responses": {
           "200": {
-            "description": "Retain approval or recalled-memory allow decision.",
+            "description": "Retain approval, recalled-memory allow decision, or blocked-content false-positive classification.",
             "content": {
               "application/json": {
                 "schema": {
@@ -250,7 +250,7 @@
       "post": {
         "operationId": "rejectQuarantineItem",
         "summary": "Reject a quarantine item",
-        "description": "The operation removes an unapproved request from the current quarantine state. For a recalled memory, it invalidates the Hindsight memory. It also stores a reviewed-blocked audit state.",
+        "description": "The operation removes an unapproved request from the current quarantine state. For a recalled memory, it invalidates the Hindsight memory. It also stores a reviewed-blocked audit state. For blocked_content, rejection classifies the finding as true positive without a provider action or source-memory change. Runtime blocks remain in force.",
         "tags": [
           "Quarantine administration"
         ],
@@ -266,7 +266,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Request rejection or recalled-memory block decision.",
+            "description": "Request rejection, recalled-memory block decision, or blocked-content true-positive classification.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1832,7 +1832,8 @@
           "retain_request",
           "recall_request",
           "recalled_memory",
-          "security_event"
+          "security_event",
+          "blocked_content"
         ]
       },
       "QuarantineStatus": {
@@ -1925,6 +1926,11 @@
           "bank_id": {
             "type": "string",
             "description": "Canonical bank for the item. For known-writer retain requests, this is the writer's write_bank snapshot. For single-bank recalls and suppressed recalled memories, this is the source bank. For security events with a path bank, this is that bank.\n\nThis field is absent for unknown-writer rows, multi-bank recall fan-outs, and security events without a bank."
+          },
+          "audit_summary": {
+            "type": "string",
+            "maxLength": 256,
+            "description": "Bounded plaintext audit context for auth_failed, denied_endpoint, or openclaw_unknown_writer. Contains no request body, credentials, or query values."
           }
         }
       },
@@ -2140,6 +2146,9 @@
           },
           {
             "$ref": "#/components/schemas/RecalledMemoryDecision"
+          },
+          {
+            "$ref": "#/components/schemas/BlockedContentDecision"
           }
         ]
       },
@@ -2164,6 +2173,9 @@
           },
           {
             "$ref": "#/components/schemas/RecalledMemoryDecision"
+          },
+          {
+            "$ref": "#/components/schemas/BlockedContentDecision"
           }
         ]
       },
@@ -2577,9 +2589,37 @@
         ],
         "title": "ExchangeLogin",
         "type": "object"
+      },
+      "BlockedContentDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "reviewed",
+          "classification",
+          "quarantine_id",
+          "runtime_block_unchanged"
+        ],
+        "properties": {
+          "reviewed": {
+            "type": "boolean",
+            "const": true
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "false_positive",
+              "true_positive"
+            ]
+          },
+          "quarantine_id": {
+            "$ref": "#/components/schemas/QuarantineId"
+          },
+          "runtime_block_unchanged": {
+            "type": "boolean",
+            "const": true
+          }
+        }
       }
     }
   }
 }
-
-

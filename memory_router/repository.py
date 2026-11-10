@@ -83,6 +83,7 @@ _SUMMARY_COLUMNS = (
     "encrypted_bytes",
     "expires_at",
     "bank_id",
+    "audit_summary",
 )
 _PENDING_SCOPE_PREFIX = (
     "SELECT COUNT(*) count FROM quarantine_items "
@@ -179,7 +180,9 @@ class QueueFilter:
 
 
 QUEUE_FILTER_PARAMS = ("bank_id", "writer_id", "principal_id", "kind", "status")
-QUEUE_KINDS = frozenset({"retain_request", "recall_request", "recalled_memory", "security_event"})
+QUEUE_KINDS = frozenset(
+    {"retain_request", "recall_request", "recalled_memory", "security_event", "blocked_content"}
+)
 QUEUE_STATUSES = frozenset(
     {
         PENDING,
@@ -387,17 +390,22 @@ class QuarantineRepository:
         if bank_ids is not None:
             if not bank_ids:
                 return []
-            clause = " AND bank_id IN (" + ",".join("?" for _ in bank_ids) + ")"
+            clause = " AND banks.bank_id IN (" + ",".join("?" for _ in bank_ids) + ")"
             params.extend(bank_ids)
         statement = (
-            """SELECT bank_id,
+            """WITH banks AS (
+                SELECT quarantine_id, bank_id FROM quarantine_items WHERE bank_id IS NOT NULL
+                UNION
+                SELECT quarantine_id, bank_id FROM quarantine_review_banks
+              )
+              SELECT banks.bank_id,
               COUNT(*) total_items,
               SUM(CASE WHEN status='pending' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) pending_items,
               SUM(CASE WHEN status='postponed' AND NOT(expires_at IS NOT NULL AND expires_at<=?) THEN 1 ELSE 0 END) postponed_items,
               COALESCE(SUM(CASE WHEN status IN ('pending','postponed') AND expires_at IS NOT NULL AND expires_at<=? THEN 0 ELSE encrypted_bytes END),0) encrypted_bytes
-              FROM quarantine_items WHERE bank_id IS NOT NULL"""  # nosec B608  # noqa: S608
+              FROM banks JOIN quarantine_items USING(quarantine_id) WHERE banks.bank_id IS NOT NULL"""  # nosec B608  # noqa: S608
             + clause
-            + " GROUP BY bank_id ORDER BY bank_id ASC"
+            + " GROUP BY banks.bank_id ORDER BY banks.bank_id ASC"
         )
         async with self.db.transaction() as tx:
             rows = await tx.fetchall(statement, params)
@@ -499,9 +507,10 @@ class QuarantineRepository:
     async def insert_item(self, tx: Tx, item: dict[str, Any]) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         await tx.execute(
-            """INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at,bank_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            """INSERT INTO quarantine_items(quarantine_id,created_at,updated_at,kind,reason,writer_id,source,source_bank,source_memory_id,source_content_sha256,dedupe_key,sha256,encrypted_envelope,encrypted_bytes,status,postpone_count,requarantine_count,expires_at,bank_id,audit_summary) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             _params(item, envelope),
         )
+        await _store_review_banks(tx, item["quarantine_id"], item)
         await insert_event(
             tx,
             item["quarantine_id"],
@@ -513,7 +522,7 @@ class QuarantineRepository:
     async def _refresh(self, tx: Tx, quarantine_id: str, item: dict[str, Any], count: int) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         await tx.execute(
-            """UPDATE quarantine_items SET updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,requarantine_count=requarantine_count+1,bank_id=? WHERE quarantine_id=?""",
+            """UPDATE quarantine_items SET updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,requarantine_count=requarantine_count+1,bank_id=?,audit_summary=? WHERE quarantine_id=?""",
             (
                 item["updated_at"],
                 item["kind"],
@@ -528,9 +537,11 @@ class QuarantineRepository:
                 envelope,
                 len(envelope.encode("utf-8")),
                 item.get("bank_id"),
+                item.get("audit_summary"),
                 quarantine_id,
             ),
         )
+        await _store_review_banks(tx, quarantine_id, item)
         if item["reason"] != "auth_failed":
             await insert_event(
                 tx,
@@ -548,7 +559,7 @@ class QuarantineRepository:
     async def _reopen_expired(self, tx: Tx, quarantine_id: str, item: dict[str, Any]) -> None:
         envelope = json.dumps(item["encrypted"], separators=(",", ":"), ensure_ascii=False)
         await tx.execute(
-            """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1,expires_at=?,bank_id=? WHERE quarantine_id=?""",
+            """UPDATE quarantine_items SET created_at=?,updated_at=?,kind=?,reason=?,writer_id=?,source=?,source_bank=?,source_memory_id=?,source_content_sha256=?,dedupe_key=?,sha256=?,encrypted_envelope=?,encrypted_bytes=?,status='pending',postpone_count=0,requarantine_count=requarantine_count+1,expires_at=?,bank_id=?,audit_summary=? WHERE quarantine_id=?""",
             (
                 item["created_at"],
                 item["updated_at"],
@@ -565,9 +576,11 @@ class QuarantineRepository:
                 len(envelope.encode("utf-8")),
                 item.get("expires_at"),
                 item.get("bank_id"),
+                item.get("audit_summary"),
                 quarantine_id,
             ),
         )
+        await _store_review_banks(tx, quarantine_id, item)
         await insert_event(
             tx,
             quarantine_id,
@@ -640,7 +653,7 @@ class QuarantineRepository:
         next_bytes = int(totals.get("encrypted_bytes") or 0) - existing_bytes + item_bytes
         if next_pending > capacity.max_pending_items or next_bytes > capacity.max_encrypted_bytes:
             raise HttpError(507, "quarantine_capacity_exceeded", "quarantine capacity is exhausted")
-        await self._assert_bank_capacity(tx, item, existing_live, existing_pending, capacity, at)
+        await self._assert_bank_capacity(tx, item, capacity, at)
         if capacity.max_pending_items_per_writer <= 0:
             return
         scoped = await _scoped_pending_count(tx, item, at)
@@ -672,27 +685,40 @@ class QuarantineRepository:
     async def _assert_bank_capacity(
         tx: Tx,
         item: dict[str, Any],
-        existing_live: dict[str, Any] | None,
-        existing_pending: bool,
         capacity: Capacity,
         at: str,
     ) -> None:
-        bank_id = item.get("bank_id")
-        if capacity.max_pending_items_per_bank <= 0 or bank_id is None:
+        if capacity.max_pending_items_per_bank <= 0:
             return
-        row = await tx.fetchone(
-            _PENDING_SCOPE_PREFIX + "bank_id=?",
-            (at, bank_id),
-        )
-        bank_pending = int((row or {}).get("count") or 0)
-        if existing_pending and existing_live and existing_live.get("bank_id") == bank_id:
-            bank_pending -= 1
-        if bank_pending + 1 > capacity.max_pending_items_per_bank:
-            raise HttpError(
-                507,
-                "quarantine_bank_capacity_exceeded",
-                "bank quarantine capacity is exhausted",
+        banks = set(item.get("review_banks") or [])
+        if item.get("bank_id") is not None:
+            banks.add(item["bank_id"])
+        for bank_id in sorted(banks):
+            row = await tx.fetchone(
+                "SELECT COUNT(*) count FROM quarantine_items "
+                "WHERE status IN ('pending','postponed') "
+                "AND (expires_at IS NULL OR expires_at>?) "
+                "AND (bank_id=? OR EXISTS (SELECT 1 FROM quarantine_review_banks b "
+                "WHERE b.quarantine_id=quarantine_items.quarantine_id AND b.bank_id=?)) "
+                "AND quarantine_id<>?",
+                (at, bank_id, bank_id, item["quarantine_id"]),
             )
+            bank_pending = int((row or {}).get("count") or 0)
+            if bank_pending + 1 > capacity.max_pending_items_per_bank:
+                raise HttpError(
+                    507,
+                    "quarantine_bank_capacity_exceeded",
+                    "bank quarantine capacity is exhausted",
+                )
+
+
+async def _store_review_banks(tx: Tx, quarantine_id: str, item: dict[str, Any]) -> None:
+    await tx.execute("DELETE FROM quarantine_review_banks WHERE quarantine_id=?", (quarantine_id,))
+    for bank_id in sorted(set(item.get("review_banks") or [])):
+        await tx.execute(
+            "INSERT INTO quarantine_review_banks(quarantine_id,bank_id) VALUES(?,?)",
+            (quarantine_id, bank_id),
+        )
 
 
 def _same_evidence(
@@ -762,6 +788,7 @@ def _params(item: dict[str, Any], envelope: str) -> tuple[Any, ...]:
         item.get("requarantine_count", 0),
         item.get("expires_at"),
         item.get("bank_id"),
+        item.get("audit_summary"),
     )
 
 

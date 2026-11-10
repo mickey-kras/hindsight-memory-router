@@ -61,7 +61,11 @@ async def test_unsafe_recall_supplementals_are_suppressed_and_audited() -> None:
     assert response["entities"] == {}
     assert response["source_facts"] == {"f1": {"text": "safe fact"}}
     assert response["trace"] == {}
-    blocked = [item for item in store.items if item["reason"] == "recalled_suspicious_supplemental"]
+    blocked = [
+        item
+        for item in store.items
+        if item["reason"] == "recalled_suspicious_supplemental" and item["kind"] == "security_event"
+    ]
     assert len(blocked) == 3
     assert all("response" not in item["payload"] for item in blocked)
     assert all("content_sha256" in item["payload"] for item in blocked)

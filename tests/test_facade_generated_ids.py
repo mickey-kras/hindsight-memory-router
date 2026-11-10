@@ -25,6 +25,7 @@ def _policy(value: object) -> SimpleNamespace:
         registry=SimpleNamespace(writers={"openclaw": SimpleNamespace(write_bank="main")}),
         hindsight=SimpleNamespace(openclaw_request=AsyncMock(return_value=value)),
         limits=SimpleNamespace(consume_retain=AsyncMock()),
+        capture_blocked_content=AsyncMock(),
         quarantine_security_event=AsyncMock(),
     )
 

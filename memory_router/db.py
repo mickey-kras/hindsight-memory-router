@@ -45,7 +45,7 @@ SCHEMA = [
  source_bank TEXT, source_memory_id TEXT, source_content_sha256 TEXT, dedupe_key TEXT,
  sha256 TEXT NOT NULL, encrypted_envelope TEXT, encrypted_bytes INTEGER NOT NULL DEFAULT 0,
  status TEXT NOT NULL, postpone_count INTEGER NOT NULL DEFAULT 0,
- requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT, bank_id TEXT)""",
+ requarantine_count INTEGER NOT NULL DEFAULT 0, expires_at TEXT, bank_id TEXT, audit_summary TEXT)""",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_review ON quarantine_items(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_reason ON quarantine_items(reason, status, created_at)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_source_memory ON quarantine_items(source_bank, source_memory_id) WHERE source_bank IS NOT NULL AND source_memory_id IS NOT NULL",
@@ -57,6 +57,10 @@ SCHEMA = [
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_quarantine_items_dedupe_key ON quarantine_items(dedupe_key) WHERE dedupe_key IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_expires_at ON quarantine_items(expires_at) WHERE expires_at IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_items_bank ON quarantine_items(bank_id, status, created_at) WHERE bank_id IS NOT NULL",
+    """CREATE TABLE IF NOT EXISTS quarantine_review_banks (
+ quarantine_id TEXT NOT NULL REFERENCES quarantine_items(quarantine_id) ON DELETE CASCADE,
+ bank_id TEXT NOT NULL, PRIMARY KEY (quarantine_id, bank_id))""",
+    "CREATE INDEX IF NOT EXISTS idx_quarantine_review_banks_bank ON quarantine_review_banks(bank_id, quarantine_id)",
 ] + CAPACITY_INDEXES
 
 _BANK_ID_BACKFILL = (
@@ -395,6 +399,7 @@ async def _initialize_schema_transaction(db: Database, statements: list[str]) ->
             ("requarantine_count", "requarantine_count INTEGER NOT NULL DEFAULT 0"),
             ("expires_at", "expires_at TEXT"),
             ("bank_id", "bank_id TEXT"),
+            ("audit_summary", "audit_summary TEXT"),
         ):
             if not await tx.column_exists("quarantine_items", name):
                 await tx.execute(f"ALTER TABLE quarantine_items ADD COLUMN {definition}")

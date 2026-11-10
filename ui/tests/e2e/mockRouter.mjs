@@ -51,6 +51,7 @@ export function startMockRouter(port = 8899) {
   const reset = () => {
     items = new Map();
     for (const entry of index.items) {
+      if (entry.record.kind === "blocked_content") continue;
       items.set(entry.record.quarantine_id, {
         record: { ...entry.record },
         encrypted: JSON.parse(readFileSync(path.join(FIXTURES, entry.envelope_file), "utf8")),
@@ -122,6 +123,15 @@ export function startMockRouter(port = 8899) {
     if (url.pathname === "/__reset" && req.method === "POST") {
       reset();
       return finish(200, { reset: true });
+    }
+    if (url.pathname === "/__seed-blocked" && req.method === "POST") {
+      const entry = index.items.find((item) => item.record.kind === "blocked_content");
+      items.set(entry.record.quarantine_id, {
+        record: { ...entry.record },
+        encrypted: JSON.parse(readFileSync(path.join(FIXTURES, entry.envelope_file), "utf8")),
+        decrypted: JSON.parse(readFileSync(path.join(FIXTURES, entry.decrypted_file), "utf8")),
+      });
+      return finish(200, { seeded: "blocked_content" });
     }
     if (url.pathname === "/__seed-completed" && req.method === "POST") {
       for (const item of items.values()) {
@@ -427,7 +437,7 @@ export function startMockRouter(port = 8899) {
             message: "decrypted quarantine content differs from the original item",
           });
         }
-        if (!["retain_request", "recalled_memory"].includes(item.record.kind)) {
+        if (!["retain_request", "recalled_memory", "blocked_content"].includes(item.record.kind)) {
           return finish(409, {
             error: "invalid_review_action",
             message: "this quarantine item cannot be approved into memory",
@@ -449,6 +459,9 @@ export function startMockRouter(port = 8899) {
           quarantine_id: item.record.quarantine_id,
           decrypted: parsed.decrypted,
         });
+        if (item.record.kind === "blocked_content") {
+          return finish(200, { reviewed: true, classification: "false_positive", quarantine_id: item.record.quarantine_id, runtime_block_unchanged: true });
+        }
         finish(
           200,
           item.record.kind === "recalled_memory"
@@ -473,6 +486,9 @@ export function startMockRouter(port = 8899) {
       item.record.status = "reviewed_blocked";
       eventCount += 1;
       actions.push({ action: "reject", quarantine_id: item.record.quarantine_id });
+      if (item.record.kind === "blocked_content") {
+        return finish(200, { reviewed: true, classification: "true_positive", quarantine_id: item.record.quarantine_id, runtime_block_unchanged: true });
+      }
       return finish(
         200,
         item.record.kind === "recalled_memory"

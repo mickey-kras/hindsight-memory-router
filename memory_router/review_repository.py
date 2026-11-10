@@ -280,6 +280,42 @@ async def finish_reject_memory(
         await mark_recalled(tx, item, REVIEWED_BLOCKED, at, actor=actor)
 
 
+async def classify_blocked_content(
+    repository: QuarantineRepository,
+    snapshot: dict[str, Any],
+    classification: str,
+    at: str,
+    *,
+    actor: str,
+) -> None:
+    quarantine_id = str(snapshot["quarantine_id"])
+    expected_sha256 = str(snapshot["sha256"])
+    expected_updated_at = str(snapshot["updated_at"])
+
+    async def apply(tx: Tx, item: dict[str, object]) -> None:
+        if item["kind"] != "blocked_content":
+            raise HttpError(409, "invalid_review_action", "item is not blocked content")
+        await tx.execute("DELETE FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,))
+        await insert_event(
+            tx,
+            quarantine_id,
+            "blocked_content_reviewed",
+            at,
+            {"classification": classification, "sha256": expected_sha256},
+            actor=actor,
+        )
+
+    await _mutate_review(
+        repository,
+        quarantine_id,
+        at,
+        None,
+        apply,
+        expected_sha256=expected_sha256,
+        expected_updated_at=expected_updated_at,
+    )
+
+
 async def remove(
     repository: QuarantineRepository,
     quarantine_id: str,
