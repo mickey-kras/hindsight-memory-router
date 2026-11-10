@@ -257,10 +257,20 @@ jobs:
             }
 
             async function reviewedHead() {
-              if (pull.user?.type !== 'Bot' || !Number.isInteger(pull.user?.id) || pull.user.id <= 0 ||
-                  pull.user.id === 24433677 || pull.user?.login === 'mickey-kras') return false;
               const owners = await readFileAtHead('.github/CODEOWNERS', baseSha);
               if (owners.trim() !== '/.github/ @mickey-kras') return false;
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pull_number, per_page: 100,
+              });
+              const approve = `/approve-ci ${headSha}`;
+              const revoke = `/revoke-ci ${headSha}`;
+              const commands = comments.filter(comment => Number.isSafeInteger(comment.id) &&
+                comment.user?.login === 'mickey-kras' && comment.user?.id === 24433677 && comment.user?.type === 'User' &&
+                [approve, revoke].includes(comment.body?.trim()));
+              commands.sort((a, b) => b.id - a.id);
+              if (commands.length) return commands[0].body.trim() === approve;
+              if (pull.user?.type !== 'Bot' || !Number.isInteger(pull.user?.id) || pull.user.id <= 0 ||
+                  pull.user.id === 24433677 || pull.user?.login === 'mickey-kras') return false;
               const rules = await github.paginate('GET /repos/{owner}/{repo}/rules/branches/{branch}', {
                 owner, repo, branch: pull.base.ref, per_page: 100,
               });
