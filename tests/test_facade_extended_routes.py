@@ -1358,10 +1358,12 @@ async def test_facade_response_preserves_fractional_scores_and_counters(number: 
         ("mental-models", "exclude_knowledge_pages=true", {"items": []}),
         ("llm-requests", "call_type=decision", {}),
         ("llm-requests/stats", "call_type=embedding", {}),
+        ("llm-requests/stats", "split_by=model", {}),
+        ("llm-requests/stats", "split_by=operation", {}),
     ],
 )
 @pytest.mark.asyncio
-async def test_hindsight_1_1_filters_forward_to_resolved_bank(
+async def test_hindsight_filters_forward_to_resolved_bank(
     resource: str, query: str, response: dict[str, object]
 ) -> None:
     policy = _policy(response)
