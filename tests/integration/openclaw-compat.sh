@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 75cd299bbb72d718e75e4a806e26f1040c0374bb35f5b06891091ae485dbdcc3
+# integration-behavior-sha256: 0ddeadc160b2d383de7a2c1d256aa7f67ab96d1c810a2e46839f8c3bb20b96a1
 
 openclaw_request() {
   local method="$1"
@@ -131,7 +131,7 @@ page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer
 openclaw_request PATCH "/v1/default/banks/main/knowledge-base/nodes/node-1" '{"title":"Runbook"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests?call_type=decision" >/dev/null
-openclaw_request GET "/v1/default/banks/main/llm-requests/stats?call_type=embedding" >/dev/null
+openclaw_request GET "/v1/default/banks/main/llm-requests/stats?call_type=embedding&split_by=model" >/dev/null
 openclaw_request POST "/v1/default/banks/main/mental-models/page-1/refresh" '{"mode":"full"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/observations/scopes?limit=1&offset=5" >/dev/null
 openclaw_request DELETE "/v1/default/banks/main/observations" >/dev/null
@@ -165,7 +165,7 @@ expected = {
     ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
     ("GET", "audit-logs"): ("", None),
     ("GET", "llm-requests"): ("?call_type=decision", None),
-    ("GET", "llm-requests/stats"): ("?call_type=embedding", None),
+    ("GET", "llm-requests/stats"): ("?call_type=embedding&split_by=model", None),
     ("POST", "mental-models/page-1/refresh"): ("", {"mode": "full"}),
     ("GET", "observations/scopes"): ("?limit=1&offset=5", None),
     ("DELETE", "observations"): ("", None),
