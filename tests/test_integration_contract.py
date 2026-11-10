@@ -52,7 +52,9 @@ DIRECT_ROUTE_COVERAGE = {
     ("GET", "/ready"): "router readiness and internal Hindsight become reachable",
 }
 ADMIN_PREFIX = "pathname.startswith('/admin/')"
-ADMIN_ITEM_REGEX = "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?"
+ADMIN_ITEM_REGEX = (
+    "regex:/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile|revoke))?"
+)
 BANK_MEMORY_REGEX = "regex:/v1/default/banks/([^/]+)/memories(?:/(recall))?"
 DISPATCH_BRANCH_COVERAGE = {
     frozenset(
@@ -68,7 +70,7 @@ DISPATCH_BRANCH_COVERAGE = {
         {"method=='GET'", "action is None"}
     ): "admin queue and item expose metadata plus ciphertext only",
     frozenset(
-        {"method=='POST'", "action in {'approve','postpone','reconcile','reject'}"}
+        {"method=='POST'", "action in {'approve','postpone','reconcile','reject','revoke'}"}
     ): "ambiguous review side effects reconcile only from a verified snapshot",
     frozenset(
         {"method=='GET'", "pathname=='/version'"}
@@ -82,6 +84,7 @@ DISPATCH_BRANCH_COVERAGE = {
     ): "safe recall endpoint succeeds",
 }
 REQUIRED_WORKFLOW_CHECKS = {
+    "exact blocked-content approval permits matching calls and revocation restores the block",
     "Generated knowledge page identifiers preserve direct response scanning",
     "recall review metadata batches preserve snapshots and duplicate quarantine visibility",
     "independent maintenance phases preserve recovery and event retention",

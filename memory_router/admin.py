@@ -24,6 +24,7 @@ from .repository import (
     REVIEWED_BLOCKED,
     STAT_KEYS,
     QueueFilter,
+    insert_event,
     is_expired,
 )
 from .review_repository import (
@@ -168,8 +169,44 @@ class QuarantineAdminService:
             "reviewed": True,
             "classification": classification,
             "quarantine_id": quarantine_id,
-            "runtime_block_unchanged": True,
+            "runtime_block_unchanged": not (
+                classification == "false_positive" and bool(item.get("source_content_sha256"))
+            ),
+            "exception_active": classification == "false_positive"
+            and bool(item.get("source_content_sha256")),
+            "exception_id": quarantine_id
+            if classification == "false_positive" and item.get("source_content_sha256")
+            else None,
         }
+
+    async def revoke(self, quarantine_id: str, actor: AdminActor) -> dict[str, object]:
+        if not QUARANTINE_ID_RE.fullmatch(quarantine_id):
+            raise HttpError(400, "invalid_quarantine_id", "invalid quarantine_id")
+        async with self.repository.db.transaction() as tx:
+            item = await tx.fetchone(
+                tx.select_for_update("SELECT * FROM quarantine_items WHERE quarantine_id=?"),
+                (quarantine_id,),
+            )
+            if not item:
+                raise HttpError(404, "quarantine_not_found", "quarantine item not found")
+            if item["kind"] != "blocked_content" or item["status"] != "reviewed_allowed":
+                raise HttpError(
+                    409, "invalid_review_action", "item has no active blocked-content exception"
+                )
+            await tx.execute(
+                "DELETE FROM quarantine_items WHERE kind='blocked_content' AND source_content_sha256=?",
+                (item["source_content_sha256"],),
+            )
+            await insert_event(
+                tx,
+                quarantine_id,
+                "blocked_content_revoked",
+                iso_now(),
+                {"sha256": item["sha256"]},
+                actor=actor.label,
+            )
+        _log_admin_action("revoke", actor, quarantine_id)
+        return {"revoked": True, "exception_id": quarantine_id}
 
     async def _approve_retain(
         self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any], actor: str

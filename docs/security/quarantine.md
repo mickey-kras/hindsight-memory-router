@@ -108,12 +108,23 @@ There is no Hindsight quarantine bank.
 Blocked recall aggregates, supplemental entries, and OpenClaw requests and responses keep separate hash-only security events.
 When the content fits the configured limits, a `blocked_content` item holds the content and source context inside its encrypted payload.
 The item uses the same size, capacity, rate, retention, and cleanup limits as other held content.
+The encrypted `ordered_payload_json` preserves the original field order for review and counts toward these limits.
 A failed admission does not change the block or reveal content in the caller response or logs.
 
-Approval verifies the exact decrypted object and records a false-positive classification.
-Rejection records a true-positive classification.
-These decisions never change runtime blocks, bypass scanning, replay requests, or mutate source memories.
+Approval verifies the exact decrypted object and records a hash-only exception for a false positive.
+The exception binds the full content to the principal, operation, authorized banks, source identities, and policy.
+A later call must match this context and pass all other checks.
+Changed content, grants, or policy cannot reuse the decision.
+Aggregate scans still block new findings assembled across content.
+
+Rejection records a true-positive classification and keeps the block.
+Review actions never replay requests or mutate source memories.
 A source-memory change requires a separate explicit review.
+Older captures without a verified exception context remain classification-only.
+
+Exceptions expire with the original quarantine item and support explicit revocation and normal cleanup.
+Unavailable exception state cannot grant access.
+Oversized or credential-bearing content cannot receive an exception.
 
 Single-bank items need review access to that bank.
 Multi-bank aggregates need global review access.

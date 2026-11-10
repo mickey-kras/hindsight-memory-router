@@ -36,6 +36,7 @@ CAPACITY_INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bank ON quarantine_items(bank_id, status, expires_at) WHERE status IN ('pending','postponed') AND bank_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_bytes ON quarantine_items(encrypted_bytes, status, expires_at) WHERE encrypted_bytes<>0",
     "CREATE INDEX IF NOT EXISTS idx_quarantine_capacity_security ON quarantine_items(kind) WHERE kind='security_event'",
+    "CREATE INDEX IF NOT EXISTS idx_blocked_content_exception ON quarantine_items(source_content_sha256, expires_at) WHERE kind='blocked_content' AND status='reviewed_allowed'",
 ]
 
 SCHEMA = [

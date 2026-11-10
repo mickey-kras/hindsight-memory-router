@@ -111,9 +111,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
       try {
         if (action === "approve") {
           if (!decrypted) throw new Error("decrypt the item before approving");
-          await approveItem(tokens, item.quarantine_id, decrypted);
+          const result = await approveItem(tokens, item.quarantine_id, decrypted);
           onAction(item.kind === "blocked_content"
-            ? `classified ${item.quarantine_id} as false positive; content remains blocked`
+            ? result.exception_active === true
+              ? `approved exact exception ${item.quarantine_id}; applies to matching later calls`
+              : `classified ${item.quarantine_id} as false positive; content remains blocked`
             : `approved ${item.quarantine_id}`);
         } else if (action === "reject") {
           await rejectItem(tokens, item.quarantine_id);
@@ -160,6 +162,9 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const joinedText = decrypted && typeof decrypted.payload === "object" && decrypted.payload !== null
     && "joined_text" in decrypted.payload && typeof decrypted.payload.joined_text === "string"
     ? decrypted.payload.joined_text : null;
+  const orderedPayload = decrypted && typeof decrypted.payload === "object" && decrypted.payload !== null
+    && "ordered_payload_json" in decrypted.payload && typeof decrypted.payload.ordered_payload_json === "string"
+    ? decrypted.payload.ordered_payload_json : null;
   const canReconcile = record.status === "review_side_effect_started";
   const needsAgent = detail?.encrypted.encryption.provider !== undefined || useAgent;
 
@@ -176,7 +181,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         </p>
       )}
       {reviewOnly && (
-        <Banner kind="info" text="Classify this finding only. Content stays blocked. Neither decision changes source memories or repeats a provider operation." />
+        <Banner kind="info" text="False-positive approval can permit this exact content on later calls with the same identity, operation, banks, sources, and policy. Neither decision changes source memories or repeats a provider operation." />
       )}
 
       {loadError && <Banner kind="error" text={loadError} />}
@@ -205,6 +210,14 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
           <div className="mb-2 text-xs font-medium text-emerald-300">
             Decrypted locally - digest verified against the stored envelope
           </div>
+          {reviewOnly && orderedPayload !== null && (
+            <div className="mb-3">
+              <h3 className="mb-1 text-xs font-medium text-emerald-300">Original field order under review</h3>
+              <pre data-testid="ordered-payload" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
+                {orderedPayload}
+              </pre>
+            </div>
+          )}
           {reviewOnly && joinedText !== null && (
             <div className="mb-3">
               <h3 className="mb-1 text-xs font-medium text-zinc-300">Joined text under review</h3>
@@ -306,7 +319,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
               <span className="text-sm text-zinc-300">
                 {pendingAction === "approve"
                   ? reviewOnly
-                    ? "Mark this exact finding as false positive? The decrypted object is verified. Content stays blocked."
+                    ? "Mark this exact finding as false positive? Eligible approvals permit matching later calls until expiry or revocation. Older review items remain blocked. Other findings still block."
                     : "Approve into memory? The exact decrypted object is submitted for hash verification."
                   : pendingAction === "reject"
                     ? reviewOnly ? "Mark this finding as true positive? Content stays blocked and source memories do not change." : "Reject this item?"

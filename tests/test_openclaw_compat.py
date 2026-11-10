@@ -225,6 +225,7 @@ def make_policy(response: object = None) -> FakePolicy:
             consume_recall=AsyncMock(),
         ),
         capture_blocked_content=AsyncMock(),
+        blocked_content_allowed=AsyncMock(return_value=False),
         quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 

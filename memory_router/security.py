@@ -46,6 +46,7 @@ from .security_models import (
     _QueryWindowContext,
     _WindowScanContext,
 )
+from .security_provenance import _ReviewedKey, _ReviewedNumber
 from .security_rules import MAX_NON_ASCII_CODEPOINTS as MAX_NON_ASCII_CODEPOINTS
 from .security_rules import MAX_SCAN_FIELD_BYTES as MAX_SCAN_FIELD_BYTES
 from .security_windows import MAX_SPLIT_WINDOW_BYTES as MAX_SPLIT_WINDOW_BYTES
@@ -132,23 +133,14 @@ def scan_recall_result(result: dict[str, Any], *, reviewed_stable: bool = False)
 
 
 def scan_recall_response(
-    response: dict[str, Any], *, reviewed_result_positions: frozenset[int] = frozenset()
+    response: dict[str, Any],
+    *,
+    reviewed_result_positions: frozenset[int] = frozenset(),
+    reviewed_supplemental: list[tuple[str, str, str]] | None = None,
 ) -> SafetyResult:
-    # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
-    # metadata and supplemental fields cannot acquire approval through a path label.
-    marked = dict(response)
-    marked_results: list[dict[str, object]] = []
-    for position, result in enumerate(response.get("results", [])):
-        copied = dict(result)
-        if position in reviewed_result_positions:
-            for field_index, field_name in enumerate(("id", "text")):
-                value = copied.get(field_name)
-                if isinstance(value, str):
-                    copied[field_name] = security_provenance.ReviewedText(
-                        value, 2 * position + field_index + 1
-                    )
-        marked_results.append(copied)
-    marked["results"] = marked_results
+    marked = security_provenance.mark_reviewed_response(
+        response, reviewed_result_positions, reviewed_supplemental
+    )
     fields = (
         (
             key,
@@ -569,7 +561,14 @@ def _walk_strings(
         except StopIteration:
             stack.pop()
             continue
-        if isinstance(current, str):
+        if isinstance(current, _ReviewedNumber):
+            for spelling in _numeric_spellings(current.value):
+                yield (
+                    current_path,
+                    security_provenance.ReviewedText(spelling, current.origin),
+                    current_is_key,
+                )
+        elif isinstance(current, str):
             yield current_path, current, current_is_key
         elif (
             include_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
@@ -719,7 +718,7 @@ def _scan_direct_fields(  # NOSONAR
             result.transformations.update(transformations)
             if options.reviewed_fields or isinstance(raw, security_provenance.ReviewedText):
                 trusted: int | tuple[int, ...] = 0
-                if not is_key:
+                if not is_key or isinstance(raw, _ReviewedKey):
                     trusted = (
                         raw.trusted
                         if isinstance(raw, security_provenance.ReviewedText)
@@ -734,7 +733,7 @@ def _scan_direct_fields(  # NOSONAR
                     options.canonical_output.append((key, canonical, is_key))
             if "keycap" in transformations:
                 keycap_values.add(canonical)
-            if not is_key and security_provenance.reviewed(canonical):
+            if security_provenance.reviewed(canonical):
                 continue
             security_rules._add_unicode_findings(result, transformations)
             signature = canonical, is_key

@@ -26,6 +26,7 @@ def _policy(value: object) -> SimpleNamespace:
         hindsight=SimpleNamespace(openclaw_request=AsyncMock(return_value=value)),
         limits=SimpleNamespace(consume_retain=AsyncMock()),
         capture_blocked_content=AsyncMock(),
+        blocked_content_allowed=AsyncMock(return_value=False),
         quarantine_security_event=AsyncMock(),
     )
 

@@ -187,8 +187,8 @@ def test_cleanup_params_validation() -> None:
 
     where, params = cleanup_params("all", None, None)
     assert where == (
-        "status NOT IN ('review_in_progress','review_side_effect_started',"
-        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked')"
+        "(status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked') OR (kind='blocked_content' AND status='reviewed_allowed'))"
     )
     assert params == []
 
@@ -207,8 +207,8 @@ def test_cleanup_params_validation() -> None:
     reasons = list(get_args(QuarantineReason))[:7]
     where, params = cleanup_params("all", reasons, None)
     assert where == (
-        "status NOT IN ('review_in_progress','review_side_effect_started',"
-        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked') "
+        "(status NOT IN ('review_in_progress','review_side_effect_started',"
+        "'review_side_effect_completed','reviewed_allowed','reviewed_blocked') OR (kind='blocked_content' AND status='reviewed_allowed')) "
         "AND reason IN (?,?,?,?,?,?,?)"
     )
     assert params == reasons

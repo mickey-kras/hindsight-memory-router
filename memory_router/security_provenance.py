@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
+from typing import Any
 
 from . import security_rules, security_windows
 from .security_models import SafetyFinding
@@ -223,3 +225,62 @@ def _hit_wholly_reviewed(hit: str, variants: Iterable[ReviewedText]) -> bool:
             if not reviewed(slice_text(variant, match.start(), match.end())):
                 return False
     return found
+
+
+def mark_reviewed_response(
+    response: dict[str, Any],
+    reviewed_result_positions: frozenset[int],
+    reviewed_supplemental: list[tuple[str, str, str]] | None,
+) -> dict[str, Any]:
+    # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
+    # metadata and supplemental fields cannot acquire approval through a path label.
+    marked = dict(response)
+    marked_results: list[dict[str, object]] = []
+    for position, result in enumerate(response.get("results", [])):
+        copied = dict(result)
+        if position in reviewed_result_positions:
+            for field_index, field_name in enumerate(("id", "text")):
+                value = copied.get(field_name)
+                if isinstance(value, str):
+                    copied[field_name] = ReviewedText(value, 2 * position + field_index + 1)
+        marked_results.append(copied)
+    marked["results"] = marked_results
+    origins: dict[str, int] = {}
+    for field, key, group in reviewed_supplemental or []:
+        if field == "results" or not isinstance(marked.get(field), dict):
+            continue
+        origin = origins.setdefault(group, 2 * len(marked_results) + len(origins) + 1)
+        marked[field] = {
+            _ReviewedKey(entry_key, origin) if entry_key == key else entry_key: _reviewed_value(
+                entry, origin
+            )
+            if entry_key == key
+            else entry
+            for entry_key, entry in marked[field].items()
+        }
+    return marked
+
+
+class _ReviewedKey(ReviewedText):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewedNumber:
+    value: int | float
+    origin: int
+
+
+def _reviewed_value(value: Any, origin: int) -> Any:
+    if isinstance(value, str):
+        return ReviewedText(value, origin)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _ReviewedNumber(value, origin)
+    if isinstance(value, list):
+        return [_reviewed_value(entry, origin) for entry in value]
+    if isinstance(value, dict):
+        return {
+            _ReviewedKey(key, origin): _reviewed_value(entry, origin)
+            for key, entry in value.items()
+        }
+    return value

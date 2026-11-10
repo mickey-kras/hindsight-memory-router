@@ -149,6 +149,8 @@ CASES.append(
 
 items = []
 for case in CASES:
+    if case["kind"] == "blocked_content":
+        case["payload"]["ordered_payload_json"] = json.dumps(case["payload"], separators=(",", ":"))
     decrypted = {
         "quarantine_id": case["quarantine_id"],
         "created_at": case["created_at"],

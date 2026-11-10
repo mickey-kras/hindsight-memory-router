@@ -48,7 +48,8 @@ def test_postgres_upgrade_helper_queries_bind_with_installed_driver() -> None:
     assert converted
     catalog = next(query for query in converted if b"c.relname LIKE" in query.query)
     assert b"c.relname LIKE $1" in catalog.query
-    assert catalog.params == [b"idx_quarantine_capacity_%"]
+    assert b"OR c.relname=$2" in catalog.query
+    assert catalog.params == [b"idx_quarantine_capacity_%", b"idx_blocked_content_exception"]
 
 
 class Cursor:
@@ -198,7 +199,12 @@ async def test_replica_migrations_do_not_hold_admission_lock(
                 assert not server.connections[1].owns_lock
         server.release_build.set()
         await asyncio.wait_for(asyncio.gather(first, second), 1)
-        assert len(server.indices) == 7 and all(server.indices.values())
+        assert len(server.indices) == 8 and all(server.indices.values())
+        assert server.indices["idx_blocked_content_exception"] is True
+        assert any(
+            sql.startswith("CREATE INDEX CONCURRENTLY idx_blocked_content_exception ")
+            for sql in server.connections[0].calls
+        )
         assert all(connection.closed for connection in server.connections)
         assert not any("CREATE INDEX" in sql for sql in server.connections[1].calls)
     finally:
@@ -259,7 +265,7 @@ async def test_waiting_replica_releases_snapshot_before_partial_index_validation
         assert not second.done()
         server.release_build.set()
         await asyncio.wait_for(asyncio.gather(first, second), 1)
-        assert all(server.indices.values()) and len(server.indices) == 7
+        assert all(server.indices.values()) and len(server.indices) == 8
         assert all(connection.closed for connection in server.connections)
     finally:
         server.release_build.set()
@@ -281,7 +287,7 @@ async def test_invalid_capacity_index_is_repaired_after_failed_build(
     server.failure = None
     await db_module.initialize_schema(server.database())
     assert any(sql.startswith("DROP INDEX CONCURRENTLY") for sql in server.connections[1].calls)
-    assert len(server.indices) == 7 and all(server.indices.values())
+    assert len(server.indices) == 8 and all(server.indices.values())
 
 
 @pytest.mark.asyncio
@@ -306,7 +312,7 @@ async def test_cancelled_build_drains_close_and_releases_session_lock(
     assert connection.closed and not server.schema_lock.locked()
     server.release_build.set()
     await db_module.initialize_schema(server.database())
-    assert len(server.indices) == 7 and all(server.indices.values())
+    assert len(server.indices) == 8 and all(server.indices.values())
 
 
 @pytest.mark.asyncio
