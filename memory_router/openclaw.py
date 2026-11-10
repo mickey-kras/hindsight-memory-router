@@ -214,9 +214,13 @@ class OpenClawFacade:
         if route is not None:
             context.update(_operation_context(route))
         elif request_context is not None:
-            for key in ("method", "operation"):
-                if key in request_context:
-                    context[key] = request_context[key]
+            context.update(
+                {
+                    key: request_context[key]
+                    for key in ("method", "operation")
+                    if key in request_context
+                }
+            )
         response_bank_ids = [bank_id] if bank_id else []
         context.update(
             {

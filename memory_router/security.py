@@ -562,12 +562,14 @@ def _walk_strings(
             stack.pop()
             continue
         if isinstance(current, _ReviewedNumber):
-            for spelling in _numeric_spellings(current.value):
-                yield (
+            yield from (
+                (
                     current_path,
                     security_provenance.ReviewedText(spelling, current.origin),
                     current_is_key,
                 )
+                for spelling in _numeric_spellings(current.value)
+            )
         elif isinstance(current, str):
             yield current_path, current, current_is_key
         elif (
