@@ -239,10 +239,7 @@ def mark_reviewed_response(
     for position, result in enumerate(response.get("results", [])):
         copied = dict(result)
         if position in reviewed_result_positions:
-            for field_index, field_name in enumerate(("id", "text")):
-                value = copied.get(field_name)
-                if isinstance(value, str):
-                    copied[field_name] = ReviewedText(value, 2 * position + field_index + 1)
+            _mark_reviewed_result(copied, position)
         marked_results.append(copied)
     marked["results"] = marked_results
     origins: dict[str, int] = {}
@@ -259,6 +256,13 @@ def mark_reviewed_response(
             for entry_key, entry in marked[field].items()
         }
     return marked
+
+
+def _mark_reviewed_result(result: dict[str, object], position: int) -> None:
+    for field_index, field_name in enumerate(("id", "text")):
+        value = result.get(field_name)
+        if isinstance(value, str):
+            result[field_name] = ReviewedText(value, 2 * position + field_index + 1)
 
 
 class _ReviewedKey(ReviewedText):
