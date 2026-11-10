@@ -17,7 +17,7 @@ ACK = {
     "mental_model_id": "mm-b25d3db07c8e4505a86235b94b2dfc33",
     "operation_id": "87533620-4755-4092-b203-b7e5d41112cc",
 }
-ROUTE = facade_route("POST", "knowledge-base/pages")
+ROUTE = facade_route("POST", "pages")
 
 
 def _policy(value: object) -> SimpleNamespace:

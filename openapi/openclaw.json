@@ -2466,7 +2466,7 @@
         "description": "Principal mode must have memory.recall for the target bank because this response can contain memory content."
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/folders": {
+    "/v1/default/banks/{bank_id}/pages/folders": {
       "post": {
         "summary": "Create a knowledge base folder",
         "operationId": "hindsightCreateKnowledgeBaseFolders",
@@ -2552,7 +2552,7 @@
         }
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/nodes/{node_id}": {
+    "/v1/default/banks/{bank_id}/pages/nodes/{node_id}": {
       "patch": {
         "summary": "Update one knowledge base node",
         "operationId": "hindsightUpdateKnowledgeBaseNodesNodeId",
@@ -2714,7 +2714,7 @@
         }
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/pages": {
+    "/v1/default/banks/{bank_id}/pages": {
       "post": {
         "summary": "Create a knowledge base page",
         "operationId": "hindsightCreateKnowledgeBasePages",
@@ -2800,7 +2800,7 @@
         }
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/pages/{page_id}": {
+    "/v1/default/banks/{bank_id}/pages/{page_id}": {
       "get": {
         "summary": "Get one knowledge base page",
         "operationId": "hindsightGetKnowledgeBasePagesPageId",
@@ -2875,7 +2875,7 @@
         }
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/search": {
+    "/v1/default/banks/{bank_id}/pages/search": {
       "get": {
         "summary": "Search the resolved bank knowledge base",
         "operationId": "hindsightGetKnowledgeBaseSearch",
@@ -3012,7 +3012,7 @@
         }
       }
     },
-    "/v1/default/banks/{bank_id}/knowledge-base/tree": {
+    "/v1/default/banks/{bank_id}/pages/tree": {
       "get": {
         "summary": "Get the knowledge base tree for the resolved bank",
         "operationId": "hindsightGetKnowledgeBaseTree",
@@ -4322,13 +4322,24 @@
           },
           {
             "in": "query",
+            "name": "exclude_pages",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false
+            },
+            "description": "List standalone mental models without pages."
+          },
+          {
+            "in": "query",
             "name": "exclude_knowledge_pages",
             "required": false,
             "schema": {
               "type": "boolean",
               "default": false
             },
-            "description": "List standalone mental models without knowledge pages."
+            "description": "Deprecated alias for exclude_pages.",
+            "deprecated": true
           }
         ],
         "responses": {

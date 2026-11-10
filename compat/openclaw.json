@@ -9,12 +9,12 @@
     "tools": "hindsight-integrations/openclaw/src/tools.ts"
   },
   "source_blob_shas": {
-    "plugin": "64e3d881d4f7e0eca69ad683092d46fdd5a9964b",
+    "plugin": "893fe35bf89714df1d07f1846677eabbe96fb506",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
-    "client": "efccddb92726a263312cd9ee71ad45bdfb55eb07",
-    "facade_spec": "6388f9f0d4473bcf7f2f47229e44b5ed8ab5c482",
+    "client": "d8958c516e366d5c05078ac578b7579223ecc6dc",
+    "facade_spec": "8a25ffe7e105a7c34372a9ee32c64a2ee33033c3",
     "memory_provider": "d7037deb856c8ad5d724afec6cc0a09c56b7f672",
-    "tools": "2783cb6e9fd66178a3663536c2b261a68c7c8a34"
+    "tools": "7bd829ae80db60a4ec211d1e2a1001bf5c9f3e30"
   },
   "plugin_client_methods": [
     "createBank",
@@ -29,6 +29,6 @@
     "searchKnowledgeBase",
     "updateKnowledgeNode"
   ],
-  "upstream_version": "1.2.0",
-  "upstream_commit": "34a138684a899b6ec34175f7a2b633860466d289"
+  "upstream_version": "1.2.1",
+  "upstream_commit": "0eb02d8c418eac6b489bc63883c993b2257dfac4"
 }

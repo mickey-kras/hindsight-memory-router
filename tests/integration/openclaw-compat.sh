@@ -131,12 +131,12 @@ ordinary_dry_run="$(python3 -c 'import json; print(json.dumps({"items": [{"conte
 openclaw_request POST "/v1/default/banks/main/memories/dry-run-extract" "$ordinary_dry_run" >/dev/null
 openclaw_request GET "/v1/default/banks/main/directives" >/dev/null
 openclaw_request POST "/v1/default/banks/main/operations/op-1/retry" >/dev/null
-openclaw_request GET "/v1/default/banks/main/knowledge-base/tree" >/dev/null
-folder_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/folders" -d '{"name":"Runbooks"}')"
+openclaw_request GET "/v1/default/banks/main/pages/tree" >/dev/null
+folder_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/pages/folders" -d '{"name":"Runbooks"}')"
 [[ "$folder_status" == "201" ]] || fail_check "knowledge-base folder create returned ${folder_status}"
-page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/knowledge-base/pages" -d '{"title":"Runbook","content":"safe content"}')"
+page_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X POST "${router_url}/v1/default/banks/main/pages" -d '{"title":"Runbook","content":"safe content"}')"
 [[ "$page_status" == "201" ]] || fail_check "knowledge-base page create returned ${page_status}"
-openclaw_request PATCH "/v1/default/banks/main/knowledge-base/nodes/node-1" '{"title":"Runbook"}' >/dev/null
+openclaw_request PATCH "/v1/default/banks/main/pages/nodes/node-1" '{"title":"Runbook"}' >/dev/null
 openclaw_request GET "/v1/default/banks/main/audit-logs" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests?call_type=decision" >/dev/null
 openclaw_request GET "/v1/default/banks/main/llm-requests/stats?call_type=embedding&split_by=model" >/dev/null
@@ -164,13 +164,13 @@ expected = {
     ("POST", "consolidate"): ("", {}),
     ("GET", "directives"): ("", None),
     ("POST", "operations/op-1/retry"): ("", {}),
-    ("GET", "knowledge-base/tree"): ("", None),
-    ("POST", "knowledge-base/folders"): ("", {"name": "Runbooks"}),
-    ("POST", "knowledge-base/pages"): (
+    ("GET", "pages/tree"): ("", None),
+    ("POST", "pages/folders"): ("", {"name": "Runbooks"}),
+    ("POST", "pages"): (
         "",
         {"title": "Runbook", "content": "safe content"},
     ),
-    ("PATCH", "knowledge-base/nodes/node-1"): ("", {"title": "Runbook"}),
+    ("PATCH", "pages/nodes/node-1"): ("", {"title": "Runbook"}),
     ("GET", "audit-logs"): ("", None),
     ("GET", "llm-requests"): ("?call_type=decision", None),
     ("GET", "llm-requests/stats"): ("?call_type=embedding&split_by=model", None),
@@ -191,9 +191,9 @@ pass_check
 begin_check "Compound tag filters preserve values on all supported routes"
 filter_events_start="$(wc -l < "$state_file")"
 compound_filter='[{"or":[{"tags":["\u0074eam"]}]}]'
-for filter_route in entities entities/graph entities/entity-1 knowledge-base/tree knowledge-base/search; do
+for filter_route in entities entities/graph entities/entity-1 pages/tree pages/search; do
   filter_args=(--get)
-  if [[ "$filter_route" == "knowledge-base/search" ]]; then
+  if [[ "$filter_route" == "pages/search" ]]; then
     filter_args+=(--data-urlencode "q=preferences")
   fi
   curl -fsS -H "Authorization: Bearer ${router_token}" "${filter_args[@]}" --data-urlencode "tags=first" --data-urlencode "tags=second" --data-urlencode "tags_match=all_strict" "${router_url}/v1/default/banks/main/${filter_route}" >/dev/null
@@ -206,12 +206,12 @@ from urllib.parse import parse_qsl
 
 events = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8")][int(sys.argv[2]):]
 facade = [event for event in events if event.get("kind") == "facade"]
-routes = {"entities", "entities/graph", "entities/entity-1", "knowledge-base/tree", "knowledge-base/search"}
+routes = {"entities", "entities/graph", "entities/entity-1", "pages/tree", "pages/search"}
 assert len(facade) == 2 * len(routes)
 assert {event["path"] for event in facade} == routes
 for route in routes:
     queries = [parse_qsl(event["query"].removeprefix("?")) for event in facade if event["path"] == route]
-    prefix = [("q", "preferences")] if route == "knowledge-base/search" else []
+    prefix = [("q", "preferences")] if route == "pages/search" else []
     assert queries == [
         prefix + [("tags", "first"), ("tags", "second"), ("tags_match", "all_strict")],
         prefix + [("tag_groups", sys.argv[3])],
@@ -228,7 +228,7 @@ escaped = "".join(f"\\u{ord(character):04x}" for character in text)
 print('[{"or":[{"tags":["' + escaped + '"]}]}]')
 PYFILTER
 )"
-compound_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" --get --data-urlencode "tag_groups=${escaped_filter}" --data-urlencode "tags=instructions" "${router_url}/v1/default/banks/main/knowledge-base/tree")"
+compound_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" --get --data-urlencode "tag_groups=${escaped_filter}" --data-urlencode "tags=instructions" "${router_url}/v1/default/banks/main/pages/tree")"
 [[ "$compound_status" == "422" ]] || fail_check "escaped compound tag injection was not blocked: ${compound_status}"
 surrogate_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" --get --data-urlencode 'tag_groups=[{"tags":["\ud800"]}]' "${router_url}/v1/default/banks/main/entities")"
 [[ "$surrogate_status" == "422" ]] || fail_check "unpaired JSON surrogate was not rejected cleanly: ${surrogate_status}"

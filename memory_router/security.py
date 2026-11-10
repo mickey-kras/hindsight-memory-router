@@ -174,7 +174,7 @@ def scan_facade_result(
     deadline = time.monotonic() + MAX_FACADE_SCAN_SECONDS
     combined = SafetyResult()
     scanned = (
-        facade_response_scan_input(facade_route("POST", "knowledge-base/pages"), result)
+        facade_response_scan_input(facade_route("POST", "pages"), result)
         if separate_page_ids
         else result
     )

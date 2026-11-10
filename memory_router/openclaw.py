@@ -180,9 +180,7 @@ class OpenClawFacade:
             value,
             writer_id=writer_id,
             separate_page_ids=bool(
-                route is not None
-                and route.method == "POST"
-                and route.template == "knowledge-base/pages"
+                route is not None and route.method == "POST" and route.template == "pages"
             ),
         )
         if _only_scan_limit_findings(response_scan):

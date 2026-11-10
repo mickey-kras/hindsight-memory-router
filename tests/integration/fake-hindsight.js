@@ -368,7 +368,7 @@ createServer(async (req, res) => {
         query: url.search,
         body,
       });
-      if (method === "POST" && facade[2] === "knowledge-base/pages") {
+      if (method === "POST" && facade[2] === "pages") {
         return send(res, 201, {
           page_id: "kp-ce44e615a5f84888a27339d1b4349929",
           mental_model_id: "mm-b25d3db07c8e4505a86235b94b2dfc33",
@@ -396,7 +396,7 @@ createServer(async (req, res) => {
           return send(res, 200, operation);
         }
       }
-      const status = /^knowledge-base\/(folders|pages)$/.test(facade[2]) ? 201 : 200;
+      const status = /^pages(?:\/folders)?$/.test(facade[2]) ? 201 : 200;
       return send(res, status, { ok: true });
     }
 
