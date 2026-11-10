@@ -32,6 +32,8 @@ services:
       # Integration harness exercises the full facade matrix for one writer in
       # a single rate-limit window; production keeps the default of 30.
       HINDSIGHT_RETAIN_RATE_LIMIT_WRITER_MAX: "64"
+      # Blocked requests now store both audit events and encrypted review records.
+      QUARANTINE_RATE_LIMIT_MAX: "64"
       QUARANTINE_PUBLIC_KEY: ${QUARANTINE_PUBLIC_KEY:?missing QUARANTINE_PUBLIC_KEY}
       QUARANTINE_DATABASE_URL: sqlite:/state/quarantine.db
     ports:
