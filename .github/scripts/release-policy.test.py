@@ -55,7 +55,7 @@ if ROUTER:
 
 
 def policy(overrides=None, paths=None, reviews=None, rules=None, pull=None, base_overrides=None, statuses=None, current_pull=None,
-           sources=None, settings_review=""):
+           sources=None, settings_review="", comments=None):
     files = {
         str(path.relative_to(ROOT)): path.read_text()
         for path in (ROOT / ".github").rglob("*")
@@ -76,10 +76,11 @@ const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 const failures = [];
 let pullReads = 0;
 const github = { paginate: async method => method === github.rest.pulls.listReviews ? input.reviews :
+    method === github.rest.issues.listComments ? input.comments :
     typeof method === 'string' ? input.rules :
     input.paths.map(filename => ({filename, status: input.statuses[filename] || 'modified'})),
   request: async () => ({data: input.rules}),
-  rest: { pulls: {listFiles() {}, listReviews() {}, get: async () => ({data: pullReads++ ? input.current_pull || input.pull : input.pull})},
+  rest: { issues: {listComments() {}}, pulls: {listFiles() {}, listReviews() {}, get: async () => ({data: pullReads++ ? input.current_pull || input.pull : input.pull})},
     repos: {getRepoRuleset: async ({ruleset_id}) => ({data: input.sources[String(ruleset_id)]}),
       getContent: async ({path, ref}) => ({data: {
       type: 'file', content: Buffer.from((ref === input.pull.base.sha ? input.base_files : input.files)[path]).toString('base64'), encoding: 'base64'
@@ -95,7 +96,7 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
             env={**os.environ, "POLICY_TOOLS_DIRECTORY": os.environ.get("POLICY_TOOLS_DIRECTORY", str(ROOT / ".github/scripts")),
                  "CI_POLICY_SETTINGS_REVIEW": settings_review},
             input=json.dumps({"script": script, "files": files, "base_files": base_files, "paths": paths if paths is not None else PATHS,
-                              "reviews": reviews or [], "rules": rules or [], "statuses": statuses or {}, "current_pull": current_pull,
+                              "comments": comments or [], "reviews": reviews or [], "rules": rules or [], "statuses": statuses or {}, "current_pull": current_pull,
                               "sources": sources if sources is not None else {"42": {
                                   "id": 42, "source_type": "Repository", "source": "test/test", "enforcement": "active",
                                   "target": "branch", "updated_at": "2026-10-23T00:00:00Z", "bypass_actors": [], "rules": rules or []}},
@@ -1469,6 +1470,20 @@ class AdmissionPolicyTests(unittest.TestCase):
     def settings_review(self, **values):
         return json.dumps({'repository': 'test/test', 'ruleset_id': 42, 'updated_at': '2026-10-23T00:00:00Z',
                            'bypass_actors': [], **values})
+
+    def test_owner_comment_admission(self):
+        owner = {'login': 'mickey-kras', 'type': 'User', 'id': 24433677}
+        approve = {'id': 1, 'user': owner, 'body': '/approve-ci ' + 'a' * 40}
+        self.assertEqual(self.admission(user=owner, comments=[approve]), [])
+        for change in [{'body': '/approve-ci ' + 'b' * 40}, {'body': '/approve-ci aaaaaaa'},
+                       {'body': 'Please ' + approve['body']}, {'user': {**owner, 'id': 1}},
+                       {'user': {**owner, 'login': 'other'}}, {'user': {**owner, 'type': 'Bot'}}]:
+            self.assertTrue(self.admission(user=owner, comments=[{**approve, **change}]))
+        revoke = {**approve, 'id': 2, 'body': '/revoke-ci ' + 'a' * 40}
+        self.assertTrue(self.admission([self.approval()], self.rules(), comments=[revoke, approve]))
+        self.assertEqual(self.admission(user=owner, comments=[revoke, approve, {**approve, 'id': 3}]), [])
+        self.assertTrue(self.admission(user=owner, comments=[approve],
+                                      base_overrides={'.github/CODEOWNERS': '/.github/ @other'}))
 
     def test_review_source_bypasses_and_redaction_fail_closed(self):
         args = ([self.approval()], self.rules())

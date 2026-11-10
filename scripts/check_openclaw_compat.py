@@ -290,7 +290,7 @@ def main() -> int:
         )
 
     expected_plugin = set(inventory["plugin_client_methods"])
-    actual_plugin = _methods(plugin, ("client", "c"))
+    actual_plugin = _methods(plugin + "\n" + sources["tools"], ("client", "c"))
     if actual_plugin != expected_plugin:
         raise SystemExit(
             f"CompatibilityError: OpenClaw Hindsight client surface changed: expected {sorted(expected_plugin)}, "
