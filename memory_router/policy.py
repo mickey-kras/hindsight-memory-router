@@ -949,7 +949,8 @@ class RouterPolicy:
             return None
         if contains_credentials(payload, getattr(self.hindsight, "api_key", None)):
             return None
-        if payload.get("context", {}).get("credential_bearing"):
+        context = payload.get("context", {})
+        if context.get("credential_bearing"):
             return None
         if len(canonical_json(payload).encode()) > getattr(
             getattr(self.store, "limits", None), "max_item_bytes", 1_048_576
@@ -1026,9 +1027,10 @@ class RouterPolicy:
                     "blocked_content_capture_unavailable", {"error_type": "scan_limit"}
                 )
                 return
+            context = payload.get("context", {})
             if contains_credentials(
                 payload, getattr(self.hindsight, "api_key", None)
-            ) or payload.get("context", {}).get("credential_bearing"):
+            ) or context.get("credential_bearing"):
                 self._log_degradation(
                     "blocked_content_capture_unavailable", {"error_type": "provider_credentials"}
                 )
@@ -1059,7 +1061,6 @@ class RouterPolicy:
                         },
                     )
                     return
-            context = payload.get("context", {})
             review_banks = context.get("bank_ids", [bank_id] if bank_id is not None else [])
             await self.quarantine_security_event(
                 {

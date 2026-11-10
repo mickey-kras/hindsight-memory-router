@@ -27,7 +27,8 @@ Approval must have the complete decrypted object with no changes. Modified conte
 The console shows the exact decrypted payload, its source context, and aggregate joined text.
 The joined text is not a source memory.
 Inspect **Original field order under review** before approval.
-This raw JSON preserves the sequence used by the scanner; the formatted payload can sort object keys.
+This raw JSON preserves the sequence used by the scanner.
+The formatted payload can sort object keys.
 
 Use **Mark false positive** to approve an exact exception after decryption.
 A later call can use the exception only when its complete content and security context match.
@@ -40,11 +41,16 @@ Changes to source identities, order, metadata, grants, or policy prevent reuse.
 All calls still pass authorization, bounds, rate limits, and safety scans.
 Separate approvals cannot approve a new unsafe join.
 
-The approval response reports `exception_active` and an `exception_id`.
-Older items without a verified exception context remain classification-only; their content stays blocked.
+Check `exception_active` and `exception_id` in the approval response.
+
+For older items, approval only classifies the finding.
+These items lack the context for an exception.
+Their content stays blocked.
+
 Keep the exception ID to revoke approval with `POST /admin/quarantine/items/{quarantine_id}/revoke`.
 Revocation requires review access and does not call Hindsight.
-Exceptions expire with the original item and can be removed through normal quarantine cleanup.
+Exceptions expire with the original item.
+Use normal quarantine cleanup to remove them.
 
 `security_event` items remain audit-only.
 The console shows a bounded summary for authentication failures, denied endpoints, and unknown OpenClaw writers without decryption.
