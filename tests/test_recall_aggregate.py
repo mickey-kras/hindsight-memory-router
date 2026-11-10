@@ -261,7 +261,8 @@ async def test_aggregate_field_budget_suppresses_combination_of_safe_results() -
     results = [{"id": f"m{index}", "text": "ordinary"} for index in range(33)]
     router, _, store, _ = policy(FakeHindsight(results))
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 2
+    assert len(store.items) == 1
+    assert store.items[0]["kind"] == "security_event"
     assert {"reason": "span_limit"} in store.items[0]["payload"]["findings"]
 
 
@@ -386,7 +387,7 @@ async def test_exact_integer_float_equivalence_cannot_bypass_aggregate_scan(
     }
     router, _, store, _ = policy(FakeHindsight(response=response))
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 2
+    assert len(store.items) == (1 if isinstance(number, int) else 2)
     assert store.items[0]["reason"] == "recalled_suspicious_aggregate"
     assert "20261234567890124" not in json.dumps(store.items[0])
 

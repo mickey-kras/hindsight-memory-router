@@ -41,11 +41,11 @@ describe("completed checkpoint controls", () => {
     expect(html).not.toContain('data-testid="reconcile-');
   });
 
-  it("classifies blocked content without offering a memory action", () => {
+  it("explains exact later-call approval without offering a memory action", () => {
     const html = render("blocked_content", { status: "pending" });
     expect(html).toContain("Mark false positive");
     expect(html).toContain("Mark true positive");
-    expect(html).toContain("Content stays blocked");
+    expect(html).toContain("this exact content on later calls");
     expect(html).toMatch(/disabled=""[^>]*data-testid="approve-open"/);
     expect(html).not.toContain("Approve into memory");
   });

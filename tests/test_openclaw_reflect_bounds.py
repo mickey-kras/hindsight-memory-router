@@ -38,6 +38,7 @@ async def test_reflect_enforces_recall_bounds_before_quota_or_hindsight(
         hindsight=hindsight,
         limits=limits,
         capture_blocked_content=AsyncMock(),
+        blocked_content_allowed=AsyncMock(return_value=False),
         quarantine_security_event=AsyncMock(),
     )
 

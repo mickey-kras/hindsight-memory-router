@@ -6,6 +6,12 @@ from collections import Counter
 from typing import Any, Literal, cast, get_args, get_origin
 
 from .audit_summary import normalized_method, normalized_route
+from .blocked_exceptions import (
+    AUTHORIZATION_CONTEXT,
+    ordered_content_digest,
+    ordered_content_json,
+    scanner_policy_digest,
+)
 from .canonical import canonical_json, sha256_hex
 from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
@@ -98,7 +104,7 @@ def _recalled_audit_digest(result: dict[str, Any]) -> str:
 
 def _audit_digest(value: Any) -> str:
     try:
-        return sha256_hex(canonical_json(value))
+        return ordered_content_digest(value)
     except ValueError:
         return sha256_hex(repr(value))
 
@@ -194,15 +200,33 @@ class RouterPolicy:
             )
             return {"results": []}
         responses, failed_banks = await self._recall_from_banks(writer_id, read_banks, body)
+        context = {
+            "bank_ids": read_banks,
+            "request_sha256": _audit_digest(body),
+            "source_responses": [
+                {"bank_id": bank, "response_sha256": _audit_digest(response)}
+                for bank, response in responses
+            ],
+            "credential_bearing": any(
+                contains_credentials(response, getattr(self.hindsight, "api_key", None))
+                for _, response in responses
+            ),
+        }
         reviewed_positions: set[int] = set()
         combined: dict[str, Any] = {
             "results": await self._allowed_recall_results(
                 writer_id, source, responses, reviewed_positions=reviewed_positions
             )
         }
+        reviewed_supplemental: list[tuple[str, str, str]] = []
         for field in _RECALL_RESPONSE_MAP_FIELDS:
             present, value = await self._merged_recall_field(
-                writer_id, source, responses, field, request_body=body
+                writer_id,
+                source,
+                responses,
+                field,
+                context=context,
+                reviewed_supplemental=reviewed_supplemental,
             )
             if present:
                 combined[field] = value
@@ -215,10 +239,10 @@ class RouterPolicy:
             source,
             combined,
             frozenset(reviewed_positions),
+            reviewed_supplemental=reviewed_supplemental,
             bank_id=read_banks[0] if len(read_banks) == 1 else None,
             context={
-                "bank_ids": read_banks,
-                "request_sha256": _audit_digest(body),
+                **context,
                 "contributors": [
                     {
                         "bank_id": bank,
@@ -228,10 +252,6 @@ class RouterPolicy:
                     for bank, response in responses
                     for result in response.get("results", [])
                     if id(result) in contributing_results
-                ],
-                "source_responses": [
-                    {"bank_id": bank, "response_sha256": _audit_digest(response)}
-                    for bank, response in responses
                 ],
             },
         ):
@@ -250,16 +270,31 @@ class RouterPolicy:
         *,
         bank_id: str | None = None,
         context: dict[str, Any] | None = None,
+        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
     ) -> bool:
         score_certification = dict(
             Counter(recall_score_certification(result) for result in response.get("results", []))
         )
         scan = await scan_recalled(
-            response, writer_id=writer_id, reviewed_result_positions=reviewed_positions
+            response,
+            writer_id=writer_id,
+            reviewed_result_positions=reviewed_positions,
+            reviewed_supplemental=reviewed_supplemental,
         )
         if scan.safe:
             return True
         digest = _audit_digest(response)
+        payload = {
+            "response": response,
+            "joined_text": joined_response_text(response),
+            "context": context or {},
+            "content_sha256": digest,
+            "score_certification": score_certification,
+        }
+        if await self.blocked_content_allowed(
+            writer_id, source, "recalled_suspicious_aggregate", bank_id, payload, scan
+        ):
+            return True
         try:
             await self.quarantine_security_event(
                 {
@@ -293,12 +328,8 @@ class RouterPolicy:
             source,
             "recalled_suspicious_aggregate",
             bank_id,
-            {
-                "response": response,
-                "joined_text": joined_response_text(response),
-                "context": context or {},
-                "content_sha256": digest,
-            },
+            payload,
+            scan,
         )
         return False
 
@@ -361,12 +392,13 @@ class RouterPolicy:
         responses: list[tuple[str, dict[str, Any]]],
         field: str,
         *,
-        request_body: dict[str, Any] | None = None,
+        context: dict[str, Any],
+        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         merged: dict[str, Any] = {}
         present = False
         map_present = False
-        for bank_id, response in responses:
+        for position, (bank_id, response) in enumerate(responses):
             if field not in response:
                 continue
             present = True
@@ -381,11 +413,29 @@ class RouterPolicy:
                 field,
                 value,
                 merged,
+                reviewed_supplemental=reviewed_supplemental,
                 context={
-                    "request_sha256": _audit_digest(request_body or {}),
-                    "response_sha256": _audit_digest(response),
+                    **context,
+                    "response_sha256": context["source_responses"][position]["response_sha256"],
                 },
             )
+        if field == "trace" and reviewed_supplemental is not None:
+            groups: dict[str, list[str]] = {}
+            for entry_field, key, group in reviewed_supplemental:
+                if entry_field == field:
+                    groups.setdefault(group, []).append(key)
+            keys = list(merged)
+            positions = {key: index for index, key in enumerate(keys)}
+            intact = {
+                group
+                for group, group_keys in groups.items()
+                if group_keys[0] in positions
+                and keys[positions[group_keys[0]] : positions[group_keys[0]] + len(group_keys)]
+                == group_keys
+            }
+            reviewed_supplemental[:] = [
+                entry for entry in reviewed_supplemental if entry[0] != field or entry[2] in intact
+            ]
         return present, merged if map_present else None
 
     async def _merge_recall_map(
@@ -397,17 +447,32 @@ class RouterPolicy:
         value: dict[str, Any],
         merged: dict[str, Any],
         *,
-        context: dict[str, str] | None = None,
+        context: dict[str, Any] | None = None,
+        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
     ) -> None:
         if field == "trace":
             if await self._allow_recall_supplemental_or_degrade(
-                writer_id, source, bank_id, field, None, value, context=context
+                writer_id,
+                source,
+                bank_id,
+                field,
+                None,
+                value,
+                context=context,
+                reviewed_supplemental=reviewed_supplemental,
             ):
                 merged.update(value)
             return
         for key, entry in value.items():
             if await self._allow_recall_supplemental_or_degrade(
-                writer_id, source, bank_id, field, str(key), entry, context=context
+                writer_id,
+                source,
+                bank_id,
+                field,
+                str(key),
+                entry,
+                context=context,
+                reviewed_supplemental=reviewed_supplemental,
             ):
                 merged[key] = entry
 
@@ -466,13 +531,51 @@ class RouterPolicy:
         key: str | None,
         value: Any,
         *,
-        context: dict[str, str] | None = None,
+        context: dict[str, Any] | None = None,
+        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
     ) -> bool:
         evidence = {field: value} if key is None else {field: {key: value}}
+        positions = (
+            [(field, str(entry_key)) for entry_key in value] if key is None else [(field, key)]
+        )
         scan = await scan_recalled(evidence, writer_id=writer_id)
         if scan.safe:
+            if reviewed_supplemental is not None:
+                replaced_groups = {
+                    position[2] for position in reviewed_supplemental if position[:2] in positions
+                }
+                reviewed_supplemental[:] = [
+                    position
+                    for position in reviewed_supplemental
+                    if position[2] not in replaced_groups
+                ]
             return True
         digest = _audit_digest(evidence)
+        payload = {
+            "entry": value,
+            "field": field,
+            "entry_key": key,
+            "bank_id": bank_id,
+            "context": context or {},
+            "content_sha256": digest,
+        }
+        if await self.blocked_content_allowed(
+            writer_id, source, "recalled_suspicious_supplemental", bank_id, payload, scan
+        ):
+            if reviewed_supplemental is not None:
+                replaced_groups = {
+                    position[2] for position in reviewed_supplemental if position[:2] in positions
+                }
+                reviewed_supplemental[:] = [
+                    position
+                    for position in reviewed_supplemental
+                    if position[2] not in replaced_groups
+                ]
+                reviewed_supplemental.extend(
+                    (entry_field, entry_key, ordered_content_digest(payload))
+                    for entry_field, entry_key in positions
+                )
+            return True
         try:
             await self.quarantine_security_event(
                 {
@@ -507,14 +610,8 @@ class RouterPolicy:
             source,
             "recalled_suspicious_supplemental",
             bank_id,
-            {
-                "entry": value,
-                "field": field,
-                "entry_key": key,
-                "bank_id": bank_id,
-                "context": context or {},
-                "content_sha256": digest,
-            },
+            payload,
+            scan,
         )
         return False
 
@@ -839,6 +936,79 @@ class RouterPolicy:
                 },
             )
 
+    def blocked_content_key(
+        self,
+        writer_id: str,
+        source: str,
+        reason: str,
+        bank_id: str | None,
+        payload: dict[str, Any],
+        scan: SafetyResult,
+    ) -> str | None:
+        if any(finding.reason == "span_limit" for finding in scan.findings):
+            return None
+        if contains_credentials(payload, getattr(self.hindsight, "api_key", None)):
+            return None
+        if payload.get("context", {}).get("credential_bearing"):
+            return None
+        if len(canonical_json(payload).encode()) > getattr(
+            getattr(self.store, "limits", None), "max_item_bytes", 1_048_576
+        ):
+            return None
+        authorization = AUTHORIZATION_CONTEXT.get()
+        if authorization is None:
+            writer = self.registry.writers.get(writer_id)
+            if writer is None:
+                return None
+            authorization = {"legacy_writer": writer.model_dump(mode="json")}
+        return sha256_hex(
+            canonical_json(
+                {
+                    "principal": writer_id,
+                    "source": source,
+                    "reason": reason,
+                    "bank": bank_id,
+                    "payload_sha256": ordered_content_digest(payload),
+                    "authorization": authorization,
+                    "scanner_policy": scanner_policy_digest(),
+                    "findings": [
+                        {
+                            "matched": f.matched,
+                            "reason": f.reason,
+                            "detector": f.detector,
+                            "hits": list(f.hits),
+                        }
+                        for f in scan.findings
+                    ],
+                }
+            )
+        )
+
+    async def blocked_content_allowed(
+        self,
+        writer_id: str,
+        source: str,
+        reason: str,
+        bank_id: str | None,
+        payload: dict[str, Any],
+        scan: SafetyResult,
+    ) -> bool:
+        try:
+            key = self.blocked_content_key(writer_id, source, reason, bank_id, payload, scan)
+            if key is None:
+                return False
+            async with self.repository.db.transaction() as tx:
+                row = await tx.fetchone(
+                    "SELECT quarantine_id FROM quarantine_items WHERE kind='blocked_content' AND status='reviewed_allowed' AND source_content_sha256=? AND (expires_at IS NULL OR expires_at>?) LIMIT 1",
+                    (key, iso_now()),
+                )
+            return row is not None
+        except Exception as exc:
+            self._log_degradation(
+                "blocked_content_capture_unavailable", {"error_type": type(exc).__name__}
+            )
+            return False
+
     async def capture_blocked_content(
         self,
         writer_id: str,
@@ -846,8 +1016,28 @@ class RouterPolicy:
         reason: str,
         bank_id: str | None,
         payload: dict[str, Any],
+        scan: SafetyResult | None = None,
     ) -> None:
         try:
+            if scan is not None and any(
+                finding.reason == "span_limit" for finding in scan.findings
+            ):
+                self._log_degradation(
+                    "blocked_content_capture_unavailable", {"error_type": "scan_limit"}
+                )
+                return
+            if contains_credentials(
+                payload, getattr(self.hindsight, "api_key", None)
+            ) or payload.get("context", {}).get("credential_bearing"):
+                self._log_degradation(
+                    "blocked_content_capture_unavailable", {"error_type": "provider_credentials"}
+                )
+                return
+            exception_key = (
+                self.blocked_content_key(writer_id, source, reason, bank_id, payload, scan)
+                if scan is not None
+                else None
+            )
             if reason in {
                 "recalled_suspicious_aggregate",
                 "recalled_suspicious_supplemental",
@@ -876,15 +1066,19 @@ class RouterPolicy:
                     "writerId": writer_id,
                     "source": source,
                     "kind": "blocked_content",
+                    "sourceContentSha256": exception_key,
                     "reviewBanks": review_banks,
                     "reason": reason,
                     "bankId": bank_id,
                     "payload": {
                         **payload,
+                        "ordered_payload_json": ordered_content_json(payload),
                         "principal_id": writer_id,
                         "authorization_scope": {"bank_id": bank_id, "source": source},
-                        "decision_scope": "classification_only",
-                        "policy": "current_scan_required_on_every_request",
+                        "decision_scope": "exact_content_and_context"
+                        if exception_key
+                        else "classification_only",
+                        "policy": scanner_policy_digest(),
                     },
                 }
             )

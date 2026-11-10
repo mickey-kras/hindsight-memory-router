@@ -26,15 +26,25 @@ Approval must have the complete decrypted object with no changes. Modified conte
 `blocked_content` items hold bounded blocked recall and OpenClaw content for inspection.
 The console shows the exact decrypted payload, its source context, and aggregate joined text.
 The joined text is not a source memory.
+Inspect **Original field order under review** before approval.
+This raw JSON preserves the sequence used by the scanner; the formatted payload can sort object keys.
 
-Use **Mark false positive** to classify the exact finding after decryption.
-Use **Mark true positive** to confirm the block.
-Both decisions leave runtime blocks in force.
-Neither decision writes, replays, invalidates, or edits a source memory.
+Use **Mark false positive** to approve an exact exception after decryption.
+A later call can use the exception only when its complete content and security context match.
+Use **Mark true positive** to keep the block without an exception.
+Neither review action writes, replays, invalidates, or edits a source memory.
 
 A source-memory action needs a separate review of the verified bank and memory identity.
-A false-positive classification cannot approve a different principal, bank, content version, or response context.
-It does not bypass aggregate scanning.
+An exception cannot approve a different principal, operation, bank scope, content version, or response context.
+Changes to source identities, order, metadata, grants, or policy prevent reuse.
+All calls still pass authorization, bounds, rate limits, and safety scans.
+Separate approvals cannot approve a new unsafe join.
+
+The approval response reports `exception_active` and an `exception_id`.
+Older items without a verified exception context remain classification-only; their content stays blocked.
+Keep the exception ID to revoke approval with `POST /admin/quarantine/items/{quarantine_id}/revoke`.
+Revocation requires review access and does not call Hindsight.
+Exceptions expire with the original item and can be removed through normal quarantine cleanup.
 
 `security_event` items remain audit-only.
 The console shows a bounded summary for authentication failures, denied endpoints, and unknown OpenClaw writers without decryption.

@@ -802,6 +802,12 @@ async def _reject_item_response(
     return JSONResponse(await admin.reject(item_id, actor))
 
 
+async def _revoke_item_response(
+    request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
+) -> Response:
+    return JSONResponse(await admin.revoke(item_id, actor))
+
+
 async def _postpone_item_response(
     request: Request, admin: QuarantineAdminService, item_id: str, actor: AdminActor
 ) -> Response:
@@ -818,6 +824,7 @@ async def _reconcile_item_response(
 _ADMIN_ITEM_ACTIONS: dict[
     str, Callable[[Request, QuarantineAdminService, str, AdminActor], Awaitable[Response]]
 ] = {
+    "revoke": _revoke_item_response,
     "approve": _approve_item_response,
     "reject": _reject_item_response,
     "postpone": _postpone_item_response,
@@ -836,7 +843,7 @@ async def _admin_item_response(
     action = match.group(2)
     if method == "GET" and action is None:
         return JSONResponse(await admin.read_item(item_id))
-    if method == "POST" and action in {"approve", "reject", "postpone", "reconcile"}:
+    if method == "POST" and action in {"approve", "reject", "postpone", "reconcile", "revoke"}:
         return await _ADMIN_ITEM_ACTIONS[action](request, admin, item_id, actor)
     return None
 
@@ -855,7 +862,7 @@ async def _authorized_admin_response(
     if method == "POST" and pathname == "/admin/quarantine/cleanup":
         return JSONResponse(await admin.cleanup(await _admin_body(request, "cleanup"), actor))
     match = re.fullmatch(
-        r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile))?", pathname
+        r"/admin/quarantine/items/([^/]+)(?:/(approve|reject|postpone|reconcile|revoke))?", pathname
     )
     if match is not None:
         response = await _admin_item_response(request, admin, method, match, actor)

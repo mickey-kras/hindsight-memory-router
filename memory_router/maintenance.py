@@ -29,7 +29,7 @@ _CLEANUP_TIME = re.compile(
 _SWEEP_SQL = """
 SELECT quarantine_id, expires_at
 FROM quarantine_items
-WHERE status IN ('pending','postponed')
+WHERE (status IN ('pending','postponed') OR (kind='blocked_content' AND status='reviewed_allowed'))
   AND expires_at IS NOT NULL
   AND expires_at <= ?
 ORDER BY expires_at
@@ -183,7 +183,11 @@ def cleanup_params(
         raise HttpError(
             400, "invalid_cleanup", "cleanup reasons must be supported quarantine reasons"
         )
-    clauses = [REVIEWABLE_FILTER_SQL if scope == PENDING else CLEANUP_FILTER_SQL]
+    clauses = [
+        REVIEWABLE_FILTER_SQL
+        if scope == PENDING
+        else f"({CLEANUP_FILTER_SQL} OR (kind='blocked_content' AND status='reviewed_allowed'))"
+    ]
     params: list[Any] = []
     if selected:
         clauses.append("reason IN (" + ",".join("?" for _ in selected) + ")")

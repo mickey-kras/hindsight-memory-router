@@ -8,6 +8,7 @@ from typing import Any, Protocol
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 
+from .blocked_exceptions import AUTHORIZATION_CONTEXT, authorization_context
 from .errors import HttpError
 from .facade_routes import match_facade_route
 from .hindsight import HindsightGateway
@@ -70,6 +71,27 @@ class AuthenticatedRequestDispatcher:
         self.deps = dependencies
 
     async def dispatch(
+        self,
+        request: Request,
+        pathname: str,
+        method: str,
+        principal: PrincipalSession | None,
+        route_class: str,
+    ) -> Response:
+        context = (
+            authorization_context(principal, self.deps.resolver.registry)
+            if principal is not None and self.deps.resolver is not None
+            else None
+        )
+        token = AUTHORIZATION_CONTEXT.set(context)
+        try:
+            return await self._dispatch_authenticated(
+                request, pathname, method, principal, route_class
+            )
+        finally:
+            AUTHORIZATION_CONTEXT.reset(token)
+
+    async def _dispatch_authenticated(
         self,
         request: Request,
         pathname: str,

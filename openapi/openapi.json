@@ -134,7 +134,7 @@
       "post": {
         "operationId": "approveQuarantineItem",
         "summary": "Approve the exact original quarantined object",
-        "description": "The caller decrypts the object locally. The caller submits the complete object without changes. The router examines the original SHA-256.\n\nRetain approval preserves the original bank. Principal mode must have the current memory.retain grant of the original principal. Legacy mode must have the same writer bank. Register unknown legacy writers before approval. If you cannot make sure of the origin of a pending pre-upgrade retain request, submit the request again.\n\nThe router completes the review of completed writes without another write. The router permits recalled memories only while their digest stays the same.\n\nFor blocked_content, approval classifies only the exact finding as false positive. Runtime blocks remain in force. The decision does not allow other content, bypass scanning, replay requests, or change source memories. The router rejects approval of audit-only security events.",
+        "description": "The caller decrypts the object locally. The caller submits the complete object without changes. The router examines the original SHA-256.\n\nRetain approval preserves the original bank. Principal mode must have the current memory.retain grant of the original principal. Legacy mode must have the same writer bank. Register unknown legacy writers before approval. If you cannot make sure of the origin of a pending pre-upgrade retain request, submit the request again.\n\nThe router completes the review of completed writes without another write. The router permits recalled memories only while their digest stays the same.\n\nFor blocked_content, approval records an exact false-positive exception when the item has a verified security context. Later calls must match the complete content, principal, operation, bank scope, sources, grants, and policy. All normal checks still run. Other findings remain blocked. \n\nOlder captures without this context remain classification-only. Exceptions expire with the original item and support revocation and cleanup. Review does not replay requests or change source memories. The router rejects approval of audit-only security events.",
         "tags": [
           "Quarantine administration"
         ],
@@ -160,7 +160,7 @@
         },
         "responses": {
           "200": {
-            "description": "Retain approval, recalled-memory allow decision, or blocked-content false-positive classification.",
+            "description": "Retain approval, recalled-memory allow decision, or exact blocked-content exception.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1252,6 +1252,67 @@
           },
           "503": {
             "description": "The identity provider, shared state, or active policy is unavailable."
+          }
+        }
+      }
+    },
+    "/admin/quarantine/items/{quarantine_id}/revoke": {
+      "post": {
+        "operationId": "revokeBlockedContentException",
+        "summary": "Revoke an exact blocked-content exception",
+        "description": "Requires the review credential. Removes an approved blocked-content exception without calling Hindsight. Later calls cannot reuse this decision. Returns 409 when the item has no approved exception.",
+        "tags": [
+          "Quarantine administration"
+        ],
+        "security": [
+          {
+            "AdminToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/QuarantineId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exception revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "revoked",
+                    "exception_id"
+                  ],
+                  "properties": {
+                    "revoked": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "exception_id": {
+                      "$ref": "#/components/schemas/QuarantineId"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/AdminUnauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/AdminRateLimited"
           }
         }
       }
@@ -2597,7 +2658,9 @@
           "reviewed",
           "classification",
           "quarantine_id",
-          "runtime_block_unchanged"
+          "runtime_block_unchanged",
+          "exception_active",
+          "exception_id"
         ],
         "properties": {
           "reviewed": {
@@ -2615,8 +2678,21 @@
             "$ref": "#/components/schemas/QuarantineId"
           },
           "runtime_block_unchanged": {
+            "type": "boolean"
+          },
+          "exception_active": {
             "type": "boolean",
-            "const": true
+            "description": "True only when this review grants an exact exception for matching later calls."
+          },
+          "exception_id": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/QuarantineId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       }

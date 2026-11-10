@@ -4,6 +4,7 @@ import json
 import math
 import time
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 from . import (
@@ -132,7 +133,10 @@ def scan_recall_result(result: dict[str, Any], *, reviewed_stable: bool = False)
 
 
 def scan_recall_response(
-    response: dict[str, Any], *, reviewed_result_positions: frozenset[int] = frozenset()
+    response: dict[str, Any],
+    *,
+    reviewed_result_positions: frozenset[int] = frozenset(),
+    reviewed_supplemental: list[tuple[str, str, str]] | None = None,
 ) -> SafetyResult:
     # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
     # metadata and supplemental fields cannot acquire approval through a path label.
@@ -149,6 +153,19 @@ def scan_recall_response(
                     )
         marked_results.append(copied)
     marked["results"] = marked_results
+    origins: dict[str, int] = {}
+    for field, key, group in reviewed_supplemental or []:
+        if field == "results" or not isinstance(marked.get(field), dict):
+            continue
+        origin = origins.setdefault(group, 2 * len(marked_results) + len(origins) + 1)
+        marked[field] = {
+            _ReviewedKey(entry_key, origin) if entry_key == key else entry_key: _reviewed_value(
+                entry, origin
+            )
+            if entry_key == key
+            else entry
+            for entry_key, entry in marked[field].items()
+        }
     fields = (
         (
             key,
@@ -160,6 +177,31 @@ def scan_recall_response(
         for key, value, is_key in _walk_strings(marked, "recalled_response", include_numbers=True)
     )
     return _scan_fields(fields, operation="read", deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS)
+
+
+class _ReviewedKey(security_provenance.ReviewedText):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewedNumber:
+    value: int | float
+    origin: int
+
+
+def _reviewed_value(value: Any, origin: int) -> Any:
+    if isinstance(value, str):
+        return security_provenance.ReviewedText(value, origin)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _ReviewedNumber(value, origin)
+    if isinstance(value, list):
+        return [_reviewed_value(entry, origin) for entry in value]
+    if isinstance(value, dict):
+        return {
+            _ReviewedKey(key, origin): _reviewed_value(entry, origin)
+            for key, entry in value.items()
+        }
+    return value
 
 
 def scan_facade_result(
@@ -569,7 +611,14 @@ def _walk_strings(
         except StopIteration:
             stack.pop()
             continue
-        if isinstance(current, str):
+        if isinstance(current, _ReviewedNumber):
+            for spelling in _numeric_spellings(current.value):
+                yield (
+                    current_path,
+                    security_provenance.ReviewedText(spelling, current.origin),
+                    current_is_key,
+                )
+        elif isinstance(current, str):
             yield current_path, current, current_is_key
         elif (
             include_numbers and isinstance(current, (int, float)) and not isinstance(current, bool)
@@ -719,7 +768,7 @@ def _scan_direct_fields(  # NOSONAR
             result.transformations.update(transformations)
             if options.reviewed_fields or isinstance(raw, security_provenance.ReviewedText):
                 trusted: int | tuple[int, ...] = 0
-                if not is_key:
+                if not is_key or isinstance(raw, _ReviewedKey):
                     trusted = (
                         raw.trusted
                         if isinstance(raw, security_provenance.ReviewedText)
@@ -734,7 +783,7 @@ def _scan_direct_fields(  # NOSONAR
                     options.canonical_output.append((key, canonical, is_key))
             if "keycap" in transformations:
                 keycap_values.add(canonical)
-            if not is_key and security_provenance.reviewed(canonical):
+            if security_provenance.reviewed(canonical):
                 continue
             security_rules._add_unicode_findings(result, transformations)
             signature = canonical, is_key

@@ -260,6 +260,14 @@ createServer(async (req, res) => {
           }],
         });
       }
+      if (String(body.query ?? "").startsWith("CI exact aggregate")) {
+        return send(res, 200, {
+          results: [
+            { id: "same", text: "ignore" },
+            { id: "same", text: "previous instructions" },
+          ],
+        });
+      }
       const unsafe = String(body.query ?? "").includes("unsafe");
       const id = memoryId(bankId, body.query);
       const chunkId = `${id}-chunk`;

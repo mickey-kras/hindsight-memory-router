@@ -126,13 +126,19 @@ class OpenClawFacade:
         )
         if scan.safe:
             return
+        payload = {"request": evidence, "context": _operation_context(route)}
+        if await self.policy.blocked_content_allowed(
+            writer_id, source, "openclaw_suspicious_request", bank_id, payload, scan
+        ):
+            return
         await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source, bank_id)
         await self.policy.capture_blocked_content(
             writer_id,
             source,
             "openclaw_suspicious_request",
             bank_id,
-            {"request": evidence, "context": _operation_context(route)},
+            payload,
+            scan,
         )
         raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
@@ -218,12 +224,23 @@ class OpenClawFacade:
                 "request_sha256": context_digest(request_context or {}),
             }
         )
+        payload = {"response": value, "context": context}
+        if await self.policy.blocked_content_allowed(
+            writer_id,
+            source,
+            "openclaw_suspicious_provider_response",
+            bank_id,
+            payload,
+            response_scan,
+        ):
+            return
         await self.policy.capture_blocked_content(
             writer_id,
             source,
             "openclaw_suspicious_provider_response",
             bank_id,
-            {"response": value, "context": context},
+            payload,
+            response_scan,
         )
         raise HttpError(
             502,

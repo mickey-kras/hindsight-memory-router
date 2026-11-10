@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .canonical import canonical_json, sha256_hex
+from .blocked_exceptions import ordered_content_digest
+from .canonical import sha256_hex
 from .security import _walk_strings
 
 _CREDENTIAL_FIELDS = frozenset(
@@ -48,7 +49,7 @@ def joined_response_text(response: dict[str, Any]) -> str:
 
 def context_digest(value: Any) -> str:
     try:
-        serialized = canonical_json(value)
+        return ordered_content_digest(value)
     except (ValueError, RecursionError):
         serialized = repr(value)
     return sha256_hex(serialized)

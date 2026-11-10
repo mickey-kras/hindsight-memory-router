@@ -294,7 +294,13 @@ async def classify_blocked_content(
     async def apply(tx: Tx, item: dict[str, object]) -> None:
         if item["kind"] != "blocked_content":
             raise HttpError(409, "invalid_review_action", "item is not blocked content")
-        await tx.execute(_DELETE_ITEM, (quarantine_id,))
+        if classification == "false_positive" and item.get("source_content_sha256"):
+            await tx.execute(
+                "UPDATE quarantine_items SET status='reviewed_allowed',encrypted_envelope=NULL,encrypted_bytes=0,updated_at=? WHERE quarantine_id=?",
+                (at, quarantine_id),
+            )
+        else:
+            await tx.execute(_DELETE_ITEM, (quarantine_id,))
         await insert_event(
             tx,
             quarantine_id,

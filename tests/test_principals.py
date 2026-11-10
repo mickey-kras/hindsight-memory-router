@@ -5,6 +5,7 @@ import hmac
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 from secrets import token_urlsafe
@@ -17,6 +18,7 @@ from httpx import ASGITransport, AsyncClient
 
 from memory_router import app as app_module
 from memory_router import request_dispatch
+from memory_router.blocked_exceptions import AUTHORIZATION_CONTEXT
 from memory_router.config import RouterSettings, assert_auth_environment
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES
@@ -121,6 +123,7 @@ def principal_runtime_state(tmp_path: Path) -> None:
         recall_bank=AsyncMock(return_value={"results": []}),
         deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
         capture_blocked_content=AsyncMock(),
+        blocked_content_allowed=AsyncMock(return_value=False),
         quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
     yield
@@ -1496,3 +1499,66 @@ async def test_blocked_bank_list_review_respects_authorized_bank_capacity(
             assert payload["context"]["operation"] == "bank.list"
     finally:
         await repository.close()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+async def test_http_dispatch_binds_exception_context_and_restores_it(fail: bool) -> None:
+    observed: list[dict[str, object] | None] = []
+
+    async def recall_bank(
+        principal_id: str, bank: str, body: dict[str, object], source: str
+    ) -> dict[str, object]:
+        observed.append(deepcopy(AUTHORIZATION_CONTEXT.get()))
+        if fail:
+            raise HttpError(503, "test_unavailable", "test unavailable")
+        return {"results": []}
+
+    async def legacy_recall(writer_id: str, body: dict[str, object]) -> dict[str, object]:
+        observed.append(deepcopy(AUTHORIZATION_CONTEXT.get()))
+        return {"results": []}
+
+    resolver = app_module.runtime.principal_resolver
+    assert resolver is not None
+    resolver.registry.banks["shared"] = BankConfiguration(
+        accessPolicy=BankAccessPolicy(allowedPrincipals=["agent-alpha", "agent-reader"])
+    )
+    app_module.runtime.policy.recall_bank = AsyncMock(side_effect=recall_bank)
+    app_module.runtime.policy.recall = AsyncMock(side_effect=legacy_recall)
+    outer = {"principal": "outer-context"}
+    token = AUTHORIZATION_CONTEXT.set(outer)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app_module.app), base_url="http://test"
+        ) as client:
+            for principal_id, key_id, secret in (
+                ("agent-alpha", "alpha-1", ALPHA_SECRET),
+                ("agent-reader", "reader-1", READER_SECRET),
+            ):
+                response = await client.post(
+                    "/v1/default/banks/shared/memories/recall",
+                    headers={"Authorization": _bearer(key_id, secret)},
+                    json={"query": "ordinary"},
+                )
+                assert response.status_code == (503 if fail else 200)
+                context = observed[-1]
+                assert context is not None
+                assert context["principal"] == principal_id
+                assert context["grants"] == [
+                    grant.model_dump(mode="json")
+                    for grant in resolver.registry.principals[principal_id].grants
+                ]
+                assert context["banks"] == {
+                    "shared": resolver.registry.banks["shared"].model_dump(mode="json")
+                }
+                assert secret not in json.dumps(context)
+                assert AUTHORIZATION_CONTEXT.get() is outer
+            app_module.runtime.principal_resolver = None
+            app_module.runtime.allow_anonymous = True
+            response = await client.post(
+                "/v1/default/banks/legacy/memories/recall", json={"query": "ordinary"}
+            )
+            assert response.status_code == 200
+            assert observed[-1] is None
+            assert AUTHORIZATION_CONTEXT.get() is outer
+    finally:
+        AUTHORIZATION_CONTEXT.reset(token)

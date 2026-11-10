@@ -460,7 +460,7 @@ export function startMockRouter(port = 8899) {
           decrypted: parsed.decrypted,
         });
         if (item.record.kind === "blocked_content") {
-          return finish(200, { reviewed: true, classification: "false_positive", quarantine_id: item.record.quarantine_id, runtime_block_unchanged: true });
+          return finish(200, { reviewed: true, classification: "false_positive", quarantine_id: item.record.quarantine_id, runtime_block_unchanged: false, exception_active: true, exception_id: item.record.quarantine_id });
         }
         finish(
           200,
