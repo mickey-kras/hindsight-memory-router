@@ -26,7 +26,7 @@ Compatible clients in legacy token mode use the same values: router URL, router 
 
 Denied: webhooks, file transfer, import, export, upstream metrics, LLM health, cross-writer listings and deprecated endpoints. The router's own opt-in metrics endpoint has separate [admin authorization](../reference/api.md).
 
-Compatibility review covers Hindsight v1.1.0, including native memory-provider search and get.
+Compatibility review covers Hindsight v1.2.0, including native memory-provider search and get.
 The router still supports legacy mental-model routes.
 CI and the daily upstream compatibility workflow check the latest stable release.
 Review source changes before you update inventory hashes.
