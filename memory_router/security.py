@@ -4,7 +4,6 @@ import json
 import math
 import time
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass
 from typing import Any
 
 from . import (
@@ -47,6 +46,7 @@ from .security_models import (
     _QueryWindowContext,
     _WindowScanContext,
 )
+from .security_provenance import _ReviewedKey, _ReviewedNumber
 from .security_rules import MAX_NON_ASCII_CODEPOINTS as MAX_NON_ASCII_CODEPOINTS
 from .security_rules import MAX_SCAN_FIELD_BYTES as MAX_SCAN_FIELD_BYTES
 from .security_windows import MAX_SPLIT_WINDOW_BYTES as MAX_SPLIT_WINDOW_BYTES
@@ -138,34 +138,9 @@ def scan_recall_response(
     reviewed_result_positions: frozenset[int] = frozenset(),
     reviewed_supplemental: list[tuple[str, str, str]] | None = None,
 ) -> SafetyResult:
-    # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
-    # metadata and supplemental fields cannot acquire approval through a path label.
-    marked = dict(response)
-    marked_results: list[dict[str, object]] = []
-    for position, result in enumerate(response.get("results", [])):
-        copied = dict(result)
-        if position in reviewed_result_positions:
-            for field_index, field_name in enumerate(("id", "text")):
-                value = copied.get(field_name)
-                if isinstance(value, str):
-                    copied[field_name] = security_provenance.ReviewedText(
-                        value, 2 * position + field_index + 1
-                    )
-        marked_results.append(copied)
-    marked["results"] = marked_results
-    origins: dict[str, int] = {}
-    for field, key, group in reviewed_supplemental or []:
-        if field == "results" or not isinstance(marked.get(field), dict):
-            continue
-        origin = origins.setdefault(group, 2 * len(marked_results) + len(origins) + 1)
-        marked[field] = {
-            _ReviewedKey(entry_key, origin) if entry_key == key else entry_key: _reviewed_value(
-                entry, origin
-            )
-            if entry_key == key
-            else entry
-            for entry_key, entry in marked[field].items()
-        }
+    marked = security_provenance.mark_reviewed_response(
+        response, reviewed_result_positions, reviewed_supplemental
+    )
     fields = (
         (
             key,
@@ -177,31 +152,6 @@ def scan_recall_response(
         for key, value, is_key in _walk_strings(marked, "recalled_response", include_numbers=True)
     )
     return _scan_fields(fields, operation="read", deadline=time.monotonic() + MAX_CORE_SCAN_SECONDS)
-
-
-class _ReviewedKey(security_provenance.ReviewedText):
-    pass
-
-
-@dataclass(frozen=True, slots=True)
-class _ReviewedNumber:
-    value: int | float
-    origin: int
-
-
-def _reviewed_value(value: Any, origin: int) -> Any:
-    if isinstance(value, str):
-        return security_provenance.ReviewedText(value, origin)
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return _ReviewedNumber(value, origin)
-    if isinstance(value, list):
-        return [_reviewed_value(entry, origin) for entry in value]
-    if isinstance(value, dict):
-        return {
-            _ReviewedKey(key, origin): _reviewed_value(entry, origin)
-            for key, entry in value.items()
-        }
-    return value
 
 
 def scan_facade_result(

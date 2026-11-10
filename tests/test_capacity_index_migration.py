@@ -48,7 +48,8 @@ def test_postgres_upgrade_helper_queries_bind_with_installed_driver() -> None:
     assert converted
     catalog = next(query for query in converted if b"c.relname LIKE" in query.query)
     assert b"c.relname LIKE $1" in catalog.query
-    assert catalog.params == [b"idx_quarantine_capacity_%"]
+    assert b"OR c.relname=$2" in catalog.query
+    assert catalog.params == [b"idx_quarantine_capacity_%", b"idx_blocked_content_exception"]
 
 
 class Cursor:
