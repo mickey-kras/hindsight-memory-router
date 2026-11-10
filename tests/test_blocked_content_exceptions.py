@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from copy import deepcopy
 from pathlib import Path
@@ -87,6 +88,7 @@ def aggregate_response() -> dict[str, object]:
 
 async def test_exact_aggregate_approval_survives_new_policy_instance_and_revocation(
     configured: Configured,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     router, admin, private = configured
     response = aggregate_response()
@@ -99,7 +101,15 @@ async def test_exact_aggregate_approval_survives_new_policy_instance_and_revocat
         router.registry, router.hindsight, router.limits, router.store, router.repository
     )
     assert await fresh.recall("main", {"query": "ordinary"}) == response
+    caplog.set_level(logging.INFO, logger="memory_router.admin")
+    caplog.clear()
     assert await admin.revoke(identity, ACTOR) == {"revoked": True, "exception_id": identity}
+    records = [record for record in caplog.records if record.msg == "admin_action"]
+    assert len(records) == 1
+    assert vars(records[0])["action"] == "revoke"
+    assert vars(records[0])["operation"] == "quarantine_review"
+    assert vars(records[0])["quarantine_id"] == identity
+    assert vars(records[0])["admin_token_scope"] == ACTOR.token_scope
     assert await fresh.recall("main", {"query": "ordinary"}) == {"results": []}
 
 
