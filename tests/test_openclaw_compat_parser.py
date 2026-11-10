@@ -37,23 +37,24 @@ def test_inventory_reports_removed_upstream_source(
         compat.main()
 
 
+@pytest.mark.parametrize("source_name", ["plugin", "tools"])
 def test_inventory_rejects_unreviewed_upstream_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source_name: str
 ) -> None:
     (tmp_path / "compat").mkdir()
     (tmp_path / "plugin.ts").write_text("changed upstream behavior")
     (tmp_path / "compat/openclaw.json").write_text(
         json.dumps(
             {
-                "sources": {"plugin": "plugin.ts"},
-                "source_blob_shas": {"plugin": "0" * 40},
+                "sources": {source_name: "plugin.ts"},
+                "source_blob_shas": {source_name: "0" * 40},
             }
         )
     )
     monkeypatch.setattr(compat, "REPOSITORY_ROOT", tmp_path)
     monkeypatch.setattr(sys, "argv", ["check_openclaw_compat.py", str(tmp_path)])
 
-    with pytest.raises(SystemExit, match="refresh inventory: \\['plugin'\\]"):
+    with pytest.raises(SystemExit, match=rf"refresh inventory: \[{source_name!r}\]"):
         compat.main()
 
 

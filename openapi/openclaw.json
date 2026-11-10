@@ -3437,6 +3437,19 @@
               ]
             },
             "description": "Filter by model call type."
+          },
+          {
+            "in": "query",
+            "name": "split_by",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "model",
+                "operation"
+              ]
+            },
+            "description": "Split each time bucket by model or operation."
           }
         ],
         "responses": {
@@ -6414,5 +6427,3 @@
     }
   }
 }
-
-
