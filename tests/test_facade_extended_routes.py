@@ -138,13 +138,13 @@ def _policy(response: object = None) -> SimpleNamespace:
         ),
         (
             "GET",
-            "/v1/default/banks/openclaw/knowledge-base/tree",
-            "/v1/default/banks/resolved-main/knowledge-base/tree",
+            "/v1/default/banks/openclaw/pages/tree",
+            "/v1/default/banks/resolved-main/pages/tree",
         ),
         (
             "PATCH",
-            "/v1/default/banks/openclaw/knowledge-base/nodes/node-1",
-            "/v1/default/banks/resolved-main/knowledge-base/nodes/node-1",
+            "/v1/default/banks/openclaw/pages/nodes/node-1",
+            "/v1/default/banks/resolved-main/pages/nodes/node-1",
         ),
         (
             "GET",
@@ -228,8 +228,8 @@ def _policy(response: object = None) -> SimpleNamespace:
         ),
         (
             "GET",
-            "/v1/default/banks/openclaw/knowledge-base/pages/page-1",
-            "/v1/default/banks/resolved-main/knowledge-base/pages/page-1",
+            "/v1/default/banks/openclaw/pages/page-1",
+            "/v1/default/banks/resolved-main/pages/page-1",
         ),
         (
             "GET",
@@ -282,12 +282,12 @@ async def test_observation_scopes_preserves_pagination_and_resolved_bank() -> No
     )
 
 
-@pytest.mark.parametrize("resource", ["folders", "pages"])
+@pytest.mark.parametrize("resource", ["pages/folders", "pages"])
 @pytest.mark.asyncio
-async def test_knowledge_base_create_preserves_created_status(resource: str) -> None:
+async def test_page_create_preserves_created_status(resource: str) -> None:
     policy = _policy({})
     app_module.runtime.policy = policy
-    path = f"/v1/default/banks/openclaw/knowledge-base/{resource}"
+    path = f"/v1/default/banks/openclaw/{resource}"
 
     result = await app_module.dispatch(
         path.lstrip("/"), request("POST", path, body={"title": "Runbook"})
@@ -671,7 +671,7 @@ async def test_free_text_query_uses_query_ruleset(query: str) -> None:
 async def test_required_query_is_rejected_before_quota() -> None:
     policy = _policy({})
     app_module.runtime.policy = policy
-    path = "/v1/default/banks/openclaw/knowledge-base/search"
+    path = "/v1/default/banks/openclaw/pages/search"
 
     with pytest.raises(HttpError) as blocked:
         await app_module.dispatch(path.lstrip("/"), request("GET", path))
@@ -1356,6 +1356,7 @@ async def test_facade_response_preserves_fractional_scores_and_counters(number: 
 @pytest.mark.parametrize(
     ("resource", "query", "response"),
     [
+        ("mental-models", "exclude_pages=true", {"items": []}),
         ("mental-models", "exclude_knowledge_pages=true", {"items": []}),
         ("llm-requests", "call_type=decision", {}),
         ("llm-requests/stats", "call_type=embedding", {}),

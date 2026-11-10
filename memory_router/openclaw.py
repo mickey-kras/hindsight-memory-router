@@ -180,9 +180,7 @@ class OpenClawFacade:
             value,
             writer_id=writer_id,
             separate_page_ids=bool(
-                route is not None
-                and route.method == "POST"
-                and route.template == "knowledge-base/pages"
+                route is not None and route.method == "POST" and route.template == "pages"
             ),
         )
         if _only_scan_limit_findings(response_scan):
@@ -213,9 +211,10 @@ class OpenClawFacade:
             for key in ("method", "operation"):
                 if key in request_context:
                     context[key] = request_context[key]
+        response_bank_ids = [bank_id] if bank_id else []
         context.update(
             {
-                "bank_ids": bank_ids if bank_ids is not None else ([bank_id] if bank_id else []),
+                "bank_ids": bank_ids if bank_ids is not None else response_bank_ids,
                 "request_sha256": context_digest(request_context or {}),
             }
         )

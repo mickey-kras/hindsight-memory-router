@@ -12,7 +12,7 @@ def facade_response_scan_input(route: FacadeRoute | None, value: object) -> obje
     if (
         route is None
         or route.method != "POST"
-        or route.template != "knowledge-base/pages"
+        or route.template != "pages"
         or not isinstance(value, dict)
         or value.keys() != {"page_id", "mental_model_id", "operation_id"}
         or not _generated_uuid(value.get("page_id"), "kp-")

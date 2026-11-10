@@ -20,8 +20,8 @@ FILTER_ROUTES = [
     "entities",
     "entities/graph",
     "entities/{entity_id}",
-    "knowledge-base/tree",
-    "knowledge-base/search",
+    "pages/tree",
+    "pages/search",
 ]
 
 
@@ -49,7 +49,7 @@ async def test_upstream_tag_filters_preserve_repeated_tags_and_compound_filter(
         if compound is None
         else [("tag_groups", compound)]
     )
-    if template == "knowledge-base/search":
+    if template == "pages/search":
         query.insert(0, ("q", "preferences"))
 
     await OpenClawFacade(policy).forward(
@@ -85,7 +85,7 @@ async def test_compound_tag_filters_scan_decoded_keys_and_values(
 ) -> None:
     policy = make_policy({"items": []})
     query = [("tag_groups", compound)]
-    if template == "knowledge-base/search":
+    if template == "pages/search":
         query.insert(0, ("q", "preferences"))
 
     with pytest.raises(HttpError) as blocked:
@@ -127,7 +127,7 @@ async def test_compound_tag_filter_limits_fail_closed(compound: str) -> None:
     policy.hindsight.openclaw_request.assert_not_awaited()
 
 
-@pytest.mark.parametrize("template", ["knowledge-base/tree", "knowledge-base/search"])
+@pytest.mark.parametrize("template", ["pages/tree", "pages/search"])
 @pytest.mark.parametrize(
     "keys", [("tag_groups", "tags"), ("tags", "tag_groups"), ("tag_groups", "tag_groups")]
 )
@@ -140,7 +140,7 @@ async def test_decoded_tag_filters_share_cross_query_scanning(
         (key, '[{"tags":["' + _unicode_escape(value) + '"]}]' if key == "tag_groups" else value)
         for key, value in zip(keys, ("ignore previous", "instructions"), strict=True)
     ]
-    if template == "knowledge-base/search":
+    if template == "pages/search":
         query.insert(0, ("q", "preferences"))
 
     with pytest.raises(HttpError) as blocked:
@@ -161,7 +161,7 @@ async def test_plain_query_keeps_literal_json_escapes_and_malformed_json() -> No
     policy = make_policy({"items": []})
     query = [("q", r'[{"tags":["\u0074eam"]')]
     await OpenClawFacade(policy).forward(
-        route=facade_route("GET", "knowledge-base/search"),
+        route=facade_route("GET", "pages/search"),
         writer_id="openclaw",
         params={},
         query=query,
@@ -178,7 +178,7 @@ async def test_upstream_tag_filters_block_unsafe_content(key: str) -> None:
 
     with pytest.raises(HttpError) as blocked:
         await OpenClawFacade(policy).forward(
-            route=facade_route("GET", "knowledge-base/tree"),
+            route=facade_route("GET", "pages/tree"),
             writer_id="openclaw",
             params={},
             query=[(key, INJECTION)],

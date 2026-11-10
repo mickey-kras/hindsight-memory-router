@@ -4,6 +4,12 @@
 
 Use the [integrations package](https://github.com/mickey-kras/hindsight-memory-router-integrations) for per-agent credentials, assigned write and read banks, and HTTPS transport. Follow its [OpenClaw setup](https://github.com/mickey-kras/hindsight-memory-router-integrations/blob/main/docs/OPENCLAW.md) after creating matching [principal grants](../security/authentication.md).
 
+## Hindsight 1.2.1 compatibility
+
+Page requests use `/pages` instead of the deprecated `/knowledge-base` paths. Update clients that call the old paths directly.
+
+The router accepts `exclude_pages` for mental-model lists and retains the `exclude_knowledge_pages` query alias. Page creation responses retain identifier validation and content scanning.
+
 ## Legacy upstream Hindsight plugin
 
 The configuration below is for the upstream Hindsight plugin with the deprecated shared router-token mode. It is not the configuration of the per-agent plugin.

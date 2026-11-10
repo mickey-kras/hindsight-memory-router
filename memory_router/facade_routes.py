@@ -97,7 +97,15 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         read=True,
         body="none",
         strict=True,
-        query=("tags", "tags_match", "detail", "limit", "offset", "exclude_knowledge_pages"),
+        query=(
+            "tags",
+            "tags_match",
+            "detail",
+            "limit",
+            "offset",
+            "exclude_pages",
+            "exclude_knowledge_pages",
+        ),
     ),
     _route(
         "POST", "mental-models", read=False, body="required", strict=True, body_label="mental-model"
@@ -277,10 +285,10 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     _route("DELETE", "operations/{operation_id}", read=False, body="none"),
     _route("DELETE", "operations/{operation_id}/delete", read=False, body="none"),
     _route("POST", "operations/{operation_id}/retry", read=False, body="none"),
-    # Knowledge base.
+    # Pages.
     _route(
         "GET",
-        "knowledge-base/search",
+        "pages/search",
         read=True,
         body="none",
         query=("q", "limit", "tags", "tags_match", "tag_groups"),
@@ -288,16 +296,16 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
     ),
     _route(
         "GET",
-        "knowledge-base/tree",
+        "pages/tree",
         read=True,
         body="none",
         query=("tags", "tags_match", "tag_groups"),
     ),
-    _route("POST", "knowledge-base/folders", read=False, body="required", success_status=201),
-    _route("POST", "knowledge-base/pages", read=False, body="required", success_status=201),
-    _route("GET", "knowledge-base/pages/{page_id}", read=True, body="none"),
-    _route("PATCH", "knowledge-base/nodes/{node_id}", read=False, body="required"),
-    _route("DELETE", "knowledge-base/nodes/{node_id}", read=False, body="none"),
+    _route("POST", "pages/folders", read=False, body="required", success_status=201),
+    _route("POST", "pages", read=False, body="required", success_status=201),
+    _route("GET", "pages/{page_id}", read=True, body="none"),
+    _route("PATCH", "pages/nodes/{node_id}", read=False, body="required"),
+    _route("DELETE", "pages/nodes/{node_id}", read=False, body="none"),
     # Bank observability.
     _route(
         "GET",
