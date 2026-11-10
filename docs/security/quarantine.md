@@ -115,8 +115,8 @@ Rejection records a true-positive classification.
 These decisions never change runtime blocks, bypass scanning, replay requests, or mutate source memories.
 A source-memory change requires a separate explicit review.
 
-Single-bank items require review access to that bank.
-Multi-bank aggregates require global review access.
+Single-bank items need review access to that bank.
+Multi-bank aggregates need global review access.
 Bank IDs also serve as database metadata for per-bank capacity accounting.
 Memory IDs and held content remain inside the encrypted payload.
 A multi-bank item contributes to each source bank's statistics but counts once in global totals.
