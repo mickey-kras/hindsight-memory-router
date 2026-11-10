@@ -4,7 +4,8 @@ export type QuarantineKind =
   | "retain_request"
   | "recall_request"
   | "recalled_memory"
-  | "security_event";
+  | "security_event"
+  | "blocked_content";
 
 export type QuarantineStatus =
   | "pending"
@@ -49,6 +50,7 @@ export interface QuarantineItemSummary {
   encrypted_bytes?: number;
   expires_at?: string;
   bank_id?: string;
+  audit_summary?: string;
 }
 
 export interface QuarantineQueueResponse {

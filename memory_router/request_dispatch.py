@@ -125,7 +125,21 @@ class AuthenticatedRequestDispatcher:
             async def list_safe_banks() -> dict[str, Any]:
                 payload = await hindsight.list_banks(banks, q=q, limit=limit, offset=offset)
                 await OpenClawFacade(self.deps.policy).validate_safe_response(
-                    "banks", principal.principal_id, principal.source, payload
+                    "banks",
+                    principal.principal_id,
+                    principal.source,
+                    payload,
+                    banks[0] if len(banks) == 1 else None,
+                    bank_ids=banks,
+                    request_context={
+                        "method": "GET",
+                        "resource": "banks",
+                        "operation": SCOPE_BANK_LIST,
+                        "bank_ids": banks,
+                        "query": q,
+                        "limit": limit,
+                        "offset": offset,
+                    },
                 )
                 return payload
 

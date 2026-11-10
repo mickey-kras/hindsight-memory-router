@@ -224,6 +224,7 @@ def make_policy(response: object = None) -> FakePolicy:
             consume_retain=AsyncMock(),
             consume_recall=AsyncMock(),
         ),
+        capture_blocked_content=AsyncMock(),
         quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 
@@ -670,7 +671,7 @@ def test_exact_current_openclaw_auto_and_knowledge_recall_shapes() -> None:
 
 
 @pytest.mark.asyncio
-async def test_facade_request_audit_stamps_path_bank_in_principal_mode_only() -> None:
+async def test_facade_request_audit_stamps_resolved_bank_in_both_identity_modes() -> None:
     policy = make_policy({"text": "safe"})
     with pytest.raises(HttpError) as blocked:
         await OpenClawFacade(policy).forward(
@@ -692,7 +693,7 @@ async def test_facade_request_audit_stamps_path_bank_in_principal_mode_only() ->
             params={},
             body={"query": INJECTION},
         )
-    assert legacy.quarantine_security_event.await_args.args[0]["bankId"] is None
+    assert legacy.quarantine_security_event.await_args.args[0]["bankId"] == "physical-main"
 
 
 @pytest.mark.asyncio

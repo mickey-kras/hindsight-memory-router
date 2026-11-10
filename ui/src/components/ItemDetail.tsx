@@ -112,10 +112,14 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         if (action === "approve") {
           if (!decrypted) throw new Error("decrypt the item before approving");
           await approveItem(tokens, item.quarantine_id, decrypted);
-          onAction(`approved ${item.quarantine_id}`);
+          onAction(item.kind === "blocked_content"
+            ? `classified ${item.quarantine_id} as false positive; content remains blocked`
+            : `approved ${item.quarantine_id}`);
         } else if (action === "reject") {
           await rejectItem(tokens, item.quarantine_id);
-          onAction(`rejected ${item.quarantine_id}`);
+          onAction(item.kind === "blocked_content"
+            ? `classified ${item.quarantine_id} as true positive; content remains blocked`
+            : `rejected ${item.quarantine_id}`);
         } else if (action === "postpone") {
           await postponeItem(tokens, item.quarantine_id);
           onAction(`postponed ${item.quarantine_id}`);
@@ -151,6 +155,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const canApprove = canFinalize && record.kind === "retain_request";
   const canReject = canFinalize && record.kind === "recalled_memory";
   const canReview = record.status === "pending" || record.status === "postponed";
+  const reviewOnly = record.kind === "blocked_content";
+  const supportsApproval = ["retain_request", "recalled_memory", "blocked_content"].includes(record.kind);
+  const joinedText = decrypted && typeof decrypted.payload === "object" && decrypted.payload !== null
+    && "joined_text" in decrypted.payload && typeof decrypted.payload.joined_text === "string"
+    ? decrypted.payload.joined_text : null;
   const canReconcile = record.status === "review_side_effect_started";
   const needsAgent = detail?.encrypted.encryption.provider !== undefined || useAgent;
 
@@ -160,6 +169,15 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
       className="flex flex-col gap-4 rounded-xl border border-zinc-800 bg-zinc-900/60 p-4"
     >
       <ItemMetadata item={item} record={record} onClose={onClose} />
+
+      {record.audit_summary && (
+        <p data-testid="audit-summary" className="break-words text-sm text-zinc-300">
+          {record.audit_summary}
+        </p>
+      )}
+      {reviewOnly && (
+        <Banner kind="info" text="Classify this finding only. Content stays blocked. Neither decision changes source memories or repeats a provider operation." />
+      )}
 
       {loadError && <Banner kind="error" text={loadError} />}
       {detail && !decrypted && (
@@ -187,6 +205,14 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
           <div className="mb-2 text-xs font-medium text-emerald-300">
             Decrypted locally - digest verified against the stored envelope
           </div>
+          {reviewOnly && joinedText !== null && (
+            <div className="mb-3">
+              <h3 className="mb-1 text-xs font-medium text-zinc-300">Joined text under review</h3>
+              <pre data-testid="joined-text" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
+                {joinedText}
+              </pre>
+            </div>
+          )}
           <pre
             data-testid="payload"
             className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200"
@@ -216,7 +242,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
             <div className="flex flex-wrap gap-2">
               {(canReview || canApprove || canReject) && (
                 <>
-                  {(canReview || canApprove) && (
+                  {((canReview && supportsApproval) || canApprove) && (
                     <button
                       onClick={() => setPendingAction("approve")}
                       disabled={!decrypted || busy || (tokens !== "host" && !tokens.review)}
@@ -226,7 +252,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
                       }
                       className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
                     >
-                      {canFinalize ? "Finalize approval" : "Approve"}
+                      {canFinalize ? "Finalize approval" : reviewOnly ? "Mark false positive" : "Approve"}
                     </button>
                   )}
                   {(canReview || canReject) && (
@@ -236,7 +262,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
                       data-testid="reject-open"
                       className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
                     >
-                      {canFinalize ? "Finalize rejection" : "Reject"}
+                      {canFinalize ? "Finalize rejection" : reviewOnly ? "Mark true positive" : "Reject"}
                     </button>
                   )}
                   {canReview && (
@@ -279,9 +305,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
             <div className="flex flex-wrap items-center gap-2" data-testid="confirm-bar">
               <span className="text-sm text-zinc-300">
                 {pendingAction === "approve"
-                  ? "Approve into memory? The exact decrypted object is submitted for hash verification."
+                  ? reviewOnly
+                    ? "Mark this exact finding as false positive? The decrypted object is verified. Content stays blocked."
+                    : "Approve into memory? The exact decrypted object is submitted for hash verification."
                   : pendingAction === "reject"
-                    ? "Reject this item?"
+                    ? reviewOnly ? "Mark this finding as true positive? Content stays blocked and source memories do not change." : "Reject this item?"
                     : pendingAction === "confirmed_applied"
                       ? "Confirm the side effect reached Hindsight? The original decision is finalized without re-calling Hindsight."
                       : "Confirm the side effect never reached Hindsight? The item returns to postponed for normal retry."}

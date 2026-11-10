@@ -301,7 +301,7 @@ async def verify_batches(url: str) -> None:
             )
             async with db.transaction() as tx:
                 aggregate_audits = await tx.fetchall(
-                    "SELECT quarantine_id FROM quarantine_items WHERE reason=?",
+                    "SELECT quarantine_id FROM quarantine_items WHERE reason=? AND kind='security_event'",
                     ("recalled_suspicious_aggregate",),
                 )
             assert len(aggregate_audits) == (1 if case == "instruction" else 2)

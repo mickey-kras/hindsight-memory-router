@@ -21,6 +21,25 @@ private-key-command | memory-router-decrypt-quarantine encrypted-response.json
 
 Approval must have the complete decrypted object with no changes. Modified content returns `409 quarantine_hash_mismatch`.
 
+## Blocked-content findings
+
+`blocked_content` items hold bounded blocked recall and OpenClaw content for inspection.
+The console shows the exact decrypted payload, its source context, and aggregate joined text.
+The joined text is not a source memory.
+
+Use **Mark false positive** to classify the exact finding after decryption.
+Use **Mark true positive** to confirm the block.
+Both decisions leave runtime blocks in force.
+Neither decision writes, replays, invalidates, or edits a source memory.
+
+A source-memory action needs a separate review of the verified bank and memory identity.
+A false-positive classification cannot approve a different principal, bank, content version, or response context.
+It does not bypass aggregate scanning.
+
+`security_event` items remain audit-only.
+The console shows a bounded summary for authentication failures, denied endpoints, and unknown OpenClaw writers without decryption.
+The summary excludes request bodies, credentials, and query values.
+
 ## Provider-wrapped and hardware-key review
 
 The review console uses a separate trusted local agent for provider-wrapped envelopes.

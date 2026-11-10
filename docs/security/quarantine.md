@@ -103,6 +103,29 @@ Log throttling never suppresses this audit event.
 
 There is no Hindsight quarantine bank.
 
+## Blocked-content review
+
+Blocked recall aggregates, supplemental entries, and OpenClaw requests and responses keep separate hash-only security events.
+When the content fits the configured limits, a `blocked_content` item holds the content and source context inside its encrypted payload.
+The item uses the same size, capacity, rate, retention, and cleanup limits as other held content.
+A failed admission does not change the block or reveal content in the caller response or logs.
+
+Approval verifies the exact decrypted object and records a false-positive classification.
+Rejection records a true-positive classification.
+These decisions never change runtime blocks, bypass scanning, replay requests, or mutate source memories.
+A source-memory change requires a separate explicit review.
+
+Single-bank items require review access to that bank.
+Multi-bank aggregates require global review access.
+Bank IDs also serve as database metadata for per-bank capacity accounting.
+Memory IDs and held content remain inside the encrypted payload.
+A multi-bank item contributes to each source bank's statistics but counts once in global totals.
+
+Oversized memory and query events remain hash-only.
+Authentication failures, denied endpoints, and unknown OpenClaw writers remain audit-only.
+Their bounded plaintext summary contains only the route group, normalized method and route, or writer, method, and resource.
+It excludes bodies, credentials, query values, and unbounded paths.
+
 ## Deduplication
 
 If two retain or recall quarantine requests are the same, they share one pending item. The dedupe key covers request kind, writer, policy target, and canonical JSON payload. Object key order and JSON formatting do not matter. String content must be exact.

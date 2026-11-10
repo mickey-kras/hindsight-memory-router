@@ -62,6 +62,7 @@ def _policy(response: object = None) -> SimpleNamespace:
             consume_recall=AsyncMock(),
         ),
         deny_endpoint=AsyncMock(return_value={"error": "endpoint_not_allowed"}),
+        capture_blocked_content=AsyncMock(),
         quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 

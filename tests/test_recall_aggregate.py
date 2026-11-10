@@ -135,7 +135,7 @@ async def test_final_aggregate_is_suppressed_and_audited(location: str) -> None:
     repository.find_memory_review_states = lookup
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
     assert lookup.await_count == (0 if location == "supplemental" else 1)
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     audit = store.items[0]
     assert audit["reason"] == "recalled_suspicious_aggregate"
     assert set(audit["payload"]) == {"action", "content_sha256", "findings", "score_certification"}
@@ -240,7 +240,7 @@ async def test_separately_approved_card_context_cannot_approve_new_sensitive_ref
             "source_content_sha256": recalled_content_digest(result),
         }
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     assert store.items[0]["reason"] == "recalled_suspicious_aggregate"
     assert "2026123456789012" not in json.dumps(store.items[0])
 
@@ -261,7 +261,7 @@ async def test_aggregate_field_budget_suppresses_combination_of_safe_results() -
     results = [{"id": f"m{index}", "text": "ordinary"} for index in range(33)]
     router, _, store, _ = policy(FakeHindsight(results))
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     assert {"reason": "span_limit"} in store.items[0]["payload"]["findings"]
 
 
@@ -293,7 +293,7 @@ async def test_aggregate_audit_is_persisted_encrypted_with_private_content_omitt
         assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
         async with database.transaction() as tx:
             rows = await tx.fetchall(
-                "SELECT quarantine_id FROM quarantine_items WHERE reason=?",
+                "SELECT quarantine_id FROM quarantine_items WHERE reason=? AND kind='security_event'",
                 ("recalled_suspicious_aggregate",),
             )
         assert len(rows) == 1
@@ -346,7 +346,7 @@ async def test_numeric_scalar_combines_with_card_context_in_aggregate_worker(
                 "source_content_sha256": recalled_content_digest(result),
             }
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     assert store.items[0]["reason"] == "recalled_suspicious_aggregate"
     assert "2026123456789012" not in json.dumps(store.items[0])
 
@@ -371,7 +371,7 @@ async def test_numeric_metadata_extending_approved_card_reference_fails_closed()
         "source_content_sha256": recalled_content_digest(approved),
     }
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     assert store.items[0]["reason"] == "recalled_suspicious_aggregate"
 
 
@@ -386,7 +386,7 @@ async def test_exact_integer_float_equivalence_cannot_bypass_aggregate_scan(
     }
     router, _, store, _ = policy(FakeHindsight(response=response))
     assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
-    assert len(store.items) == 1
+    assert len(store.items) == 2
     assert store.items[0]["reason"] == "recalled_suspicious_aggregate"
     assert "20261234567890124" not in json.dumps(store.items[0])
 
@@ -478,7 +478,9 @@ async def test_multibank_aggregate_audit_remains_unscoped(tmp_path: Path) -> Non
     try:
         assert await router.recall("main", {"query": "ordinary"}) == {"results": []}
         async with repository.db.transaction() as tx:
-            rows = await tx.fetchall("SELECT bank_id, reason FROM quarantine_items")
+            rows = await tx.fetchall(
+                "SELECT bank_id, reason FROM quarantine_items WHERE kind='security_event'"
+            )
         assert rows == [{"bank_id": None, "reason": "recalled_suspicious_aggregate"}]
     finally:
         await repository.close()

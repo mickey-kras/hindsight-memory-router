@@ -55,4 +55,5 @@ export const KIND_LABEL: Record<QuarantineKind, string> = {
   recall_request: "recall",
   recalled_memory: "recalled memory",
   security_event: "security event",
+  blocked_content: "blocked content review",
 };

@@ -241,6 +241,7 @@ async def test_queue_fetches_only_summary_columns(
         "dedupe_key",
         "expires_at",
         "bank_id",
+        "audit_summary",
     }
     assert "encrypted" not in fetched[0]
     assert rows[0]["postpone_count"] == 0

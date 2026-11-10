@@ -29,6 +29,7 @@ from .repository import (
 from .review_repository import (
     REVIEW_STALE_SECONDS,
     claim_review,
+    classify_blocked_content,
     complete_side_effect,
     confirm_side_effect_applied,
     confirm_side_effect_not_applied,
@@ -137,7 +138,9 @@ class QuarantineAdminService:
     ) -> dict[str, Any]:
         item = await self._require_claim_candidate(quarantine_id)
         decrypted = self._verify_exact(item, body.get("decrypted"))
-        if item["kind"] == "retain_request":
+        if item["kind"] == "blocked_content":
+            result = await self._classify_blocked_content(item, "false_positive", actor.label)
+        elif item["kind"] == "retain_request":
             result = await self._approve_retain(quarantine_id, item, decrypted, actor.label)
         elif item["kind"] == "recalled_memory":
             result = await self._approve_recalled_memory(
@@ -149,6 +152,24 @@ class QuarantineAdminService:
             )
         _log_admin_action("approve", actor, quarantine_id)
         return result
+
+    async def _classify_blocked_content(
+        self, item: dict[str, Any], classification: str, actor: str
+    ) -> dict[str, Any]:
+        quarantine_id = str(item["quarantine_id"])
+        await classify_blocked_content(
+            self.repository,
+            item,
+            classification,
+            iso_now(),
+            actor=actor,
+        )
+        return {
+            "reviewed": True,
+            "classification": classification,
+            "quarantine_id": quarantine_id,
+            "runtime_block_unchanged": True,
+        }
 
     async def _approve_retain(
         self, quarantine_id: str, item: dict[str, Any], decrypted: dict[str, Any], actor: str
@@ -340,7 +361,9 @@ class QuarantineAdminService:
 
     async def reject(self, quarantine_id: str, actor: AdminActor) -> dict[str, Any]:
         item = await self._require_claim_candidate(quarantine_id)
-        if item["kind"] == "recalled_memory":
+        if item["kind"] == "blocked_content":
+            result = await self._classify_blocked_content(item, "true_positive", actor.label)
+        elif item["kind"] == "recalled_memory":
             bank_id = item.get("source_bank")
             memory_id = item.get("source_memory_id")
             if not bank_id or not memory_id:

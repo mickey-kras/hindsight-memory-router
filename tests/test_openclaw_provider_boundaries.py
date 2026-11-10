@@ -22,6 +22,7 @@ def _policy(response: object) -> SimpleNamespace:
             consume_retain=AsyncMock(),
             consume_recall=AsyncMock(),
         ),
+        capture_blocked_content=AsyncMock(),
         quarantine_security_event=AsyncMock(return_value={"quarantine_id": "q1"}),
     )
 

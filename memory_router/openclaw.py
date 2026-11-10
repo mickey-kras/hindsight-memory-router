@@ -11,6 +11,7 @@ from .hindsight import HindsightGatewayError
 from .logging import log_event
 from .observability import current_request_id
 from .openclaw_contracts import validate_facade_response, validate_openclaw_response
+from .review_capture import context_digest
 from .scan_executor import scan_facade_response, scan_request, scan_unavailable
 from .security import SafetyResult
 
@@ -58,7 +59,7 @@ class OpenClawFacade:
         # Route metadata and free-text query values are not persisted payload. Query
         # values decode valid Base64 but do not fail closed on ordinary URL syntax.
         await self._validate_safe_request(
-            route, writer_id, source, request_evidence, forwarded_query, bank_override
+            route, writer_id, source, request_evidence, forwarded_query, target_bank
         )
         path = _facade_path(route, target_bank, params, forwarded_query)
 
@@ -73,7 +74,13 @@ class OpenClawFacade:
         if value is not None:
             try:
                 await self.validate_safe_response(
-                    route.resource, writer_id, source, value, bank_override, route=route
+                    route.resource,
+                    writer_id,
+                    source,
+                    value,
+                    target_bank,
+                    route=route,
+                    request_context=request_evidence,
                 )
             except HttpError as exc:
                 if route.read or exc.code != "facade_scan_unavailable":
@@ -120,6 +127,13 @@ class OpenClawFacade:
         if scan.safe:
             return
         await self._audit(writer_id, "openclaw_suspicious_request", evidence, scan, source, bank_id)
+        await self.policy.capture_blocked_content(
+            writer_id,
+            source,
+            "openclaw_suspicious_request",
+            bank_id,
+            {"request": evidence, "context": _operation_context(route)},
+        )
         raise HttpError(422, "suspicious_content", "request blocked by memory-router policy")
 
     async def _target_bank(
@@ -159,6 +173,8 @@ class OpenClawFacade:
         bank_id: str | None = None,
         *,
         route: FacadeRoute | None = None,
+        request_context: dict[str, Any] | None = None,
+        bank_ids: list[str] | None = None,
     ) -> None:
         response_scan = await scan_facade_response(
             value,
@@ -189,6 +205,26 @@ class OpenClawFacade:
             response_scan,
             source,
             bank_id,
+        )
+        context: dict[str, Any] = {"resource": resource}
+        if route is not None:
+            context.update(_operation_context(route))
+        elif request_context is not None:
+            for key in ("method", "operation"):
+                if key in request_context:
+                    context[key] = request_context[key]
+        context.update(
+            {
+                "bank_ids": bank_ids if bank_ids is not None else ([bank_id] if bank_id else []),
+                "request_sha256": context_digest(request_context or {}),
+            }
+        )
+        await self.policy.capture_blocked_content(
+            writer_id,
+            source,
+            "openclaw_suspicious_provider_response",
+            bank_id,
+            {"response": value, "context": context},
         )
         raise HttpError(
             502,
@@ -221,6 +257,11 @@ class OpenClawFacade:
                     "dedupeKey": f"{reason}:{writer_id}:{digest}",
                     "payload": {
                         "action": reason,
+                        **(
+                            {"method": value.get("method"), "resource": value.get("resource")}
+                            if reason == "openclaw_unknown_writer" and isinstance(value, dict)
+                            else {}
+                        ),
                         "content_sha256": digest,
                         "findings": findings,
                     },
@@ -241,6 +282,15 @@ class OpenClawFacade:
                 writer_id=writer_id,
                 reason=reason,
             )
+
+
+def _operation_context(route: FacadeRoute) -> dict[str, str]:
+    return {
+        "method": route.method,
+        "resource": route.resource,
+        "template": route.template,
+        "operation": route.operation,
+    }
 
 
 def _only_scan_limit_findings(scan: SafetyResult) -> bool:
