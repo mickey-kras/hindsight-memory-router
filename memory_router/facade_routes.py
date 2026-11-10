@@ -333,7 +333,7 @@ FACADE_ROUTES: tuple[FacadeRoute, ...] = (
         "llm-requests/stats",
         read=True,
         body="none",
-        query=("operation", "call_type", "period"),
+        query=("operation", "call_type", "period", "split_by"),
     ),
 )
 
