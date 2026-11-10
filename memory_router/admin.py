@@ -370,15 +370,8 @@ class QuarantineAdminService:
                 raise HttpError(
                     409, "quarantine_source_missing", "recalled memory source metadata is missing"
                 )
-            if item["status"] == REVIEW_SIDE_EFFECT_COMPLETED:
-                await finish_reject_memory(
-                    self.repository,
-                    quarantine_id,
-                    str(item["updated_at"]),
-                    expected_sha256=str(item["sha256"]),
-                    actor=actor.label,
-                )
-            else:
+            at = str(item["updated_at"])
+            if item["status"] != REVIEW_SIDE_EFFECT_COMPLETED:
                 at = iso_now()
                 claimed = await claim_review(
                     self.repository,
@@ -406,13 +399,13 @@ class QuarantineAdminService:
                     at,
                     expected_sha256=str(item["sha256"]),
                 )
-                await finish_reject_memory(
-                    self.repository,
-                    quarantine_id,
-                    at,
-                    expected_sha256=str(item["sha256"]),
-                    actor=actor.label,
-                )
+            await finish_reject_memory(
+                self.repository,
+                quarantine_id,
+                at,
+                expected_sha256=str(item["sha256"]),
+                actor=actor.label,
+            )
             result = {
                 "reviewed": True,
                 "allowed": False,

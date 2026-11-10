@@ -24,6 +24,7 @@ from .timestamps import parse_iso
 REVIEW_STALE_SECONDS = 60
 _EXPIRED_MESSAGE = "quarantine item has expired"
 _NOT_FOUND_MESSAGE = "quarantine item not found"
+_DELETE_ITEM = "DELETE FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_ITEM = "SELECT * FROM quarantine_items WHERE quarantine_id=?"
 _SELECT_IN_PROGRESS = "SELECT * FROM quarantine_items WHERE status='review_in_progress'"
 _UPDATE_STATUS = "UPDATE quarantine_items SET status=?,updated_at=? WHERE quarantine_id=?"
@@ -242,9 +243,7 @@ async def finish_approve_retain(
         item = await require_side_effect_completed(
             tx, quarantine_id, at, expected_sha256=expected_sha256
         )
-        await tx.execute(
-            "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
-        )
+        await tx.execute(_DELETE_ITEM, (item["quarantine_id"],))
         await insert_event(tx, quarantine_id, "approved", at, details)
 
 
@@ -295,7 +294,7 @@ async def classify_blocked_content(
     async def apply(tx: Tx, item: dict[str, object]) -> None:
         if item["kind"] != "blocked_content":
             raise HttpError(409, "invalid_review_action", "item is not blocked content")
-        await tx.execute("DELETE FROM quarantine_items WHERE quarantine_id=?", (quarantine_id,))
+        await tx.execute(_DELETE_ITEM, (quarantine_id,))
         await insert_event(
             tx,
             quarantine_id,
@@ -326,9 +325,7 @@ async def remove(
     actor: str | None = None,
 ) -> None:
     async def apply(tx: Tx, item: dict[str, object]) -> None:
-        await tx.execute(
-            "DELETE FROM quarantine_items WHERE quarantine_id=?", (item["quarantine_id"],)
-        )
+        await tx.execute(_DELETE_ITEM, (item["quarantine_id"],))
         await insert_event(tx, quarantine_id, event_type, at, {}, actor=actor)
 
     await _mutate_review(repository, quarantine_id, at, stale_seconds, apply)
