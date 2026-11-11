@@ -1,0 +1,13 @@
+{
+  "schema": 2,
+  "version": "0.1.19",
+  "base": "5c2921d8f996e777873c6823fa17b1458ebaf717",
+  "preparation_run": 42981063374,
+  "hindsight": {
+    "version": "1.2.1",
+    "sha": "0eb02d8c418eac6b489bc63883c993b2257dfac4",
+    "image": "ghcr.io/vectorize-io/hindsight:1.2.1@sha256:d2bc230a714e933affd63753e181a0579328fdcbbc021800a76e0bc7b6e76b31"
+  },
+  "packages": [],
+  "publication_run": 42981063374
+}
