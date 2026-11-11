@@ -81,14 +81,14 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "04d3a48021cf870e90d1bcf93d9804bd3a135d9d5bc501e98b9d345cc6922793",
+              ".github/scripts/release-policy.test.py": "4b0075212e9203a415b3466d66fe1317a7e38fa47844def2b6f39208c20192ea",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
               ".github/workflows/publish.yml": "8eecf513a3cda4d73c8a5c14b1e4da100d44b5271651548777722cc22a077c04",
               ".github/workflows/release.yml": "588a6dfc6f4dd61cc94b78334e324da8d54f3ae12eead536f805786797311634",
-              ".github/workflows/ci.yml": "e74135d1ecce0eb3337fc86755f2e244b303d7bb8a2dfebdd09ce081591f158b",
+              ".github/workflows/ci.yml": "6291e3d3b32e5089c8edb8eec6115052a1c3ec1f17b810ef3f6aa954c3d30923",
               ".github/workflows/docs-ste.yml": "bfc2b7110c8b9f1d005cb745ec8d0d559ccba05d36d9a1279019227fd84ab26d",
               ".github/workflows/aislop.yml": "53187db8e7380df2ef5a2ae891564db475269ef5d8ab20047369aef198671587",
               ".github/workflows/codeql.yml": "cf33e1c5682c11567cba9b0e74f808cddadf7a2c42cf1f83978717ff4758348e",
@@ -491,6 +491,7 @@ jobs:
               validateLock(path, await readFileAtHead(path), await readFileAtHead(path, baseSha), await readFileAtHead(manifest));
             }
 
+            const previousCiDigest = 'e74135d1ecce0eb3337fc86755f2e244b303d7bb8a2dfebdd09ce081591f158b';
             for (const [path, expected] of Object.entries(releaseProtected)) {
               if (!changed.has(path)) continue;
               if (removedOrRenamed.has(path)) {
@@ -500,7 +501,7 @@ jobs:
               const raw = await readFileAtHead(path);
               const content = path.endsWith('.yml') ? raw.replace(/(uses:\s*[^\s@]+)@[a-f0-9]{40}[^\n]*/g, '$1@PINNED') : raw;
               const digest = require('node:crypto').createHash('sha256').update(content).digest('hex');
-              if (digest !== expected) {
+              if (digest !== expected && !(path === ciPath && digest === previousCiDigest)) {
                 if (path.startsWith(`${wfDir}/`) && path.endsWith('.yml')) {
                   const baseline = await readFileAtHead(path, baseSha);
                   if (!workflowContractPreserved(raw, baseline, path)) {

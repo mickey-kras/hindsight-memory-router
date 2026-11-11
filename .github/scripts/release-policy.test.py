@@ -1545,6 +1545,31 @@ class AdmissionPolicyTests(unittest.TestCase):
                                       'user': {'login': 'implementer[bot]', 'type': 'Bot', 'id': 123}})
                 self.assertIn('must not override the registry or governed lockfile', '\n'.join(result))
 
+    def test_ci_pip_pin_transition_accepts_only_reviewed_workflows(self):
+        path = '.github/workflows/ci.yml'
+        original = (ROOT / path).read_text()
+        commands = [
+            ("python -m pip install 'pip==26.2.2'",
+             'python -m pip install "$(grep -m1 -o \'^pip==[^ ]*\' dev-requirements.txt)"'),
+            ("printf 'pip==26.2.2\\n' > dev-constraints.txt",
+             "grep -m1 -o '^pip==[^ ]*' dev-requirements.txt > dev-constraints.txt"),
+        ]
+        legacy = original
+        for before, after in commands:
+            legacy = legacy.replace(after, before)
+        updated = legacy
+        for before, after in commands:
+            updated = updated.replace(before, after)
+        self.assertNotEqual(legacy, updated)
+        for reviewed in [legacy, updated]:
+            with self.subTest(workflow='legacy' if reviewed == legacy else 'updated'):
+                self.assertEqual(policy({path: reviewed}, paths=[path]), [])
+                changed = reviewed.replace('      - name: Gitleaks\n',
+                                           '      - name: Gitleaks\n        if: false\n')
+                self.assertNotEqual(changed, reviewed)
+                self.assertIn('cannot change the trusted workflow execution contract',
+                              '\n'.join(policy({path: changed}, paths=[path])))
+
     def test_owner_approval_cannot_disable_workflow_execution(self):
         path = '.github/workflows/ci.yml'
         original = (ROOT / path).read_text()
