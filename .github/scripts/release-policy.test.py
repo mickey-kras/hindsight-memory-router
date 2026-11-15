@@ -13,6 +13,7 @@ import yaml
 
 ROOT = Path.cwd()
 GUARD = ROOT / ".github/workflows/policy-guard.yml"
+TRUSTED_REVIEWERS = {"reviewers": [{"login": "mickey-kras", "id": 24433677}]}
 ROUTER = (ROOT / ".github/workflows/publish.yml").exists()
 MAIN = ".github/workflows/publish.yml" if ROUTER else ".github/workflows/main.yml"
 PATHS = [
@@ -94,7 +95,8 @@ new AsyncFunction('github', 'context', 'core', 'require', input.script)(github, 
         result = subprocess.run(
             ["node", "-e", driver],
             env={**os.environ, "POLICY_TOOLS_DIRECTORY": os.environ.get("POLICY_TOOLS_DIRECTORY", str(ROOT / ".github/scripts")),
-                 "CI_POLICY_SETTINGS_REVIEW": settings_review},
+                 "CI_POLICY_SETTINGS_REVIEW": settings_review,
+                 "TRUSTED_REVIEWERS_JSON": json.dumps(TRUSTED_REVIEWERS)},
             input=json.dumps({"script": script, "files": files, "base_files": base_files, "paths": paths if paths is not None else PATHS,
                               "comments": comments or [], "reviews": reviews or [], "rules": rules or [], "statuses": statuses or {}, "current_pull": current_pull,
                               "sources": sources if sources is not None else {"42": {
@@ -1476,14 +1478,21 @@ class AdmissionPolicyTests(unittest.TestCase):
         approve = {'id': 1, 'user': owner, 'body': '/approve-ci ' + 'a' * 40}
         self.assertEqual(self.admission(user=owner, comments=[approve]), [])
         for change in [{'body': '/approve-ci ' + 'b' * 40}, {'body': '/approve-ci aaaaaaa'},
-                       {'body': 'Please ' + approve['body']}, {'user': {**owner, 'id': 1}},
-                       {'user': {**owner, 'login': 'other'}}, {'user': {**owner, 'type': 'Bot'}}]:
+                       {'body': 'Please ' + approve['body']}, {'user': {**owner, 'id': 1, 'login': 'other'}},
+                       {'user': {**owner, 'type': 'Bot'}}]:
             self.assertTrue(self.admission(user=owner, comments=[{**approve, **change}]))
+        # Numeric id is the primary identity; login is the fallback.
+        self.assertEqual(self.admission(user=owner, comments=[{**approve, 'user': {**owner, 'login': 'other'}}]), [])
+        self.assertEqual(self.admission(user=owner, comments=[{**approve, 'user': {**owner, 'id': 1}}]), [])
         revoke = {**approve, 'id': 2, 'body': '/revoke-ci ' + 'a' * 40}
         self.assertTrue(self.admission([self.approval()], self.rules(), comments=[revoke, approve]))
         self.assertEqual(self.admission(user=owner, comments=[revoke, approve, {**approve, 'id': 3}]), [])
         self.assertTrue(self.admission(user=owner, comments=[approve],
                                       base_overrides={'.github/CODEOWNERS': '/.github/ @other'}))
+        self.assertEqual(self.admission(user=owner, comments=[approve],
+                                       base_overrides={'.github/CODEOWNERS': '/.github/ @mickey-kras @other\n'}), [])
+        self.assertEqual(self.admission(user=owner, comments=[approve],
+                                       base_overrides={'.github/CODEOWNERS': '/.github/ @other @mickey-kras\n'}), [])
 
     def test_review_source_bypasses_and_redaction_fail_closed(self):
         args = ([self.approval()], self.rules())
@@ -1530,7 +1539,7 @@ class AdmissionPolicyTests(unittest.TestCase):
     def test_stale_revoked_and_nonowner_reviews_cannot_admit(self):
         for review in [self.approval(commit_id='c' * 40), self.approval(state='DISMISSED'),
                        self.approval(user={'login': 'someone', 'type': 'User'}),
-                       self.approval(user={'login': 'mickey-kras', 'type': 'User', 'id': 999})]:
+                       self.approval(user={'login': 'someone', 'type': 'User', 'id': 999})]:
             self.assertTrue(self.admission([review], self.rules()))
         for state in ['DISMISSED', 'CHANGES_REQUESTED']:
             self.assertTrue(self.admission([self.approval(), self.approval(id=2, state=state)], self.rules()))
@@ -1624,9 +1633,16 @@ class AdmissionPolicyTests(unittest.TestCase):
         self.assertEqual(workflow['permissions'], {'contents': 'read', 'pull-requests': 'read'})
         steps = workflow['jobs']['guard']['steps']
         checkouts = [step for step in steps if step.get('uses', '').startswith('actions/checkout@')]
-        self.assertEqual(len(checkouts), 1)
-        self.assertEqual(checkouts[0]['with'], {'ref': '${{ github.workflow_sha }}', 'path': '.policy-tools',
-                                               'sparse-checkout': '.github/scripts', 'persist-credentials': False})
+        tools = [step for step in checkouts if step.get('with', {}).get('path') == '.policy-tools']
+        self.assertEqual(len(tools), 1)
+        self.assertEqual(tools[0]['with'], {'ref': '${{ github.workflow_sha }}', 'path': '.policy-tools',
+                                            'sparse-checkout': '.github/scripts', 'persist-credentials': False})
+        # The trusted-reviewer admit list must come from the pull request base,
+        # never from the PR head.
+        config = [step for step in checkouts if step.get('with', {}).get('path') == '.policy-config']
+        self.assertEqual(len(config), 1)
+        self.assertEqual(config[0]['with'], {'ref': '${{ github.event.pull_request.base.sha }}', 'path': '.policy-config',
+                                             'sparse-checkout': '.github', 'persist-credentials': False})
         install = next(step for step in steps if step.get('name') == 'Install trusted policy parser')
         self.assertEqual(install['working-directory'], '.policy-tools/.github/scripts')
         self.assertEqual(install['run'], 'npm ci --ignore-scripts --registry=https://registry.npmjs.org --userconfig=/dev/null')
