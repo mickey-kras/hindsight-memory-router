@@ -62,6 +62,9 @@ jobs:
               throw new Error('Invalid immutable pull request revision');
             }
             if (headSha !== context.payload.pull_request.head.sha) throw new Error('Stale pull request event');
+            // The reviewer admit list is loaded from the event's base revision;
+            // refuse to judge with a stale list when the base has since moved.
+            if (baseSha !== context.payload.pull_request.base.sha) throw new Error('Stale pull request base event');
             const trustedReviewers = JSON.parse(process.env.TRUSTED_REVIEWERS_JSON || 'null');
             if (!trustedReviewers || !Array.isArray(trustedReviewers.reviewers) || trustedReviewers.reviewers.length === 0 ||
                 !trustedReviewers.reviewers.every(reviewer => reviewer && typeof reviewer === 'object' &&
