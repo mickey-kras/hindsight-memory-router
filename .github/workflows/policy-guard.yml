@@ -527,6 +527,7 @@ jobs:
             }
 
             const previousCiDigest = 'e74135d1ecce0eb3337fc86755f2e244b303d7bb8a2dfebdd09ce081591f158b';
+            const reviewersPath = '.github/trusted-reviewers.json';
             for (const [path, expected] of Object.entries(releaseProtected)) {
               if (!changed.has(path)) continue;
               if (removedOrRenamed.has(path)) {
@@ -536,7 +537,18 @@ jobs:
               const raw = await readFileAtHead(path);
               const content = path.endsWith('.yml') ? raw.replace(/(uses:\s*[^\s@]+)@[a-f0-9]{40}[^\n]*/g, '$1@PINNED') : raw;
               const digest = require('node:crypto').createHash('sha256').update(content).digest('hex');
-              if (digest !== expected && !(path === ciPath && digest === previousCiDigest)) {
+              // The reviewer admit list is authorization state, not release
+              // automation: any content change relative to the base revision —
+              // including restoring the originally pinned bytes after a reviewer
+              // rotation — must carry exact-head approval from the current
+              // base-revision reviewers.
+              let reviewersAuthorizationChanged = false;
+              if (path === reviewersPath) {
+                let baseRaw = null;
+                try { baseRaw = await readFileAtHead(path, baseSha); } catch { baseRaw = null; }
+                reviewersAuthorizationChanged = baseRaw === null || raw !== baseRaw;
+              }
+              if (reviewersAuthorizationChanged || (digest !== expected && !(path === ciPath && digest === previousCiDigest))) {
                 if (path.startsWith(`${wfDir}/`) && path.endsWith('.yml')) {
                   const baseline = await readFileAtHead(path, baseSha);
                   if (!workflowContractPreserved(raw, baseline, path)) {

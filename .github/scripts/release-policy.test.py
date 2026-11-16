@@ -1652,6 +1652,37 @@ class AdmissionPolicyTests(unittest.TestCase):
         self.assertNotRegex(pins, r':\s*\[')
         self.assertNotIn('guard', yaml.safe_load((ROOT / '.github/workflows/pr-validation.yml').read_text())['jobs'])
 
+    def test_reviewer_list_change_restore_and_add_require_approval(self):
+        original = (ROOT / '.github/trusted-reviewers.json').read_text()
+        rotated = json.dumps({"reviewers": [{"login": "rotated-reviewer", "id": 12345678}]}, indent=2) + '\n'
+        comment = {"id": 1, "user": {"login": "mickey-kras", "id": 24433677, "type": "User"},
+                   "body": f"/approve-ci {'a' * 40}"}
+
+        # Rotating the list without approval fails.
+        rotated_result = policy(paths=[".github/trusted-reviewers.json"],
+                                overrides={".github/trusted-reviewers.json": rotated})
+        self.assertIn(".github/trusted-reviewers.json: release automation must match its reviewed policy",
+                      "\n".join(rotated_result))
+
+        # Restoring the originally pinned bytes after a rotation is still a
+        # change relative to the base and must not pass without approval.
+        restore_result = policy(paths=[".github/trusted-reviewers.json"],
+                                base_overrides={".github/trusted-reviewers.json": rotated})
+        self.assertIn(".github/trusted-reviewers.json: release automation must match its reviewed policy",
+                      "\n".join(restore_result))
+
+        # Adding the list to a base that never had it requires approval too.
+        added_result = policy(paths=[".github/trusted-reviewers.json"],
+                              base_overrides={".github/trusted-reviewers.json": None})
+        self.assertIn(".github/trusted-reviewers.json: release automation must match its reviewed policy",
+                      "\n".join(added_result))
+
+        # Exact-head approval from a current base-revision reviewer admits the change.
+        approved = policy(paths=[".github/trusted-reviewers.json"],
+                          base_overrides={".github/trusted-reviewers.json": rotated}, comments=[comment])
+        self.assertEqual(approved, [])
+        self.assertEqual(original, (ROOT / '.github/trusted-reviewers.json').read_text())
+
 
 if __name__ == "__main__":
     unittest.main()
