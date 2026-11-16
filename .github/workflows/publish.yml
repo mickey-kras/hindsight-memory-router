@@ -159,6 +159,28 @@ jobs:
       - name: Verify authoritative coverage
         run: python .github/scripts/coverage-artifact.py restore "$RUNNER_TEMP/coverage-evidence"
 
+      - name: Download python analyzer reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: python-analyzers-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/python-analyzers
+          digest-mismatch: error
+      - name: Verify python analyzer reports
+        env:
+          PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python .github/scripts/analyzer-artifact.py restore python "$RUNNER_TEMP/python-analyzers"
+
+      - name: Download ui analyzer reports
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: ui-analyzers-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-analyzers
+          digest-mismatch: error
+      - name: Verify ui analyzer reports
+        env:
+          PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python .github/scripts/analyzer-artifact.py restore ui "$RUNNER_TEMP/ui-analyzers"
+
       - name: Mask configured SonarQube endpoint
         env:
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}

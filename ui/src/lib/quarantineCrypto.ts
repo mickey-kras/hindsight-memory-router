@@ -219,7 +219,7 @@ export async function decryptEnvelope(
         additionalData: enc.aad === AAD_FORMAT ? (aad(envelope).buffer as ArrayBuffer) : undefined,
       },
       key,
-      combined.buffer as ArrayBuffer,
+      combined.buffer,
     );
     plaintext = new TextDecoder().decode(buffer);
   } catch {

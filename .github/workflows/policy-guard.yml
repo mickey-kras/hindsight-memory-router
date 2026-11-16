@@ -89,6 +89,8 @@ jobs:
             // Reviewed release workflows and helpers. Pin refreshes (including
             // trailing version comments on uses lines) preserve workflow shape.
             const releaseProtected = {
+              ".github/scripts/analyzer-artifact.test.py": "559b13217ff1a9753dc17a8502b328e1cbfad85ccfc33ceef1c57c96e9a684a7",
+              ".github/scripts/analyzer-artifact.py": "560f1324ede3b1e578b0da52730c9cefcfc47a1f8fd96d368c0876e6e12bb0e9",
               ".github/CODEOWNERS": "9b847e665150fab23893753a76743f32d159f2d347766a011906848e34f95af0",
               ".github/trusted-reviewers.json": "c2ed5e40d207ab1d50777ae35fd451b8609566a1bfd5b7d1009834e445e5b9fc",
               ".github/rulesets/require-ci-owner-review.json": "1decb20b1e1239ca11c56b0a3004d956efb21250bb7a49170fe2d41886fa55d8",
@@ -116,14 +118,14 @@ jobs:
               ".github/scripts/release.test.cjs": "89ebcfc1e5c2b250d77bdcbfa6b09c8d120b405fa34ba2b7bcf79ba383a30ed2",
               ".github/scripts/release-cleanup.cjs": "c878f1e64990c498aa27b2fbb3a485574245a4b78c2ffed7880415714373ad22",
               ".github/scripts/release-cleanup.test.cjs": "d88923e9d5f6f4293a52dc78de338097f7898043317c4cb42cad30498b81b803",
-              ".github/scripts/release-policy.test.py": "62b76d3f6fb2053e43e992e4c91d823797c4e9a9d0f8823bbd963258e9ebaea2",
+              ".github/scripts/release-policy.test.py": "c4bfe2de7779b3a2a55c1770ffb310038d6bec6dac9cf31f91ab261d56746f66",
               ".github/scripts/aislop-cli.test.cjs": "8a37cf4335ab7762b86a73bfb7961bf649d6745be3d0ff92b9287f7d1946d6b6",
               ".github/rulesets/protect-release-branches.json": "b3ccb6d485283c3f83c4e39939c38543808c63225f1f419295156b72700a06d7",
               ".github/scripts/publish-image.sh": "eabbfb7c05465cbb0a46eee13ec54a51dd6e6f5c46126a6d443eeef948a9fd7b",
               ".github/scripts/publish-image.test.cjs": "bac26ea2f4a54f2a455445fee9e96d8503aabb89e226b82f9eadf551c198350c",
-              ".github/workflows/publish.yml": "8eecf513a3cda4d73c8a5c14b1e4da100d44b5271651548777722cc22a077c04",
+              ".github/workflows/publish.yml": "5b7225084dbfb69e00a9d671b756557b2c57d36a37ccdd4bbb6fa40a5fd8ac48",
               ".github/workflows/release.yml": "588a6dfc6f4dd61cc94b78334e324da8d54f3ae12eead536f805786797311634",
-              ".github/workflows/ci.yml": "6291e3d3b32e5089c8edb8eec6115052a1c3ec1f17b810ef3f6aa954c3d30923",
+              ".github/workflows/ci.yml": "beeb6e1f9d9bd91fd53ee4d8cb4e2bc18396ed1999349ce809dec5f2a4d7c27c",
               ".github/workflows/docs-ste.yml": "bfc2b7110c8b9f1d005cb745ec8d0d559ccba05d36d9a1279019227fd84ab26d",
               ".github/workflows/aislop.yml": "53187db8e7380df2ef5a2ae891564db475269ef5d8ab20047369aef198671587",
               ".github/workflows/codeql.yml": "cf33e1c5682c11567cba9b0e74f808cddadf7a2c42cf1f83978717ff4758348e",
@@ -529,7 +531,7 @@ jobs:
               validateLock(path, await readFileAtHead(path), await readFileAtHead(path, baseSha), await readFileAtHead(manifest));
             }
 
-            const previousCiDigest = 'e74135d1ecce0eb3337fc86755f2e244b303d7bb8a2dfebdd09ce081591f158b';
+            const previousCiDigest = 'ee6b3da7437e6e33b301ac1b047c79be9c31d0e998c5b66a2097ba095654e8bf';
             const reviewersPath = '.github/trusted-reviewers.json';
             for (const [path, expected] of Object.entries(releaseProtected)) {
               if (!changed.has(path)) continue;

@@ -29,6 +29,8 @@ PATHS = [
     ".github/scripts/report-main-failures.test.cjs",
     ".github/scripts/coverage-artifact.py",
     ".github/scripts/coverage-artifact.test.py",
+    ".github/scripts/analyzer-artifact.py",
+    ".github/scripts/analyzer-artifact.test.py",
     ".github/scripts/aislop-cli.test.cjs",
     ".github/scripts/ci-impact.cjs",
     ".github/scripts/ci-impact.test.cjs",
@@ -1200,6 +1202,27 @@ process.exit(Number(process.env.AISLOP_TEST_EXIT));
                 if not success:
                     self.assertIn("CoverageEvidenceError:", result.stderr)
                     self.assertIn("rerun authoritative main CI", result.stderr)
+
+    def test_analyzer_reports_are_bound_to_successful_main_producers(self):
+        ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+        sonar = yaml.safe_load((ROOT / MAIN).read_text())["jobs"]["sonar"]
+        steps = sonar["steps"]
+        names = [step.get("name") for step in steps]
+        for kind in ["python", "ui"]:
+            producer = ci["jobs"][kind]
+            upload = next(step for step in producer["steps"] if step.get("id") == "analyzer-upload")
+            self.assertIn("success()", upload["if"])
+            self.assertIn("inputs.candidate_sha == ''", upload["if"])
+            self.assertIn("github.ref == 'refs/heads/main'", upload["if"])
+            self.assertNotIn("continue-on-error", upload)
+            download = next(step for step in steps if step.get("name") == f"Download {kind} analyzer reports")
+            self.assertEqual(download["with"]["name"], kind + "-analyzers-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}")
+            self.assertNotIn("run-id", download["with"])
+            self.assertNotIn("pattern", download["with"])
+            self.assertEqual(download["with"]["digest-mismatch"], "error")
+            self.assertLess(names.index(f"Verify {kind} analyzer reports"), names.index("Mask configured SonarQube endpoint"))
+        for path in [".github/scripts/analyzer-artifact.py", ".github/scripts/analyzer-artifact.test.py"]:
+            self.assertTrue(policy({path: (ROOT / path).read_text() + "\n# unreviewed change\n"}))
 
     def test_coverage_verifier_and_tests_are_protected(self):
         for path in [".github/scripts/coverage-artifact.py", ".github/scripts/coverage-artifact.test.py"]:

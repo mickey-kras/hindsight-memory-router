@@ -23,21 +23,30 @@
     "pretest:e2e": "npm run fixtures",
     "test:e2e": "playwright test",
     "posttest:e2e": "npm run fixtures:clean",
-    "test:package": "node tests/package-consumer.mjs"
+    "test:package": "node tests/package-consumer.mjs",
+    "lint": "eslint src tests/unit vite.config.ts vitest.config.ts --max-warnings 0",
+    "lint:report": "npm run lint -- --format json --output-file ../reports/eslint.json",
+    "test:coverage": "vitest run --coverage",
+    "pretest:coverage": "npm run fixtures",
+    "posttest:coverage": "npm run fixtures:clean"
   },
   "dependencies": {
     "react": "^19.3.1",
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@eslint/js": "10.0.1",
     "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.1.11",
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.2",
+    "@vitest/coverage-v8": "5.0.4",
+    "eslint": "10.15.0",
     "tailwindcss": "^4.1.11",
-    "typescript": "^7.0.2",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.73.0",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
   },
