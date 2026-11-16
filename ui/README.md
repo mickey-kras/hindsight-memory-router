@@ -200,8 +200,9 @@ The UI pins TypeScript 6.0.3 because typescript-eslint does not yet support Type
 CI runs the checks before the UI tests and build.
 
 SonarQube analyzes the router and `ui/src`.
-The main CI jobs export Ruff, mypy, ESLint, and UI LCOV reports.
-The Sonar job verifies each artifact against the source revision, run, and producer attempt before import.
+CI exports reports from Ruff, mypy, ESLint, and UI coverage.
+The Sonar job checks the source revision and CI run before it imports each artifact.
 
-UI coverage includes all UI source files; uncovered components remain visible.
+UI coverage includes all UI source files.
+Uncovered components remain visible.
 Rerun all CI jobs if analyzer artifacts are missing after a partial retry.
