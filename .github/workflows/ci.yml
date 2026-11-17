@@ -233,6 +233,19 @@ jobs:
       - run: mypy memory_router
         if: ${{ needs.changes.outputs.python != 'false' }}
 
+      - name: Python analyzer reports
+        if: ${{ needs.changes.outputs.python != 'false' }}
+        run: |
+          set -o pipefail
+          mkdir -p reports
+          ruff check memory_router tests .github/scripts/sync-sonar-findings.py .github/scripts/mask-sonar-context.py .github/scripts/coverage-artifact.py .github/scripts/coverage-artifact.test.py .github/scripts/analyzer-artifact.py .github/scripts/analyzer-artifact.test.py --output-format json | tee reports/ruff.json
+          mypy memory_router --no-pretty --no-color-output --no-error-summary --show-column-numbers | tee reports/mypy.txt
+      - name: Analyzer artifact regressions
+        if: ${{ needs.changes.outputs.python != 'false' }}
+        run: |
+          ruff format --check .github/scripts/analyzer-artifact.py .github/scripts/analyzer-artifact.test.py
+          python .github/scripts/analyzer-artifact.test.py
+
       - name: Tests and coverage
         if: ${{ needs.changes.outputs.python != 'false' }}
         # Each pytest worker can start four scanner processes; keep the worker count bounded.
@@ -257,6 +270,20 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage-evidence/coverage.xml
             ${{ runner.temp }}/coverage-evidence/manifest.json
+          if-no-files-found: error
+
+      - name: Prepare Python analyzer reports
+        if: ${{ success() && needs.changes.outputs.python != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        env:
+          PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: python .github/scripts/analyzer-artifact.py prepare python "$RUNNER_TEMP/python-analyzers"
+      - name: Upload Python analyzer reports
+        id: analyzer-upload
+        if: ${{ success() && needs.changes.outputs.python != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: python-analyzers-${{ inputs.candidate_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/python-analyzers/
           if-no-files-found: error
 
       - name: Record successful validation
@@ -323,9 +350,19 @@ jobs:
         if: ${{ needs.changes.outputs.ui != 'false' }}
         run: node --test .github/scripts/aislop-cli.test.cjs
 
+      - name: Type-aware UI analysis
+        if: ${{ needs.changes.outputs.ui != 'false' }}
+        run: |
+          mkdir -p reports
+          npm run lint:report --prefix ui || { cat reports/eslint.json; exit 1; }
+
       - name: UI unit, crypto, and build checks
         if: ${{ needs.changes.outputs.ui != 'false' }}
         run: npm test --prefix ui && npm run build --prefix ui
+
+      - name: UI coverage
+        if: ${{ needs.changes.outputs.ui != 'false' }}
+        run: npm run test:coverage --prefix ui
 
       - name: UI package consumer check
         if: ${{ needs.changes.outputs.ui != 'false' }}
@@ -353,6 +390,23 @@ jobs:
           name: openapi-lint-diagnostics-${{ inputs.candidate_sha || github.sha }}-${{ github.run_attempt }}
           path: openapi-lint.log
           if-no-files-found: error
+      - name: Prepare UI analyzer reports
+        id: analyzer-evidence
+        if: ${{ success() && needs.changes.outputs.ui != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        env:
+          PRODUCER_RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          python .github/scripts/analyzer-artifact.py prepare ui "$RUNNER_TEMP/ui-analyzers"
+          echo "run_attempt=$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Upload UI analyzer reports
+        id: analyzer-upload
+        if: ${{ success() && needs.changes.outputs.ui != 'false' && inputs.candidate_sha == '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ui-analyzers-${{ inputs.candidate_sha || github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/ui-analyzers/
+          if-no-files-found: error
+
       - name: Record successful validation
         id: completed
         env:

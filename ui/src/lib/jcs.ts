@@ -21,7 +21,7 @@ function assertJcsSafe(value: unknown): asserts value is JsonValue {
     return;
   }
   if (typeof value === "object") {
-    for (const key of Object.keys(value as object)) {
+    for (const key of Object.keys(value)) {
       assertJcsSafe((value as Record<string, unknown>)[key]);
     }
     return;

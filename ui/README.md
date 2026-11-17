@@ -191,3 +191,18 @@ Cleanup and review actions must have their scoped tokens.
 Read-only use works with the read token alone.
 
 
+
+## Static analysis
+
+Run `npm run lint --prefix ui` for type-aware ESLint checks.
+The UI pins TypeScript 6.0.3 because typescript-eslint does not yet support TypeScript 7.
+
+CI runs the checks before the UI tests and build.
+
+SonarQube analyzes the router and `ui/src`.
+CI exports reports from Ruff, mypy, ESLint, and UI coverage.
+The Sonar job checks the source revision and CI run before it imports each artifact.
+
+UI coverage includes all UI source files.
+Uncovered components remain visible.
+Rerun all CI jobs if analyzer artifacts are missing after a partial retry.

@@ -35,3 +35,6 @@ tests/integration/tmp/
 # Vale downloads its styles here. Only the project vocabulary is tracked.
 .vale/styles/*
 !.vale/styles/config/
+
+# Generated static analysis reports
+reports/

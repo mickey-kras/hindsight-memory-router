@@ -47,7 +47,7 @@ describe("decryptEnvelope conformance", () => {
     expect(decrypted).toEqual(expected);
   });
 
-  it.each(IDS)("%s: canonical form matches the Python hash input byte-for-byte", async (id) => {
+  it.each(IDS)("%s: canonical form matches the Python hash input byte-for-byte", (id) => {
     const expectedCanonical = readFileSync(new URL(`${id}.canonical.txt`, FIXTURES), "utf8");
     const decrypted = fixture<DecryptedQuarantineObject>(`${id}.decrypted.json`);
     expect(canonicalDecrypted(decrypted)).toBe(expectedCanonical);

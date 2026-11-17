@@ -109,9 +109,9 @@ describe("api client base URL", () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        calls.push(String(input));
-        return new Response(JSON.stringify({ status: "alive" }), { status: 200 });
+      vi.fn((input: RequestInfo | URL) => {
+        calls.push(input instanceof Request ? input.url : input.toString());
+        return Promise.resolve(new Response(JSON.stringify({ status: "alive" }), { status: 200 }));
       }),
     );
     await fetchLiveness();
@@ -122,9 +122,9 @@ describe("api client base URL", () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL) => {
-        calls.push(String(input));
-        return new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 });
+      vi.fn((input: RequestInfo | URL) => {
+        calls.push(input instanceof Request ? input.url : input.toString());
+        return Promise.resolve(new Response(JSON.stringify({ items: [], total: 0 }), { status: 200 }));
       }),
     );
     const { listQueue } = await import("../../src/lib/api");
@@ -141,7 +141,7 @@ describe("anonymous liveness probe", () => {
     [200, { version: "old mock" }],
     [200, null],
   ])("rejects HTTP %i with body %j", async (status, body) => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(body), { status })));
+    vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response(JSON.stringify(body), { status }))));
     await expect(fetchLiveness()).rejects.toThrow();
   });
 });
