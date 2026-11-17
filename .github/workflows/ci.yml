@@ -589,6 +589,9 @@ jobs:
           npm_config_userconfig: /dev/null
           npm_config_globalconfig: ${{ runner.temp }}/npm-global.rc
           npm_config_ignore_scripts: 'true'
+          # GHSA-fc5q-39xc-vjpf: picomatch ReDoS (<=4.0.7), no patched release; dev-only aislop/knip chain.
+          # Remove when a patched picomatch (>4.0.7) ships.
+          NPM_AUDIT_IGNORE_GHSAS: GHSA-fc5q-39xc-vjpf
         run: |
           node trusted/.github/scripts/npm-audit.cjs "$RUNNER_TEMP/audits"
           node trusted/.github/scripts/npm-audit.cjs "$RUNNER_TEMP/audits/ui"
