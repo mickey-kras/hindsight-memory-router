@@ -2,9 +2,40 @@ const { spawnSync } = require('node:child_process');
 
 const SEVERITY = { low: 1, moderate: 2, high: 3, critical: 4 };
 
-function findings(report) {
-  return Object.entries(report.vulnerabilities || {}).filter(([, vulnerability]) =>
-    SEVERITY[vulnerability.severity] >= SEVERITY.moderate);
+const IGNORE_GHSAS = new Set(
+  (process.env.NPM_AUDIT_IGNORE_GHSAS || '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean),
+);
+
+function findings(report, ignoreGhsas = IGNORE_GHSAS) {
+  const entries = Object.entries(report.vulnerabilities || {});
+  // Drop the packages named by an ignored advisory, then iteratively drop
+  // dependents whose only path to a vulnerability runs through dropped packages.
+  const suppressed = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const [name, vulnerability] of entries) {
+      if (suppressed.has(name)) continue;
+      const via = Array.isArray(vulnerability.via) ? vulnerability.via : [];
+      const advisoryIgnored = via.some(
+        (entry) => entry !== null && typeof entry === 'object' && ignoreGhsas.has(entry.source),
+      );
+      const pathsOnlyThroughSuppressed =
+        via.length > 0 &&
+        via.every((entry) => typeof entry === 'string' && suppressed.has(entry));
+      if (advisoryIgnored || pathsOnlyThroughSuppressed) {
+        suppressed.add(name);
+        changed = true;
+      }
+    }
+  }
+  return entries.filter(
+    ([name, vulnerability]) =>
+      !suppressed.has(name) && SEVERITY[vulnerability.severity] >= SEVERITY.moderate,
+  );
 }
 
 function audit(directory = '.') {
