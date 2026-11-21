@@ -18,8 +18,8 @@
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "devDependencies": {
-    "@redocly/cli": "2.77.0",
-    "aislop": "0.20.1"
+    "@redocly/cli": "2.78.0",
+    "aislop": "0.22.0"
   },
   "overrides": {
     "postcss": {
