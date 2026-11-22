@@ -4,6 +4,12 @@
 
 Use the [integrations package](https://github.com/mickey-kras/hindsight-memory-router-integrations) for per-agent credentials, assigned write and read banks, and HTTPS transport. Follow its [OpenClaw setup](https://github.com/mickey-kras/hindsight-memory-router-integrations/blob/main/docs/OPENCLAW.md) after creating matching [principal grants](../security/authentication.md).
 
+## Hindsight 1.2.3 compatibility
+
+Hindsight 1.2.3 adds the `knowledge_banks` bank configuration key. This key lets reflect search other banks.
+The router rejects `PATCH /config` requests that set `knowledge_banks` with `403 cross_bank_config_denied`. This rule also applies to the `HINDSIGHT_API_KNOWLEDGE_BANKS` form.
+The router does not forward the new `/observations/tree` endpoint.
+
 ## Hindsight 1.2.1 compatibility
 
 Page requests use `/pages` instead of the deprecated `/knowledge-base` paths. Update clients that call the old paths directly.
