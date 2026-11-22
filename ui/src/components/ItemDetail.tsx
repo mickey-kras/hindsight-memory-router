@@ -24,14 +24,161 @@ import { formatBytes, formatTime, KIND_LABEL, REASON_STYLE, STATUS_STYLE } from 
 import { Banner } from "./Banner";
 
 interface Props {
-  item: QuarantineItemSummary;
-  tokens: AdminSession;
-  onUnauthorized: () => void;
-  onAction: (message: string) => void;
-  onClose: () => void;
+  readonly item: QuarantineItemSummary;
+  readonly tokens: AdminSession;
+  readonly onUnauthorized: () => void;
+  readonly onAction: (message: string) => void;
+  readonly onClose: () => void;
 }
 
 type PendingAction = "approve" | "reject" | ReconcileAction | null;
+type OpenAction = "approve" | "reject" | ReconcileAction;
+type RunnableAction = OpenAction | "postpone";
+
+interface ActionContext {
+  readonly tokens: AdminSession;
+  readonly item: QuarantineItemSummary;
+  readonly detail: QuarantineItemResponse | null;
+  readonly decrypted: DecryptedQuarantineObject | null;
+  readonly onAction: (message: string) => void;
+}
+
+async function executeAction(action: RunnableAction, ctx: ActionContext): Promise<void> {
+  if (action === "approve") {
+    await approveAction(ctx);
+    return;
+  }
+  if (action === "reject") {
+    await rejectAction(ctx);
+    return;
+  }
+  if (action === "postpone") {
+    await postponeAction(ctx);
+    return;
+  }
+  await reconcileAction(action, ctx);
+}
+
+async function approveAction(ctx: ActionContext): Promise<void> {
+  if (!ctx.decrypted) throw new Error("decrypt the item before approving");
+  const result = await approveItem(ctx.tokens, ctx.item.quarantine_id, ctx.decrypted);
+  ctx.onAction(approvalMessage(ctx.item, result));
+}
+
+function approvalMessage(item: QuarantineItemSummary, result: Record<string, unknown>): string {
+  if (item.kind !== "blocked_content") return `approved ${item.quarantine_id}`;
+  if (result.exception_active === true) {
+    return `approved exact exception ${item.quarantine_id}; applies to matching later calls`;
+  }
+  return `classified ${item.quarantine_id} as false positive; content remains blocked`;
+}
+
+async function rejectAction(ctx: ActionContext): Promise<void> {
+  await rejectItem(ctx.tokens, ctx.item.quarantine_id);
+  ctx.onAction(rejectionMessage(ctx.item));
+}
+
+function rejectionMessage(item: QuarantineItemSummary): string {
+  if (item.kind === "blocked_content") {
+    return `classified ${item.quarantine_id} as true positive; content remains blocked`;
+  }
+  return `rejected ${item.quarantine_id}`;
+}
+
+async function postponeAction(ctx: ActionContext): Promise<void> {
+  await postponeItem(ctx.tokens, ctx.item.quarantine_id);
+  ctx.onAction(`postponed ${ctx.item.quarantine_id}`);
+}
+
+async function reconcileAction(action: ReconcileAction, ctx: ActionContext): Promise<void> {
+  const current = ctx.detail?.record ?? ctx.item;
+  await reconcileItem(ctx.tokens, ctx.item.quarantine_id, {
+    action,
+    ...reconcileDecision(ctx.item.kind),
+    expected_sha256: current.sha256,
+    expected_updated_at: current.updated_at,
+  });
+  ctx.onAction(`reconciled ${ctx.item.quarantine_id} (${action})`);
+}
+
+function reconcileDecision(
+  kind: QuarantineItemSummary["kind"],
+): { decision: "approve" } | { decision: "reject" } | Record<string, never> {
+  if (kind === "retain_request") return { decision: "approve" };
+  if (kind === "recalled_memory") return { decision: "reject" };
+  return {};
+}
+
+function extractJoinedText(decrypted: DecryptedQuarantineObject | null): string | null {
+  if (!decrypted || typeof decrypted.payload !== "object" || decrypted.payload === null) {
+    return null;
+  }
+  if (!("joined_text" in decrypted.payload)) return null;
+  return typeof decrypted.payload.joined_text === "string" ? decrypted.payload.joined_text : null;
+}
+
+function extractOrderedPayload(decrypted: DecryptedQuarantineObject | null): string | null {
+  if (!decrypted || typeof decrypted.payload !== "object" || decrypted.payload === null) {
+    return null;
+  }
+  if (!("ordered_payload_json" in decrypted.payload)) return null;
+  return typeof decrypted.payload.ordered_payload_json === "string"
+    ? decrypted.payload.ordered_payload_json
+    : null;
+}
+
+function approveLabel(canFinalize: boolean, reviewOnly: boolean): string {
+  if (canFinalize) return "Finalize approval";
+  if (reviewOnly) return "Mark false positive";
+  return "Approve";
+}
+
+function rejectLabel(canFinalize: boolean, reviewOnly: boolean): string {
+  if (canFinalize) return "Finalize rejection";
+  if (reviewOnly) return "Mark true positive";
+  return "Reject";
+}
+
+function approveTitle(hasDecrypted: boolean, authorized: boolean): string {
+  if (!hasDecrypted) return "decrypt first";
+  if (!authorized) return "review token required";
+  return "";
+}
+
+function reviewTokenTitle(authorized: boolean): string {
+  return authorized ? "" : "review token required";
+}
+
+function confirmPrompt(pendingAction: OpenAction, reviewOnly: boolean): string {
+  if (pendingAction === "approve") {
+    return reviewOnly
+      ? "Mark this exact finding as false positive? Eligible approvals permit matching later calls until expiry or revocation. Older review items remain blocked. Other findings still block."
+      : "Approve into memory? The exact decrypted object is submitted for hash verification.";
+  }
+  if (pendingAction === "reject") {
+    return reviewOnly
+      ? "Mark this finding as true positive? Content stays blocked and source memories do not change."
+      : "Reject this item?";
+  }
+  if (pendingAction === "confirmed_applied") {
+    return "Confirm the side effect reached Hindsight? The original decision is finalized without re-calling Hindsight.";
+  }
+  return "Confirm the side effect never reached Hindsight? The item returns to postponed for normal retry.";
+}
+
+function confirmLabel(busy: boolean, pendingAction: OpenAction): string {
+  if (busy) return "working...";
+  if (pendingAction === "approve" || pendingAction === "reject") return `Confirm ${pendingAction}`;
+  return "Confirm reconcile";
+}
+
+function confirmButtonClass(pendingAction: OpenAction): string {
+  if (pendingAction === "approve" || pendingAction === "confirmed_applied") {
+    return "bg-emerald-600 hover:bg-emerald-500";
+  }
+  if (pendingAction === "reject") return "bg-red-600 hover:bg-red-500";
+  return "bg-zinc-600 hover:bg-zinc-500";
+}
 
 export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: Props) {
   const [detail, setDetail] = useState<QuarantineItemResponse | null>(null);
@@ -87,16 +234,21 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const decrypt = useCallback(async () => {
     if (!detail) return;
     const needsAgent = detail.encrypted.encryption.provider !== undefined || useAgent;
-    if (!needsAgent && !keyRef.current) return;
+    const localKey = keyRef.current;
+    if (!needsAgent && !localKey) return;
     const generation = selectionGeneration.current;
     setDecryptError(null);
     try {
-      if (needsAgent && tokens !== "host" && !tokens.review) {
-        throw new DecryptError("review token required");
+      if (needsAgent) {
+        if (tokens !== "host" && !tokens.review) {
+          throw new DecryptError("review token required");
+        }
+        const agentPlaintext = await decryptWithReviewAgent(detail.encrypted, agentCredential);
+        if (generation === selectionGeneration.current) setDecrypted(agentPlaintext);
+        return;
       }
-      const plaintext = needsAgent
-        ? await decryptWithReviewAgent(detail.encrypted, agentCredential)
-        : await decryptEnvelope(detail.encrypted, keyRef.current!);
+      if (!localKey) return;
+      const plaintext = await decryptEnvelope(detail.encrypted, localKey);
       if (generation === selectionGeneration.current) setDecrypted(plaintext);
     } catch (error) {
       if (generation !== selectionGeneration.current) return;
@@ -106,39 +258,10 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   }, [detail, useAgent, agentCredential, tokens]);
 
   const runAction = useCallback(
-    async (action: "approve" | "reject" | "postpone" | ReconcileAction) => {
+    async (action: RunnableAction) => {
       setBusy(true);
       try {
-        if (action === "approve") {
-          if (!decrypted) throw new Error("decrypt the item before approving");
-          const result = await approveItem(tokens, item.quarantine_id, decrypted);
-          onAction(item.kind === "blocked_content"
-            ? result.exception_active === true
-              ? `approved exact exception ${item.quarantine_id}; applies to matching later calls`
-              : `classified ${item.quarantine_id} as false positive; content remains blocked`
-            : `approved ${item.quarantine_id}`);
-        } else if (action === "reject") {
-          await rejectItem(tokens, item.quarantine_id);
-          onAction(item.kind === "blocked_content"
-            ? `classified ${item.quarantine_id} as true positive; content remains blocked`
-            : `rejected ${item.quarantine_id}`);
-        } else if (action === "postpone") {
-          await postponeItem(tokens, item.quarantine_id);
-          onAction(`postponed ${item.quarantine_id}`);
-        } else {
-          const current = detail?.record ?? item;
-          await reconcileItem(tokens, item.quarantine_id, {
-            action,
-            ...(item.kind === "retain_request"
-              ? { decision: "approve" as const }
-              : item.kind === "recalled_memory"
-                ? { decision: "reject" as const }
-                : {}),
-            expected_sha256: current.sha256,
-            expected_updated_at: current.updated_at,
-          });
-          onAction(`reconciled ${item.quarantine_id} (${action})`);
-        }
+        await executeAction(action, { tokens, item, detail, decrypted, onAction });
       } catch (error) {
         if (tokens === "host" && error instanceof ApiError && error.status === 401) onUnauthorized();
         setBusy(false);
@@ -152,6 +275,23 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
     [decrypted, detail, item, tokens, onAction, onUnauthorized],
   );
 
+  // importKey/decrypt/runAction handle their own errors internally; the catch is
+  // only a safety net so the fire-and-forget call sites below stay lint-clean.
+  const handleImport = useCallback(() => {
+    importKey().catch(() => undefined);
+  }, [importKey]);
+
+  const handleDecrypt = useCallback(() => {
+    decrypt().catch(() => undefined);
+  }, [decrypt]);
+
+  const handleRunAction = useCallback(
+    (action: RunnableAction) => {
+      runAction(action).catch(() => undefined);
+    },
+    [runAction],
+  );
+
   const record = detail?.record ?? item;
   const canFinalize = record.status === "review_side_effect_completed";
   const canApprove = canFinalize && record.kind === "retain_request";
@@ -159,14 +299,11 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const canReview = record.status === "pending" || record.status === "postponed";
   const reviewOnly = record.kind === "blocked_content";
   const supportsApproval = ["retain_request", "recalled_memory", "blocked_content"].includes(record.kind);
-  const joinedText = decrypted && typeof decrypted.payload === "object" && decrypted.payload !== null
-    && "joined_text" in decrypted.payload && typeof decrypted.payload.joined_text === "string"
-    ? decrypted.payload.joined_text : null;
-  const orderedPayload = decrypted && typeof decrypted.payload === "object" && decrypted.payload !== null
-    && "ordered_payload_json" in decrypted.payload && typeof decrypted.payload.ordered_payload_json === "string"
-    ? decrypted.payload.ordered_payload_json : null;
+  const joinedText = extractJoinedText(decrypted);
+  const orderedPayload = extractOrderedPayload(decrypted);
   const canReconcile = record.status === "review_side_effect_started";
   const needsAgent = detail?.encrypted.encryption.provider !== undefined || useAgent;
+  const authorized = tokens === "host" || Boolean(tokens.review);
 
   return (
     <section
@@ -197,42 +334,21 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
           setKeyPem={setKeyPem}
           keyLoaded={keyLoaded}
           busy={busy}
-          authorized={tokens === "host" || Boolean(tokens.review)}
-          onImport={() => void importKey()}
-          onDecrypt={() => void decrypt()}
+          authorized={authorized}
+          onImport={handleImport}
+          onDecrypt={handleDecrypt}
         />
       )}
 
       {decryptError && <Banner kind="error" text={decryptError} onDismiss={() => setDecryptError(null)} />}
 
       {decrypted && (
-        <div className="rounded-lg border border-emerald-500/30 bg-zinc-950 p-3">
-          <div className="mb-2 text-xs font-medium text-emerald-300">
-            Decrypted locally - digest verified against the stored envelope
-          </div>
-          {reviewOnly && orderedPayload !== null && (
-            <div className="mb-3">
-              <h3 className="mb-1 text-xs font-medium text-emerald-300">Original field order under review</h3>
-              <pre data-testid="ordered-payload" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
-                {orderedPayload}
-              </pre>
-            </div>
-          )}
-          {reviewOnly && joinedText !== null && (
-            <div className="mb-3">
-              <h3 className="mb-1 text-xs font-medium text-zinc-300">Joined text under review</h3>
-              <pre data-testid="joined-text" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
-                {joinedText}
-              </pre>
-            </div>
-          )}
-          <pre
-            data-testid="payload"
-            className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200"
-          >
-            {JSON.stringify(decrypted, null, 2)}
-          </pre>
-        </div>
+        <DecryptedView
+          reviewOnly={reviewOnly}
+          orderedPayload={orderedPayload}
+          joinedText={joinedText}
+          decrypted={decrypted}
+        />
       )}
 
       {canReconcile && (
@@ -249,131 +365,250 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
         />
       )}
 
-      {(canReview || canReconcile || canFinalize) && (
-        <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-zinc-800 bg-zinc-900/95 px-4 py-3 backdrop-blur">
-          {pendingAction === null && (
-            <div className="flex flex-wrap gap-2">
-              {(canReview || canApprove || canReject) && (
-                <>
-                  {((canReview && supportsApproval) || canApprove) && (
-                    <button
-                      onClick={() => setPendingAction("approve")}
-                      disabled={!decrypted || busy || (tokens !== "host" && !tokens.review)}
-                      data-testid="approve-open"
-                      title={
-                        !decrypted ? "decrypt first" : (tokens !== "host" && !tokens.review) ? "review token required" : ""
-                      }
-                      className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
-                    >
-                      {canFinalize ? "Finalize approval" : reviewOnly ? "Mark false positive" : "Approve"}
-                    </button>
-                  )}
-                  {(canReview || canReject) && (
-                    <button
-                      onClick={() => setPendingAction("reject")}
-                      disabled={busy || (tokens !== "host" && !tokens.review)}
-                      data-testid="reject-open"
-                      className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
-                    >
-                      {canFinalize ? "Finalize rejection" : reviewOnly ? "Mark true positive" : "Reject"}
-                    </button>
-                  )}
-                  {canReview && (
-                    <button
-                      onClick={() => void runAction("postpone")}
-                      disabled={busy || (tokens !== "host" && !tokens.review)}
-                      data-testid="postpone"
-                      className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                    >
-                      Postpone
-                    </button>
-                  )}
-                </>
-              )}
-              {canReconcile && (
-                <>
-                  <button
-                    onClick={() => setPendingAction("confirmed_applied")}
-                    disabled={busy || (tokens !== "host" && !tokens.review)}
-                    data-testid="reconcile-applied-open"
-                    title={(tokens !== "host" && !tokens.review) ? "review token required" : ""}
-                    className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
-                  >
-                    Confirm applied
-                  </button>
-                  <button
-                    onClick={() => setPendingAction("confirmed_not_applied")}
-                    disabled={busy || (tokens !== "host" && !tokens.review)}
-                    data-testid="reconcile-not-applied-open"
-                    title={(tokens !== "host" && !tokens.review) ? "review token required" : ""}
-                    className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
-                  >
-                    Confirm not applied
-                  </button>
-                </>
-              )}
-            </div>
-          )}
-          {pendingAction !== null && (
-            <div className="flex flex-wrap items-center gap-2" data-testid="confirm-bar">
-              <span className="text-sm text-zinc-300">
-                {pendingAction === "approve"
-                  ? reviewOnly
-                    ? "Mark this exact finding as false positive? Eligible approvals permit matching later calls until expiry or revocation. Older review items remain blocked. Other findings still block."
-                    : "Approve into memory? The exact decrypted object is submitted for hash verification."
-                  : pendingAction === "reject"
-                    ? reviewOnly ? "Mark this finding as true positive? Content stays blocked and source memories do not change." : "Reject this item?"
-                    : pendingAction === "confirmed_applied"
-                      ? "Confirm the side effect reached Hindsight? The original decision is finalized without re-calling Hindsight."
-                      : "Confirm the side effect never reached Hindsight? The item returns to postponed for normal retry."}
-              </span>
-              <button
-                onClick={() => void runAction(pendingAction)}
-                disabled={busy}
-                data-testid="confirm-action"
-                className={`rounded-lg px-4 py-2 text-sm font-medium text-white ${
-                  pendingAction === "approve" || pendingAction === "confirmed_applied"
-                    ? "bg-emerald-600 hover:bg-emerald-500"
-                    : pendingAction === "reject"
-                      ? "bg-red-600 hover:bg-red-500"
-                      : "bg-zinc-600 hover:bg-zinc-500"
-                } disabled:opacity-40`}
-              >
-                {busy
-                  ? "working..."
-                  : pendingAction === "approve" || pendingAction === "reject"
-                    ? `Confirm ${pendingAction}`
-                    : "Confirm reconcile"}
-              </button>
-              <button
-                onClick={() => setPendingAction(null)}
-                disabled={busy}
-                className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-        </div>
-      )}
+      <ActionBar
+        visible={canReview || canReconcile || canFinalize}
+        canReview={canReview}
+        canApprove={canApprove}
+        canReject={canReject}
+        canReconcile={canReconcile}
+        canFinalize={canFinalize}
+        reviewOnly={reviewOnly}
+        supportsApproval={supportsApproval}
+        hasDecrypted={decrypted !== null}
+        authorized={authorized}
+        busy={busy}
+        pendingAction={pendingAction}
+        onOpenAction={(action) => setPendingAction(action)}
+        onCancel={() => setPendingAction(null)}
+        onRunAction={handleRunAction}
+      />
     </section>
   );
 }
 
+interface ActionBarProps extends ActionButtonsProps {
+  readonly visible: boolean;
+  readonly pendingAction: PendingAction;
+  readonly onCancel: () => void;
+}
+
+function ActionBar(props: ActionBarProps) {
+  if (!props.visible) return null;
+  const { pendingAction, onCancel, onOpenAction, onRunAction } = props;
+  return (
+    <div className="sticky bottom-0 -mx-4 -mb-4 border-t border-zinc-800 bg-zinc-900/95 px-4 py-3 backdrop-blur">
+      {pendingAction === null ? (
+        <ActionButtons
+          canReview={props.canReview}
+          canApprove={props.canApprove}
+          canReject={props.canReject}
+          canReconcile={props.canReconcile}
+          canFinalize={props.canFinalize}
+          reviewOnly={props.reviewOnly}
+          supportsApproval={props.supportsApproval}
+          hasDecrypted={props.hasDecrypted}
+          authorized={props.authorized}
+          busy={props.busy}
+          onOpenAction={onOpenAction}
+          onRunAction={onRunAction}
+        />
+      ) : (
+        <ConfirmBar
+          pendingAction={pendingAction}
+          reviewOnly={props.reviewOnly}
+          busy={props.busy}
+          onConfirm={() => onRunAction(pendingAction)}
+          onCancel={onCancel}
+        />
+      )}
+    </div>
+  );
+}
+
+interface ActionButtonsProps {
+  readonly canReview: boolean;
+  readonly canApprove: boolean;
+  readonly canReject: boolean;
+  readonly canReconcile: boolean;
+  readonly canFinalize: boolean;
+  readonly reviewOnly: boolean;
+  readonly supportsApproval: boolean;
+  readonly hasDecrypted: boolean;
+  readonly authorized: boolean;
+  readonly busy: boolean;
+  readonly onOpenAction: (action: OpenAction) => void;
+  readonly onRunAction: (action: RunnableAction) => void;
+}
+
+function ActionButtons({
+  canReview,
+  canApprove,
+  canReject,
+  canReconcile,
+  canFinalize,
+  reviewOnly,
+  supportsApproval,
+  hasDecrypted,
+  authorized,
+  busy,
+  onOpenAction,
+  onRunAction,
+}: ActionButtonsProps) {
+  return (
+    <div className="flex flex-wrap gap-2">
+      {(canReview || canApprove || canReject) && (
+        <>
+          {((canReview && supportsApproval) || canApprove) && (
+            <button
+              onClick={() => onOpenAction("approve")}
+              disabled={!hasDecrypted || busy || !authorized}
+              data-testid="approve-open"
+              title={approveTitle(hasDecrypted, authorized)}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+            >
+              {approveLabel(canFinalize, reviewOnly)}
+            </button>
+          )}
+          {(canReview || canReject) && (
+            <button
+              onClick={() => onOpenAction("reject")}
+              disabled={busy || !authorized}
+              data-testid="reject-open"
+              className="rounded-lg bg-red-600/80 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-40"
+            >
+              {rejectLabel(canFinalize, reviewOnly)}
+            </button>
+          )}
+          {canReview && (
+            <button
+              onClick={() => onRunAction("postpone")}
+              disabled={busy || !authorized}
+              data-testid="postpone"
+              className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+            >
+              Postpone
+            </button>
+          )}
+        </>
+      )}
+      {canReconcile && (
+        <>
+          <button
+            onClick={() => onOpenAction("confirmed_applied")}
+            disabled={busy || !authorized}
+            data-testid="reconcile-applied-open"
+            title={reviewTokenTitle(authorized)}
+            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-40"
+          >
+            Confirm applied
+          </button>
+          <button
+            onClick={() => onOpenAction("confirmed_not_applied")}
+            disabled={busy || !authorized}
+            data-testid="reconcile-not-applied-open"
+            title={reviewTokenTitle(authorized)}
+            className="rounded-lg border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 disabled:opacity-40"
+          >
+            Confirm not applied
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+interface ConfirmBarProps {
+  readonly pendingAction: OpenAction;
+  readonly reviewOnly: boolean;
+  readonly busy: boolean;
+  readonly onConfirm: () => void;
+  readonly onCancel: () => void;
+}
+
+function ConfirmBar({ pendingAction, reviewOnly, busy, onConfirm, onCancel }: ConfirmBarProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-2" data-testid="confirm-bar">
+      <span className="text-sm text-zinc-300">
+        {confirmPrompt(pendingAction, reviewOnly)}
+      </span>
+      <button
+        onClick={onConfirm}
+        disabled={busy}
+        data-testid="confirm-action"
+        className={`rounded-lg px-4 py-2 text-sm font-medium text-white ${confirmButtonClass(pendingAction)} disabled:opacity-40`}
+      >
+        {confirmLabel(busy, pendingAction)}
+      </button>
+      <button
+        onClick={onCancel}
+        disabled={busy}
+        className="rounded-lg border border-zinc-600 px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800"
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
+interface DecryptedViewProps {
+  readonly reviewOnly: boolean;
+  readonly orderedPayload: string | null;
+  readonly joinedText: string | null;
+  readonly decrypted: DecryptedQuarantineObject;
+}
+
+function DecryptedView({ reviewOnly, orderedPayload, joinedText, decrypted }: DecryptedViewProps) {
+  return (
+    <div className="rounded-lg border border-emerald-500/30 bg-zinc-950 p-3">
+      <div className="mb-2 text-xs font-medium text-emerald-300">
+        Decrypted locally - digest verified against the stored envelope
+      </div>
+      {reviewOnly && orderedPayload !== null && (
+        <div className="mb-3">
+          <h3 className="mb-1 text-xs font-medium text-emerald-300">Original field order under review</h3>
+          <pre data-testid="ordered-payload" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
+            {orderedPayload}
+          </pre>
+        </div>
+      )}
+      {reviewOnly && joinedText !== null && (
+        <div className="mb-3">
+          <h3 className="mb-1 text-xs font-medium text-zinc-300">Joined text under review</h3>
+          <pre data-testid="joined-text" className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200">
+            {joinedText}
+          </pre>
+        </div>
+      )}
+      <pre
+        data-testid="payload"
+        className="mono max-h-80 overflow-auto whitespace-pre-wrap break-words text-xs text-zinc-200"
+      >
+        {JSON.stringify(decrypted, null, 2)}
+      </pre>
+    </div>
+  );
+}
+
 interface DecryptControlsProps {
-  detail: QuarantineItemResponse;
-  needsAgent: boolean;
-  useAgent: boolean;
-  setUseAgent: (value: boolean) => void;
-  agentCredential: string;
-  setAgentCredential: (value: string) => void;
-  keyPem: string;
-  setKeyPem: (value: string) => void;
-  keyLoaded: boolean;
-  busy: boolean;
-  authorized: boolean;
-  onImport: () => void;
-  onDecrypt: () => void;
+  readonly detail: QuarantineItemResponse;
+  readonly needsAgent: boolean;
+  readonly useAgent: boolean;
+  readonly setUseAgent: (value: boolean) => void;
+  readonly agentCredential: string;
+  readonly setAgentCredential: (value: string) => void;
+  readonly keyPem: string;
+  readonly setKeyPem: (value: string) => void;
+  readonly keyLoaded: boolean;
+  readonly busy: boolean;
+  readonly authorized: boolean;
+  readonly onImport: () => void;
+  readonly onDecrypt: () => void;
+}
+
+function envelopeHint(needsAgent: boolean, keyLoaded: boolean): string {
+  if (needsAgent) return " Use the trusted local review agent; no token private key enters the browser.";
+  if (keyLoaded) return " Decryption key imported (non-extractable).";
+  return " Paste the quarantine decryption key. It never leaves this browser tab.";
 }
 
 function DecryptControls({
@@ -384,11 +619,7 @@ function DecryptControls({
     <div className="flex flex-col gap-2 rounded-lg border border-zinc-800 bg-zinc-950 p-3">
       <div className="text-xs text-zinc-400">
         Encrypted envelope loaded ({formatBytes(JSON.stringify(detail.encrypted).length)}).
-        {needsAgent
-          ? " Use the trusted local review agent; no token private key enters the browser."
-          : keyLoaded
-            ? " Decryption key imported (non-extractable)."
-            : " Paste the quarantine decryption key. It never leaves this browser tab."}
+        {envelopeHint(needsAgent, keyLoaded)}
       </div>
       {detail.encrypted.encryption.provider === undefined && (
         <label className="flex items-center gap-2 text-xs text-zinc-300">
@@ -398,7 +629,7 @@ function DecryptControls({
             onChange={(e) => setUseAgent(e.target.checked)}
             data-testid="use-agent"
           />
-          Use a hardware-backed key via local review agent
+          {"Use a hardware-backed key via local review agent"}
         </label>
       )}
       {needsAgent && (
@@ -457,9 +688,9 @@ function DecryptControls({
 }
 
 function ItemMetadata({ item, record, onClose }: {
-  item: QuarantineItemSummary;
-  record: QuarantineItemSummary;
-  onClose: () => void;
+  readonly item: QuarantineItemSummary;
+  readonly record: QuarantineItemSummary;
+  readonly onClose: () => void;
 }) {
   const meta: Array<[string, string]> = [
     ["Kind", KIND_LABEL[item.kind]],

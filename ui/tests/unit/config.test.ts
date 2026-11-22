@@ -37,6 +37,11 @@ describe("resolveUiConfig", () => {
     expect(apiUrl("/version")).toBe("https://router.example.com/hmr/version");
   });
 
+  it("strips a long run of trailing slashes in linear time", () => {
+    host[CONFIG_KEY] = { baseUrl: `https://router.example.com/hmr${"/".repeat(100_000)}` };
+    expect(resolveUiConfig().baseUrl).toBe("https://router.example.com/hmr");
+  });
+
   it("accepts a base URL without a path prefix", () => {
     host[CONFIG_KEY] = { baseUrl: "http://127.0.0.1:8890" };
     expect(resolveUiConfig().baseUrl).toBe("http://127.0.0.1:8890");
