@@ -11,8 +11,8 @@
   "source_blob_shas": {
     "plugin": "893fe35bf89714df1d07f1846677eabbe96fb506",
     "bank_defaults": "e559899ea6e5902483eb2de0bd95c5646f47dcb0",
-    "client": "d8958c516e366d5c05078ac578b7579223ecc6dc",
-    "facade_spec": "8a25ffe7e105a7c34372a9ee32c64a2ee33033c3",
+    "client": "c51e54e6fa253567183fa42252df2891e1d7b122",
+    "facade_spec": "384bb2f05d1b516ba3f06a8c1fd6bdbfa9506c68",
     "memory_provider": "d7037deb856c8ad5d724afec6cc0a09c56b7f672",
     "tools": "7bd829ae80db60a4ec211d1e2a1001bf5c9f3e30"
   },
@@ -29,6 +29,6 @@
     "searchKnowledgeBase",
     "updateKnowledgeNode"
   ],
-  "upstream_version": "1.2.1",
-  "upstream_commit": "0eb02d8c418eac6b489bc63883c993b2257dfac4"
+  "upstream_version": "1.2.3",
+  "upstream_commit": "bd230e8bb40e768bf69f266f1dd3c9ae03e22fe3"
 }
