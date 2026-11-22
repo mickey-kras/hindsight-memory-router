@@ -162,6 +162,8 @@ class OpenClawFacade:
     def _validate_request_bounds(self, route: FacadeRoute, body: dict[str, Any] | None) -> None:
         if body is None:
             return
+        if route.method == "PATCH" and route.template == "config":
+            _reject_cross_bank_config(body)
         if route.resource == "reflect":
             self.policy.limits.assert_recall_bounds(body)
         if route.template != "memories/dry-run-extract":
@@ -316,6 +318,24 @@ def _operation_context(route: FacadeRoute) -> dict[str, str]:
 def _only_scan_limit_findings(scan: SafetyResult) -> bool:
     limits = {"facade_field_limit", "facade_time_limit"}
     return bool(scan.findings) and all(finding.matched in limits for finding in scan.findings)
+
+
+# Bank config keys that make Hindsight read other banks. Writer ACLs are enforced
+# per bank by the router, so a bank must not be able to name additional banks.
+_CROSS_BANK_CONFIG_KEYS = frozenset({"knowledge_banks"})
+
+
+def _reject_cross_bank_config(body: dict[str, Any]) -> None:
+    updates = body.get("updates")
+    if not isinstance(updates, dict):
+        return
+    for key in updates:
+        normalized = key.lower() if isinstance(key, str) else ""
+        normalized = normalized.removeprefix("hindsight_api_")
+        if normalized in _CROSS_BANK_CONFIG_KEYS:
+            raise HttpError(
+                403, "cross_bank_config_denied", "bank config must not reference other banks"
+            )
 
 
 def _validate_required_query(route: FacadeRoute, query: list[tuple[str, str]]) -> None:

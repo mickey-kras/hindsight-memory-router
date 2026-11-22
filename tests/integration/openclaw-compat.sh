@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sourced by smoke.sh after the router and fake Hindsight are ready.
-# integration-behavior-sha256: 8e523487275eb7d9f010683cd614dbdee80fb6f8c188aede70fae750a1b4bd9a
+# integration-behavior-sha256: fb3bbcf44731963be4c315c08025eba8e9328c645c65574b895d04d431e9c865
 
 openclaw_request() {
   local method="$1"
@@ -277,4 +277,8 @@ profile_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bea
 [[ "$profile_status" == "404" ]] || fail_check "deprecated profile endpoint was not denied: ${profile_status}"
 export_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" "${router_url}/v1/default/banks/main/export")"
 [[ "$export_status" == "404" ]] || fail_check "export endpoint was not denied: ${export_status}"
+events_before_knowledge_banks="$(wc -l < "$state_file")"
+knowledge_banks_status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${router_token}" -H "Content-Type: application/json" -X PATCH "${router_url}/v1/default/banks/main/config" -d '{"updates":{"knowledge_banks":["other"]}}')"
+[[ "$knowledge_banks_status" == "403" ]] || fail_check "cross-bank knowledge_banks config was not denied: ${knowledge_banks_status}"
+[[ "$(wc -l < "$state_file")" == "$events_before_knowledge_banks" ]] || fail_check "cross-bank knowledge_banks config reached Hindsight"
 pass_check

@@ -10,7 +10,9 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.request
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import ModuleType
@@ -244,8 +246,18 @@ class SonarPrivacyTests(unittest.TestCase):
                 )
             ),
             OSError("https://advertised.example/private test-token"),
+            urllib.error.HTTPError(
+                "https://advertised.example/private", 401, "test-token", Message(), None
+            ),
         )
-        for failure in failures:
+        reasons = (
+            "JSONDecodeError",
+            "missing advertised endpoint",
+            "invalid endpoint",
+            "OSError",
+            "HTTP status 401",
+        )
+        for failure, reason in zip(failures, reasons, strict=True):
             with (
                 self.subTest(failure=type(failure).__name__),
                 patch.dict(
@@ -264,7 +276,8 @@ class SonarPrivacyTests(unittest.TestCase):
                 with patch("urllib.request.OpenerDirector.open", **options):
                     self.assertEqual(masking.main(), 1)
             self.assertEqual(
-                error.getvalue(), "Unable to establish masked SonarQube server context.\n"
+                error.getvalue(),
+                f"Unable to establish masked SonarQube server context.\nReason: {reason}\n",
             )
 
     def test_advertised_endpoint_masks_both_configured_and_distinct_advertised_host(self) -> None:
@@ -303,6 +316,7 @@ class SonarPrivacyTests(unittest.TestCase):
             "https://sonar.example\n::warning::private",
             "https://sonar.example:invalid",
         ):
+            reason = "ValueError" if value.endswith(":invalid") else "invalid endpoint"
             with (
                 self.subTest(value=value),
                 patch.dict(os.environ, {"SONAR_HOST_URL": value}),
@@ -313,7 +327,8 @@ class SonarPrivacyTests(unittest.TestCase):
                 self.assertEqual(masking.main(), 1)
             self.assertEqual(output.getvalue(), "")
             self.assertEqual(
-                error.getvalue(), "Unable to establish masked SonarQube server context.\n"
+                error.getvalue(),
+                f"Unable to establish masked SonarQube server context.\nReason: {reason}\n",
             )
 
     def test_workflow_masks_before_network_and_analysis(self) -> None:
