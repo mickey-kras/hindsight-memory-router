@@ -6,7 +6,7 @@ Use the [integrations package](https://github.com/mickey-kras/hindsight-memory-r
 
 ## Hindsight 1.2.3 compatibility
 
-Hindsight 1.2.3 adds the `knowledge_banks` bank configuration key. This key lets reflect search other banks.
+Hindsight 1.2.3 adds the `knowledge_banks` key to the bank configuration. With this key, reflect can search other banks.
 The router rejects `PATCH /config` requests that set `knowledge_banks` with `403 cross_bank_config_denied`. This rule also applies to the `HINDSIGHT_API_KNOWLEDGE_BANKS` form.
 The router does not forward the new `/observations/tree` endpoint.
 
