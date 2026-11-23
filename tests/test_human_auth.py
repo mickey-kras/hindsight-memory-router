@@ -21,9 +21,9 @@ from memory_router import probes
 from memory_router.config import RouterSettings, assert_auth_environment
 from memory_router.db import create_database
 from memory_router.errors import HttpError
-from memory_router.human_auth import ExchangeLogin, HumanAuth, StartLogin
+from memory_router.human_auth import ExchangeLogin, HumanAuth, RefreshSession, StartLogin
 from memory_router.human_auth_config import HumanAuthConfig, generation_for, load_human_config
-from memory_router.human_auth_store import HumanAuthStore
+from memory_router.human_auth_store import HumanAuthStore, RefreshPolicy, refresh_policy
 from memory_router.human_oidc import HumanOidc
 from memory_router.principals import PrincipalGrant, PrincipalRegistry, PrincipalResolver
 from memory_router.rate_limit import InMemoryConcurrencyLimiter, InMemoryRateLimiter
@@ -588,3 +588,128 @@ def test_config_and_conditional_principal_keys(tmp_path: Path, service: HumanAut
         )
     with pytest.raises(RuntimeError, match="requires MEMORY_ROUTER_PRINCIPALS"):
         assert_auth_environment(RouterSettings(MEMORY_ROUTER_HUMAN_AUTH=str(path)))
+
+
+async def _refreshable(service: HumanAuth, provider: Provider) -> dict[str, object]:
+    service.store.refresh_policy = RefreshPolicy(idle_ms=86_400_000, absolute_ms=604_800_000)
+    return await service.exchange(await start(service, provider))
+
+
+async def _post(service: HumanAuth, operation: str, **kwargs: object) -> httpx.Response:
+    response = await service.dispatch(
+        request("POST", f"/auth/human/{operation}", **kwargs), operation
+    )
+    assert response.headers["cache-control"] == "no-store"
+    return httpx.Response(response.status_code, content=bytes(response.body))
+
+
+async def test_refresh_contract_preserves_principal_and_rotates(
+    service: HumanAuth, provider: Provider, caplog: pytest.LogCaptureFixture
+) -> None:
+    issued = await _refreshable(service, provider)
+    refresh_token = str(issued["refresh_token"])
+    assert refresh_token.startswith("mrr_") and len(refresh_token) == 101
+    response = await _post(service, "refresh", body={"refresh_token": refresh_token})
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {
+        "token",
+        "token_type",
+        "refresh_token",
+        "principal_id",
+        "grants",
+        "expires_at",
+    }
+    assert body["principal_id"] == "human-test" and body["refresh_token"] != refresh_token
+    assert body["expires_at"] <= int(time.time()) + 3600
+    authenticated = await service.authenticate("Bearer " + body["token"])
+    assert authenticated.session is not None and authenticated.session.source == "human"
+    replay = await _post(service, "refresh", body={"refresh_token": refresh_token})
+    assert replay.status_code == 401 and replay.json()["error"] == "human_login_required"
+    assert (await service.authenticate("Bearer " + body["token"])).session is None
+    assert [getattr(record, "reason", None) for record in caplog.records] == ["refresh-token-reuse"]
+    logged = str([record.__dict__ for record in caplog.records])
+    assert refresh_token not in logged and body["refresh_token"] not in logged
+
+
+async def test_refresh_rechecks_current_grants(service: HumanAuth, provider: Provider) -> None:
+    issued = await _refreshable(service, provider)
+    principal = service.resolver.registry.principals["human-test"]
+    principal.grants = [
+        PrincipalGrant(bank="personal", scopes=["memory.recall", "memory.retain"]),
+        PrincipalGrant(bank="other", scopes=["memory.recall"]),
+    ]
+    narrowed = await service.refresh(RefreshSession(refresh_token=str(issued["refresh_token"])))
+    # Newly added grants never widen the original session.
+    assert narrowed["grants"] == [{"bank": "personal", "scopes": ["memory.recall"]}]
+    principal.grants = [PrincipalGrant(bank="other", scopes=["memory.recall"])]
+    with pytest.raises(HttpError) as removed:
+        await service.refresh(RefreshSession(refresh_token=str(narrowed["refresh_token"])))
+    assert removed.value.status == 401
+    assert (await service.authenticate("Bearer " + str(narrowed["token"]))).session is None
+
+
+async def test_sign_out_with_refresh_token_after_access_expiry(
+    service: HumanAuth, provider: Provider
+) -> None:
+    signed_out = await _refreshable(service, provider)
+    other = await service.exchange(await start(service, provider))
+    async with service.store.db.transaction() as tx:
+        await tx.execute("UPDATE human_auth_sessions SET expires_at_ms=0")
+    body = {"refresh_token": str(signed_out["refresh_token"])}
+    response = await _post(service, "sign-out", body=body)
+    assert response.status_code == 200 and response.json() == {"signed_out": True}
+    assert (await _post(service, "refresh", body=body)).status_code == 401
+    assert (await _post(service, "sign-out", body=body)).status_code == 200
+    unknown = {"refresh_token": "mrr_" + "0" * 32 + "_" + "0" * 64}
+    assert (await _post(service, "sign-out", body=unknown)).status_code == 401
+    still = await _post(service, "refresh", body={"refresh_token": str(other["refresh_token"])})
+    assert still.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"refresh_token": "mrh_" + "0" * 32 + "_" + "0" * 64},
+        {"refresh_token": "x" * 101},
+        {"refresh_token": "mrr_short"},
+        {"refresh_token": "mrr_" + "0" * 32 + "_" + "0" * 64, "principal_id": "other"},
+        b'{"refresh_token":"a","refresh_token":"b"}',
+    ],
+)
+async def test_refresh_strict_boundary(
+    service: HumanAuth, provider: Provider, body: object
+) -> None:
+    await _refreshable(service, provider)
+    assert (await _post(service, "refresh", body=body)).status_code == 400
+
+
+async def test_refresh_disabled_and_exchange_omits_refresh_token(
+    service: HumanAuth, provider: Provider
+) -> None:
+    issued = await service.exchange(await start(service, provider))
+    assert "refresh_token" not in issued
+    response = await _post(service, "refresh", body={"refresh_token": "mrr_" + "0" * 64})
+    assert response.status_code == 404
+
+
+def test_session_lifetime_configuration() -> None:
+    base = {
+        "router_url": "https://router.example",
+        "issuer": "https://id.example",
+        "client_id": "coding-agent",
+        "subjects": {"subject-1": "human-test"},
+    }
+    config = HumanAuthConfig.model_validate(
+        {**base, "session_idle_seconds": 86_400, "session_absolute_seconds": 604_800}
+    )
+    assert refresh_policy(config) == RefreshPolicy(86_400_000, 604_800_000)
+    assert refresh_policy(HumanAuthConfig.model_validate(base)) is None
+    for invalid in (
+        {"session_idle_seconds": 86_400},
+        {"session_idle_seconds": 7200, "session_absolute_seconds": 3600},
+        {"session_idle_seconds": 60, "session_absolute_seconds": 3600},
+        {"session_idle_seconds": 86_400, "session_absolute_seconds": 2_592_001},
+    ):
+        with pytest.raises(ValueError):
+            HumanAuthConfig.model_validate({**base, **invalid})

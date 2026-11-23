@@ -7,6 +7,7 @@ HTTP_METHODS = {"get", "post", "put", "patch", "delete", "head", "options", "tra
 EXPECTED_ROUTES = {
     "/auth/human/start": {"post"},
     "/auth/human/exchange": {"post"},
+    "/auth/human/refresh": {"post"},
     "/auth/human/sign-out": {"post"},
     "/health": {"get"},
     "/health/live": {"get"},
@@ -122,6 +123,7 @@ def test_openapi_surface_is_backed_by_dispatch_handlers() -> None:
     markers = {
         "/auth/human/start": 'operation == "start"',
         "/auth/human/exchange": "self.exchange(ExchangeLogin.model_validate(value))",
+        "/auth/human/refresh": "self.refresh(RefreshSession.model_validate(value))",
         "/auth/human/sign-out": 'operation == "sign-out"',
         "/health": '@app.get("/health")',
         "/health/live": '@app.get("/health/live")',

@@ -22,17 +22,20 @@ Optional human authentication (`MEMORY_ROUTER_HUMAN_AUTH`):
 | POST endpoint | JSON request | Success response |
 | --- | --- | --- |
 | `/auth/human/start` | `redirect_uri`, `state`, `code_challenge` | `transaction_id`, `authorization_url` |
-| `/auth/human/exchange` | `transaction_id`, `code`, `state`, `code_verifier` | `token`, `token_type: "Bearer"`, `principal_id`, `grants`, `expires_at` |
-| `/auth/human/sign-out` | No body. The `Authorization` header holds the human bearer token | `signed_out: true` |
+| `/auth/human/exchange` | `transaction_id`, `code`, `state`, `code_verifier` | `token`, `token_type: "Bearer"`, `principal_id`, `grants`, `expires_at`, and `refresh_token` when refresh is on |
+| `/auth/human/refresh` | `refresh_token` | `token`, `token_type: "Bearer"`, `refresh_token`, `principal_id`, `grants`, `expires_at` |
+| `/auth/human/sign-out` | No body with the human bearer token in `Authorization`, or `refresh_token` without authorization | `signed_out: true` |
 
-`expires_at` is an integer UNIX timestamp in seconds.
+`expires_at` is an integer UNIX timestamp in seconds for the access token.
+Refresh tokens are single-use. Refresh returns `404` when session refresh is off.
+
 Grants are `{bank, scopes}` objects.
 These endpoints return `404` when disabled.
 Malformed requests return `400`/`413`, authentication failures return `401`, and exhausted limits return `429`.
 Unavailable identity or shared storage, or an inactive policy, returns `503`.
 All responses are `no-store`.
 
-Only start and exchange accept unauthenticated requests.
+Start, exchange, refresh, and refresh-token sign-out accept requests without an `Authorization` header.
 See the [protocol and client requirements](../security/authentication.md#optional-human-login-protocol-contract).
 
 With `MEMORY_ROUTER_PRINCIPALS` set, `{writer}` path segments are target banks.

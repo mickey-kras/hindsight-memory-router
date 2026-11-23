@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .principals import PrincipalRegistry
 
@@ -38,6 +38,9 @@ class HumanAuthConfig(BaseModel):
     issuer: str = Field(max_length=2048)
     client_id: str = Field(min_length=1, max_length=256)
     subjects: dict[str, str] = Field(min_length=1, max_length=10000)
+    # Both lifetimes enable router-issued refresh tokens; omit both to require hourly login.
+    session_idle_seconds: int | None = Field(None, ge=3600, le=604_800)
+    session_absolute_seconds: int | None = Field(None, ge=3600, le=2_592_000)
 
     @field_validator("router_url", "issuer")
     @classmethod
@@ -51,6 +54,15 @@ class HumanAuthConfig(BaseModel):
         if value.endswith("/") or parsed.netloc != parsed.netloc.lower() or parsed.port == 443:
             raise ValueError("router_url must be canonical without trailing slash or default port")
         return value
+
+    @model_validator(mode="after")
+    def paired_session_lifetimes(self) -> HumanAuthConfig:
+        idle, absolute = self.session_idle_seconds, self.session_absolute_seconds
+        if (idle is None) != (absolute is None) or (
+            idle is not None and absolute is not None and idle > absolute
+        ):
+            raise ValueError("session lifetimes must be set together with idle <= absolute")
+        return self
 
 
 def load_human_config(path: str, registry: PrincipalRegistry) -> HumanAuthConfig:
@@ -72,6 +84,10 @@ def load_human_config(path: str, registry: PrincipalRegistry) -> HumanAuthConfig
 
 
 def generation_for(config: HumanAuthConfig, registry: PrincipalRegistry) -> str:
-    policy = {"human_auth": config.model_dump(), "registry": registry.model_dump(mode="json")}
+    # Omitting unset options keeps generations of configurations without refresh unchanged.
+    policy = {
+        "human_auth": config.model_dump(exclude_none=True),
+        "registry": registry.model_dump(mode="json"),
+    }
     encoded = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()

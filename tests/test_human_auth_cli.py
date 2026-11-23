@@ -57,8 +57,9 @@ async def test_activation_and_revoke(configured_cli: tuple[str, str, str]) -> No
         issued = await store.issue(
             activation_epoch=await store.require_generation(), principal_id="human-test", grants=()
         )
-        await human_auth._operate("revoke", issued.key_id)
+        assert await human_auth._operate("revoke", issued.key_id)
         assert await store.authenticate(issued.key_id, issued.token.split("_")[2]) is None
+        assert not await human_auth._operate("revoke", "0" * 32)
         issued = await store.issue(
             activation_epoch=await store.require_generation(), principal_id="human-test", grants=()
         )
@@ -93,3 +94,13 @@ def test_key_id_validation(value: str) -> None:
     with pytest.raises(SystemExit) as error:
         human_auth.run(["revoke", "--key-id", value])
     assert error.value.code == 2
+
+
+def test_run_revoke_reports_unknown_key(
+    configured_cli: tuple[str, str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert human_auth.run(["activate"]) == 0
+    capsys.readouterr()
+    assert human_auth.run(["revoke", "--key-id", "0" * 32]) == 1
+    output = capsys.readouterr()
+    assert output.out == "" and "No stored session" in output.err

@@ -5,7 +5,12 @@ import os
 
 from memory_router.db import create_database
 from memory_router.errors import HttpError
-from memory_router.human_auth_store import HumanAuthStore
+from memory_router.human_auth_store import (
+    HumanAuthStore,
+    IssuedSession,
+    RefreshPolicy,
+    RefreshRejected,
+)
 from memory_router.principals import PrincipalGrant
 
 
@@ -70,6 +75,43 @@ async def verify() -> None:
         assert (
             sum(isinstance(result, HttpError) and result.status == 429 for result in results) == 1
         )
+        # Concurrent rotation across independent pools succeeds once; reuse revokes the successor.
+        first.refresh_policy = second.refresh_policy = RefreshPolicy(3_600_000, 86_400_000)
+        refreshable = await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-refresh",
+            grants=grants,
+        )
+        assert refreshable.refresh_token is not None
+        _, refresh_key, refresh_secret = refreshable.refresh_token.split("_")
+        rotated = await asyncio.gather(
+            first.refresh(refresh_key, refresh_secret, lambda _principal, ceiling: ceiling),
+            second.refresh(refresh_key, refresh_secret, lambda _principal, ceiling: ceiling),
+            return_exceptions=True,
+        )
+        winners = [result for result in rotated if isinstance(result, IssuedSession)]
+        assert len(winners) == 1
+        assert sum(isinstance(result, RefreshRejected) and result.reuse for result in rotated) == 1
+        _, successor_key, successor_secret = winners[0].token.split("_")
+        assert await second.authenticate(successor_key, successor_secret) is None
+        # Operators can revoke a refreshed session by an access key ID whose row was pruned.
+        live = await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-refresh",
+            grants=grants,
+        )
+        assert live.refresh_token is not None
+        renewed = await first.refresh(
+            *live.refresh_token.split("_")[1:], lambda _principal, ceiling: ceiling
+        )
+        async with first_db.transaction() as tx:
+            await tx.execute(
+                "UPDATE human_auth_sessions SET expires_at_ms=1 WHERE key_id=?", (live.key_id,)
+            )
+        await second.prune()
+        assert await second.revoke(live.key_id)
+        assert await first.authenticate(*renewed.token.split("_")[1:]) is None
+        assert not await second.revoke("0" * 32)
         replacement = HumanAuthStore(second_db, "smoke-b")
         await replacement.initialize(check_generation=False)
         await replacement.activate()
