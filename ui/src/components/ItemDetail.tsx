@@ -1,27 +1,30 @@
 import { useCallback, useLayoutEffect, useRef, useState } from "react";
-import {
-  ApiError,
-  approveItem,
-  fetchItem,
-  postponeItem,
-  reconcileItem,
-  rejectItem,
-  type AdminSession,
-} from "../lib/api";
-import {
-  DecryptError,
-  decryptEnvelope,
-  importDecryptionKeyPem,
-} from "../lib/quarantineCrypto";
-import { decryptWithReviewAgent } from "../lib/reviewAgent";
+import { ApiError, fetchItem, type AdminSession } from "../lib/api";
+import { DecryptError, importDecryptionKeyPem } from "../lib/quarantineCrypto";
 import type {
   DecryptedQuarantineObject,
   QuarantineItemResponse,
   QuarantineItemSummary,
-  ReconcileAction,
 } from "../lib/types";
 import { formatBytes, formatTime, KIND_LABEL, REASON_STYLE, STATUS_STYLE } from "../lib/format";
 import { Banner } from "./Banner";
+import {
+  approveLabel,
+  approveTitle,
+  confirmButtonClass,
+  confirmLabel,
+  confirmPrompt,
+  decryptItem,
+  executeAction,
+  extractJoinedText,
+  extractOrderedPayload,
+  needsReviewAgent,
+  rejectLabel,
+  reviewTokenTitle,
+  type OpenAction,
+  type PendingAction,
+  type RunnableAction,
+} from "./itemDetailLogic";
 
 interface Props {
   readonly item: QuarantineItemSummary;
@@ -29,155 +32,6 @@ interface Props {
   readonly onUnauthorized: () => void;
   readonly onAction: (message: string) => void;
   readonly onClose: () => void;
-}
-
-type PendingAction = "approve" | "reject" | ReconcileAction | null;
-type OpenAction = "approve" | "reject" | ReconcileAction;
-type RunnableAction = OpenAction | "postpone";
-
-interface ActionContext {
-  readonly tokens: AdminSession;
-  readonly item: QuarantineItemSummary;
-  readonly detail: QuarantineItemResponse | null;
-  readonly decrypted: DecryptedQuarantineObject | null;
-  readonly onAction: (message: string) => void;
-}
-
-async function executeAction(action: RunnableAction, ctx: ActionContext): Promise<void> {
-  if (action === "approve") {
-    await approveAction(ctx);
-    return;
-  }
-  if (action === "reject") {
-    await rejectAction(ctx);
-    return;
-  }
-  if (action === "postpone") {
-    await postponeAction(ctx);
-    return;
-  }
-  await reconcileAction(action, ctx);
-}
-
-async function approveAction(ctx: ActionContext): Promise<void> {
-  if (!ctx.decrypted) throw new Error("decrypt the item before approving");
-  const result = await approveItem(ctx.tokens, ctx.item.quarantine_id, ctx.decrypted);
-  ctx.onAction(approvalMessage(ctx.item, result));
-}
-
-function approvalMessage(item: QuarantineItemSummary, result: Record<string, unknown>): string {
-  if (item.kind !== "blocked_content") return `approved ${item.quarantine_id}`;
-  if (result.exception_active === true) {
-    return `approved exact exception ${item.quarantine_id}; applies to matching later calls`;
-  }
-  return `classified ${item.quarantine_id} as false positive; content remains blocked`;
-}
-
-async function rejectAction(ctx: ActionContext): Promise<void> {
-  await rejectItem(ctx.tokens, ctx.item.quarantine_id);
-  ctx.onAction(rejectionMessage(ctx.item));
-}
-
-function rejectionMessage(item: QuarantineItemSummary): string {
-  if (item.kind === "blocked_content") {
-    return `classified ${item.quarantine_id} as true positive; content remains blocked`;
-  }
-  return `rejected ${item.quarantine_id}`;
-}
-
-async function postponeAction(ctx: ActionContext): Promise<void> {
-  await postponeItem(ctx.tokens, ctx.item.quarantine_id);
-  ctx.onAction(`postponed ${ctx.item.quarantine_id}`);
-}
-
-async function reconcileAction(action: ReconcileAction, ctx: ActionContext): Promise<void> {
-  const current = ctx.detail?.record ?? ctx.item;
-  await reconcileItem(ctx.tokens, ctx.item.quarantine_id, {
-    action,
-    ...reconcileDecision(ctx.item.kind),
-    expected_sha256: current.sha256,
-    expected_updated_at: current.updated_at,
-  });
-  ctx.onAction(`reconciled ${ctx.item.quarantine_id} (${action})`);
-}
-
-function reconcileDecision(
-  kind: QuarantineItemSummary["kind"],
-): { decision: "approve" } | { decision: "reject" } | Record<string, never> {
-  if (kind === "retain_request") return { decision: "approve" };
-  if (kind === "recalled_memory") return { decision: "reject" };
-  return {};
-}
-
-function extractJoinedText(decrypted: DecryptedQuarantineObject | null): string | null {
-  if (!decrypted || typeof decrypted.payload !== "object" || decrypted.payload === null) {
-    return null;
-  }
-  if (!("joined_text" in decrypted.payload)) return null;
-  return typeof decrypted.payload.joined_text === "string" ? decrypted.payload.joined_text : null;
-}
-
-function extractOrderedPayload(decrypted: DecryptedQuarantineObject | null): string | null {
-  if (!decrypted || typeof decrypted.payload !== "object" || decrypted.payload === null) {
-    return null;
-  }
-  if (!("ordered_payload_json" in decrypted.payload)) return null;
-  return typeof decrypted.payload.ordered_payload_json === "string"
-    ? decrypted.payload.ordered_payload_json
-    : null;
-}
-
-function approveLabel(canFinalize: boolean, reviewOnly: boolean): string {
-  if (canFinalize) return "Finalize approval";
-  if (reviewOnly) return "Mark false positive";
-  return "Approve";
-}
-
-function rejectLabel(canFinalize: boolean, reviewOnly: boolean): string {
-  if (canFinalize) return "Finalize rejection";
-  if (reviewOnly) return "Mark true positive";
-  return "Reject";
-}
-
-function approveTitle(hasDecrypted: boolean, authorized: boolean): string {
-  if (!hasDecrypted) return "decrypt first";
-  if (!authorized) return "review token required";
-  return "";
-}
-
-function reviewTokenTitle(authorized: boolean): string {
-  return authorized ? "" : "review token required";
-}
-
-function confirmPrompt(pendingAction: OpenAction, reviewOnly: boolean): string {
-  if (pendingAction === "approve") {
-    return reviewOnly
-      ? "Mark this exact finding as false positive? Eligible approvals permit matching later calls until expiry or revocation. Older review items remain blocked. Other findings still block."
-      : "Approve into memory? The exact decrypted object is submitted for hash verification.";
-  }
-  if (pendingAction === "reject") {
-    return reviewOnly
-      ? "Mark this finding as true positive? Content stays blocked and source memories do not change."
-      : "Reject this item?";
-  }
-  if (pendingAction === "confirmed_applied") {
-    return "Confirm the side effect reached Hindsight? The original decision is finalized without re-calling Hindsight.";
-  }
-  return "Confirm the side effect never reached Hindsight? The item returns to postponed for normal retry.";
-}
-
-function confirmLabel(busy: boolean, pendingAction: OpenAction): string {
-  if (busy) return "working...";
-  if (pendingAction === "approve" || pendingAction === "reject") return `Confirm ${pendingAction}`;
-  return "Confirm reconcile";
-}
-
-function confirmButtonClass(pendingAction: OpenAction): string {
-  if (pendingAction === "approve" || pendingAction === "confirmed_applied") {
-    return "bg-emerald-600 hover:bg-emerald-500";
-  }
-  if (pendingAction === "reject") return "bg-red-600 hover:bg-red-500";
-  return "bg-zinc-600 hover:bg-zinc-500";
 }
 
 export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: Props) {
@@ -233,23 +87,16 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
 
   const decrypt = useCallback(async () => {
     if (!detail) return;
-    const needsAgent = detail.encrypted.encryption.provider !== undefined || useAgent;
-    const localKey = keyRef.current;
-    if (!needsAgent && !localKey) return;
     const generation = selectionGeneration.current;
     setDecryptError(null);
     try {
-      if (needsAgent) {
-        if (tokens !== "host" && !tokens.review) {
-          throw new DecryptError("review token required");
-        }
-        const agentPlaintext = await decryptWithReviewAgent(detail.encrypted, agentCredential);
-        if (generation === selectionGeneration.current) setDecrypted(agentPlaintext);
-        return;
-      }
-      if (!localKey) return;
-      const plaintext = await decryptEnvelope(detail.encrypted, localKey);
-      if (generation === selectionGeneration.current) setDecrypted(plaintext);
+      const plaintext = await decryptItem(detail, {
+        useAgent,
+        agentCredential,
+        tokens,
+        localKey: keyRef.current,
+      });
+      if (plaintext && generation === selectionGeneration.current) setDecrypted(plaintext);
     } catch (error) {
       if (generation !== selectionGeneration.current) return;
       setDecrypted(null);
@@ -302,7 +149,7 @@ export function ItemDetail({ item, tokens, onAction, onClose, onUnauthorized }: 
   const joinedText = extractJoinedText(decrypted);
   const orderedPayload = extractOrderedPayload(decrypted);
   const canReconcile = record.status === "review_side_effect_started";
-  const needsAgent = detail?.encrypted.encryption.provider !== undefined || useAgent;
+  const needsAgent = detail ? needsReviewAgent(detail, useAgent) : useAgent;
   const authorized = tokens === "host" || Boolean(tokens.review);
 
   return (
@@ -392,7 +239,7 @@ interface ActionBarProps extends ActionButtonsProps {
   readonly onCancel: () => void;
 }
 
-function ActionBar(props: ActionBarProps) {
+export function ActionBar(props: ActionBarProps) {
   if (!props.visible) return null;
   const { pendingAction, onCancel, onOpenAction, onRunAction } = props;
   return (
@@ -425,7 +272,7 @@ function ActionBar(props: ActionBarProps) {
   );
 }
 
-interface ActionButtonsProps {
+export interface ActionButtonsProps {
   readonly canReview: boolean;
   readonly canApprove: boolean;
   readonly canReject: boolean;
@@ -440,7 +287,7 @@ interface ActionButtonsProps {
   readonly onRunAction: (action: RunnableAction) => void;
 }
 
-function ActionButtons({
+export function ActionButtons({
   canReview,
   canApprove,
   canReject,
@@ -525,7 +372,7 @@ interface ConfirmBarProps {
   readonly onCancel: () => void;
 }
 
-function ConfirmBar({ pendingAction, reviewOnly, busy, onConfirm, onCancel }: ConfirmBarProps) {
+export function ConfirmBar({ pendingAction, reviewOnly, busy, onConfirm, onCancel }: ConfirmBarProps) {
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="confirm-bar">
       <span className="text-sm text-zinc-300">
@@ -557,7 +404,7 @@ interface DecryptedViewProps {
   readonly decrypted: DecryptedQuarantineObject;
 }
 
-function DecryptedView({ reviewOnly, orderedPayload, joinedText, decrypted }: DecryptedViewProps) {
+export function DecryptedView({ reviewOnly, orderedPayload, joinedText, decrypted }: DecryptedViewProps) {
   return (
     <div className="rounded-lg border border-emerald-500/30 bg-zinc-950 p-3">
       <div className="mb-2 text-xs font-medium text-emerald-300">
@@ -611,7 +458,7 @@ function envelopeHint(needsAgent: boolean, keyLoaded: boolean): string {
   return " Paste the quarantine decryption key. It never leaves this browser tab.";
 }
 
-function DecryptControls({
+export function DecryptControls({
   detail, needsAgent, useAgent, setUseAgent, agentCredential, setAgentCredential,
   keyPem, setKeyPem, keyLoaded, busy, authorized, onImport, onDecrypt,
 }: DecryptControlsProps) {
@@ -687,7 +534,7 @@ function DecryptControls({
   );
 }
 
-function ItemMetadata({ item, record, onClose }: {
+export function ItemMetadata({ item, record, onClose }: {
   readonly item: QuarantineItemSummary;
   readonly record: QuarantineItemSummary;
   readonly onClose: () => void;
