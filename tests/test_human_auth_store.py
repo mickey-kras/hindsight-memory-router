@@ -542,3 +542,32 @@ async def test_initialize_migrates_sessions_without_family_column(tmp_path: Path
         assert await store.authenticate(*_parts(issued.token)) is not None
     finally:
         await db.close()
+
+
+async def test_operator_revokes_refreshed_session_by_pruned_access_key(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    refreshed = await first.refresh(*_parts(issued.refresh_token), _accept)
+    # The superseded access row is pruned once its grace window ends.
+    async with first.db.transaction() as tx:
+        await tx.execute(
+            "UPDATE human_auth_sessions SET expires_at_ms=1 WHERE key_id=?", (issued.key_id,)
+        )
+    await second.prune()
+    assert await second.revoke(issued.key_id)
+    assert await first.authenticate(*_parts(refreshed.token)) is None
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(refreshed.refresh_token), _accept)
+    assert not await second.revoke("0" * 32)
+
+
+async def test_activation_bounds_revoked_session_retention(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, _ = await _refreshable(stores)
+    await second.activate()
+    async with first.db.transaction() as tx:
+        row = await tx.fetchone("SELECT revoked, idle_expires_at_ms FROM human_auth_families")
+    assert row is not None and int(row["revoked"]) == 1
+    assert int(row["idle_expires_at_ms"]) <= time.time() * 1000 + 3_600_000

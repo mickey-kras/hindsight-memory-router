@@ -20,7 +20,7 @@ def _key_id(value: str) -> str:
     return value
 
 
-async def _operate(action: str, key_id: str | None) -> None:
+async def _operate(action: str, key_id: str | None) -> bool:
     settings = load_settings()
     if not settings.memory_router_human_auth or not settings.memory_router_principals:
         raise RuntimeError("human authentication and principal configuration are required")
@@ -32,8 +32,8 @@ async def _operate(action: str, key_id: str | None) -> None:
         await store.initialize(check_generation=False)
         if action == "activate":
             await store.activate()
-        elif key_id is not None:
-            await store.revoke(key_id)
+            return True
+        return key_id is not None and await store.revoke(key_id)
     finally:
         await database.close()
 
@@ -51,13 +51,17 @@ def run(argv: list[str] | None = None) -> int:
     revoke.add_argument("--key-id", required=True, type=_key_id)
     args = parser.parse_args(argv)
     try:
-        asyncio.run(_operate(args.action, getattr(args, "key_id", None)))
+        found = asyncio.run(_operate(args.action, getattr(args, "key_id", None)))
     except Exception:
         # Configuration and database exceptions can contain credentials or identity claims.
         print(
             "Human authentication command failed; check configuration and database access.",
             file=sys.stderr,
         )
+        return 1
+    if not found:
+        # Expired sessions without refresh are pruned; their key IDs cannot be revoked.
+        print("No stored session has this key ID.", file=sys.stderr)
         return 1
     print(
         "Human authentication policy activated."

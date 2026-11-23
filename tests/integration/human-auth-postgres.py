@@ -94,6 +94,24 @@ async def verify() -> None:
         assert sum(isinstance(result, RefreshRejected) and result.reuse for result in rotated) == 1
         _, successor_key, successor_secret = winners[0].token.split("_")
         assert await second.authenticate(successor_key, successor_secret) is None
+        # Operators can revoke a refreshed session by an access key ID whose row was pruned.
+        live = await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-refresh",
+            grants=grants,
+        )
+        assert live.refresh_token is not None
+        renewed = await first.refresh(
+            *live.refresh_token.split("_")[1:], lambda _principal, ceiling: ceiling
+        )
+        async with first_db.transaction() as tx:
+            await tx.execute(
+                "UPDATE human_auth_sessions SET expires_at_ms=1 WHERE key_id=?", (live.key_id,)
+            )
+        await second.prune()
+        assert await second.revoke(live.key_id)
+        assert await first.authenticate(*renewed.token.split("_")[1:]) is None
+        assert not await second.revoke("0" * 32)
         replacement = HumanAuthStore(second_db, "smoke-b")
         await replacement.initialize(check_generation=False)
         await replacement.activate()

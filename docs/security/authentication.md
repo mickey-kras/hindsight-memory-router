@@ -334,6 +334,8 @@ Stale replicas fail closed until updated.
 
 Revoke a session using `memory-router-human-auth revoke --key-id <key-id>`.
 The key ID can identify an access token or a refresh token. The command revokes every credential of that session.
+If no stored session has the key ID, the command reports this and exits with status 1.
+
 The key ID is not secret.
 Never pass a bearer token to this command. Application
 principal rotation does not change.

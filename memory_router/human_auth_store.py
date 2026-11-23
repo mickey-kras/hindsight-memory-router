@@ -49,6 +49,11 @@ _SCHEMA = (
     "used INTEGER NOT NULL DEFAULT 0)",
     "CREATE INDEX IF NOT EXISTS idx_human_auth_refresh_tokens_family "
     "ON human_auth_refresh_tokens(family_id)",
+    # Access-key IDs outlive their pruned rows so operators can revoke a session by any of them.
+    "CREATE TABLE IF NOT EXISTS human_auth_access_keys "
+    "(key_id TEXT PRIMARY KEY, family_id TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_human_auth_access_keys_family "
+    "ON human_auth_access_keys(family_id)",
 )
 
 
@@ -170,8 +175,9 @@ class HumanAuthStore:
             await tx.execute("DELETE FROM human_auth_logins")
             # Keep unexpired rows counted against caps even after revocation.
             await tx.execute("UPDATE human_auth_sessions SET revoked=1")
-            await tx.execute("UPDATE human_auth_families SET revoked=1")
-            await self._prune(tx, await _now_ms(tx))
+            now = await _now_ms(tx)
+            await self._revoke_families(tx, now)
+            await self._prune(tx, now)
 
     async def create_login(
         self, *, state: str, challenge: str, redirect_uri: str, nonce: str
@@ -314,6 +320,11 @@ class HumanAuthStore:
                 family_id,
             ),
         )
+        if family_id is not None:
+            await tx.execute(
+                "INSERT INTO human_auth_access_keys(key_id,family_id) VALUES(?,?)",
+                (key_id, family_id),
+            )
         return f"mrh_{key_id}_{secret}", key_id
 
     async def _refresh_row(self, tx: Tx, key_id: str, secret: str) -> dict[str, Any] | None:
@@ -397,14 +408,24 @@ class HumanAuthStore:
         return True
 
     async def _revoke_family(self, tx: Tx, family_id: str, now: int) -> None:
-        # Keep revoked sessions for at most one access lifetime: they still count against
-        # caps and detect reuse, but cannot block new logins for the full idle window.
-        await tx.execute(
-            "UPDATE human_auth_families SET revoked=1, idle_expires_at_ms=CASE "
-            "WHEN idle_expires_at_ms>? THEN ? ELSE idle_expires_at_ms END WHERE family_id=?",
-            (now + _SESSION_TTL_MS, now + _SESSION_TTL_MS, family_id),
-        )
+        await self._revoke_families(tx, now, family_id)
         await tx.execute("UPDATE human_auth_sessions SET revoked=1 WHERE family_id=?", (family_id,))
+
+    async def _revoke_families(self, tx: Tx, now: int, family_id: str | None = None) -> None:
+        """Revoke one family, or all of them, keeping each for at most one access lifetime.
+
+        Revoked families still count against caps and detect reuse, but cannot block new
+        logins for the full idle window.
+        """
+        bound = now + _SESSION_TTL_MS
+        revoke = (
+            "UPDATE human_auth_families SET revoked=1, idle_expires_at_ms=CASE "
+            "WHEN idle_expires_at_ms>? THEN ? ELSE idle_expires_at_ms END"
+        )
+        if family_id is None:
+            await tx.execute(revoke, (bound, bound))
+        else:
+            await tx.execute(revoke + " WHERE family_id=?", (bound, bound, family_id))
 
     async def authenticate(self, key_id: str, secret: str) -> StoredSession | None:
         digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
@@ -426,17 +447,25 @@ class HumanAuthStore:
                 _GRANTS.validate_json(str(row["grants"])),
             )
 
-    async def revoke(self, key_id: str) -> None:
-        """Revoke an access or refresh key ID and every credential of its session."""
+    async def revoke(self, key_id: str) -> bool:
+        """Revoke an access or refresh key ID and every credential of its session.
+
+        Returns False when no stored credential has this key ID.
+        """
         async with self.db.transaction(capacity_lock=True) as tx:
+            session = await tx.fetchone(
+                "SELECT key_id FROM human_auth_sessions WHERE key_id=?", (key_id,)
+            )
             await tx.execute("UPDATE human_auth_sessions SET revoked=1 WHERE key_id=?", (key_id,))
             row = await tx.fetchone(
                 "SELECT family_id FROM human_auth_sessions WHERE key_id=? AND family_id IS NOT NULL "
-                "UNION SELECT family_id FROM human_auth_refresh_tokens WHERE key_id=?",
-                (key_id, key_id),
+                "UNION SELECT family_id FROM human_auth_refresh_tokens WHERE key_id=? "
+                "UNION SELECT family_id FROM human_auth_access_keys WHERE key_id=?",
+                (key_id, key_id, key_id),
             )
             if row is not None:
                 await self._revoke_family(tx, str(row["family_id"]), await _now_ms(tx))
+        return session is not None or row is not None
 
     async def _require_session_capacity(self, tx: Tx, now: int) -> None:
         row = await tx.fetchone(
@@ -455,6 +484,10 @@ class HumanAuthStore:
         await tx.execute(
             "DELETE FROM human_auth_families WHERE idle_expires_at_ms<=? OR absolute_expires_at_ms<=?",
             (now, now),
+        )
+        await tx.execute(
+            "DELETE FROM human_auth_access_keys WHERE NOT EXISTS "
+            "(SELECT 1 FROM human_auth_families f WHERE f.family_id=human_auth_access_keys.family_id)"
         )
         await tx.execute(
             "DELETE FROM human_auth_refresh_tokens WHERE NOT EXISTS "
