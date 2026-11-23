@@ -17,6 +17,33 @@ import { CleanupPanel } from "./components/CleanupPanel";
 import { Banner } from "./components/Banner";
 
 const QUEUE_PAGE_SIZE = 100;
+const HOST_UNAUTHORIZED = "401 unauthorized - sign in through the host, then refresh";
+
+function initialSession(config: ResolvedUiConfig | null): AdminSession | null {
+  if (config === null) return null;
+  if (config.auth === "host") return "host";
+  return loadTokens();
+}
+
+function isUnauthorized(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
+}
+
+function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? `${err.code}: ${err.message}` : fallback;
+}
+
+function refreshErrorMessage(err: unknown, session: AdminSession): string {
+  if (isUnauthorized(err)) {
+    return session === "host" ? HOST_UNAUTHORIZED : "401 unauthorized - check the read token and its scope";
+  }
+  return errorMessage(err, "refresh failed");
+}
+
+// A host session that expired while a request was in flight must not apply its result.
+function isStaleHostResult(session: AdminSession, epoch: number, current: number): boolean {
+  return session === "host" && epoch !== current;
+}
 
 export default function App() {
   const [host] = useState<{ config: ResolvedUiConfig | null; error: string | null }>(() => {
@@ -29,7 +56,7 @@ export default function App() {
       };
     }
   });
-  const [tokens, setTokens] = useState<AdminSession | null>(() => !host.config ? null : host.config.auth === "host" ? "host" : loadTokens());
+  const [tokens, setTokens] = useState<AdminSession | null>(() => initialSession(host.config));
   const [stats, setStats] = useState<QuarantineStats | null>(null);
   const [items, setItems] = useState<QuarantineItemSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -59,7 +86,7 @@ export default function App() {
     setItems([]);
     setTotal(0);
     setNotice(null);
-    setError("401 unauthorized - sign in through the host, then refresh");
+    setError(HOST_UNAUTHORIZED);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -72,22 +99,16 @@ export default function App() {
         listQueue(tokens, QUEUE_PAGE_SIZE),
         fetchStats(tokens),
       ]);
-      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
+      if (isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) return;
       setItems(queue.items);
       setTotal(queue.total);
       setStats(nextStats);
     } catch (err) {
-      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
-      if (err instanceof ApiError && err.status === 401) {
-        if (tokens === "host") {
-          expireHostSession();
-        }
-        setError(tokens === "host" ? "401 unauthorized - sign in through the host, then refresh" : "401 unauthorized - check the read token and its scope");
-      } else {
-        setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "refresh failed");
-      }
+      if (isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) return;
+      if (tokens === "host" && isUnauthorized(err)) expireHostSession();
+      setError(refreshErrorMessage(err, tokens));
     } finally {
-      if (tokens !== "host" || epoch === hostSessionEpoch.current) setLoading(false);
+      if (!isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) setLoading(false);
     }
   }, [tokens, expireHostSession]);
 
@@ -98,7 +119,7 @@ export default function App() {
     setError(null);
     try {
       const queue = await listQueue(tokens, QUEUE_PAGE_SIZE, items.length);
-      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
+      if (isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) return;
       setItems((current) => {
         const byId = new Map(current.map((item) => [item.quarantine_id, item]));
         for (const item of queue.items) byId.set(item.quarantine_id, item);
@@ -106,17 +127,21 @@ export default function App() {
       });
       setTotal(queue.total);
     } catch (err) {
-      if (tokens === "host" && epoch !== hostSessionEpoch.current) return;
-      if (tokens === "host" && err instanceof ApiError && err.status === 401) expireHostSession();
-      else setError(err instanceof ApiError ? `${err.code}: ${err.message}` : "load more failed");
+      if (isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) return;
+      if (tokens === "host" && isUnauthorized(err)) expireHostSession();
+      else setError(errorMessage(err, "load more failed"));
     } finally {
-      if (tokens !== "host" || epoch === hostSessionEpoch.current) setLoadingMore(false);
+      if (!isStaleHostResult(tokens, epoch, hostSessionEpoch.current)) setLoadingMore(false);
     }
   }, [items.length, loadingMore, tokens, total, expireHostSession]);
 
-  useEffect(() => {
-    void refresh();
+  // refresh and loadMore report every failure through setError and never reject;
+  // the catch only satisfies no-floating-promises at these fire-and-forget sites.
+  const startRefresh = useCallback(() => {
+    refresh().catch(() => undefined);
   }, [refresh]);
+
+  useEffect(startRefresh, [startRefresh]);
 
   const connect = (next: AdminTokens) => {
     saveTokens(next);
@@ -136,7 +161,7 @@ export default function App() {
     if (tokens === "host" && actionEpoch !== hostSessionEpoch.current) return;
     setNotice(message);
     setSelected(null);
-    void refresh();
+    startRefresh();
   };
 
   if (!host.config) {
@@ -174,7 +199,7 @@ export default function App() {
               Cleanup
             </button>
             <button
-              onClick={() => void refresh()}
+              onClick={startRefresh}
               disabled={loading}
               data-testid="refresh"
               className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
@@ -204,7 +229,9 @@ export default function App() {
           total={total}
           selectedId={selected?.quarantine_id ?? null}
           loadingMore={loadingMore}
-          onLoadMore={() => void loadMore()}
+          onLoadMore={() => {
+            loadMore().catch(() => undefined);
+          }}
           onSelect={(item) =>
             setSelected((current) =>
               current?.quarantine_id === item.quarantine_id ? null : item,

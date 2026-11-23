@@ -2,15 +2,15 @@ import type { QuarantineItemSummary } from "../lib/types";
 import { KIND_LABEL, REASON_STYLE, STATUS_STYLE, timeAgo } from "../lib/format";
 
 interface Props {
-  items: QuarantineItemSummary[];
-  total: number;
-  selectedId: string | null;
-  loadingMore: boolean;
-  onSelect: (item: QuarantineItemSummary) => void;
-  onLoadMore: () => void;
+  readonly items: QuarantineItemSummary[];
+  readonly total: number;
+  readonly selectedId: string | null;
+  readonly loadingMore: boolean;
+  readonly onSelect: (item: QuarantineItemSummary) => void;
+  readonly onLoadMore: () => void;
 }
 
-function Badge({ text, style }: { text: string; style: string }) {
+function Badge({ text, style }: Readonly<{ text: string; style: string }>) {
   return (
     <span className={`inline-block rounded-md border px-1.5 py-0.5 text-[11px] ${style}`}>
       {text}

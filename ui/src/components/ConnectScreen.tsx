@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { fetchLiveness, type AdminTokens } from "../lib/api";
 
 interface Props {
-  embed?: boolean;
-  onConnect: (tokens: AdminTokens) => void;
+  readonly embed?: boolean;
+  readonly onConnect: (tokens: AdminTokens) => void;
 }
 
 export function ConnectScreen({ onConnect, embed = false }: Props) {

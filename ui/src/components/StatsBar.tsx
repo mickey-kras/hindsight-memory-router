@@ -2,7 +2,7 @@ import type { QuarantineStats } from "../lib/types";
 import { formatBytes } from "../lib/format";
 
 interface Props {
-  stats: QuarantineStats;
+  readonly stats: QuarantineStats;
 }
 
 export function StatsBar({ stats }: Props) {
