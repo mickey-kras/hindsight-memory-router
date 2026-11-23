@@ -76,7 +76,11 @@ async def _body(request: Request, *, optional: bool = False) -> object:
         value: object = json.loads(body, object_pairs_hook=_unique_object)
         return value
     except (ValueError, RecursionError):
-        raise HttpError(400, "invalid_human_login", "invalid human login request") from None
+        raise _invalid_request() from None
+
+
+def _invalid_request() -> HttpError:
+    return HttpError(400, "invalid_human_login", "invalid human login request")
 
 
 def unavailable() -> HttpError:
@@ -197,7 +201,7 @@ class HumanAuth:
                 await self.exchange(ExchangeLogin.model_validate(value)), headers=_NO_STORE
             )
         except ValidationError:
-            error = HttpError(400, "invalid_human_login", "invalid human login request")
+            error = _invalid_request()
         except HttpError as exc:
             error = exc
         except Exception as exc:
@@ -268,7 +272,7 @@ class HumanAuth:
     async def refresh(self, body: RefreshSession) -> dict[str, object]:
         match = REFRESH_TOKEN.fullmatch(body.refresh_token)
         if match is None:
-            raise HttpError(400, "invalid_human_login", "invalid human login request")
+            raise _invalid_request()
         try:
             return _session_body(await self.store.refresh(match[1], match[2], self._refresh_grants))
         except RefreshRejected as rejected:
