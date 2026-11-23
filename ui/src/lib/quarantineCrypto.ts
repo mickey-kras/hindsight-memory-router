@@ -21,10 +21,8 @@ function b64ToBytes(value: string, field: string): Uint8Array {
   if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) {
     throw new DecryptError(`${field} must be valid base64`);
   }
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  // atob yields one Latin-1 character (code point 0-255) per decoded byte.
+  return Uint8Array.from(atob(value), (char) => char.codePointAt(0) ?? 0);
 }
 
 // Import a PKCS8 PEM decryption key as a non-extractable CryptoKey.
@@ -34,7 +32,7 @@ export async function importDecryptionKeyPem(pem: string): Promise<CryptoKey> {
   const body = pem
     .replace(header, "")
     .replace(footer, "")
-    .replace(/\s+/g, "");
+    .replaceAll(/\s+/g, "");
   if (!pem.includes(header) || !pem.includes(footer) || !body || pem.includes("ENCRYPTED")) {
     throw new DecryptError("an unencrypted PKCS8 PEM decryption key is required");
   }
@@ -98,8 +96,8 @@ function parseDecrypted(value: unknown): DecryptedQuarantineObject {
     quarantine_id: obj["quarantine_id"] as string,
     created_at: obj["created_at"] as string,
     reason: obj["reason"] as ReviewReason,
-    ...(obj["writer_id"] !== undefined ? { writer_id: obj["writer_id"] as string } : {}),
-    ...(obj["source"] !== undefined ? { source: obj["source"] as string } : {}),
+    ...(obj["writer_id"] === undefined ? {} : { writer_id: obj["writer_id"] as string }),
+    ...(obj["source"] === undefined ? {} : { source: obj["source"] as string }),
     payload: obj["payload"],
   };
 }

@@ -54,7 +54,7 @@ async function request<T>(
       ...init,
       ...(hostAuth ? { credentials: "same-origin" as const, mode: "same-origin" as const, redirect: "error" as const } : {}),
       headers: {
-        ...(!hostAuth ? { Authorization: `Bearer ${token}` } : {}),
+        ...(hostAuth ? {} : { Authorization: `Bearer ${token}` }),
         ...(init?.body ? { "Content-Type": "application/json" } : {}),
       },
     });

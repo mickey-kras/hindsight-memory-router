@@ -6,9 +6,9 @@ import { formatBytes } from "../lib/format";
 import { Banner } from "./Banner";
 
 interface Props {
-  tokens: AdminSession;
-  onUnauthorized: () => void;
-  onDone: (message: string) => void;
+  readonly tokens: AdminSession;
+  readonly onUnauthorized: () => void;
+  readonly onDone: (message: string) => void;
 }
 
 export function CleanupPanel({ tokens, onDone, onUnauthorized }: Props) {
@@ -63,7 +63,7 @@ export function CleanupPanel({ tokens, onDone, onUnauthorized }: Props) {
 
       <div className="flex flex-wrap items-center gap-3 text-sm">
         <label className="flex items-center gap-2 text-zinc-300">
-          Scope
+          <span>Scope</span>
           <select
             disabled={busy}
             value={scope}
@@ -78,7 +78,7 @@ export function CleanupPanel({ tokens, onDone, onUnauthorized }: Props) {
           </select>
         </label>
         <label className="flex items-center gap-2 text-zinc-300">
-          Older than
+          <span>Older than</span>
           <input
             disabled={busy}
             type="datetime-local"

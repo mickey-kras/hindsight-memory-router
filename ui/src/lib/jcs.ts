@@ -29,10 +29,17 @@ function assertJcsSafe(value: unknown): asserts value is JsonValue {
   throw new Error("value must contain JSON values only");
 }
 
+// RFC 8785 orders object keys by UTF-16 code units, not by locale.
+function compareCodeUnits(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
 function serialize(value: JsonValue): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(serialize).join(",")}]`;
-  const keys = Object.keys(value).sort();
+  const keys = Object.keys(value).sort(compareCodeUnits);
   const parts = keys.map((key) => `${JSON.stringify(key)}:${serialize(value[key] as JsonValue)}`);
   return `{${parts.join(",")}}`;
 }

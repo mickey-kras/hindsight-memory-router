@@ -1,7 +1,7 @@
 interface Props {
-  kind: "error" | "ok" | "info";
-  text: string;
-  onDismiss?: () => void;
+  readonly kind: "error" | "ok" | "info";
+  readonly text: string;
+  readonly onDismiss?: () => void;
 }
 
 const STYLE = {
@@ -11,11 +11,9 @@ const STYLE = {
 } as const;
 
 export function Banner({ kind, text, onDismiss }: Props) {
-  return (
-    <div
-      role={kind === "error" ? "alert" : "status"}
-      className={`flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${STYLE[kind]}`}
-    >
+  const className = `flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${STYLE[kind]}`;
+  const content = (
+    <>
       <span className="break-words">{text}</span>
       {onDismiss && (
         <button
@@ -26,6 +24,15 @@ export function Banner({ kind, text, onDismiss }: Props) {
           x
         </button>
       )}
-    </div>
+    </>
   );
+  if (kind === "error") {
+    return (
+      <div role="alert" className={className}>
+        {content}
+      </div>
+    );
+  }
+  // <output> carries the implicit "status" live-region role.
+  return <output className={className}>{content}</output>;
 }
