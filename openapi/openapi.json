@@ -1181,7 +1181,7 @@
             "description": "Invalid request."
           },
           "401": {
-            "description": "The refresh token is unknown, consumed, expired, or revoked, or the principal lost every original grant. A login is necessary."
+            "description": "The router rejects an unknown, expired, revoked, or already used refresh token. It also rejects refresh when the principal has no original grant. A login is necessary."
           },
           "404": {
             "description": "Human authentication or session refresh is off, or the route is unknown."
@@ -2723,7 +2723,7 @@
             "title": "Refresh Token",
             "type": "string",
             "pattern": "^mrr_[0-9a-f]{32}_[0-9a-f]{64}$",
-            "description": "Opaque single-use refresh token from exchange or the previous refresh."
+            "description": "An opaque token that you can use one time. It comes from exchange or from the previous refresh."
           }
         },
         "required": [

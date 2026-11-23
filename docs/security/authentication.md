@@ -171,6 +171,7 @@ The router rejects other encodings before body decoding to preserve response-siz
 
 The router requests only `openid`.
 It does not support arbitrary ID-token submission, implicit flow, or password flow.
+
 It never requests identity-provider refresh tokens or `offline_access`. Session refresh uses router-issued tokens only.
 Browser callbacks and exchange responses use `Cache-Control: no-store`.
 Router and identity-provider bearer tokens never appear in URLs.
@@ -194,6 +195,7 @@ Human principals have no administrative, control-plane, quarantine, configuratio
 Successful exchange returns an opaque `mrh_<32-hex-key-id>_<64-hex-secret>` access token, principal ID, authorized grants, and expiry.
 When session refresh is on, it also returns an opaque `mrr_<32-hex-key-id>_<64-hex-secret>` refresh token.
 Key IDs and secrets use 16 and 32 random bytes respectively.
+
 The default and maximum access-token lifetime is one hour. `expires_at` always describes the access token.
 Storage contains only the secret's SHA-256 digest, expiry, revocation state, issued grant ceiling, and policy generation.
 Every authenticated request checks shared session state.
@@ -207,6 +209,7 @@ There is no positive authentication cache or fallback to another credential type
 Send the access token as a bearer credential, or send `{"refresh_token": "..."}` without authorization.
 The refresh-token form works after the access token expires.
 Other sessions of the same principal, such as another harness, stay valid.
+
 Operators revoke sessions through a server-side administrative command. After a revocation commits, it blocks all later authentication on every replica.
 Operations that the router admitted before can finish. Expired or revoked credentials must have an explicit interactive
 login again. Identity-provider logout is separate from router sign-out.
@@ -214,7 +217,7 @@ login again. Identity-provider logout is separate from router sign-out.
 ### Session refresh
 
 Session refresh is off by default. Without it, each session ends after one hour and needs a new browser login.
-Turn it on with both `session_idle_seconds` and `session_absolute_seconds` in the human authentication file.
+Enable it with both `session_idle_seconds` and `session_absolute_seconds` in the human authentication file.
 
 - Idle lifetime: 3600 to 604,800 seconds. Each successful refresh extends it, up to the absolute lifetime.
 - Absolute lifetime: 3600 to 2,592,000 seconds from the browser login. Refresh never extends it.
@@ -227,7 +230,7 @@ The deployment admits at most 600 refresh requests per minute.
 
 - Storage contains only SHA-256 digests of refresh secrets.
 - Rotation is atomic across replicas. Each refresh token succeeds at most once.
-- Reuse of a consumed refresh token returns `401` and revokes the session, including its active successor.
+- If a client sends a refresh token a second time, the router returns `401` and revokes the session, including its active successor.
   The router logs `authentication_failed` with reason `refresh-token-reuse`, never the token.
 - Clients must serialize refresh for each stored session. Two concurrent refreshes with one token count as reuse.
 - An access token that a refresh replaces stays valid for at most 60 more seconds, for requests already in flight.
@@ -241,13 +244,13 @@ The deployment admits at most 600 refresh requests per minute.
 #### Identity-provider policy
 
 Refresh does not contact the identity provider.
-Identity-provider session controls, such as Microsoft Entra Conditional Access sign-in frequency, apply only at browser login.
+Session controls of the identity provider apply only at browser login. An example is the sign-in frequency of a Conditional Access policy in Microsoft Entra.
 Account disablement or deletion in the identity provider does not end an active router session.
-Before you turn on refresh, confirm your reauthentication and offboarding requirements with the identity-provider owner.
+Before you enable refresh, confirm your reauthentication and offboarding requirements with the identity-provider owner.
 
 - Set `session_absolute_seconds` to no more than the required reauthentication interval.
   For Entra, use the Conditional Access [sign-in frequency](https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-session-lifetime) that applies to the client application.
-- To offboard a person, remove the subject mapping or the human principal, then run `memory-router-human-auth activate`.
+- To offboard a person, remove the subject mapping or the human principal. Then run `memory-router-human-auth activate`.
   Activation revokes every human session. To end one session immediately, use `memory-router-human-auth revoke`.
 - If policy forbids router-only renewal, leave both lifetimes unset.
 
@@ -307,7 +310,7 @@ Set `MEMORY_ROUTER_HUMAN_AUTH` to a JSON file:
 {"router_url":"https://router.example","issuer":"https://identity.example","client_id":"coding-agents","subjects":{"synthetic-subject":"human-example"}}
 ```
 
-To turn on [session refresh](#session-refresh), add both lifetimes:
+To enable [session refresh](#session-refresh), add both lifetimes:
 
 ```json
 {"session_idle_seconds":86400,"session_absolute_seconds":604800}

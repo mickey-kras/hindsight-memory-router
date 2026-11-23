@@ -28,6 +28,7 @@ Optional human authentication (`MEMORY_ROUTER_HUMAN_AUTH`):
 
 `expires_at` is an integer UNIX timestamp in seconds for the access token.
 Refresh tokens are single-use. Refresh returns `404` when session refresh is off.
+
 Grants are `{bank, scopes}` objects.
 These endpoints return `404` when disabled.
 Malformed requests return `400`/`413`, authentication failures return `401`, and exhausted limits return `429`.
