@@ -1122,52 +1122,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "required": [
-                    "token",
-                    "token_type",
-                    "principal_id",
-                    "grants",
-                    "expires_at"
-                  ],
-                  "properties": {
-                    "token": {
-                      "type": "string"
-                    },
-                    "token_type": {
-                      "const": "Bearer"
-                    },
-                    "principal_id": {
-                      "type": "string"
-                    },
-                    "grants": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "required": [
-                          "bank",
-                          "scopes"
-                        ],
-                        "properties": {
-                          "bank": {
-                            "type": "string"
-                          },
-                          "scopes": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "additionalProperties": false
-                      }
-                    },
-                    "expires_at": {
-                      "type": "integer",
-                      "description": "UNIX seconds. The expiry is no more than one hour after the router issues the session."
-                    }
-                  },
-                  "additionalProperties": false
+                  "$ref": "#/components/schemas/HumanSession"
                 }
               }
             }
@@ -1203,6 +1158,57 @@
         }
       }
     },
+    "/auth/human/refresh": {
+      "post": {
+        "operationId": "refreshHumanSession",
+        "summary": "Rotate a human refresh token",
+        "tags": [
+          "Human authentication"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success. Cache-Control: no-store.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HumanRefreshedSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request."
+          },
+          "401": {
+            "description": "The refresh token is unknown, consumed, expired, or revoked, or the principal lost every original grant. A login is necessary."
+          },
+          "404": {
+            "description": "Human authentication or session refresh is off, or the route is unknown."
+          },
+          "413": {
+            "description": "The request is more than 8 KiB."
+          },
+          "429": {
+            "description": "The refresh rate or session storage use is at its limit."
+          },
+          "503": {
+            "description": "Shared state or the active policy is unavailable."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanSessionRefresh"
+              }
+            }
+          }
+        },
+        "description": "Exchanges a refresh token for a new access token and a replacement refresh token. The router rechecks the current grants of the human principal and never widens the original session scope. A consumed, expired, or revoked refresh token returns 401. Reuse of a consumed token also revokes the session and its active successor."
+      }
+    },
     "/auth/human/sign-out": {
       "post": {
         "operationId": "signOutHumanSession",
@@ -1213,7 +1219,8 @@
         "security": [
           {
             "HumanToken": []
-          }
+          },
+          {}
         ],
         "responses": {
           "200": {
@@ -1252,6 +1259,17 @@
           },
           "503": {
             "description": "The identity provider, shared state, or active policy is unavailable."
+          }
+        },
+        "description": "Revokes every credential of one harness session, including outstanding access tokens. Send the access token as a bearer credential, or send the refresh token in the body without authorization. The body form works after the access token expires. Other sessions of the same principal stay valid.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HumanSessionRefresh"
+              }
+            }
           }
         }
       }
@@ -2695,6 +2713,131 @@
             ]
           }
         }
+      },
+      "HumanSessionRefresh": {
+        "additionalProperties": false,
+        "properties": {
+          "refresh_token": {
+            "maxLength": 101,
+            "minLength": 101,
+            "title": "Refresh Token",
+            "type": "string",
+            "pattern": "^mrr_[0-9a-f]{32}_[0-9a-f]{64}$",
+            "description": "Opaque single-use refresh token from exchange or the previous refresh."
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "title": "RefreshSession",
+        "type": "object"
+      },
+      "HumanSession": {
+        "type": "object",
+        "required": [
+          "token",
+          "token_type",
+          "principal_id",
+          "grants",
+          "expires_at"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "token_type": {
+            "const": "Bearer"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "bank",
+                "scopes"
+              ],
+              "properties": {
+                "bank": {
+                  "type": "string"
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "UNIX seconds when the access token expires. The access token expires no more than one hour after the router issues it, and never after the absolute session lifetime."
+          },
+          "refresh_token": {
+            "type": "string",
+            "pattern": "^mrr_[0-9a-f]{32}_[0-9a-f]{64}$",
+            "description": "Present only when the deployment configures session lifetimes. Single-use: each refresh returns a replacement, and reuse of a consumed token revokes the session."
+          }
+        },
+        "additionalProperties": false
+      },
+      "HumanRefreshedSession": {
+        "type": "object",
+        "required": [
+          "token",
+          "token_type",
+          "principal_id",
+          "grants",
+          "expires_at",
+          "refresh_token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          },
+          "token_type": {
+            "const": "Bearer"
+          },
+          "principal_id": {
+            "type": "string"
+          },
+          "grants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "bank",
+                "scopes"
+              ],
+              "properties": {
+                "bank": {
+                  "type": "string"
+                },
+                "scopes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "expires_at": {
+            "type": "integer",
+            "description": "UNIX seconds when the access token expires. The access token expires no more than one hour after the router issues it, and never after the absolute session lifetime."
+          },
+          "refresh_token": {
+            "type": "string",
+            "pattern": "^mrr_[0-9a-f]{32}_[0-9a-f]{64}$",
+            "description": "Present only when the deployment configures session lifetimes. Single-use: each refresh returns a replacement, and reuse of a consumed token revokes the session."
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

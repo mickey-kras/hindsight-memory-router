@@ -44,7 +44,10 @@ def run(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "activate", help="Activate configured policy and invalidate existing sessions."
     )
-    revoke = commands.add_parser("revoke", help="Revoke a session by its public key ID.")
+    revoke = commands.add_parser(
+        "revoke",
+        help="Revoke a session and all of its credentials by an access or refresh key ID.",
+    )
     revoke.add_argument("--key-id", required=True, type=_key_id)
     args = parser.parse_args(argv)
     try:

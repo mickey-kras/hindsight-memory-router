@@ -170,7 +170,8 @@ The router rejects other encodings before body decoding to preserve response-siz
    After use, the router discards the OIDC tokens.
 
 The router requests only `openid`.
-It does not support arbitrary ID-token submission, implicit flow, password flow, refresh tokens, or `offline_access`.
+It does not support arbitrary ID-token submission, implicit flow, or password flow.
+It never requests identity-provider refresh tokens or `offline_access`. Session refresh uses router-issued tokens only.
 Browser callbacks and exchange responses use `Cache-Control: no-store`.
 Router and identity-provider bearer tokens never appear in URLs.
 The authorization code appears only in the mandatory loopback callback. Logs never contain this code.
@@ -190,9 +191,10 @@ Allowed human scopes are `bank.list`, `memory.recall`, `memory.retain`, `memory.
 Existing bank access policies and principal limits still apply.
 Human principals have no administrative, control-plane, quarantine, configuration-write, or delegation authority.
 
-Successful exchange returns an opaque `mrh_<32-hex-key-id>_<64-hex-secret>` credential, principal ID, authorized grants, and expiry.
-The key ID and secret use 16 and 32 random bytes respectively.
-The default and maximum lifetime is one hour.
+Successful exchange returns an opaque `mrh_<32-hex-key-id>_<64-hex-secret>` access token, principal ID, authorized grants, and expiry.
+When session refresh is on, it also returns an opaque `mrr_<32-hex-key-id>_<64-hex-secret>` refresh token.
+Key IDs and secrets use 16 and 32 random bytes respectively.
+The default and maximum access-token lifetime is one hour. `expires_at` always describes the access token.
 Storage contains only the secret's SHA-256 digest, expiry, revocation state, issued grant ceiling, and policy generation.
 Every authenticated request checks shared session state.
 
@@ -201,10 +203,55 @@ Do not intersect bank and scope lists separately.
 Do not recombine these lists into new grants.
 There is no positive authentication cache or fallback to another credential type.
 
-`POST /auth/human/sign-out` revokes the caller's session. An operator must also be
-able to revoke sessions through a server-side administrative command. After a revocation commits, it blocks all later authentication on every replica.
+`POST /auth/human/sign-out` revokes the caller's session and every credential issued for it, including outstanding access tokens.
+Send the access token as a bearer credential, or send `{"refresh_token": "..."}` without authorization.
+The refresh-token form works after the access token expires.
+Other sessions of the same principal, such as another harness, stay valid.
+Operators revoke sessions through a server-side administrative command. After a revocation commits, it blocks all later authentication on every replica.
 Operations that the router admitted before can finish. Expired or revoked credentials must have an explicit interactive
 login again. Identity-provider logout is separate from router sign-out.
+
+### Session refresh
+
+Session refresh is off by default. Without it, each session ends after one hour and needs a new browser login.
+Turn it on with both `session_idle_seconds` and `session_absolute_seconds` in the human authentication file.
+
+- Idle lifetime: 3600 to 604,800 seconds. Each successful refresh extends it, up to the absolute lifetime.
+- Absolute lifetime: 3600 to 2,592,000 seconds from the browser login. Refresh never extends it.
+- For overnight use, an idle lifetime of `86400` covers a session that sits unused for up to a day.
+
+`POST /auth/human/refresh` accepts only `{"refresh_token": "..."}` and no other credential.
+It returns a new access token, a replacement refresh token, `expires_at`, `principal_id`, and grants with `Cache-Control: no-store`.
+The response never contains upstream credentials or URLs.
+The deployment admits at most 600 refresh requests per minute.
+
+- Storage contains only SHA-256 digests of refresh secrets.
+- Rotation is atomic across replicas. Each refresh token succeeds at most once.
+- Reuse of a consumed refresh token returns `401` and revokes the session, including its active successor.
+  The router logs `authentication_failed` with reason `refresh-token-reuse`, never the token.
+- Clients must serialize refresh for each stored session. Two concurrent refreshes with one token count as reuse.
+- An access token that a refresh replaces stays valid for at most 60 more seconds, for requests already in flight.
+- Refresh keeps the server-resolved principal and `Principal.source = human`.
+  It rechecks the current principal grants and returns only the intersection with the grants of the original login.
+  Grants added after login never apply. If no original grant remains, refresh revokes the session and returns `401`.
+- Unknown, expired, revoked, or consumed refresh tokens return `401`. The client must then run an explicit login.
+- Policy activation revokes refreshable sessions as it revokes access tokens.
+- Revoked sessions count against the per-principal cap for at most one hour.
+
+#### Identity-provider policy
+
+Refresh does not contact the identity provider.
+Identity-provider session controls, such as Microsoft Entra Conditional Access sign-in frequency, apply only at browser login.
+Account disablement or deletion in the identity provider does not end an active router session.
+Before you turn on refresh, confirm your reauthentication and offboarding requirements with the identity-provider owner.
+
+- Set `session_absolute_seconds` to no more than the required reauthentication interval.
+  For Entra, use the Conditional Access [sign-in frequency](https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-session-lifetime) that applies to the client application.
+- To offboard a person, remove the subject mapping or the human principal, then run `memory-router-human-auth activate`.
+  Activation revokes every human session. To end one session immediately, use `memory-router-human-auth revoke`.
+- If policy forbids router-only renewal, leave both lifetimes unset.
+
+See [RFC 9700 §4.14](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14).
 
 ### Storage, deployment, and client requirements
 
@@ -223,7 +270,8 @@ Limit checks occur before provider I/O or state allocation.
 Exhausted limits return `429`.
 The router prunes expired state before allocation and during maintenance.
 
-Shared storage caps are 1000 login transactions, 10,000 unexpired sessions, and 20 unexpired sessions per human principal.
+Shared storage caps are 1000 login transactions, 10,000 unexpired access tokens, and 20 unexpired sessions per human principal.
+Refreshable sessions and access tokens count separately against the per-principal cap.
 Revocation does not bypass these caps.
 Database failure denies login and human authentication with `503`.
 
@@ -259,6 +307,15 @@ Set `MEMORY_ROUTER_HUMAN_AUTH` to a JSON file:
 {"router_url":"https://router.example","issuer":"https://identity.example","client_id":"coding-agents","subjects":{"synthetic-subject":"human-example"}}
 ```
 
+To turn on [session refresh](#session-refresh), add both lifetimes:
+
+```json
+{"session_idle_seconds":86400,"session_absolute_seconds":604800}
+```
+
+Changing lifetimes changes the policy generation and requires activation.
+Configurations without lifetimes keep their existing generation after upgrade.
+
 Add a human entry to the principal registry:
 
 ```json
@@ -273,6 +330,7 @@ Activation immediately invalidates all human sessions and pending logins, even f
 Stale replicas fail closed until updated.
 
 Revoke a session using `memory-router-human-auth revoke --key-id <key-id>`.
+The key ID can identify an access token or a refresh token. The command revokes every credential of that session.
 The key ID is not secret.
 Never pass a bearer token to this command. Application
 principal rotation does not change.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,7 +11,12 @@ import pytest
 
 from memory_router.db import Database, Tx, create_database
 from memory_router.errors import HttpError
-from memory_router.human_auth_store import HumanAuthStore
+from memory_router.human_auth_store import (
+    HumanAuthStore,
+    IssuedSession,
+    RefreshPolicy,
+    RefreshRejected,
+)
 from memory_router.principals import PrincipalGrant
 
 GRANTS = (
@@ -212,8 +218,17 @@ async def test_global_caps_and_prune(stores: tuple[HumanAuthStore, HumanAuthStor
     async with first.db.transaction() as tx:
         for index in range(10_000):
             await tx.execute(
-                "INSERT INTO human_auth_sessions VALUES(?,?,?,?,?,?,?)",
-                (str(index), "generation-a", str(index), "digest", "[]", 9_999_999_999_999, 1),
+                "INSERT INTO human_auth_sessions VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    str(index),
+                    "generation-a",
+                    str(index),
+                    "digest",
+                    "[]",
+                    9_999_999_999_999,
+                    1,
+                    None,
+                ),
             )
     with pytest.raises(HttpError) as full:
         await second.issue(
@@ -305,3 +320,225 @@ async def test_authentication_does_not_take_allocation_lock(
     assert await second.authenticate(issued.key_id, "0" * 64) is None
     assert await second.authenticate("0" * 32, "0" * 64) is None
     assert capacity_locks == [False, False, False]
+
+
+POLICY = RefreshPolicy(idle_ms=86_400_000, absolute_ms=604_800_000)
+
+
+def _accept(_principal: str, grants: tuple[PrincipalGrant, ...]) -> tuple[PrincipalGrant, ...]:
+    return grants
+
+
+def _parts(token: str | None) -> tuple[str, str]:
+    assert token is not None
+    _, key_id, secret = token.split("_")
+    return key_id, secret
+
+
+async def _refreshable(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> tuple[HumanAuthStore, HumanAuthStore, IssuedSession]:
+    first, second = stores
+    first.refresh_policy = second.refresh_policy = POLICY
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
+    return first, second, issued
+
+
+async def test_refresh_rotates_hashed_token_once(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    key_id, secret = _parts(issued.refresh_token)
+    assert issued.refresh_token is not None and issued.refresh_token not in repr(issued)
+    async with first.db.transaction() as tx:
+        row = await tx.fetchone("SELECT * FROM human_auth_refresh_tokens WHERE key_id=?", (key_id,))
+        assert row is not None and secret not in str(row)
+        assert row["secret_digest"] == hashlib.sha256(secret.encode()).hexdigest()
+    refreshed = await second.refresh(key_id, secret, _accept)
+    assert refreshed.refresh_token != issued.refresh_token
+    assert refreshed.principal_id == "human-test" and refreshed.grants == GRANTS
+    assert await first.authenticate(*_parts(refreshed.token)) is not None
+    # The superseded access token keeps only a short grace window.
+    async with first.db.transaction() as tx:
+        row = await tx.fetchone(
+            "SELECT expires_at_ms FROM human_auth_sessions WHERE key_id=?", (issued.key_id,)
+        )
+        assert row is not None and int(row["expires_at_ms"]) < refreshed.expires_at * 1000
+
+
+async def test_concurrent_rotation_succeeds_once_and_reuse_revokes_successor(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    key_id, secret = _parts(issued.refresh_token)
+    results = await asyncio.gather(
+        first.refresh(key_id, secret, _accept),
+        second.refresh(key_id, secret, _accept),
+        return_exceptions=True,
+    )
+    winners = [result for result in results if isinstance(result, IssuedSession)]
+    rejected = [result for result in results if isinstance(result, RefreshRejected)]
+    assert len(winners) == 1 and len(rejected) == 1 and rejected[0].reuse
+    successor = winners[0]
+    assert await first.authenticate(*_parts(successor.token)) is None
+    assert await first.authenticate(*_parts(issued.token)) is None
+    with pytest.raises(RefreshRejected) as replay:
+        await first.refresh(*_parts(successor.refresh_token), _accept)
+    assert not replay.value.reuse
+
+
+async def test_unknown_and_wrong_secret_refresh_do_not_revoke(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    key_id, _ = _parts(issued.refresh_token)
+    for attempt in ((key_id, "0" * 64), ("0" * 32, "0" * 64)):
+        with pytest.raises(RefreshRejected):
+            await second.refresh(*attempt, _accept)
+    assert await first.authenticate(*_parts(issued.token)) is not None
+
+
+@pytest.mark.parametrize("column", ["idle_expires_at_ms", "absolute_expires_at_ms"])
+async def test_idle_and_absolute_expiry(
+    stores: tuple[HumanAuthStore, HumanAuthStore], column: str
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    async with first.db.transaction() as tx:
+        # Column names are fixed by the parametrization, never user input.
+        await tx.execute(f"UPDATE human_auth_families SET {column}=1")  # noqa: S608
+    with pytest.raises(RefreshRejected):
+        await second.refresh(*_parts(issued.refresh_token), _accept)
+    await second.prune()
+    async with first.db.transaction() as tx:
+        assert await tx.fetchone("SELECT * FROM human_auth_families") is None
+        assert await tx.fetchone("SELECT * FROM human_auth_refresh_tokens") is None
+
+
+async def test_access_and_idle_lifetimes_are_bounded_by_absolute_lifetime(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second = stores
+    first.refresh_policy = RefreshPolicy(idle_ms=3_600_000, absolute_ms=1_800_000)
+    issued = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
+    async with first.db.transaction() as tx:
+        row = await tx.fetchone("SELECT * FROM human_auth_families")
+        assert row is not None
+        assert row["idle_expires_at_ms"] == row["absolute_expires_at_ms"]
+        assert issued.expires_at == int(row["absolute_expires_at_ms"]) // 1000
+
+
+async def test_lost_permission_revokes_session(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    with pytest.raises(RefreshRejected) as rejected:
+        await second.refresh(*_parts(issued.refresh_token), lambda _principal, _grants: None)
+    assert not rejected.value.reuse
+    assert await first.authenticate(*_parts(issued.token)) is None
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(issued.refresh_token), _accept)
+
+
+async def test_sign_out_after_access_expiry_and_harness_isolation(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, signed_out = await _refreshable(stores)
+    other = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
+    await set_expired(first.db, "sessions")
+    assert await second.sign_out_refresh(*_parts(signed_out.refresh_token))
+    assert not await second.sign_out_refresh("0" * 32, "0" * 64)
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(signed_out.refresh_token), _accept)
+    refreshed = await first.refresh(*_parts(other.refresh_token), _accept)
+    assert await second.authenticate(*_parts(refreshed.token)) is not None
+
+
+@pytest.mark.parametrize("credential", ["access", "refresh"])
+async def test_operator_revocation_invalidates_whole_session(
+    stores: tuple[HumanAuthStore, HumanAuthStore], credential: str
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    refreshed = await first.refresh(*_parts(issued.refresh_token), _accept)
+    other = await first.issue(
+        activation_epoch=await first.require_generation(), principal_id="human-test", grants=GRANTS
+    )
+    target = issued.key_id if credential == "access" else _parts(refreshed.refresh_token)[0]
+    await second.revoke(target)
+    for token in (issued.token, refreshed.token):
+        assert await first.authenticate(*_parts(token)) is None
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(refreshed.refresh_token), _accept)
+    assert await first.authenticate(*_parts(other.token)) is not None
+
+
+async def test_activation_revokes_refreshable_sessions_and_disabled_policy_rejects(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    await second.activate()
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(issued.refresh_token), _accept)
+    first.refresh_policy = None
+    with pytest.raises(RefreshRejected):
+        await first.refresh(*_parts(issued.refresh_token), _accept)
+    assert (
+        await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        )
+    ).refresh_token is None
+
+
+async def test_refresh_sessions_count_against_per_principal_cap(
+    stores: tuple[HumanAuthStore, HumanAuthStore],
+) -> None:
+    first, second, issued = await _refreshable(stores)
+    for _ in range(19):
+        await first.issue(
+            activation_epoch=await first.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        )
+    await set_expired(first.db, "sessions")
+    with pytest.raises(HttpError) as full:
+        await second.issue(
+            activation_epoch=await second.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        )
+    assert full.value.status == 429
+    # A revoked session still counts, but only for one access lifetime.
+    await second.sign_out_refresh(*_parts(issued.refresh_token))
+    async with first.db.transaction() as tx:
+        row = await tx.fetchone(
+            "SELECT idle_expires_at_ms FROM human_auth_families WHERE revoked=1"
+        )
+        assert row is not None and int(row["idle_expires_at_ms"]) <= time.time() * 1000 + 3_600_000
+
+
+async def test_initialize_migrates_sessions_without_family_column(tmp_path: Path) -> None:
+    db = await create_database(f"sqlite:{tmp_path / 'legacy.db'}")
+    try:
+        async with db.transaction() as tx:
+            await tx.execute(
+                "CREATE TABLE human_auth_sessions (key_id TEXT PRIMARY KEY, generation TEXT NOT NULL, "
+                "principal_id TEXT NOT NULL, secret_digest TEXT NOT NULL, grants TEXT NOT NULL, "
+                "expires_at_ms BIGINT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)"
+            )
+        store = HumanAuthStore(db, "generation-a", POLICY)
+        await store.initialize()
+        issued = await store.issue(
+            activation_epoch=await store.require_generation(),
+            principal_id="human-test",
+            grants=GRANTS,
+        )
+        assert await store.authenticate(*_parts(issued.token)) is not None
+    finally:
+        await db.close()

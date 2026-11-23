@@ -148,6 +148,7 @@ REASONS = frozenset(
         "agent-claim-mismatch",
         "expired-token",
         "invalid-token-format",
+        "refresh-token-reuse",
         "revoked-token",
         "unknown-key-id",
         "wrong-secret",

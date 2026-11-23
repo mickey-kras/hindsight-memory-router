@@ -36,7 +36,7 @@ from .errors import HttpError, rate_limit_error
 from .hindsight import HindsightGateway, HindsightGatewayError, hindsight_log_fields
 from .human_auth import HumanAuth
 from .human_auth_config import generation_for, load_human_config
-from .human_auth_store import HumanAuthStore
+from .human_auth_store import HumanAuthStore, refresh_policy
 from .key_wrap import SidecarWrapProvider, WrapProvider
 from .lifecycle import cleanup_result, finish_before_cancelling
 from .limits import HindsightLimitConfig, HindsightLimits
@@ -218,7 +218,9 @@ class Runtime:
             resolver = _require_runtime(self.principal_resolver, _PRINCIPAL_RESOLVER_COMPONENT)
             human_config = load_human_config(settings.memory_router_human_auth, resolver.registry)
             human_store = HumanAuthStore(
-                self.database, generation_for(human_config, resolver.registry)
+                self.database,
+                generation_for(human_config, resolver.registry),
+                refresh_policy(human_config),
             )
             await human_store.initialize()
             self.human_auth = HumanAuth(
