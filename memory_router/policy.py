@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter
-from typing import Any, Literal, cast, get_args, get_origin
+from typing import Any, Literal, get_args, get_origin
 
 from . import blocked_content_review as blocked_review
 from .audit_summary import normalized_method, normalized_route
@@ -14,10 +14,12 @@ from .blocked_exceptions import (
 from .canonical import canonical_json, sha256_hex
 from .dedupe import request_dedupe_key, security_event_dedupe_key
 from .errors import HttpError
-from .hindsight import HindsightGatewayError, recall_score_certification
+from .hindsight import HindsightGateway, HindsightGatewayError, recall_score_certification
+from .limits import HindsightLimits
 from .logging import log_event
-from .models import RecallResponse
+from .models import RecallResponse, WriterRegistry
 from .observability import current_request_id
+from .quarantine_store import QuarantineStore
 from .repository import (
     REVIEW_IN_PROGRESS,
     REVIEW_SIDE_EFFECT_COMPLETED,
@@ -27,10 +29,12 @@ from .repository import (
     REVIEWED_BLOCKED,
     MemoryIdentity,
     MemoryReviewState,
+    QuarantineRepository,
 )
 from .review_capture import contains_credentials, joined_response_text
 from .scan_executor import scan_facade_response, scan_recalled, scan_request
 from .security import SafetyResult
+from .security_provenance import ReviewedSpan
 from .timestamps import iso_now
 
 logger = logging.getLogger(__name__)
@@ -108,9 +112,24 @@ def _audit_digest(value: Any) -> str:
         return sha256_hex(repr(value))
 
 
+def _drop_replaced_groups(
+    reviewed_supplemental: list[ReviewedSpan], positions: list[tuple[str, str]]
+) -> None:
+    """Drop each approved group that a later bank replaces at one of these positions."""
+    replaced = {span.group for span in reviewed_supplemental if (span.field, span.key) in positions}
+    reviewed_supplemental[:] = [
+        span for span in reviewed_supplemental if span.group not in replaced
+    ]
+
+
 class RouterPolicy:
     def __init__(
-        self, registry: Any, hindsight: Any, limits: Any, quarantine_store: Any, repository: Any
+        self,
+        registry: WriterRegistry,
+        hindsight: HindsightGateway,
+        limits: HindsightLimits,
+        quarantine_store: QuarantineStore,
+        repository: QuarantineRepository,
     ) -> None:
         self.registry = registry
         self.hindsight = hindsight
@@ -217,7 +236,7 @@ class RouterPolicy:
                 writer_id, source, responses, reviewed_positions=reviewed_positions
             )
         }
-        reviewed_supplemental: list[tuple[str, str, str]] = []
+        reviewed_supplemental: list[ReviewedSpan] = []
         for field in _RECALL_RESPONSE_MAP_FIELDS:
             present, value = await self._merged_recall_field(
                 writer_id,
@@ -269,7 +288,7 @@ class RouterPolicy:
         *,
         bank_id: str | None = None,
         context: dict[str, Any] | None = None,
-        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+        reviewed_supplemental: list[ReviewedSpan] | None = None,
     ) -> bool:
         score_certification = dict(
             Counter(recall_score_certification(result) for result in response.get("results", []))
@@ -392,7 +411,7 @@ class RouterPolicy:
         field: str,
         *,
         context: dict[str, Any],
-        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+        reviewed_supplemental: list[ReviewedSpan] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         merged: dict[str, Any] = {}
         present = False
@@ -420,20 +439,21 @@ class RouterPolicy:
             )
         if field == "trace" and reviewed_supplemental is not None:
             groups: dict[str, list[str]] = {}
-            for entry_field, key, group in reviewed_supplemental:
-                if entry_field == field:
-                    groups.setdefault(group, []).append(key)
+            for span in reviewed_supplemental:
+                if span.field == field:
+                    groups.setdefault(span.group, []).append(span.key)
             keys = list(merged)
             positions = {key: index for index, key in enumerate(keys)}
             intact = {
                 group
                 for group, group_keys in groups.items()
-                if group_keys[0] in positions
-                and keys[positions[group_keys[0]] : positions[group_keys[0]] + len(group_keys)]
-                == group_keys
+                if (start := positions.get(group_keys[0])) is not None
+                and keys[start : start + len(group_keys)] == group_keys
             }
             reviewed_supplemental[:] = [
-                entry for entry in reviewed_supplemental if entry[0] != field or entry[2] in intact
+                span
+                for span in reviewed_supplemental
+                if span.field != field or span.group in intact
             ]
         return present, merged if map_present else None
 
@@ -447,7 +467,7 @@ class RouterPolicy:
         merged: dict[str, Any],
         *,
         context: dict[str, Any] | None = None,
-        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+        reviewed_supplemental: list[ReviewedSpan] | None = None,
     ) -> None:
         if field == "trace":
             if await self._allow_recall_supplemental_or_degrade(
@@ -518,7 +538,7 @@ class RouterPolicy:
                     {"writer_id": writer_id, "bank_id": bank, **outcome.details()},
                 )
                 continue
-            responses.append((bank, cast(dict[str, Any], outcome)))
+            responses.append((bank, outcome))
         return responses, failed_banks
 
     async def _allow_recall_supplemental_or_degrade(
@@ -531,7 +551,7 @@ class RouterPolicy:
         value: Any,
         *,
         context: dict[str, Any] | None = None,
-        reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+        reviewed_supplemental: list[ReviewedSpan] | None = None,
     ) -> bool:
         evidence = {field: value} if key is None else {field: {key: value}}
         positions = (
@@ -540,14 +560,7 @@ class RouterPolicy:
         scan = await scan_recalled(evidence, writer_id=writer_id)
         if scan.safe:
             if reviewed_supplemental is not None:
-                replaced_groups = {
-                    position[2] for position in reviewed_supplemental if position[:2] in positions
-                }
-                reviewed_supplemental[:] = [
-                    position
-                    for position in reviewed_supplemental
-                    if position[2] not in replaced_groups
-                ]
+                _drop_replaced_groups(reviewed_supplemental, positions)
             return True
         digest = _audit_digest(evidence)
         payload = {
@@ -562,16 +575,10 @@ class RouterPolicy:
             writer_id, source, "recalled_suspicious_supplemental", bank_id, payload, scan
         ):
             if reviewed_supplemental is not None:
-                replaced_groups = {
-                    position[2] for position in reviewed_supplemental if position[:2] in positions
-                }
-                reviewed_supplemental[:] = [
-                    position
-                    for position in reviewed_supplemental
-                    if position[2] not in replaced_groups
-                ]
+                _drop_replaced_groups(reviewed_supplemental, positions)
+                group = ordered_content_digest(payload)
                 reviewed_supplemental.extend(
-                    (entry_field, entry_key, ordered_content_digest(payload))
+                    ReviewedSpan(entry_field, entry_key, group)
                     for entry_field, entry_key in positions
                 )
             return True
@@ -987,7 +994,7 @@ class RouterPolicy:
         )
 
     async def quarantine_security_event(self, values: dict[str, Any]) -> dict[str, str]:
-        return cast(dict[str, str], await self.store.put({"timestamp": iso_now(), **values}))
+        return await self.store.put({"timestamp": iso_now(), **values})
 
     @staticmethod
     def _with_transformations(payload: dict[str, Any], scan: SafetyResult | None) -> dict[str, Any]:
