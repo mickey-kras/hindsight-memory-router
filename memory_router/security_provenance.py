@@ -8,7 +8,7 @@ import re
 import time
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import security_rules, security_windows
 from .security_models import SafetyFinding
@@ -227,10 +227,18 @@ def _hit_wholly_reviewed(hit: str, variants: Iterable[ReviewedText]) -> bool:
     return found
 
 
+class ReviewedSpan(NamedTuple):
+    """One approved supplemental entry. Entries from one approval share a group."""
+
+    field: str
+    key: str
+    group: str
+
+
 def mark_reviewed_response(
     response: dict[str, Any],
     reviewed_result_positions: frozenset[int],
-    reviewed_supplemental: list[tuple[str, str, str]] | None,
+    reviewed_supplemental: list[ReviewedSpan] | None,
 ) -> dict[str, Any]:
     # Mark only actual scalar id/text occurrences. Dotted keys, nested objects,
     # metadata and supplemental fields cannot acquire approval through a path label.
@@ -243,17 +251,15 @@ def mark_reviewed_response(
         marked_results.append(copied)
     marked["results"] = marked_results
     origins: dict[str, int] = {}
-    for field, key, group in reviewed_supplemental or []:
-        if field == "results" or not isinstance(marked.get(field), dict):
+    for span in reviewed_supplemental or []:
+        if span.field == "results" or not isinstance(marked.get(span.field), dict):
             continue
-        origin = origins.setdefault(group, 2 * len(marked_results) + len(origins) + 1)
-        marked[field] = {
-            _ReviewedKey(entry_key, origin) if entry_key == key else entry_key: _reviewed_value(
-                entry, origin
-            )
-            if entry_key == key
-            else entry
-            for entry_key, entry in marked[field].items()
+        origin = origins.setdefault(span.group, 2 * len(marked_results) + len(origins) + 1)
+        marked[span.field] = {
+            _ReviewedKey(entry_key, origin)
+            if entry_key == span.key
+            else entry_key: _reviewed_value(entry, origin) if entry_key == span.key else entry
+            for entry_key, entry in marked[span.field].items()
         }
     return marked
 
