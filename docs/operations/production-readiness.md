@@ -122,12 +122,10 @@ Per-request logs do not cover these events.
 The supported range is `1` to `16`. The default is `4`.
 The router rejects a value outside this range at startup.
 
-The value sets two limits:
+The value sets the number of scanner worker processes.
+It also sets the number of concurrent scans that the router admits.
+The two limits always have the same value, also after a shutdown and a restart of the scanner.
 
-- The number of scanner worker processes.
-- The number of scans that the router admits at the same time.
-
-The limits always have the same value, also after a shutdown and a restart of the scanner.
 When all slots are in use, the router does not queue the scan.
 It returns `503` with `Retry-After: 1`. Clients try again after that time.
 
@@ -155,7 +153,7 @@ It prints one JSON line with these fields:
 | `latency_ms_p50`, `latency_ms_p95` | Scan latency in milliseconds |
 | `peak_scanner_rss_mib` | Largest resident memory of all scanner processes together |
 
-Use the smallest value that gives sufficient `scans_per_second` for your peak request rate.
+Use the smallest value that gives enough `scans_per_second` for your peak request rate.
 Make sure that `peak_scanner_rss_mib` for each router process fits in the memory of the host.
 
 ## Review order
