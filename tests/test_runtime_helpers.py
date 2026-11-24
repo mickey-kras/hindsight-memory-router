@@ -456,6 +456,35 @@ def test_runtime_configure_validates_and_applies_request_settings(
         runtime.configure(invalid)
 
 
+def test_scanner_concurrency_defaults_to_four(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MEMORY_ROUTER_SCANNER_CONCURRENCY", raising=False)
+
+    runtime = app_module.Runtime(app_module.load_settings())
+
+    assert runtime.scanner_concurrency == 4
+
+
+@pytest.mark.parametrize("value", ["1", "4", "16"])
+def test_scanner_concurrency_accepts_supported_range(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_SCANNER_CONCURRENCY", value)
+
+    runtime = app_module.Runtime(app_module.load_settings())
+
+    assert runtime.scanner_concurrency == int(value)
+
+
+@pytest.mark.parametrize("value", ["0", "17", "-1", "1.5", "four", "true"])
+def test_scanner_concurrency_rejects_invalid_values_at_startup(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_SCANNER_CONCURRENCY", value)
+
+    with pytest.raises(RuntimeError, match="MEMORY_ROUTER_SCANNER_CONCURRENCY must be"):
+        app_module.load_settings()
+
+
 @pytest.mark.asyncio
 async def test_runtime_start_uses_dedicated_postgres_rate_limit_pool(
     monkeypatch: pytest.MonkeyPatch,

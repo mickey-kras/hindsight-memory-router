@@ -30,8 +30,9 @@ from .security import (
 from .security_provenance import ReviewedSpan
 
 logger = logging.getLogger(__name__)
-SCAN_WORKERS = 4
-SCAN_CAPACITY = 4
+# One setting bounds both the worker processes and the admitted scans of this router process.
+DEFAULT_SCAN_CONCURRENCY = 4
+MAX_SCAN_CONCURRENCY = 16
 FACADE_SCAN_TASK_SECONDS = MAX_FACADE_SCAN_SECONDS + 1.0
 FACADE_SCAN_WAIT_SECONDS = FACADE_SCAN_TASK_SECONDS + 1.0
 
@@ -48,14 +49,15 @@ ScanKind = Literal["request", "response", "recall", "retain_response"]
 
 def _new_scan_executor() -> ProcessPool:
     return ProcessPool(
-        max_workers=SCAN_WORKERS,
+        max_workers=_SCAN_CONCURRENCY,
         context=cast(Any, multiprocessing.get_context("spawn")),
     )
 
 
 _SCAN_EXECUTOR: ProcessPool | None = None
 _SCAN_EXECUTOR_LOCK = Lock()
-_SCAN_CAPACITY = BoundedSemaphore(value=SCAN_CAPACITY)
+_SCAN_CONCURRENCY = DEFAULT_SCAN_CONCURRENCY
+_SCAN_CAPACITY = BoundedSemaphore(value=_SCAN_CONCURRENCY)
 _SCAN_GENERATION = 0
 _SCAN_SHUTDOWN = False
 _SCAN_FUTURES: set[Any] = set()
@@ -118,13 +120,19 @@ async def _get_scan_executor_async(expected_generation: int) -> ProcessPool:
     return await asyncio.to_thread(_get_scan_executor, expected_generation)
 
 
-def start_scan_executor() -> None:
-    global _SCAN_CAPACITY, _SCAN_SHUTDOWN
+def start_scan_executor(concurrency: int = DEFAULT_SCAN_CONCURRENCY) -> None:
+    global _SCAN_CAPACITY, _SCAN_CONCURRENCY, _SCAN_SHUTDOWN
+    with _SCAN_EXECUTOR_LOCK:
+        resizing = concurrency != _SCAN_CONCURRENCY and not _SCAN_SHUTDOWN
+    if resizing:
+        # A running pool keeps its worker count, so replace it together with its admission capacity.
+        shutdown_scan_executor()
     with _SCAN_EXECUTOR_LOCK:
         restarting = _SCAN_SHUTDOWN
         _SCAN_SHUTDOWN = False
+        _SCAN_CONCURRENCY = concurrency
         if restarting:
-            _SCAN_CAPACITY = BoundedSemaphore(value=SCAN_CAPACITY)
+            _SCAN_CAPACITY = BoundedSemaphore(value=concurrency)
             _SCAN_FUTURES.clear()
     executor = _get_scan_executor()
     if not executor.active:

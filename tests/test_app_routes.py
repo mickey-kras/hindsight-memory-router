@@ -593,7 +593,7 @@ async def test_lifespan_starts_and_stops_runtime(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(app_module, "shutdown_scan_executor_async", shutdown_scanner)
     async with app_module.lifespan(app_module.app):
         start.assert_awaited_once()
-        start_scanner.assert_called_once_with()
+        start_scanner.assert_called_once_with(4)
     stop.assert_awaited_once()
     shutdown_scanner.assert_awaited_once_with()
 
@@ -616,7 +616,7 @@ async def test_lifespan_cleans_up_runtime_when_scanner_start_fails(
             pass
 
     start.assert_awaited_once_with()
-    start_scanner.assert_called_once_with()
+    start_scanner.assert_called_once_with(4)
     shutdown_scanner.assert_awaited_once_with()
     stop.assert_awaited_once_with()
 

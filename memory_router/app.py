@@ -159,6 +159,7 @@ class Runtime:
 
     def _apply_request_settings(self, settings: RouterSettings) -> None:
         self.max_body_bytes = settings.memory_router_max_body_bytes
+        self.scanner_concurrency = settings.memory_router_scanner_concurrency
         self.router_token = secret_value(settings.memory_router_token)
         self.allow_anonymous = settings.memory_router_allow_anonymous
         self.metrics_enabled = settings.memory_router_metrics_enabled
@@ -430,7 +431,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await runtime.start()
         runtime_started = True
         scanner_start_attempted = True
-        await finish_before_cancelling(asyncio.to_thread(start_scan_executor))
+        await finish_before_cancelling(
+            asyncio.to_thread(start_scan_executor, runtime.scanner_concurrency)
+        )
     except BaseException as exc:
         await _cleanup_failed_start(
             runtime_started=runtime_started,

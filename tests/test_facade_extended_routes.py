@@ -947,8 +947,7 @@ async def test_facade_response_scan_shutdown_cancels_waiter_immediately(monkeypa
 
 
 def test_scan_worker_bounds_are_pinned() -> None:
-    assert scan_executor_module.SCAN_WORKERS == 4
-    assert scan_executor_module.SCAN_CAPACITY == 4
+    assert scan_executor_module.DEFAULT_SCAN_CONCURRENCY == 4
     assert (
         scan_executor_module.MAX_FACADE_SCAN_SECONDS
         < scan_executor_module.FACADE_SCAN_TASK_SECONDS

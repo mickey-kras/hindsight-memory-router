@@ -29,6 +29,7 @@ Only the default wrap provider, `rsa-oaep`, uses it.
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WRITE_MAX` |                          `30` | Admin write requests in each window                             |
 | `MEMORY_ROUTER_ADMIN_RATE_LIMIT_WINDOW_MS` |                       `60000` | Admin rate-limit window                                         |
 | `MEMORY_ROUTER_MAX_BODY_BYTES`             |                     `1048576` | Maximum size of a JSON request body                             |
+| `MEMORY_ROUTER_SCANNER_CONCURRENCY`        |                           `4` | Safety scan worker processes and concurrent scans for each router process. Range: `1` to `16`. See [scanner concurrency](../operations/production-readiness.md#scanner-concurrency) |
 | `MEMORY_ROUTER_REGISTRY`                   |     `main` -> `main` registry | Optional registry JSON path                                     |
 | `MEMORY_ROUTER_PRINCIPALS`                 |                          none | Path of the principal registry JSON. Sets per-agent mode        |
 | `MEMORY_ROUTER_HUMAN_AUTH`                 |                          none | Optional JSON with the OIDC settings for human login. Only for principal mode |

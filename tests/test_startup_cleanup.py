@@ -271,7 +271,7 @@ async def test_cancelled_scanner_start_finishes_acquisition_before_runtime_clean
     loop = asyncio.get_running_loop()
     events: list[str] = []
 
-    def start_scanner() -> None:
+    def start_scanner(_concurrency: int) -> None:
         loop.call_soon_threadsafe(started.set)
         release.wait(timeout=5)
         events.append("scanner started")

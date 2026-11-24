@@ -33,6 +33,7 @@ from .key_wrap import (
 from .logging import log_event
 from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
+from .scan_executor import DEFAULT_SCAN_CONCURRENCY, MAX_SCAN_CONCURRENCY
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATABASE_URL = "sqlite:./data/quarantine.db"
@@ -94,6 +95,11 @@ def _bind_host(value: Any) -> str:
 NonNegativeInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=0)]
 PositiveInt = Annotated[int, BeforeValidator(_exact_integer), Field(ge=1)]
 ExactBool = Annotated[bool, BeforeValidator(_exact_boolean)]
+ScannerConcurrency = Annotated[
+    int,
+    BeforeValidator(_exact_integer),
+    Field(ge=1, le=MAX_SCAN_CONCURRENCY),
+]
 
 
 class RouterSettings(BaseSettings):
@@ -108,6 +114,9 @@ class RouterSettings(BaseSettings):
     memory_router_port: PositiveInt = Field(8890, validation_alias="MEMORY_ROUTER_PORT")
     memory_router_max_body_bytes: PositiveInt = Field(
         1_048_576, validation_alias="MEMORY_ROUTER_MAX_BODY_BYTES"
+    )
+    memory_router_scanner_concurrency: ScannerConcurrency = Field(
+        DEFAULT_SCAN_CONCURRENCY, validation_alias="MEMORY_ROUTER_SCANNER_CONCURRENCY"
     )
     memory_router_token: SecretStr | None = Field(None, validation_alias="MEMORY_ROUTER_TOKEN")
     memory_router_allow_anonymous: ExactBool = Field(
@@ -344,6 +353,8 @@ def _settings_error_message(exc: ValidationError) -> str:
     context = error.get("ctx")
     if error_type == "greater_than_equal" and isinstance(context, dict):
         return f"{name} must be >= {context['ge']}"
+    if error_type == "less_than_equal" and isinstance(context, dict):
+        return f"{name} must be <= {context['le']}"
     if name == "MEMORY_ROUTER_DEPLOYMENT_MODE" and error_type == "literal_error":
         return "MEMORY_ROUTER_DEPLOYMENT_MODE must be single or cluster"
     if isinstance(context, dict) and isinstance(context.get("error"), ValueError):
