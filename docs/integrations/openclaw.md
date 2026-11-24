@@ -4,6 +4,17 @@
 
 Use the [integrations package](https://github.com/mickey-kras/hindsight-memory-router-integrations) for per-agent credentials, assigned write and read banks, and HTTPS transport. Follow its [OpenClaw setup](https://github.com/mickey-kras/hindsight-memory-router-integrations/blob/main/docs/OPENCLAW.md) after creating matching [principal grants](../security/authentication.md).
 
+## Hindsight 1.3.0 compatibility
+
+Hindsight 1.3.0 adds the knowledge-bank API below `/v1/default/knowledge-banks`. The router does not forward these endpoints.
+A knowledge bank uses the same identifiers as a memory bank, but the router has no grants for knowledge banks.
+
+Hindsight 1.3.0 also adds the `mcp_server_instructions` key to the bank configuration.
+Hindsight sends this text to MCP clients that connect directly to its single-bank MCP endpoint.
+The router does not expose that endpoint. It scans the key as part of each `PATCH /config` request.
+
+List endpoints now decrease a `limit` that is too large instead of rejecting it. The forwarded routes, their query parameters and their response statuses do not change.
+
 ## Hindsight 1.2.3 compatibility
 
 Hindsight 1.2.3 adds the `knowledge_banks` key to the bank configuration. With this key, reflect can search other banks.

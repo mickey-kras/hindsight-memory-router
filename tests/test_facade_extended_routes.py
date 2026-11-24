@@ -449,6 +449,12 @@ async def test_dry_run_extract_rejects_invalid_item_shapes(body: dict[str, objec
         ("GET", "/v1/default/chunks/chunk-1"),
         ("GET", "/metrics"),
         ("POST", "/v1/default/banks/openclaw/background"),
+        ("GET", "/v1/default/knowledge-banks"),
+        ("POST", "/v1/default/knowledge-banks"),
+        ("GET", "/v1/default/knowledge-banks/openclaw"),
+        ("POST", "/v1/default/knowledge-banks/openclaw/search"),
+        ("POST", "/v1/default/knowledge-banks/openclaw/ingest"),
+        ("POST", "/v1/default/knowledge-banks/openclaw/files/ingest"),
     ],
 )
 @pytest.mark.asyncio
