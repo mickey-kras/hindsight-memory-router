@@ -47,7 +47,7 @@ Request scan saturation, worker failure, hard timeout, or shutdown returns `503 
 This includes retain approval.
 Native recall-result and supplemental scan failures return `503 recall_scan_unavailable`.
 The response contains no partial recall content.
-All safety scans share the worker slots that `MEMORY_ROUTER_SCANNER_CONCURRENCY` sets. The default is four.
+All safety scans share the worker slots that `MEMORY_ROUTER_SCANNER_CONCURRENCY` sets (default: four).
 Operational scanner failures do not forward or quarantine the request.
 
 `/health/live` gives anonymous liveness with a static `{"status": "alive"}` body.
