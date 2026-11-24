@@ -59,6 +59,8 @@ METADATA_TTL_SECONDS = 3600.0
 KEYS_TTL_SECONDS = 3600.0
 # Minimum time between signing-key fetches that an unknown key ID can cause.
 KEY_REFRESH_INTERVAL_SECONDS = 60.0
+# Total time for one shared fetch. The HTTP read timeout limits only the time between chunks.
+FETCH_DEADLINE_SECONDS = 30.0
 
 
 class _Cached[T]:
@@ -85,7 +87,14 @@ class _Cached[T]:
         return await asyncio.shield(self._pending)
 
     async def _store(self) -> T:
-        value = await self._load()
+        # Callers are shielded from each other, so their deadlines do not stop this fetch.
+        try:
+            async with asyncio.timeout(FETCH_DEADLINE_SECONDS):
+                value = await self._load()
+        except TimeoutError:
+            raise HttpError(
+                503, "human_identity_unavailable", "identity provider unavailable"
+            ) from None
         self._value = value
         self.loaded_at = time.monotonic()
         self._expires = self.loaded_at + self._ttl
@@ -109,6 +118,7 @@ class HumanOidc:
         )
         self._metadata = _Cached(self._load_metadata, METADATA_TTL_SECONDS)
         self._keys = _Cached(self._load_keys, KEYS_TTL_SECONDS)
+        self._rollover_attempted_at = float("-inf")
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -206,8 +216,13 @@ class HumanOidc:
             return jwt.decode(id_token, keys, algorithms=["RS256"])
         except InvalidKeyIdError:
             # Signing-key rollover: fetch the keys again, but not for each unknown key ID.
-            if time.monotonic() - self._keys.loaded_at < KEY_REFRESH_INTERVAL_SECONDS:
+            # A failed attempt also counts, so an unhealthy provider gets no extra load.
+            now = time.monotonic()
+            if now - max(self._keys.loaded_at, self._rollover_attempted_at) < (
+                KEY_REFRESH_INTERVAL_SECONDS
+            ):
                 raise
+            self._rollover_attempted_at = now
             return jwt.decode(id_token, await self._keys.refresh(), algorithms=["RS256"])
 
     async def identity(self, *, code: str, verifier: str, redirect_uri: str, nonce: str) -> str:

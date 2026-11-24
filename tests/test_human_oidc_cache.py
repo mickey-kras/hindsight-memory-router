@@ -192,3 +192,40 @@ async def test_provider_outage_fails_only_after_expiry_and_is_not_cached(
 
     provider.unavailable = set()
     assert await login(oidc) == "subject-1"
+
+
+async def test_failed_rollover_refresh_is_rate_limited(
+    oidc: HumanOidc, provider: CountingProvider, clock: Clock
+) -> None:
+    await login(oidc)
+    provider.rotate(publish=True)
+    provider.unavailable = {"/jwks"}
+    clock.now += KEY_REFRESH_INTERVAL_SECONDS
+
+    with pytest.raises(HttpError) as failure:
+        await login(oidc)
+    assert (failure.value.status, failure.value.code) == (503, "human_identity_unavailable")
+    for _ in range(3):
+        with pytest.raises(HttpError) as failure:
+            await login(oidc)
+        assert (failure.value.status, failure.value.code) == (401, "human_login_failed")
+    assert provider.count()["/jwks"] == 2
+
+    provider.unavailable = set()
+    clock.now += KEY_REFRESH_INTERVAL_SECONDS
+    assert await login(oidc) == "subject-1"
+    assert provider.count()["/jwks"] == 3
+
+
+async def test_stalled_shared_fetch_ends_at_its_own_deadline(
+    oidc: HumanOidc, provider: CountingProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(human_oidc, "FETCH_DEADLINE_SECONDS", 0.05)
+    provider.release = asyncio.Event()
+
+    with pytest.raises(HttpError) as failure:
+        await login(oidc)
+    assert (failure.value.status, failure.value.code) == (503, "human_identity_unavailable")
+
+    provider.release.set()
+    assert await login(oidc) == "subject-1"

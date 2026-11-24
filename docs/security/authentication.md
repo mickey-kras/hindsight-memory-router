@@ -187,10 +187,11 @@ The router keeps the validated discovery document and the signing keys in memory
 Each has a lifetime of one hour. During that time, a login sends only the token request.
 Concurrent logins that find no valid entry share one discovery request and one JWKS request.
 The cache holds only validated documents. It never holds a failed response.
+Each shared request has a total limit of 30 seconds.
 
 The router supports signing-key rollover.
 When an ID token names a key ID that the cached keys do not contain, the router gets the JWKS again.
-It does this no more than one time in each 60 seconds.
+It does this no more than one time in each 60 seconds. A failed attempt also counts.
 If the key ID is still unknown, authentication fails with `401 human_login_failed`.
 Publish a new signing key before the provider signs tokens with it.
 
@@ -199,7 +200,7 @@ Expiry and a provider outage interact as follows:
 - Before expiry, logins do not need the discovery and JWKS endpoints. They still need the token endpoint.
 - After expiry, the router must get the document again. If the provider is unavailable, the login fails with `503 human_identity_unavailable`.
 - The router never uses an expired document.
-- The subsequent login tries the request again.
+- The next login tries the request again.
 
 Issuer, audience, nonce, algorithm, endpoint, and response-size checks do not change.
 Router session renewal does not use the identity provider.
