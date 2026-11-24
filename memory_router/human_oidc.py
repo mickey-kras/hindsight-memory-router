@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
+from collections.abc import Awaitable, Callable
 from typing import cast
 from urllib.parse import urlencode
 
 import httpx
 from joserfc import jwt
-from joserfc.errors import JoseError
+from joserfc.errors import InvalidKeyIdError, JoseError
 from joserfc.jwk import KeySet, KeySetSerialization
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -51,6 +53,50 @@ class TokenResponse(BaseModel):
     id_token: str = Field(min_length=1, max_length=32768)
 
 
+# Validated provider documents stay in memory for this long. After that, the next login
+# fetches them again, and a provider outage then fails the login.
+METADATA_TTL_SECONDS = 3600.0
+KEYS_TTL_SECONDS = 3600.0
+# Minimum time between signing-key fetches that an unknown key ID can cause.
+KEY_REFRESH_INTERVAL_SECONDS = 60.0
+
+
+class _Cached[T]:
+    """Keep one validated provider document for a bounded time. Concurrent misses share a fetch."""
+
+    def __init__(self, load: Callable[[], Awaitable[T]], ttl: float) -> None:
+        self._load = load
+        self._ttl = ttl
+        self._value: T | None = None
+        self._expires = 0.0
+        self.loaded_at = float("-inf")
+        self._pending: asyncio.Task[T] | None = None
+
+    async def get(self) -> T:
+        if self._value is not None and time.monotonic() < self._expires:
+            return self._value
+        return await self.refresh()
+
+    async def refresh(self) -> T:
+        if self._pending is None:
+            self._pending = asyncio.ensure_future(self._store())
+            self._pending.add_done_callback(self._finished)
+        # A cancelled caller must not cancel the fetch that other callers share.
+        return await asyncio.shield(self._pending)
+
+    async def _store(self) -> T:
+        value = await self._load()
+        self._value = value
+        self.loaded_at = time.monotonic()
+        self._expires = self.loaded_at + self._ttl
+        return value
+
+    def _finished(self, task: asyncio.Task[T]) -> None:
+        self._pending = None
+        if not task.cancelled():
+            task.exception()  # Each waiter receives the failure; mark it as retrieved.
+
+
 def invalid_identity() -> HttpError:
     return HttpError(401, "human_login_failed", "human authentication failed; sign in again")
 
@@ -61,6 +107,8 @@ class HumanOidc:
         self.client = client or httpx.AsyncClient(
             timeout=10, follow_redirects=False, trust_env=False
         )
+        self._metadata = _Cached(self._load_metadata, METADATA_TTL_SECONDS)
+        self._keys = _Cached(self._load_keys, KEYS_TTL_SECONDS)
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -101,6 +149,9 @@ class HumanOidc:
             ) from None
 
     async def metadata(self) -> ProviderMetadata:
+        return await self._metadata.get()
+
+    async def _load_metadata(self) -> ProviderMetadata:
         try:
             metadata = ProviderMetadata.model_validate_json(
                 await self._fetch(
@@ -139,6 +190,26 @@ class HumanOidc:
             )
         )
 
+    async def _load_keys(self) -> KeySet:
+        raw_keys = await self._fetch((await self.metadata()).jwks_uri, maximum=262144)
+        try:
+            keys_value: object = json.loads(raw_keys)
+            if not isinstance(keys_value, dict) or not isinstance(keys_value.get("keys"), list):
+                raise invalid_identity()
+            return KeySet.import_key_set(cast(KeySetSerialization, keys_value))
+        except (JoseError, ValueError, TypeError, KeyError):
+            raise invalid_identity() from None
+
+    async def _decode(self, id_token: str) -> jwt.Token:
+        keys = await self._keys.get()
+        try:
+            return jwt.decode(id_token, keys, algorithms=["RS256"])
+        except InvalidKeyIdError:
+            # Signing-key rollover: fetch the keys again, but not for each unknown key ID.
+            if time.monotonic() - self._keys.loaded_at < KEY_REFRESH_INTERVAL_SECONDS:
+                raise
+            return jwt.decode(id_token, await self._keys.refresh(), algorithms=["RS256"])
+
     async def identity(self, *, code: str, verifier: str, redirect_uri: str, nonce: str) -> str:
         metadata = await self.metadata()
         try:
@@ -154,12 +225,7 @@ class HumanOidc:
                     },
                 )
             )
-            raw_keys = await self._fetch(metadata.jwks_uri, maximum=262144)
-            keys_value: object = json.loads(raw_keys)
-            if not isinstance(keys_value, dict) or not isinstance(keys_value.get("keys"), list):
-                raise invalid_identity()
-            keys = KeySet.import_key_set(cast(KeySetSerialization, keys_value))
-            token = jwt.decode(response.id_token, keys, algorithms=["RS256"])
+            token = await self._decode(response.id_token)
             claims = IdentityClaims.model_validate(token.claims)
             now = int(time.time())
             if (
