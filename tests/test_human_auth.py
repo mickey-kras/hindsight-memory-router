@@ -420,8 +420,11 @@ async def test_provider_failures_are_unavailability(
             return httpx.Response(status, json={"error": "private-provider-detail"})
         return provider.respond(incoming)
 
-    await service.oidc.client.aclose()
-    service.oidc.client = httpx.AsyncClient(transport=httpx.MockTransport(failed_provider))
+    await service.oidc.close()
+    # A new client has no cached provider metadata, so each endpoint is fetched again.
+    service.oidc = HumanOidc(
+        service.config, httpx.AsyncClient(transport=httpx.MockTransport(failed_provider))
+    )
     response = await service.dispatch(
         request("POST", "/auth/human/exchange", body=login.model_dump()), "exchange"
     )
