@@ -229,3 +229,18 @@ async def test_stalled_shared_fetch_ends_at_its_own_deadline(
 
     provider.release.set()
     assert await login(oidc) == "subject-1"
+
+
+async def test_concurrent_logins_after_rollover_join_one_refresh(
+    oidc: HumanOidc, provider: CountingProvider, clock: Clock
+) -> None:
+    await login(oidc)
+    provider.rotate(publish=True)
+    clock.now += KEY_REFRESH_INTERVAL_SECONDS
+    provider.release = asyncio.Event()
+    logins = [asyncio.create_task(login(oidc)) for _ in range(4)]
+    await asyncio.sleep(0.05)
+    provider.release.set()
+
+    assert await asyncio.gather(*logins) == ["subject-1"] * 4
+    assert provider.count()["/jwks"] == 2

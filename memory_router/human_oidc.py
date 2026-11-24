@@ -74,6 +74,10 @@ class _Cached[T]:
         self.loaded_at = float("-inf")
         self._pending: asyncio.Task[T] | None = None
 
+    @property
+    def refreshing(self) -> bool:
+        return self._pending is not None
+
     async def get(self) -> T:
         if self._value is not None and time.monotonic() < self._expires:
             return self._value
@@ -217,12 +221,14 @@ class HumanOidc:
         except InvalidKeyIdError:
             # Signing-key rollover: fetch the keys again, but not for each unknown key ID.
             # A failed attempt also counts, so an unhealthy provider gets no extra load.
-            now = time.monotonic()
-            if now - max(self._keys.loaded_at, self._rollover_attempted_at) < (
-                KEY_REFRESH_INTERVAL_SECONDS
-            ):
-                raise
-            self._rollover_attempted_at = now
+            # A login that arrives during a refresh joins it and starts no new request.
+            if not self._keys.refreshing:
+                now = time.monotonic()
+                if now - max(self._keys.loaded_at, self._rollover_attempted_at) < (
+                    KEY_REFRESH_INTERVAL_SECONDS
+                ):
+                    raise
+                self._rollover_attempted_at = now
             return jwt.decode(id_token, await self._keys.refresh(), algorithms=["RS256"])
 
     async def identity(self, *, code: str, verifier: str, redirect_uri: str, nonce: str) -> str:

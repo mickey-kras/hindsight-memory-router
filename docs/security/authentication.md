@@ -186,12 +186,13 @@ The router exchange never accepts a Hindsight URL or returns Hindsight credentia
 The router keeps the validated discovery document and the signing keys in memory for each router process.
 Each has a lifetime of one hour. During that time, a login sends only the token request.
 Concurrent logins that find no valid entry share one discovery request and one JWKS request.
+
 The cache holds only validated documents. It never holds a failed response.
 Each shared request has a total limit of 30 seconds.
 
 The router supports signing-key rollover.
 When an ID token names a key ID that the cached keys do not contain, the router gets the JWKS again.
-It does this no more than one time in each 60 seconds. A failed attempt also counts.
+It does this no more than one time in each 60 seconds. A failed request also counts.
 If the key ID is still unknown, authentication fails with `401 human_login_failed`.
 Publish a new signing key before the provider signs tokens with it.
 
