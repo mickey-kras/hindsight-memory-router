@@ -27,6 +27,7 @@ from .security import (
     scan_recall_result,
     scan_retain_body,
 )
+from .security_provenance import ReviewedSpan
 
 logger = logging.getLogger(__name__)
 SCAN_WORKERS = 4
@@ -327,7 +328,9 @@ def _scan_recalled_payload(payload: bytes) -> SafetyResult:
         return scan_recall_response(
             value["result"],
             reviewed_result_positions=frozenset(value["reviewed_result_positions"]),
-            reviewed_supplemental=value.get("reviewed_supplemental"),
+            reviewed_supplemental=[
+                ReviewedSpan(*span) for span in value["reviewed_supplemental"] or []
+            ],
         )
     return scan_recall_result(value["result"], reviewed_stable=value["reviewed_stable"])
 
@@ -349,7 +352,7 @@ async def scan_recalled(
     writer_id: str | None = None,
     reviewed_stable: bool = False,
     reviewed_result_positions: frozenset[int] | None = None,
-    reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+    reviewed_supplemental: list[ReviewedSpan] | None = None,
 ) -> SafetyResult:
     scan_value: dict[str, object] = value
     if reviewed_result_positions is not None:
@@ -358,7 +361,7 @@ async def scan_recalled(
         {
             "result": scan_value,
             "reviewed_stable": reviewed_stable,
-            "reviewed_supplemental": [list(position) for position in reviewed_supplemental]
+            "reviewed_supplemental": [list(span) for span in reviewed_supplemental]
             if reviewed_supplemental
             else None,
             "reviewed_result_positions": sorted(reviewed_result_positions)
