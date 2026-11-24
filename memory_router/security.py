@@ -136,7 +136,7 @@ def scan_recall_response(
     response: dict[str, Any],
     *,
     reviewed_result_positions: frozenset[int] = frozenset(),
-    reviewed_supplemental: list[tuple[str, str, str]] | None = None,
+    reviewed_supplemental: list[security_provenance.ReviewedSpan] | None = None,
 ) -> SafetyResult:
     marked = security_provenance.mark_reviewed_response(
         response, reviewed_result_positions, reviewed_supplemental
