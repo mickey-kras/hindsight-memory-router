@@ -63,13 +63,14 @@ async def _measure(concurrency: int, scans: int) -> dict[str, float | int]:
     started = time.perf_counter()
     try:
         await asyncio.gather(*(scan() for _ in range(scans)))
+        elapsed = time.perf_counter() - started
     finally:
         sampler.cancel()
         await scan_executor.shutdown_scan_executor_async()
     return {
         "concurrency": concurrency,
         "scans": scans,
-        "scans_per_second": round(scans / (time.perf_counter() - started), 1),
+        "scans_per_second": round(scans / elapsed, 1),
         "latency_ms_p50": round(statistics.median(latencies), 1),
         "latency_ms_p95": round(statistics.quantiles(latencies, n=20)[18], 1),
         "peak_scanner_rss_mib": round(peak_kib / 1024, 1),
@@ -85,8 +86,10 @@ def main() -> None:
         default=scan_executor.DEFAULT_SCAN_CONCURRENCY,
         metavar=f"1-{scan_executor.MAX_SCAN_CONCURRENCY}",
     )
-    parser.add_argument("--scans", type=int, default=200)
+    parser.add_argument("--scans", type=int, default=200, help="at least 2")
     arguments = parser.parse_args()
+    if arguments.scans < 2:
+        parser.error("--scans must be at least 2")
     print(json.dumps(asyncio.run(_measure(arguments.concurrency, arguments.scans))))
 
 
