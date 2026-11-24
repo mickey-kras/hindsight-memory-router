@@ -518,7 +518,7 @@ pass_check
 
 # Review-agent exception simplification preserves behavior; malformed JSON and UTF-8
 # rejection remain covered by tests/test_review_unwrap.py.
-# integration-behavior-sha256: b3ff92368fa0b10d6384889d9163d6fa103eec3b8ab8d91c38f60ea2133f1807
+# integration-behavior-sha256: 68e3741a09562333a62f9a17cb66c0e8a6a2fa5911495f9d52453612c71dd9c8
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

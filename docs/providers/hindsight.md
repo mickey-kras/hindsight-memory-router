@@ -36,7 +36,7 @@ Set `HINDSIGHT_REQUIRE_SECURE_TRANSPORT=true` to make HTTPS mandatory for every 
 - In legacy shared-token mode (`MEMORY_ROUTER_TOKEN`), `{bank_id}` is a writer ID resolved to its configured write bank. In principal mode (`MEMORY_ROUTER_PRINCIPALS`), it is the literal target bank, and the bearer token must grant the requested operation on that bank.
 - All GET operations use recall quotas. This includes `stats?refresh=true`. Reflect, dry-run extract, and dry-run refresh also use recall quotas. Other writes use retain quotas.
 - Bodies use `MEMORY_ROUTER_MAX_BODY_BYTES` (default: 1 MiB). Retain, recall, and dry-run extract have stricter limits.
-- Request bodies, queries, native recall results and supplemental fields, and facade responses share four process worker slots. The queue has a limit.
+- Request bodies, queries, native recall results and supplemental fields, and facade responses share the process worker slots that `MEMORY_ROUTER_SCANNER_CONCURRENCY` sets. The default is four. The queue has a limit.
 
   | Scan | Budget |
   | --- | --- |

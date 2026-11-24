@@ -116,6 +116,48 @@ Alert on sustained `review_side_effect_started` items so an operator can investi
 Use metrics for quarantine 413/429/507 responses, general 429 responses, and aged `review_side_effect_started` items.
 Per-request logs do not cover these events.
 
+## Scanner concurrency
+
+`MEMORY_ROUTER_SCANNER_CONCURRENCY` sets the safety scan capacity of one router process.
+The supported range is `1` to `16`. The default is `4`.
+The router rejects a value outside this range at startup.
+
+The value sets two limits:
+
+- The number of scanner worker processes.
+- The number of scans that the router admits at the same time.
+
+The limits always have the same value, also after a shutdown and a restart of the scanner.
+When all slots are in use, the router does not queue the scan.
+It returns `503` with `Retry-After: 1`. Clients try again after that time.
+
+The value applies to each router process.
+A host that runs three router processes with the value `4` can run twelve scanner workers.
+
+Each worker is a separate Python process that keeps its memory until shutdown.
+A small value keeps CPU and memory for other services.
+It also causes more `503` responses when many requests arrive together.
+
+To select a value, compare the results on the target host:
+
+```sh
+python scripts/scanner-benchmark.py --concurrency 1
+python scripts/scanner-benchmark.py --concurrency 4
+```
+
+Run the commands on Linux from a checkout of this repository, with the router installed (`pip install -e .`) and no other load.
+Each command starts the scanner with that value and runs 200 retain scans at full capacity.
+It prints one JSON line with these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `scans_per_second` | Completed scans for each second |
+| `latency_ms_p50`, `latency_ms_p95` | Scan latency in milliseconds |
+| `peak_scanner_rss_mib` | Largest resident memory of all scanner processes together |
+
+Use the smallest value that gives sufficient `scans_per_second` for your peak request rate.
+Make sure that `peak_scanner_rss_mib` for each router process fits in the memory of the host.
+
 ## Review order
 
 Work through unresolved items in this order:

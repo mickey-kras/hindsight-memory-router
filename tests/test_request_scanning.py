@@ -111,29 +111,23 @@ async def test_metadata_heavy_retain_keeps_event_loop_responsive(
     assert hindsight.retain_calls == []
 
 
-async def test_request_capacity_is_shared_with_responses_and_recovers_after_cancellation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
+async def _assert_saturated_scanner_is_busy(
+    concurrency: int, entered_dir: Path, release: Path
 ) -> None:
-    original = scan_executor._scan_request_payload
-    entered_dir = tmp_path / "workers"
     entered_dir.mkdir()
-    release = tmp_path / "release"
-    monkeypatch.setattr(
-        scan_executor,
-        "_scan_request_payload",
-        partial(blocked_scan, entered_dir=entered_dir, release=release),
-    )
-    tasks = [
-        asyncio.create_task(scan_executor.scan_request({}, operation="retain")) for _ in range(4)
-    ]
-    try:
+    blocked = partial(blocked_scan, entered_dir=entered_dir, release=release)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(scan_executor, "_scan_request_payload", blocked)
+        tasks = [
+            asyncio.create_task(scan_executor.scan_request({}, operation="retain"))
+            for _ in range(concurrency)
+        ]
         try:
-            # Wait for all four real processes, not just admission into the pending queue.
+            # Wait for every real process, not just admission into the pending queue.
             async with asyncio.timeout(10):
-                while sum(path.name.isdigit() for path in entered_dir.iterdir()) != 4:
+                while sum(path.name.isdigit() for path in entered_dir.iterdir()) != concurrency:
                     await asyncio.sleep(0.01)
-            await _wait_for_workers(4)
+            await _wait_for_workers(concurrency)
             for call in [
                 scan_executor.scan_request({}, operation="recall"),
                 scan_executor.scan_facade_response({}),
@@ -142,6 +136,7 @@ async def test_request_capacity_is_shared_with_responses_and_recovers_after_canc
                 with pytest.raises(HttpError) as busy:
                     await call
                 assert busy.value.status == 503
+                assert busy.value.message.endswith("safety scanner is busy")
                 assert busy.value.headers == {"Retry-After": "1"}
         finally:
             for task in tasks:
@@ -149,11 +144,43 @@ async def test_request_capacity_is_shared_with_responses_and_recovers_after_canc
             results = await asyncio.gather(*tasks, return_exceptions=True)
         assert all(isinstance(result, asyncio.CancelledError) for result in results)
         await _wait_for_workers(0)
-        monkeypatch.setattr(scan_executor, "_scan_request_payload", original)
+
+
+@pytest.mark.parametrize("concurrency", [1, 4])
+async def test_request_capacity_follows_concurrency_across_cancellation_and_restart(
+    tmp_path: Path, concurrency: int
+) -> None:
+    release = tmp_path / "release"
+    await asyncio.to_thread(scan_executor.start_scan_executor, concurrency)
+    try:
+        await _assert_saturated_scanner_is_busy(concurrency, tmp_path / "started", release)
+        # Recovery must happen before release; otherwise cancellation could be a no-op.
+        assert (await scan_executor.scan_request({}, operation="retain")).safe
+
+        await scan_executor.shutdown_scan_executor_async()
+        with pytest.raises(HttpError, match="request safety scanner is shut down"):
+            await scan_executor.scan_request({}, operation="retain")
+        await asyncio.to_thread(scan_executor.start_scan_executor, concurrency)
+
+        await _assert_saturated_scanner_is_busy(concurrency, tmp_path / "restarted", release)
         assert (await scan_executor.scan_request({}, operation="retain")).safe
     finally:
-        # Recovery must happen before release; otherwise cancellation could be a no-op.
         release.touch()
+
+
+def test_scanner_resize_replaces_running_pool_and_capacity() -> None:
+    scan_executor.start_scan_executor(1)
+    single = scan_executor._get_scan_executor()
+
+    scan_executor.start_scan_executor(4)
+
+    assert not single.active
+    assert scan_executor._get_scan_executor() is not single
+    held = [scan_executor._acquire_scan_capacity() for _ in range(5)]
+    assert [admission is not None for admission in held] == [True, True, True, True, False]
+    for admission in held[:4]:
+        assert admission is not None
+        admission[1].release()
 
 
 async def test_request_timeout_kills_worker_and_allows_following_scan(monkeypatch) -> None:
