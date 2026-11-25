@@ -311,6 +311,36 @@ The workflow reports a missing originating run as a failure.
 This consolidation of the router workflows does not change the release automation of the integrations.
 
 
+## Shared SonarQube masking action
+
+The router repository owns the SonarQube endpoint masking helper.
+There is one implementation: `.github/scripts/mask-sonar-context.py`. Its tests are in `tests/test_sonar_privacy.py`.
+The composite action `.github/actions/mask-sonar-context` runs this helper for other repositories.
+
+Router workflows call the helper script at their own revision.
+The integrations repository calls the action at a full commit SHA of this repository:
+
+```yaml
+- uses: mickey-kras/hindsight-memory-router/.github/actions/mask-sonar-context@<commit SHA>
+  with:
+    mode: configured
+    sonar-host-url: ${{ secrets.SONAR_HOST_URL }}
+```
+
+Use `mode: configured` before the job connects to the network of the server.
+Use `mode: advertised` with `sonar-token` before the analysis step.
+Each mode must run before a step that can print the endpoint.
+
+A commit SHA does not change. Thus, a change in this repository cannot reach the integrations repository without a review there.
+
+To change the helper:
+
+1. Change the helper and its tests in this repository. Merge the PR.
+2. In the integrations repository, replace the commit SHA in each `uses:` line with the SHA of the merge commit.
+3. Get the approval that the integrations policy guard requires for a workflow change. Merge that PR.
+
+Do not add a copy of the helper to another repository.
+
 ## CI policy admission
 
 The `policy` workflow runs from the trusted base with `pull_request_target`.
