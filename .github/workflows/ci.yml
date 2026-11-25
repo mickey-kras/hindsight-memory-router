@@ -126,7 +126,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2
         if: ${{ needs.changes.outputs.python != 'false' }}
         with:
           egress-policy: audit
@@ -314,7 +314,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2
         if: ${{ needs.changes.outputs.ui != 'false' }}
         with:
           egress-policy: audit
@@ -435,7 +435,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2
         if: ${{ needs.changes.outputs.release != 'false' }}
         with:
           egress-policy: audit
@@ -527,7 +527,7 @@ jobs:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft != true || inputs.candidate_sha != '' || inputs.candidate_ref != ''
     runs-on: ubuntu-latest
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2
         with:
           egress-policy: audit
       - name: Check out trusted scanner implementation
@@ -693,7 +693,7 @@ jobs:
       SOURCE_IMAGE: hindsight-memory-router:ci
       TRIVY_SKIP_VERSION_CHECK: "true"
     steps:
-      - uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+      - uses: step-security/harden-runner@aebdcf6156ab6691adf63218240e476564a1ed4c # v2.23.0
         with:
           egress-policy: audit
 
