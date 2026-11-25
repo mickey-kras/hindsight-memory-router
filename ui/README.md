@@ -195,10 +195,12 @@ Read-only use works with the read token alone.
 ## Static analysis
 
 Run `npm run lint --prefix ui` for type-aware ESLint checks.
+
 `tsc` is TypeScript 7. It does the type check in `npm run build`.
 TypeScript 7.0 has no programmatic API, and typescript-eslint needs that API.
 Thus, the `typescript` package name points to `@typescript/typescript6`, which supplies the TypeScript 6 API to ESLint.
 The `@typescript/native` package name points to TypeScript 7.
+
 Remove the TypeScript 6 package when typescript-eslint accepts TypeScript 7.
 
 CI runs the checks before the UI tests and build.
