@@ -12,7 +12,7 @@ dependencies = [
   "aiosqlite==0.22.1",
   "Pebble==5.2.3",
   "cryptography==50.0.2",
-  "fastapi==0.163.1",
+  "fastapi==0.163.2",
   "httpx==0.28.1",
   "joserfc==1.8.0",
   "psycopg[binary]==3.3.9",
