@@ -311,6 +311,26 @@ The workflow reports a missing originating run as a failure.
 This consolidation of the router workflows does not change the release automation of the integrations.
 
 
+## SonarQube masking helper
+
+The router repository owns the SonarQube endpoint masking helper.
+There is one implementation: `.github/scripts/mask-sonar-context.py`. Its tests are in `tests/test_sonar_privacy.py`.
+Router workflows call the helper at their own revision.
+
+The integrations repository keeps an exact copy of the helper at a recorded commit of this repository.
+Its `compat/router-ci.json` file records that commit and the SHA-256 of the copy.
+Its CI fails when the copy does not agree with the recorded commit.
+
+A commit SHA does not change. Thus, a change in this repository cannot reach the integrations repository without a review there.
+
+To change the helper:
+
+1. Change the helper and its tests in this repository. Merge the PR.
+2. In the integrations repository, run `python3 scripts/sync-router-ci.py <commit SHA>` with the SHA of the merge commit.
+3. Open a PR there with the updated copy and `compat/router-ci.json`. Merge it after its checks pass.
+
+Do not edit the copy in the integrations repository.
+
 ## CI policy admission
 
 The `policy` workflow runs from the trusted base with `pull_request_target`.
