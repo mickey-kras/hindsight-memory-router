@@ -13,7 +13,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "node node_modules/typescript7/bin/tsc -b && vite build",
     "prepack": "npm run build",
     "fixtures": "python3 tests/gen_fixtures.py",
     "fixtures:clean": "python3 tests/gen_fixtures.py --clean",
@@ -48,8 +48,9 @@
     "eslint": "10.15.0",
     "jsdom": "31.0.1",
     "tailwindcss": "^4.1.11",
-    "typescript": "6.0.3",
+    "typescript": "npm:@typescript/typescript6@6.0.2",
     "typescript-eslint": "8.73.0",
+    "typescript7": "npm:typescript@7.0.2",
     "vite": "^8.3.4",
     "vitest": "^5.0.4"
   },
