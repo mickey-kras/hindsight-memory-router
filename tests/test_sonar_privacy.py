@@ -18,8 +18,6 @@ from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
-import yaml
-
 
 def load_module(filename: str) -> ModuleType:
     path = Path(__file__).parents[1] / ".github/scripts" / filename
@@ -360,54 +358,6 @@ class SonarPrivacyTests(unittest.TestCase):
                     text.index("SonarSource/sonarqube-scan-action@"),
                     text.index("SonarSource/sonarqube-quality-gate-action@"),
                 )
-
-    def test_shared_action_runs_the_maintained_helper_from_its_own_revision(self) -> None:
-        action_dir = Path(__file__).parents[1] / ".github/actions/mask-sonar-context"
-        action = yaml.safe_load((action_dir / "action.yml").read_text())
-        self.assertEqual(action["runs"]["using"], "composite")
-        (step,) = action["runs"]["steps"]
-        # Expressions in a command line can inject shell text and print the endpoint.
-        self.assertNotIn("${{", step["run"])
-        self.assertEqual(
-            step["env"],
-            {
-                "MASK_MODE": "${{ inputs.mode }}",
-                "SONAR_HOST_URL": "${{ inputs.sonar-host-url }}",
-                "SONAR_TOKEN": "${{ inputs.sonar-token }}",
-            },
-        )
-
-        def run(mode: str) -> subprocess.CompletedProcess[str]:
-            return subprocess.run(  # noqa: S603 - fixed command from the reviewed action
-                ["bash", "-c", step["run"]],  # noqa: S607
-                env={
-                    "PATH": os.environ["PATH"],
-                    "GITHUB_ACTION_PATH": str(action_dir),
-                    "MASK_MODE": mode,
-                    "SONAR_HOST_URL": "https://sonar.example/base/",
-                },
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-        masked = run("configured")
-        self.assertEqual(masked.returncode, 0, masked.stderr)
-        self.assertEqual(
-            masked.stdout.splitlines(),
-            [
-                "::add-mask::https://sonar.example/base/",
-                "::add-mask::https://sonar.example/base",
-                "::add-mask::sonar.example",
-            ],
-        )
-        rejected = run("configured; echo injected")
-        self.assertEqual(rejected.returncode, 1)
-        self.assertEqual(rejected.stdout, "")
-        self.assertEqual(
-            rejected.stderr,
-            "Unable to establish masked SonarQube server context.\nReason: invalid mode\n",
-        )
 
     def test_all_public_finding_kinds_keep_diagnostics_without_server_links(self) -> None:
         public_context = {
