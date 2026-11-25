@@ -96,9 +96,7 @@ class _Cached[T]:
             async with asyncio.timeout(FETCH_DEADLINE_SECONDS):
                 value = await self._load()
         except TimeoutError:
-            raise HttpError(
-                503, "human_identity_unavailable", "identity provider unavailable"
-            ) from None
+            raise provider_unavailable() from None
         self._value = value
         self.loaded_at = time.monotonic()
         self._expires = self.loaded_at + self._ttl
@@ -108,6 +106,10 @@ class _Cached[T]:
         self._pending = None
         if not task.cancelled():
             task.exception()  # Each waiter receives the failure; mark it as retrieved.
+
+
+def provider_unavailable() -> HttpError:
+    return HttpError(503, "human_identity_unavailable", "identity provider unavailable")
 
 
 def invalid_identity() -> HttpError:
@@ -141,9 +143,7 @@ class HumanOidc:
                 timeout=10,
             ) as response:
                 if response.status_code == 429 or response.status_code >= 500:
-                    raise HttpError(
-                        503, "human_identity_unavailable", "identity provider unavailable"
-                    )
+                    raise provider_unavailable()
                 if response.status_code != 200:
                     raise invalid_identity()
                 if (
@@ -158,9 +158,7 @@ class HumanOidc:
                         raise invalid_identity()
                 return bytes(body)
         except httpx.HTTPError:
-            raise HttpError(
-                503, "human_identity_unavailable", "identity provider unavailable"
-            ) from None
+            raise provider_unavailable() from None
 
     async def metadata(self) -> ProviderMetadata:
         return await self._metadata.get()
