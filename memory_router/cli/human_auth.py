@@ -5,11 +5,10 @@ import asyncio
 import re
 import sys
 
-from memory_router.config import load_settings
+from memory_router.config import load_configured_principal_registry, load_settings
 from memory_router.db import create_database
 from memory_router.human_auth_config import generation_for, load_human_config
 from memory_router.human_auth_store import HumanAuthStore
-from memory_router.principals import load_principal_registry
 
 
 def _key_id(value: str) -> str:
@@ -22,9 +21,9 @@ def _key_id(value: str) -> str:
 
 async def _operate(action: str, key_id: str | None) -> bool:
     settings = load_settings()
-    if not settings.memory_router_human_auth or not settings.memory_router_principals:
+    registry = load_configured_principal_registry(settings)
+    if not settings.memory_router_human_auth or registry is None:
         raise RuntimeError("human authentication and principal configuration are required")
-    registry = load_principal_registry(settings.memory_router_principals)
     config = load_human_config(settings.memory_router_human_auth, registry)
     database = await create_database(settings.quarantine_database_url)
     try:

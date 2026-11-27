@@ -19,7 +19,12 @@ from httpx import ASGITransport, AsyncClient
 from memory_router import app as app_module
 from memory_router import request_dispatch
 from memory_router.blocked_exceptions import AUTHORIZATION_CONTEXT
-from memory_router.config import RouterSettings, assert_auth_environment
+from memory_router.config import (
+    RouterSettings,
+    assert_auth_environment,
+    load_configured_principal_registry,
+    load_settings,
+)
 from memory_router.errors import HttpError
 from memory_router.facade_routes import FACADE_ROUTES
 from memory_router.logging_contract import sanitize_fields
@@ -537,6 +542,59 @@ def test_principal_mode_rejects_legacy_token_and_anonymous_at_startup() -> None:
                 MEMORY_ROUTER_ALLOW_ANONYMOUS=True,
             )
         )
+
+
+def test_principal_registry_loads_from_json_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("MEMORY_ROUTER_PRINCIPALS", raising=False)
+    assert load_configured_principal_registry(RouterSettings()) is None
+    document = json.dumps(_registry_value())
+    monkeypatch.setenv("MEMORY_ROUTER_PRINCIPALS_JSON", document)
+    settings = load_settings()
+    assert document not in repr(settings)
+    registry = load_configured_principal_registry(settings)
+    assert registry == load_principal_registry(_write_registry(tmp_path))
+    assert_auth_environment(settings)
+    assert_auth_environment(
+        RouterSettings(MEMORY_ROUTER_PRINCIPALS_JSON=document, MEMORY_ROUTER_HUMAN_AUTH="h.json")
+    )
+    with pytest.raises(RuntimeError, match="MEMORY_ROUTER_TOKEN must be unset"):
+        assert_auth_environment(
+            RouterSettings(
+                MEMORY_ROUTER_PRINCIPALS_JSON=document, MEMORY_ROUTER_TOKEN=token_urlsafe(24)
+            )
+        )
+    with pytest.raises(RuntimeError, match="MEMORY_ROUTER_ALLOW_ANONYMOUS must be false"):
+        assert_auth_environment(
+            RouterSettings(
+                MEMORY_ROUTER_PRINCIPALS_JSON=document, MEMORY_ROUTER_ALLOW_ANONYMOUS=True
+            )
+        )
+
+
+def test_principal_registry_json_rejects_path_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MEMORY_ROUTER_PRINCIPALS", "/app/principals.json")
+    monkeypatch.setenv("MEMORY_ROUTER_PRINCIPALS_JSON", json.dumps(_registry_value()))
+    with pytest.raises(RuntimeError, match="mutually exclusive"):
+        load_settings()
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        "{not json",
+        json.dumps({"principals": {"a": {"keys": [_key("k", "a" * 64)], "unknown": "field"}}}),
+    ],
+)
+def test_principal_registry_json_errors_omit_content(document: str) -> None:
+    with pytest.raises(RuntimeError) as error:
+        load_configured_principal_registry(RouterSettings(MEMORY_ROUTER_PRINCIPALS_JSON=document))
+    assert str(error.value) in {
+        "principal registry is not readable JSON",
+        "invalid principal registry",
+    }
+    assert error.value.__cause__ is None or isinstance(error.value.__cause__, json.JSONDecodeError)
 
 
 @pytest.mark.asyncio

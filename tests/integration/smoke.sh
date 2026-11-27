@@ -51,6 +51,9 @@ failure_message=""
 export MEMORY_ROUTER_TEST_PORT="$router_port"
 export FAKE_HINDSIGHT_STATE_DIR="./tmp/${mode}-${router_db}/state"
 export QUARANTINE_STATE_DIR="./tmp/${mode}-${router_db}/quarantine"
+# The peer principal router loads the same registry from MEMORY_ROUTER_PRINCIPALS_JSON.
+MEMORY_ROUTER_TEST_PRINCIPALS_JSON="$(<tests/integration/principal-registry.json)"
+export MEMORY_ROUTER_TEST_PRINCIPALS_JSON
 if [[ "$mode" == "real" ]]; then
   if [[ "$router_db" == "sqlite" ]]; then
     export MEMORY_ROUTER_TEST_DEPLOYMENT_MODE="single"
@@ -516,9 +519,8 @@ unwrap_status="$(curl --max-time 5 -sS -o /dev/null -w '%{http_code}' -H "Author
 [[ "$unwrap_status" == "404" ]] || fail_check "router exposed a review-side unwrap endpoint: ${unwrap_status}"
 pass_check
 
-# Review-agent exception simplification preserves behavior; malformed JSON and UTF-8
-# rejection remain covered by tests/test_review_unwrap.py.
-# integration-behavior-sha256: 2e902309f6ffb36f038c9df62c9a3825a3a89a1701141156060e7fc2ab1b0d6e
+# The postgres peer principal router loads its registry from MEMORY_ROUTER_PRINCIPALS_JSON.
+# integration-behavior-sha256: 141dc3b7a6772a2e927673f609184f6fa53a73a2fc2f76c7381f29f17698a4a9
 if [[ "$mode" == "fake" ]]; then
   begin_check "per-agent principal grants are enforced"
   principals_url="http://127.0.0.1:${principals_port}"

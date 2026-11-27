@@ -119,7 +119,7 @@ services:
       MEMORY_ROUTER_PORT: "8890"
       MEMORY_ROUTER_DEPLOYMENT_MODE: cluster
       MEMORY_ROUTER_EXTERNAL_ADMIN_RATE_LIMIT: "true"
-      MEMORY_ROUTER_PRINCIPALS: /app/integration-principal-registry.json
+      MEMORY_ROUTER_PRINCIPALS_JSON: ${MEMORY_ROUTER_TEST_PRINCIPALS_JSON:?missing MEMORY_ROUTER_TEST_PRINCIPALS_JSON}
       MEMORY_ROUTER_ADMIN_REVIEW_TOKEN: test-admin-review-token-0123456789
       HINDSIGHT_BASE_URL: http://hindsight:8888
       HINDSIGHT_API_KEY: test-hindsight-key
@@ -127,8 +127,6 @@ services:
       QUARANTINE_DATABASE_URL: postgresql://quarantine:quarantine@postgres:5432/quarantine
     ports:
       - "127.0.0.1:${MEMORY_ROUTER_TEST_PRINCIPALS_PEER_PORT:-8894}:8890"
-    volumes:
-      - ./principal-registry.json:/app/integration-principal-registry.json:ro
     healthcheck:
       test:
         [
