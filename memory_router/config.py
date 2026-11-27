@@ -33,6 +33,7 @@ from .key_wrap import (
 from .logging import log_event
 from .logging_contract import WRITER_ID_PATTERN
 from .models import WriterRegistry
+from .principals import PrincipalRegistry, load_principal_registry, parse_principal_registry
 from .scan_executor import DEFAULT_SCAN_CONCURRENCY, MAX_SCAN_CONCURRENCY
 
 logger = logging.getLogger(__name__)
@@ -151,6 +152,9 @@ class RouterSettings(BaseSettings):
     )
     memory_router_registry: str | None = Field(None, validation_alias="MEMORY_ROUTER_REGISTRY")
     memory_router_principals: str | None = Field(None, validation_alias="MEMORY_ROUTER_PRINCIPALS")
+    memory_router_principals_json: SecretStr | None = Field(
+        None, validation_alias="MEMORY_ROUTER_PRINCIPALS_JSON"
+    )
     memory_router_human_auth: str | None = Field(None, validation_alias="MEMORY_ROUTER_HUMAN_AUTH")
     memory_router_deployment_mode: Literal["single", "cluster"] = Field(
         "single", validation_alias="MEMORY_ROUTER_DEPLOYMENT_MODE"
@@ -282,6 +286,10 @@ class RouterSettings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_deployment(self) -> RouterSettings:
+        if self.memory_router_principals and secret_value(self.memory_router_principals_json):
+            raise ValueError(
+                "MEMORY_ROUTER_PRINCIPALS and MEMORY_ROUTER_PRINCIPALS_JSON are mutually exclusive"
+            )
         if self.memory_router_allow_anonymous and not is_loopback_host(self.memory_router_host):
             raise ValueError(
                 "MEMORY_ROUTER_ALLOW_ANONYMOUS=true requires a loopback MEMORY_ROUTER_HOST"
@@ -388,6 +396,19 @@ def validate_settings(settings: RouterSettings) -> RouterSettings:
 
 def secret_value(value: SecretStr | None) -> str | None:
     return value.get_secret_value() if value is not None else None
+
+
+def principal_mode(settings: RouterSettings) -> bool:
+    return bool(settings.memory_router_principals) or bool(
+        secret_value(settings.memory_router_principals_json)
+    )
+
+
+def load_configured_principal_registry(settings: RouterSettings) -> PrincipalRegistry | None:
+    if settings.memory_router_principals:
+        return load_principal_registry(settings.memory_router_principals)
+    document = secret_value(settings.memory_router_principals_json)
+    return parse_principal_registry(document) if document else None
 
 
 def load_registry(path: str | None = None) -> WriterRegistry:
@@ -497,22 +518,24 @@ def _assert_hindsight_transport(settings: RouterSettings) -> None:
 
 
 def assert_auth_environment(settings: RouterSettings) -> None:
-    if settings.memory_router_human_auth and not settings.memory_router_principals:
-        raise RuntimeError("MEMORY_ROUTER_HUMAN_AUTH requires MEMORY_ROUTER_PRINCIPALS")
+    principals = principal_mode(settings)
+    if settings.memory_router_human_auth and not principals:
+        raise RuntimeError(
+            "MEMORY_ROUTER_HUMAN_AUTH requires MEMORY_ROUTER_PRINCIPALS"
+            " or MEMORY_ROUTER_PRINCIPALS_JSON"
+        )
     _assert_hindsight_transport(settings)
-    if settings.memory_router_principals:
+    if principals:
         if secret_value(settings.memory_router_token):
             raise RuntimeError(
-                "MEMORY_ROUTER_TOKEN must be unset when MEMORY_ROUTER_PRINCIPALS is configured"
+                "MEMORY_ROUTER_TOKEN must be unset when a principal registry is configured"
             )
         if settings.memory_router_allow_anonymous:
             raise RuntimeError(
                 "MEMORY_ROUTER_ALLOW_ANONYMOUS must be false "
-                "when MEMORY_ROUTER_PRINCIPALS is configured"
+                "when a principal registry is configured"
             )
-    router_missing = not settings.memory_router_principals and not secret_value(
-        settings.memory_router_token
-    )
+    router_missing = not principals and not secret_value(settings.memory_router_token)
     legacy = bool(secret_value(settings.memory_router_admin_token))
     read = bool(secret_value(settings.memory_router_admin_read_token))
     review = bool(secret_value(settings.memory_router_admin_review_token))

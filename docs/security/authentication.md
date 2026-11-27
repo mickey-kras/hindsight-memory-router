@@ -8,7 +8,7 @@ Set the legacy router and admin tokens to a minimum of 32 characters. Shorter to
 
 ## Principal mode
 
-Set `MEMORY_ROUTER_PRINCIPALS=/path/principals.json`. This disables the shared router token. Startup rejects:
+Set `MEMORY_ROUTER_PRINCIPALS=/path/principals.json`. Alternatively, set the registry as a JSON string in `MEMORY_ROUTER_PRINCIPALS_JSON`. Do not set the two variables. Principal mode disables the shared router token. Startup rejects:
 
 - `MEMORY_ROUTER_TOKEN`
 - `MEMORY_ROUTER_ALLOW_ANONYMOUS=true`
@@ -102,7 +102,7 @@ To migrate to principal mode:
 
 1. Create a principal registry with one principal per writer. See `principal_registry.example.json`.
 2. Give each principal a unique key ID, SHA-256 secret digest, and bank and scope grants.
-3. Set `MEMORY_ROUTER_PRINCIPALS` to the registry path.
+3. Set `MEMORY_ROUTER_PRINCIPALS` to the registry path, or set `MEMORY_ROUTER_PRINCIPALS_JSON` to the registry JSON.
 4. Unset `MEMORY_ROUTER_TOKEN`.
 5. Issue each caller a `mr_<key-id>_<secret>` token.
 

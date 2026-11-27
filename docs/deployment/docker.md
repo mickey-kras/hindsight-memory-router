@@ -59,6 +59,41 @@ Make sure uid `10001` can read the file.
 `docker compose up -d` automatically loads `compose.override.yaml`.
 See [authentication](../security/authentication.md) for token hashing and grants.
 
+### Registry from an environment variable
+
+On some hosts, uid `10001` cannot read a mounted file.
+For these hosts, set the registry as a JSON string in `MEMORY_ROUTER_PRINCIPALS_JSON`.
+The router validates the string with the same rules as the file.
+If you set `MEMORY_ROUTER_PRINCIPALS` and `MEMORY_ROUTER_PRINCIPALS_JSON` together, startup fails.
+The router does not log the value.
+
+Add the registry to `compose.override.yaml`:
+
+```yaml
+services:
+  memory-router:
+    environment:
+      MEMORY_ROUTER_PRINCIPALS_JSON: |
+        {
+          "principals": {
+            "service-writer": {
+              "keys": [
+                {
+                  "id": "writer-1",
+                  "sha256": "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb",
+                  "created_at": "2026-09-01T00:00:00Z"
+                }
+              ],
+              "grants": [
+                {"bank": "project", "scopes": ["memory.recall", "memory.retain"]}
+              ]
+            }
+          }
+        }
+```
+
+Do not use a `$` character in the value. Compose interpolates `$` in `environment:` values. Use `$$` if the value must contain `$`.
+
 ## Network exposure and TLS
 
 Compose keeps the router container listener on `0.0.0.0` inside the container but publishes the port on host loopback only: `127.0.0.1:${MEMORY_ROUTER_PORT:-8890}`. Non-container runs bind `127.0.0.1` by default through `MEMORY_ROUTER_HOST`.

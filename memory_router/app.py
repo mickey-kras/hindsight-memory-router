@@ -26,6 +26,7 @@ from .config import (
     RouterSettings,
     assert_auth_environment,
     assert_no_private_key_environment,
+    load_configured_principal_registry,
     load_registry,
     load_settings,
     secret_value,
@@ -54,7 +55,6 @@ from .principal_gate import (
 from .principals import (
     PrincipalResolver,
     PrincipalSession,
-    load_principal_registry,
     scope_limit_operation,
 )
 from .quarantine_store import QuarantineLimits, QuarantineStore
@@ -163,11 +163,8 @@ class Runtime:
         self.router_token = secret_value(settings.memory_router_token)
         self.allow_anonymous = settings.memory_router_allow_anonymous
         self.metrics_enabled = settings.memory_router_metrics_enabled
-        self.principal_resolver = (
-            PrincipalResolver(load_principal_registry(settings.memory_router_principals))
-            if settings.memory_router_principals
-            else None
-        )
+        registry = load_configured_principal_registry(settings)
+        self.principal_resolver = PrincipalResolver(registry) if registry is not None else None
         self.admin_tokens = {
             "legacy": secret_value(settings.memory_router_admin_token),
             "read": secret_value(settings.memory_router_admin_read_token),
