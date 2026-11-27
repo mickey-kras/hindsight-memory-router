@@ -287,13 +287,22 @@ def _validate_bank_configuration(
 
 def load_principal_registry(path: str) -> PrincipalRegistry:
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        document = Path(path).read_text(encoding="utf-8")
     except (OSError, ValueError) as exc:
+        raise RuntimeError("principal registry is not readable JSON") from exc
+    return parse_principal_registry(document)
+
+
+def parse_principal_registry(document: str) -> PrincipalRegistry:
+    try:
+        value = json.loads(document)
+    except ValueError as exc:
         raise RuntimeError("principal registry is not readable JSON") from exc
     try:
         registry = PrincipalRegistry.model_validate(value)
-    except ValidationError as exc:
-        raise RuntimeError("invalid principal registry") from exc
+    except ValidationError:
+        # Pydantic errors echo input values; registry content must stay out of logs.
+        raise RuntimeError("invalid principal registry") from None
     seen_key_ids: set[str] = set()
     for principal_id, principal in registry.principals.items():
         _validate_principal_id(principal_id)
