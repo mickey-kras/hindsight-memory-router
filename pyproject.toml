@@ -31,7 +31,7 @@ review = [
 ]
 dev = [
   "bandit==1.9.4",
-  "coverage==7.17.3",
+  "coverage==7.17.4",
   "mypy==2.4.1",
   "pip-audit==2.10.1",
   "pip-tools==7.7.0",
@@ -40,7 +40,7 @@ dev = [
   "pytest-cov==7.1.0",
   "pytest-httpx==0.36.2",
   "pytest-xdist==3.8.0",
-  "pyyaml==6.0.3",
+  "pyyaml==6.0.4",
   "ruff==0.17.6",
 ]
 
