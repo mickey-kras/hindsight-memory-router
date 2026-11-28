@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@redocly/cli": "2.82.0",
-    "aislop": "0.22.1"
+    "aislop": "0.22.2"
   },
   "overrides": {
     "postcss": {
